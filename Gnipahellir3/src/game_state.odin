@@ -196,8 +196,15 @@ Sim_State :: struct {
 // ─── Audio ────────────────────────────────────────────────────────────────────
 
 Audio_State :: struct {
-    music_playing: bool,
-    volume:        f32,
+    initialized:     bool,
+    master_volume:   f32,
+    sfx_volume:      f32,
+    music_volume:    f32,
+    sounds:          [Sound_ID]rl.Sound,
+    loaded:          [Sound_ID]bool,
+    ambience:        rl.Music,
+    ambience_loaded: bool,
+    ambience_gain:   f32,
 }
 
 // ─── Progression ──────────────────────────────────────────────────────────────
@@ -259,8 +266,6 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
     gs.player.equipped    = .Mine_Wand
-
-    gs.audio.volume = 1.0
 
     gs.enemies.free_head = 0
 

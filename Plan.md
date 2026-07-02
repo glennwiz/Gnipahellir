@@ -53,14 +53,25 @@ frame counter and builder dens verified continuous across sessions.
 
 ## Phase 2 — Port audio (from G2)
 
-- [ ] Port audio system (64 slots, 16 channels, music streaming, fades)
-- [ ] Re-map G2's event-driven sound triggers onto G3's event types
-- [ ] Copy `sounds/` asset library; audit which of the 97 sounds map to G3 actions
-- [ ] **New:** builder work sounds — distant digging/placing audible before visual contact
-- [ ] Ambient cave loop + surface loop
-- [ ] Master/SFX/Music volume sliders (persisted)
+- [x] Port audio system (`src/audio.odin`) — table-driven rework of G2's engine: sounds
+      keyed by `Sound_ID` enum (no linear search), music streaming. G2's dynamic
+      file-scanner subsystem was dropped: it allocates strings at runtime and only fed
+      G2's sound-debug browser window.
+- [x] Sound triggers wired to G3's existing semantic events (Tile_Mined, Damage_Dealt,
+      Entity_Died, Item_Pickup, Tile_Placed) plus a generic Play_Sound event for
+      one-offs (player jump).
+- [x] Copied `sounds/` library (199 WAVs); 9 mapped so far — jump, mine, place, pickup,
+      hurt, death, kill, builder dig, builder place. More get mapped as systems land.
+- [x] Builder work sounds attenuate with distance (48-tile hearing range, floor gain
+      0.1) — distant digging is audible before the builder is visible.
+- [x] Cave ambience: `sound_horror_ambience.wav` as a looping stream whose volume
+      follows player depth (silent on surface, full ~12 tiles below). No suitable
+      surface-loop asset exists yet — sourcing one is a Phase 7 (juice) item.
+- [ ] Master/SFX/Music volume fields exist in `Audio_State`; sliders + persistence land
+      with the settings screen in Phase 6.
 
-**Milestone:** every player and builder action has sound; caves have atmosphere.
+**Milestone reached:** every current player and builder action has sound; the cave has
+atmosphere. Verified: all sounds + ambience stream load cleanly at runtime.
 
 ## Phase 3 — Port game loop systems (from G2)
 
@@ -134,4 +145,6 @@ frame counter and builder dens verified continuous across sessions.
 - [x] project.md comparison written
 - [x] Phase 0 complete — resolution independence, git hygiene, debug build flag
 - [x] Phase 1 complete — save/load + stats persistence, verified round trip
-- [ ] Phase 2 next — port audio system from G2
+- [x] Phase 2 complete — audio engine, event triggers, builder attenuation, cave ambience
+      (volume sliders deferred to Phase 6 with the settings screen)
+- [ ] Phase 3 next — port game loop systems (crafting, placement, UI, multi-level)

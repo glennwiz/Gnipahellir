@@ -26,8 +26,8 @@ game_update :: proc(gs: ^Game_State) {
     // 7. Particles  (stub)
     // update_particles(gs)
 
-    // 8. Audio  (stub)
-    // update_audio(gs)
+    // 8. Audio
+    update_audio(gs)
 
     // 9. Clear event queue
     eq_clear(&gs.events)

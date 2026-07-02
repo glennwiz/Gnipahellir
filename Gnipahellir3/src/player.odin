@@ -25,6 +25,7 @@ update_player :: proc(gs: ^Game_State) {
     if inp.jump && p.grounded {
         p.vel.y    = JUMP_VEL
         p.grounded = false
+        eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Jump)}})
     }
 
     // ── Gravity ───────────────────────────────────────────────────

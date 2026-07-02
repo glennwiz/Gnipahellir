@@ -40,6 +40,7 @@ process_events :: proc(gs: ^Game_State) {
         case .Damage_Dealt:
             if e.target == PLAYER_ID && !gs.player.dead {
                 gs.player.hp -= int(e.payload.int_val)
+                audio_play(&gs.audio, .Hurt)
                 log_action(gs, "Player takes %d damage (hp %d)", e.payload.int_val, gs.player.hp)
                 if gs.player.hp <= 0 {
                     gs.player.hp = 0
@@ -55,6 +56,7 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Tile_Placed:
             // tile already set before event was pushed
+            audio_play(&gs.audio, .Place)
 
         case .Lava_Spread:
             // sim handles lava adjacency
@@ -64,6 +66,7 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Item_Pickup:
             // interaction handles inventory insert
+            audio_play(&gs.audio, .Pickup)
 
         case .Item_Dropped:
             // interaction handles world item placement
@@ -81,7 +84,7 @@ process_events :: proc(gs: ^Game_State) {
             // projectile system handles
 
         case .Play_Sound:
-            // audio system handles
+            audio_play(&gs.audio, Sound_ID(e.payload.int_val))
 
         case .Play_Music:
             // audio system handles
@@ -126,6 +129,12 @@ process_events :: proc(gs: ^Game_State) {
         case .Boss_Defeated:
             gs.progression.final_boss_defeated = true
 
+        case .Builder_Mined:
+            audio_play(&gs.audio, .Builder_Dig, audio_tile_gain(gs, e.tile))
+
+        case .Builder_Placed:
+            audio_play(&gs.audio, .Builder_Place, audio_tile_gain(gs, e.tile))
+
         case .Game_Won:
             // handle win screen
         }
@@ -135,9 +144,11 @@ process_events :: proc(gs: ^Game_State) {
 handle_entity_died :: proc(gs: ^Game_State, e: Event) {
     if e.source == PLAYER_ID {
         eq_push(&gs.events, Event{type = .Player_Died})
+        audio_play(&gs.audio, .Death)
         gs.stats.runs_played += 1
         _ = save_stats(&gs.stats)  // persist immediately — a crash after death shouldn't lose the run
     } else {
+        audio_play(&gs.audio, .Kill)
         gs.stats.total_kills += 1
     }
 }
@@ -152,6 +163,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     drop := terrain_table[old_tile].drop_item
 
     set_tile(&gs.world, x, y, .Void)
+    audio_play(&gs.audio, .Mine)
 
     if drop != .None {
         // Place drop in world
