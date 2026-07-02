@@ -22,14 +22,15 @@ Note: `Gnipahellir3/plan.md` is the game *design* doc; this file is the *shippin
 
 ## Phase 0 — Foundation fixes (do first, everything depends on them)
 
-- [ ] **Resolution independence in G3.** Currently hardcoded 192×108 tiles @ 10px = 1920×1080.
-      Render world to a fixed-size target and scale to the actual monitor (letterbox as needed).
-      Add fullscreen/windowed toggle. *This blocks shipping on its own.*
-- [ ] **Git hygiene.** The project folder is not a git repo. `git init` at the root, commit both
-      versions as-is (baseline), then branch for the merge work. Add proper `.gitignore`
-      (exes, pdb, logs, save files).
-- [ ] **Debug/release build flag.** Gate `enemy_action.log`, scan overlays, and debug windows
-      behind a compile-time flag. Keep them available for player bug reports.
+- [x] **Resolution independence in G3.** Game renders to a fixed 1920×1080 render texture,
+      scaled letterboxed to the real window. Starts 1280×720 windowed, resizable, **F11**
+      toggles borderless fullscreen. Mouse input transformed from window → virtual space.
+- [x] **Git hygiene.** Repo initialized with baseline commit (done manually). `.gitignore`
+      added at root (exes, pdb, logs, save data); stale artifacts untracked.
+- [x] **Debug/release build flag.** `GAME_DEBUG` in `types.odin` (default **true** so
+      `odin run src` keeps full debug tooling). Release: `odin build src -define:GAME_DEBUG=false`
+      — strips action log, F3 overlay, and scan rays (scan rays also moved from always-on
+      to F3-only in debug builds).
 
 **Milestone:** G3 runs windowed and fullscreen on any monitor, repo under version control.
 
@@ -123,4 +124,5 @@ Note: `Gnipahellir3/plan.md` is the game *design* doc; this file is the *shippin
 ## Current status
 
 - [x] project.md comparison written
-- [ ] Phase 0 in progress — starting with resolution independence
+- [x] Phase 0 complete — resolution independence, git hygiene, debug build flag
+- [ ] Phase 1 next — port save/load + persistent stats from G2

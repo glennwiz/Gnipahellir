@@ -16,16 +16,21 @@ update_input :: proc(gs: ^Game_State) {
     if rl.IsKeyPressed(.TAB) {
         gs.ui.show_inventory = !gs.ui.show_inventory
     }
-    if rl.IsKeyPressed(.F3) {
-        gs.ui.show_debug = !gs.ui.show_debug
+    when GAME_DEBUG {
+        if rl.IsKeyPressed(.F3) {
+            gs.ui.show_debug = !gs.ui.show_debug
+        }
     }
 
-    // Mouse tile position
+    // Mouse tile position (window space -> virtual space, letterbox-aware)
     mouse := rl.GetMousePosition()
-    inp.mouse_world = {mouse.x, mouse.y}
+    scale, offset := screen_transform()
+    vx := (mouse.x - offset.x) / scale
+    vy := (mouse.y - offset.y) / scale
+    inp.mouse_world = {vx, vy}
     inp.mouse_tile  = {
-        i32(mouse.x) / CELL_SIZE,
-        i32(mouse.y) / CELL_SIZE,
+        clamp(i32(vx) / CELL_SIZE, 0, GRID_W - 1),
+        clamp(i32(vy) / CELL_SIZE, 0, GRID_H - 1),
     }
     gs.ui.hover_tile = inp.mouse_tile
 }

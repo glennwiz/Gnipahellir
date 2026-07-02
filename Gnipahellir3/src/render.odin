@@ -6,16 +6,29 @@ import "core:math"
 
 // ─── Draw Entry Point ─────────────────────────────────────────────────────────
 
-draw_game :: proc(gs: ^Game_State) {
-    rl.BeginDrawing()
+draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
+    // The game renders at the fixed virtual resolution...
+    rl.BeginTextureMode(target)
     rl.ClearBackground(rl.BLACK)
 
     draw_world(&gs.world)
     draw_player(&gs.player)
-    draw_enemies(&gs.enemies, &gs.world)
+    draw_enemies(&gs.enemies)
 
-    if gs.ui.show_debug do draw_debug(gs)
+    when GAME_DEBUG {
+        if gs.ui.show_debug do draw_debug(gs)
+    }
 
+    rl.EndTextureMode()
+
+    // ...then scales letterboxed onto the real window.
+    scale, offset := screen_transform()
+    src := rl.Rectangle{0, 0, f32(SCREEN_W), -f32(SCREEN_H)}  // negative height: render textures are y-flipped
+    dst := rl.Rectangle{offset.x, offset.y, f32(SCREEN_W)*scale, f32(SCREEN_H)*scale}
+
+    rl.BeginDrawing()
+    rl.ClearBackground(rl.BLACK)
+    rl.DrawTexturePro(target.texture, src, dst, {0, 0}, 0, rl.WHITE)
     rl.EndDrawing()
 }
 
@@ -143,15 +156,14 @@ draw_pixel_flower :: proc(bx, by: i32) {
 
 // ─── Enemies ──────────────────────────────────────────────────────────────────
 
-draw_enemies :: proc(es: ^Enemy_Store, w: ^World_Grid) {
+draw_enemies :: proc(es: ^Enemy_Store) {
     for i in 0 ..< MAX_ENEMIES {
         if !es.active[i] { continue }
-        draw_enemy(&es.data[i], w)
+        draw_enemy(&es.data[i])
     }
 }
 
-draw_enemy :: proc(e: ^Enemy, w: ^World_Grid) {
-    draw_enemy_scan(e, w)
+draw_enemy :: proc(e: ^Enemy) {
     switch e.kind {
     case .Builder:
         draw_builder(e)
@@ -252,6 +264,7 @@ draw_enemies_debug :: proc(gs: ^Game_State) {
     for i in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[i] { continue }
         e := &gs.enemies.data[i]
+        draw_enemy_scan(e, &gs.world)
         label_buf: [16]u8
         label := fmt.bprintf(label_buf[:], "#%d", i)
         lx := i32(e.pos.x * CS)

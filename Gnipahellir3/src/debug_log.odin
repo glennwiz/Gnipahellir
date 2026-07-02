@@ -18,6 +18,7 @@ Debug_Log :: struct {
 }
 
 log_action :: proc(gs: ^Game_State, format: string, args: ..any) {
+    when !GAME_DEBUG { return }
     dl := &gs.debug_log
     if dl.pos >= DEBUG_LOG_CAP - 256 {
         dl.overflow = true
@@ -35,6 +36,7 @@ log_action :: proc(gs: ^Game_State, format: string, args: ..any) {
 }
 
 flush_action_log :: proc(gs: ^Game_State) {
+    when !GAME_DEBUG { return }
     if gs.debug_log.pos == 0 { return }
     data := gs.debug_log.buf[:gs.debug_log.pos]
     _ = os.write_entire_file("enemy_action.log", data)

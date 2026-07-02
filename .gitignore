@@ -1,0 +1,10 @@
+# Build artifacts
+*.exe
+*.pdb
+*.obj
+
+# Debug logs
+*.log
+
+# Save data
+*.dat
