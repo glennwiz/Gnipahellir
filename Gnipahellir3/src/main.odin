@@ -28,10 +28,13 @@ main :: proc() {
     defer free(gs)
     game_state_init(gs)
 
-    // Spawn player on the surface, a few tiles left of the cave entrance
-    gs.player.pos            = {f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H}
-    gs.player.clothing_color = rl.BLUE
-    gs.player.hair_color     = rl.ORANGE
+    if !load_game(gs) {
+        // Fresh run: spawn player on the surface, a few tiles left of the cave entrance
+        gs.player.pos            = {f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H}
+        gs.player.clothing_color = rl.BLUE
+        gs.player.hair_color     = rl.ORANGE
+    }
+    load_stats(&gs.stats)
 
     for !rl.WindowShouldClose() {
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
@@ -40,6 +43,7 @@ main :: proc() {
         draw_game(gs, target)
     }
 
+    save_on_quit(gs)
     flush_action_log(gs)
     rl.UnloadRenderTexture(target)
     rl.CloseWindow()

@@ -136,6 +136,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
     if e.source == PLAYER_ID {
         eq_push(&gs.events, Event{type = .Player_Died})
         gs.stats.runs_played += 1
+        _ = save_stats(&gs.stats)  // persist immediately — a crash after death shouldn't lose the run
     } else {
         gs.stats.total_kills += 1
     }

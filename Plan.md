@@ -36,12 +36,20 @@ Note: `Gnipahellir3/plan.md` is the game *design* doc; this file is the *shippin
 
 ## Phase 1 — Port persistence (from G2)
 
-- [ ] Port binary save/load (world grids, player position + inventory, enemy state, current level)
-- [ ] Port persistent stats system (20+ metrics: deaths, depth, ore collected, distance, etc.)
-- [ ] Extend save format for Builder state (goal, den anchor, shell progress, carried block)
-- [ ] Save-on-quit + continue-from-main-menu flow
+- [x] Port binary save/load (`src/save.odin`): versioned POD snapshot of world, player,
+      enemies, sim, progression, elapsed time + frame counter. Size/version-checked;
+      corrupt or stale saves fall back to a fresh run (verified).
+- [x] Persistent stats persistence (`gnipahellir_stats.dat`), loaded at launch, saved on
+      quit and immediately on player death. Note: G3 tracks 4 metrics so far — G2's
+      fuller 20-metric set lands with the systems that feed it (Phases 3–5).
+- [x] Builder state in save — rides along in `Enemy_Store` (goal, den anchor, shell
+      progress, carried block are all flat fields). Verified: builders resume existing
+      dens after relaunch instead of starting new ones.
+- [x] Save-on-quit + auto-continue-on-launch. Dead runs clear the save (roguelike
+      semantics). Main-menu continue flow arrives with the menu in Phase 6.
 
-**Milestone:** quit mid-run, relaunch, continue exactly where you left off — builders included.
+**Milestone reached:** quit mid-run, relaunch, continue exactly where you left off —
+frame counter and builder dens verified continuous across sessions.
 
 ## Phase 2 — Port audio (from G2)
 
@@ -125,4 +133,5 @@ Note: `Gnipahellir3/plan.md` is the game *design* doc; this file is the *shippin
 
 - [x] project.md comparison written
 - [x] Phase 0 complete — resolution independence, git hygiene, debug build flag
-- [ ] Phase 1 next — port save/load + persistent stats from G2
+- [x] Phase 1 complete — save/load + stats persistence, verified round trip
+- [ ] Phase 2 next — port audio system from G2
