@@ -11,12 +11,13 @@ import "core:os"
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
-SAVE_VERSION :: i32(1)
+SAVE_VERSION :: i32(2)
 
 Save_Data :: struct {
     version:      i32,
     level_index:  int,
     world:        World_Grid,
+    levels:       Level_Store,   // stashed non-active levels
     player:       Player,
     enemies:      Enemy_Store,   // builder goals/dens/carry ride along — Enemy is flat
     sim:          Sim_State,
@@ -32,6 +33,7 @@ save_game :: proc(gs: ^Game_State) -> bool {
     sd.version      = SAVE_VERSION
     sd.level_index  = gs.level_index
     sd.world        = gs.world
+    sd.levels       = gs.levels
     sd.player       = gs.player
     sd.enemies      = gs.enemies
     sd.sim          = gs.sim
@@ -57,6 +59,7 @@ load_game :: proc(gs: ^Game_State) -> bool {
 
     gs.level_index  = sd.level_index
     gs.world        = sd.world
+    gs.levels       = sd.levels
     gs.player       = sd.player
     gs.enemies      = sd.enemies
     gs.sim          = sd.sim

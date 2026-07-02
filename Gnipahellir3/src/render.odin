@@ -12,8 +12,10 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     rl.ClearBackground(rl.BLACK)
 
     draw_world(&gs.world)
+    draw_portal_seals(gs)
     draw_player(&gs.player)
     draw_enemies(&gs.enemies)
+    draw_ui(gs)
 
     when GAME_DEBUG {
         if gs.ui.show_debug do draw_debug(gs)
@@ -58,10 +60,18 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
 draw_world :: proc(w: ^World_Grid) {
     for y in 0 ..< GRID_H {
         for x in 0 ..< GRID_W {
-            t  := w.terrain[grid_idx(x, y)]
-            px := i32(x * CELL_SIZE)
-            py := i32(y * CELL_SIZE)
+            idx := grid_idx(x, y)
+            t   := w.terrain[idx]
+            px  := i32(x * CELL_SIZE)
+            py  := i32(y * CELL_SIZE)
             draw_tile(t, px, py)
+
+            // World item drop: small glinting square
+            it := w.items[idx]
+            if it != .None && w.item_counts[idx] > 0 {
+                rl.DrawRectangle(px + 2, py + 2, 6, 6, item_table[it].color)
+                rl.DrawRectangleLines(px + 1, py + 1, 8, 8, rl.WHITE)
+            }
         }
     }
 }

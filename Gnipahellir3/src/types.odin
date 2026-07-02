@@ -166,6 +166,10 @@ Event_Type :: enum u8 {
     // Builder AI
     Builder_Mined,
     Builder_Placed,
+
+    // Player world interaction
+    Place_Request,   // tile = target; places the selected inventory item
+    Ritual_Request,  // player activated a sky altar
 }
 
 Event_Payload :: struct #raw_union {

@@ -65,17 +65,24 @@ process_events :: proc(gs: ^Game_State) {
             // sim handles tree growth
 
         case .Item_Pickup:
-            // interaction handles inventory insert
             audio_play(&gs.audio, .Pickup)
+            #partial switch Item(e.payload.int_val) {
+            case .Blueprint_A:
+                eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 0}})
+            case .Blueprint_B:
+                eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 1}})
+            case .Blueprint_C:
+                eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 2}})
+            }
 
         case .Item_Dropped:
             // interaction handles world item placement
 
         case .Craft_Request:
-            // crafting system handles
+            handle_craft_request(gs, e)
 
         case .Craft_Complete:
-            // crafting system handles
+            audio_play(&gs.audio, .Pickup)
 
         case .Projectile_Fired:
             // projectile system handles
@@ -114,6 +121,7 @@ process_events :: proc(gs: ^Game_State) {
             tier := int(e.payload.int_val)
             if tier >= 0 && tier < MAX_PROGRESSION_TIERS {
                 gs.progression.sky_structure_complete[tier] = true
+                audio_play(&gs.audio, .Fanfare)
                 eq_push(&gs.events, Event{
                     type    = .Cave_Unlocked,
                     payload = e.payload,
@@ -134,6 +142,12 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Builder_Placed:
             audio_play(&gs.audio, .Builder_Place, audio_tile_gain(gs, e.tile))
+
+        case .Place_Request:
+            handle_place_request(gs, e)
+
+        case .Ritual_Request:
+            handle_ritual_request(gs)
 
         case .Game_Won:
             // handle win screen
@@ -162,7 +176,9 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     old_tile := gs.world.terrain[idx]
     drop := terrain_table[old_tile].drop_item
 
-    set_tile(&gs.world, x, y, .Void)
+    // Mined tiles open to void underground, to air in the sky
+    fill: Tile_Type = gs.level_index == LEVEL_SKY ? .Air : .Void
+    set_tile(&gs.world, x, y, fill)
     audio_play(&gs.audio, .Mine)
 
     if drop != .None {

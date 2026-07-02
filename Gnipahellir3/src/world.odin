@@ -33,7 +33,7 @@ terrain_table := [Tile_Type]Terrain_Behavior{
     .Cave_Entrance  = { "Cave Entrance", {.Walkable},                                                rl.Color{60,  0,   80,  255}, 1,   0,   .None          },
     .Sky_Entrance   = { "Sky Entrance",  {.Walkable},                                                rl.Color{180, 220, 255, 255}, 1,   0,   .None          },
     .Sky_Altar      = { "Sky Altar",     {.Solid, .Placeable},                                       rl.Color{200, 200, 255, 255}, 0,   0,   .Sky_Altar     },
-    .Cloud          = { "Cloud",         {.Walkable},                                                rl.Color{240, 240, 255, 200}, 1,   0,   .None          },
+    .Cloud          = { "Cloud",         {.Solid, .Mineable},                                        rl.Color{240, 240, 255, 200}, 0,   0,   .None          },
     .Cloud_Ore      = { "Cloud Ore",     {.Solid, .Mineable},                                        rl.Color{200, 220, 255, 255}, 0,   0,   .Cloud_Stone   },
     .Aether_Ore     = { "Aether Ore",    {.Solid, .Mineable},                                        rl.Color{180, 255, 200, 255}, 0,   0,   .Aether_Crystal},
     .Runic_Sky_Ore  = { "Runic Sky Ore", {.Solid, .Mineable},                                        rl.Color{255, 180, 255, 255}, 0,   0,   .Runic_Sky_Ore },
@@ -338,4 +338,7 @@ world_init :: proc(w: ^World_Grid) {
     // Cave entrance: a hole in the grass the player can fall into
     set_tile(w, ent_x,   SURFACE_Y, .Cave_Entrance)
     set_tile(w, ent_x+1, SURFACE_Y, .Cave_Entrance)
+
+    // Portals to cave 2 and the sky, plus Blueprint A
+    carve_level0_portals(w)
 }

@@ -56,6 +56,18 @@ update_player :: proc(gs: ^Game_State) {
         gs.world.entity_map[grid_idx(new_center.x, new_center.y)] = PLAYER_ID
     }
 
+    // ── Fell through the clouds: back to the surface ─────────────
+    if gs.level_index == LEVEL_SKY && p.pos.y > 85 {
+        level_transition(gs, &level_portals[LEVEL_SKY][0])
+        return
+    }
+
+    // ── Item pickup (walk over drops) ─────────────────────────────
+    player_pickup(gs)
+
+    // ── Interact: portals, sky altar ──────────────────────────────
+    if inp.interact do player_interact(gs)
+
     // ── Mana regen ────────────────────────────────────────────────
     p.mana = min(p.mana + p.mana_regen * dt, p.mana_max)
 
@@ -85,6 +97,34 @@ update_player :: proc(gs: ^Game_State) {
     } else {
         p.anim_frame = 0
         p.anim_timer = 0
+    }
+}
+
+// Collect any world drops overlapped by the player's bounding box.
+player_pickup :: proc(gs: ^Game_State) {
+    p := &gs.player
+    left  := int(p.pos.x)
+    right := int(p.pos.x + PLAYER_W - 0.001)
+    top   := int(p.pos.y)
+    bot   := int(p.pos.y + PLAYER_H - 0.001)
+
+    for ty in top ..= bot {
+        for tx in left ..= right {
+            if !in_bounds(tx, ty) do continue
+            idx := grid_idx(tx, ty)
+            it  := gs.world.items[idx]
+            cnt := int(gs.world.item_counts[idx])
+            if it == .None || cnt == 0 do continue
+            if !inventory_insert(&p.inventory, it, cnt) do continue
+
+            gs.world.items[idx]       = .None
+            gs.world.item_counts[idx] = 0
+            eq_push(&gs.events, Event{
+                type    = .Item_Pickup,
+                tile    = {i32(tx), i32(ty)},
+                payload = {int_val = i32(it)},
+            })
+        }
     }
 }
 

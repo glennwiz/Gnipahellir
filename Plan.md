@@ -75,13 +75,50 @@ atmosphere. Verified: all sounds + ambience stream load cleanly at runtime.
 
 ## Phase 3 — Port game loop systems (from G2)
 
-- [ ] Crafting system (recipes at Crafting_Bench; start with G2's 5, extend per G3's plan.md)
-- [ ] Item placement with validation rules (drag from inventory to world)
-- [ ] UI windows: inventory (B), character (C), crafting (bench proximity), tooltips
-- [ ] Multi-level plumbing: level generation/save/transition for surface + 3 caves + 1 sky tier
-- [ ] Wire G3's progression: blueprint drops → sky ritual (consumes materials) → cave unlock
+- [x] Crafting system (recipes at Crafting_Bench; start with G2's 5, extend per G3's plan.md)
+- [x] Item placement with validation rules (drag from inventory to world)
+- [x] UI windows: inventory (B), character (C), crafting (bench proximity), tooltips
+- [x] Multi-level plumbing: level generation/save/transition for surface + 3 caves + 1 sky tier
+- [x] Wire G3's progression: blueprint drops → sky ritual (consumes materials) → cave unlock
 
 **Milestone:** the full design loop is playable start to finish, even if rough.
+
+### Phase 3 status (implementation done; playtest pending)
+
+New files: `items.odin`, `crafting.odin`, `placement.odin`, `ui.odin`, `levels.odin`.
+
+**Code-verified + smoke-tested** (builds, runs, renders, save v2 round-trips at 1.78 MB):
+- Item pickup: walk over drops → inventory (stacking to 99); drops render as glinting squares
+- Inventory UI (TAB): 8×3 grid, click or keys 1–8 to select, hover shows item name
+- Placement: right-click places selected item; validated (reach 5, open tile, solid
+  neighbour, never sealing the player in); UI clicks don't leak into mining
+- Crafting (C window): 6 recipes — Plank + Crafting_Bench by hand; Smelter, Tree_Grower,
+  Iron_Bucket, Sky_Altar at a bench (range 3)
+- Levels: 0 surface+cave1, 1 Deep Cave, 2 Gnipahellir, 3 Low Sky. Portals at fixed
+  coords (gen is deterministic), E to travel, locked portals draw red runic seals.
+  Levels freeze when left; 3 builders spawn in each deep cave; sky has cloud platforms
+  with Cloud_Ore, falling below the clouds returns you to the surface
+- Progression: Blueprint A (cave-1 portal chamber), B and C (deep-cave vaults) →
+  Blueprint_Found; sky-altar ritual (E near altar) consumes tier costs →
+  Structure_Complete fanfare → cave unlock. Tier costs: A = 8 Cloud Stone + 4 Plank;
+  B = 12 Cloud Stone + 6 Silver Ore; C = 20 Cloud Stone + 10 Gold Ore (boss gate, Phase 5)
+- HUD: HP/mana bars, level name, selected item
+
+**Needs playtest** (`odin run src`, or the game_test.exe left in Gnipahellir3/):
+- [ ] Reach the cave-1 portal chamber, pick up Blueprint A
+- [ ] Sky trip: E at the surface sky gate (west edge), mine Cloud_Ore, fall-through return
+- [ ] Craft chain: logs → planks → bench → place bench → bench recipes → Sky_Altar
+- [ ] Ritual at a placed altar on the sky level, then the cave-2 portal unlocks
+- [ ] Full descent: cave 2 (lava pools), Blueprint B, ritual B, cave 3 (magic lava)
+- [ ] UI feel: slot clicks, crafting clicks, tooltip, mining suppression over panels
+
+**Known gaps (deliberate, tracked for later phases):**
+- Smelter places but doesn't smelt — ores are used raw; smelting recipes need a Phase 3.5
+  or Phase 4 slot if we want metal bars in costs
+- Tree_Grower places but doesn't grow (sim system still stubbed — lava spread too)
+- Iron_Bucket craftable but lava scooping not implemented
+- Q (drop item) reads input but does nothing yet
+- Mining costs no mana yet despite the wand flavor
 
 ## Phase 4 — Builder economy (the differentiator)
 
@@ -147,4 +184,6 @@ atmosphere. Verified: all sounds + ambience stream load cleanly at runtime.
 - [x] Phase 1 complete — save/load + stats persistence, verified round trip
 - [x] Phase 2 complete — audio engine, event triggers, builder attenuation, cave ambience
       (volume sliders deferred to Phase 6 with the settings screen)
-- [ ] Phase 3 next — port game loop systems (crafting, placement, UI, multi-level)
+- [~] Phase 3 implemented, awaiting playtest — see "Phase 3 status" checklist above.
+      Resume point: run the playtest list, fix what breaks, then decide whether
+      smelting/sim gaps block Phase 4 or ride along.

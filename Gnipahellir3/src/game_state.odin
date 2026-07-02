@@ -230,6 +230,7 @@ Persistent_Stats :: struct {
 Game_State :: struct {
     world:       World_Grid,
     level_index: int,
+    levels:      Level_Store,
 
     player:      Player,
     enemies:     Enemy_Store,
@@ -271,4 +272,5 @@ game_state_init :: proc(gs: ^Game_State) {
 
     world_init(&gs.world)
     spawn_level_1_enemies(gs)
+    gs.levels.generated[LEVEL_SURFACE] = true  // lives in gs.world
 }
