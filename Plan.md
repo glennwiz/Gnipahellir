@@ -104,13 +104,19 @@ New files: `items.odin`, `crafting.odin`, `placement.odin`, `ui.odin`, `levels.o
   B = 12 Cloud Stone + 6 Silver Ore; C = 20 Cloud Stone + 10 Gold Ore (boss gate, Phase 5)
 - HUD: HP/mana bars, level name, selected item
 
-**Needs playtest** (`odin run src`, or the game_test.exe left in Gnipahellir3/):
-- [ ] Reach the cave-1 portal chamber, pick up Blueprint A
-- [ ] Sky trip: E at the surface sky gate (west edge), mine Cloud_Ore, fall-through return
-- [ ] Craft chain: logs → planks → bench → place bench → bench recipes → Sky_Altar
-- [ ] Ritual at a placed altar on the sky level, then the cave-2 portal unlocks
-- [ ] Full descent: cave 2 (lava pools), Blueprint B, ritual B, cave 3 (magic lava)
+**Automated test suite** (`src/tests.odin`, run with `odin test src` — 9 tests, all green):
+- [x] Pickup collects drops + stacks; blueprint pickup fires Blueprint_Found
+- [x] Placement: valid placement consumes; floating and out-of-reach rejected
+- [x] Crafting: hand recipe works; bench recipe fails without bench, works beside one
+- [x] Ritual: rejected without materials; consumes and unlocks cave 2 with them
+- [x] Locked portal blocks travel, opens after unlock; cave 2 generates with builders
+- [x] Level state persists across transitions in both directions
+- [x] Sky fall-through returns the player to the surface
+- [x] Cave 2 gen: iron + silver present, majority open space, blueprint + portal placed
+
+**Human playtest still wanted** (feel, not correctness — `odin run src`):
 - [ ] UI feel: slot clicks, crafting clicks, tooltip, mining suppression over panels
+- [ ] One full loop by hand to sanity-check pacing and portal discoverability
 
 **Known gaps (deliberate, tracked for later phases):**
 - Smelter places but doesn't smelt — ores are used raw; smelting recipes need a Phase 3.5
@@ -184,6 +190,8 @@ New files: `items.odin`, `crafting.odin`, `placement.odin`, `ui.odin`, `levels.o
 - [x] Phase 1 complete — save/load + stats persistence, verified round trip
 - [x] Phase 2 complete — audio engine, event triggers, builder attenuation, cave ambience
       (volume sliders deferred to Phase 6 with the settings screen)
-- [~] Phase 3 implemented, awaiting playtest — see "Phase 3 status" checklist above.
-      Resume point: run the playtest list, fix what breaks, then decide whether
-      smelting/sim gaps block Phase 4 or ride along.
+- [x] Phase 3 complete — all systems covered by the automated suite (`odin test src`);
+      human playtest of UI feel still welcome. Known gaps (smelting, sim, bucket)
+      tracked above; decide at Phase 4 kickoff whether smelting rides along.
+- [ ] Phase 4 next — builder economy (shared ore pool, raidable dens, honest bridging,
+      AI soak test)
