@@ -100,13 +100,20 @@ These extend the general rules above. All are mandatory.
   `enemy_free`.
 - **Deterministic update order**: new systems get an explicit line in `game_update`. No implicit ordering.
 
-### Module Dependency Rules
+### Module Responsibility Rules
 
-- `render.odin` → may read `types.odin`, `world.odin`. Never imports `input.odin` or `update.odin`.
-- `input.odin` → may push to `Event_Queue`, toggle `UI_State`. Never writes `World_Grid` directly.
-- `world.odin`, `entity.odin` → never import `render.odin` or `input.odin`.
-- `sim.odin` → never imports render or input.
-- `types.odin`, `game_state.odin` → shared foundation; all modules may import them.
+All source files are one Odin package (`game`), so imports cannot enforce
+boundaries — these are call-discipline rules, checked by review:
+
+- `render.odin` and every `draw_*` proc → read `Game_State`, call raylib.
+  Never mutate game state, never call update or input procs.
+- `input.odin` → polls hardware, pushes to `Event_Queue`, toggles `UI_State`,
+  sets the inventory selection (deliberate exemption: slot selection is UI
+  state that happens to live in `Inventory`). Never writes `World_Grid` or
+  entity data.
+- `world.odin`, `enemy.odin`, sim code → never call `draw_*` or input procs.
+- `types.odin`, `game_state.odin` → shared foundation: types, constants, and
+  the fat struct only; no game logic.
 
 ### Adding a New System: Checklist
 

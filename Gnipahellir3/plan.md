@@ -88,18 +88,25 @@ Systems do not call each other directly. They push events to `Event_Queue`. Even
 ### Render is Read-Only
 Draw procs read `Game_State` and call Raylib. They never mutate world state. UI may compute hover/layout hints but may not write to world or entity data. Exception: transient per-frame tooltip/hover state in `UI_State`.
 
-### Module Dependency Rules
-- `render.odin` may import `types.odin`, `world.odin` (read only) — never `input.odin` or `update.odin`
-- `input.odin` may push to `Event_Queue` and toggle `UI_State` — never write to `World_Grid` directly
-- `world.odin` and `entity.odin` may not import `render.odin` or `input.odin`
-- `sim.odin` (hazards, growth, spread) may not import render or input
-- `types.odin` and `game_state.odin` are the shared foundation; all other modules may import them
+### Module Responsibility Rules
+All source files are one Odin package; these are call-discipline rules
+(see CLAUDE.md for the authoritative wording):
+- `draw_*` procs read `Game_State` and call raylib — never mutate game state
+- `input.odin` pushes to `Event_Queue` and toggles `UI_State` — never writes `World_Grid` or entity data
+- `world.odin`, `enemy.odin`, and sim code never call `draw_*` or input procs
+- `types.odin` and `game_state.odin` are the shared foundation: types, constants, fat struct — no game logic
 
 ### Table-Driven Behavior
 Terrain behavior, item properties, and entity stats are defined in static tables (indexed by enum). New terrain/item/enemy = new table entry. No scattered switch statements.
 
-### One Entity Per Tile
-`World_Grid.entity_map` is the authoritative record of entity positions. Before any move, check destination. Despawn zeroes the map cell. No entity may exist in a solid tile.
+### Entity Map
+`World_Grid.entity_map` is a per-tile position index (center tile,
+last-writer-wins) maintained by player/enemy updates via `entity_map_move` /
+`entity_map_clear`, and used for entity lookups such as combat targeting. It
+is **not** a movement constraint — bodies are continuous AABBs and may
+overlap. Entity_ID convention: player = 0, enemy slot i = i + 1
+(`enemy_entity_id`). Despawn goes through `despawn_enemy`, which clears the
+map cell and frees the pool slot.
 
 ### Pixel Art for Detailed Tiles
 Cells are 10×10 pixels. Simple/background tiles (stone, grass, air, etc.) use a single `DrawRectangle` call. Tiles with visual detail (wood, leaves, flowers, and future decorative tiles) use a dedicated `draw_pixel_*` proc in `render.odin` that paints within the 10×10 cell pixel-by-pixel using `DrawRectangle` or `DrawPixel` calls.
@@ -115,28 +122,30 @@ Cells are 10×10 pixels. Simple/background tiles (stone, grass, air, etc.) use a
 
 ```
 src/
-  main.odin           -- Window init, game loop, shutdown
-  types.odin          -- All enums, flags, IDs, shared constants
-  game_state.odin     -- Game_State fat struct, sub-struct types, init proc
-  world.odin          -- World_Grid ops, terrain table, bounds/collision helpers
-  entity.odin         -- Entity_Store, spawn/despawn, free-list management
-  player.odin         -- Player update, physics, movement resolution
-  enemy.odin          -- Enemy types, AI state machines
-  input.odin          -- Input polling, intent → Event_Queue
-  events.odin         -- Event_Queue ring buffer, process_events dispatcher
-  update.odin         -- game_update: orchestrates all update_ calls in order
-  sim.odin            -- Hazard simulation (lava spread, tree growth, decay)
-  crafting.odin       -- Recipe table, craft_request handler
-  projectile.odin     -- Wand projectiles, fireball, travel/impact logic
-  particles.odin      -- Particle pool, spawn helpers, update_particles
-  audio.odin          -- Audio_State, sound event handling, music streaming
-  render.odin         -- All draw_* procs, camera, tile/entity/particle render
-  ui.odin             -- UI_State draw procs, layout, windows, HUD
-  progression.odin    -- Progression_State, blueprint/structure/gate logic
-  interaction.odin    -- Pickup, placement, crafting bench trigger logic
-  save.odin           -- Serialize/deserialize Game_State to disk
-  debug.odin          -- Debug overlay, logging helpers
+  main.odin        -- Window init, virtual-resolution transform, game loop
+  types.odin       -- Build flags, constants, IDs, enums, events, nav types
+  game_state.odin  -- All state structs + Game_State fat struct, init proc
+  world.odin       -- Terrain table, grid + entity-map helpers, surface/cave-1 gen
+  levels.odin      -- Level store, portals, transitions, ritual, cave 2-3 + sky gen
+  player.odin      -- Player update, physics, pickup, mining intent
+  enemy.odin       -- Enemy pool, builder AI (A*, dens, hunting), enemy physics
+  input.odin       -- Input polling → intents/events, UI toggles
+  events.odin      -- Event_Queue ops, process_events dispatcher
+  update.odin      -- game_update: explicit update order
+  crafting.odin    -- Recipe table, craft handler
+  placement.odin   -- Place_Request validation + mutation
+  items.odin       -- Item table, inventory ops
+  audio.odin       -- Sound table, event-driven playback, depth ambience
+  render.odin      -- draw_* procs (read-only), pixel-art tiles, debug overlay
+  ui.odin          -- HUD, inventory/crafting windows, debug menu, hit tests
+  save.odin        -- Versioned binary save/load, persistent stats
+  debug_log.odin   -- Fixed-buffer action log (debug builds)
+  tests.odin       -- Headless system tests (odin test src)
 ```
+
+Planned but not yet split out: `sim.odin` (lava spread, tree growth),
+`projectile.odin`, `particles.odin`; progression + interaction logic currently
+lives in `levels.odin` and splits out when it grows (Phase 5).
 
 ---
 
@@ -539,6 +548,11 @@ More enemy types to be added per cave layer. Each gets a row in `enemy_behavior_
 |  0    | Surface  | None    | Starting area. Portals to ±1 on edges. |
 
 ### Sky World (ascend, index < 0)
+
+> **v1.0 implementation note:** the shipped build uses a flat index space —
+> 0 = surface, 1–2 = deep caves, 3 = low sky (`LEVEL_*` constants in
+> `levels.odin`). The negative-index multi-tier sky below is the post-launch
+> design.
 
 | Level | Name            | Hazards          | Materials           | Builds              | Unlocks    |
 |-------|-----------------|------------------|---------------------|---------------------|------------|

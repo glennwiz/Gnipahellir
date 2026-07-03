@@ -14,7 +14,7 @@ Phase 4 (builder economy) and Phase 5 (Garm/combat) build on top of them.
 
 ## A. Fix before Phase 4/5 (these get more expensive every phase)
 
-### A1. The one-entity-per-tile invariant is not actually enforced
+### A1. ~~The one-entity-per-tile invariant is not actually enforced~~ — FIXED (entity_map is now a maintained position index; enemy_entity_id convention, despawn_enemy path, CLAUDE.md updated; 2 tests)
 CLAUDE.md calls `World_Grid.entity_map` "the authoritative record of entity
 positions — check before every move." Reality:
 
@@ -46,7 +46,7 @@ in world.odin (or a new physics.odin) and make both callers use it before a thir
 copy appears. The enemy version's tile-snap approach is the better-commented and
 more robust of the two — start from it.
 
-### A3. Event-queue ordering trap: systems after `process_events` lose events silently
+### A3. ~~Event-queue ordering trap~~ — FIXED (eq_clear moved to directly after process_events + comment; dropped events counted and logged in debug)
 `game_update` (`update.odin`) runs `process_events` at step 6 and `eq_clear` at
 step 9. Any event pushed by steps 7–8 (`update_particles` — planned for Phase 7,
 `update_audio`) is destroyed unprocessed at step 9. Right now nothing after
@@ -86,7 +86,7 @@ pacing feedback will be measuring the wrong game.
 
 ## B. Rules vs. reality drift (cheap to fix, mostly documentation)
 
-### B1. Module "import" rules are unenforceable as written
+### B1. ~~Module "import" rules are unenforceable as written~~ — FIXED (restated as call-discipline rules in CLAUDE.md and plan.md)
 CLAUDE.md's dependency rules are phrased as import constraints ("render.odin never
 imports input.odin"), but every file is `package game` — there are no imports to
 forbid, and nothing mechanical stops a violation. The *discipline* is currently
@@ -98,7 +98,7 @@ rule as stated can't fail a build.
 packages if you want the compiler to enforce it. The former is proportionate for
 a game this size.
 
-### B2. Planned file layout has drifted from reality
+### B2. ~~Planned file layout has drifted from reality~~ — FIXED (plan.md layout matches actual files; flat level-index scheme documented)
 plan.md's module layout lists `entity.odin`, `interaction.odin`,
 `progression.odin`, `sim.odin`, `projectile.odin`, `particles.odin`, `debug.odin`.
 Actual: progression + interaction + level gen all live in `levels.odin` (379
@@ -111,7 +111,7 @@ document CLAUDE.md tells every future change to read first). Consider splitting
 `levels.odin` when Phase 5 adds the boss arena — gen code and progression logic
 are already interleaved there.
 
-### B3. The static tables are mutable globals — violating your own forbidden pattern
+### B3. ~~The static tables are mutable globals~~ — FIXED (@(rodata) on all tables; build_templates documented exemption; UI colors are constants)
 `terrain_table`, `item_table`, `recipe_table`, `build_templates`,
 `structure_costs`, `level_portals`, `level_names`, `sound_file`,
 `sound_base_volume`, `tile_draw_style`, `CROWN_OFFSETS`, and the UI colors in
@@ -126,7 +126,7 @@ become read-only memory and writes crash loudly). Where `@(rodata)` fights you
 intentionally-static tables is acceptable — but the portal table, which hands out
 pointers, deserves the real treatment.
 
-### B4. Dead code / dead fields
+### B4. ~~Dead code / dead fields~~ — FIXED (is_walkable + free_head removed, SAVE_VERSION 3, no-op comments reworded; drop_item stays for the planned Q feature)
 - `is_walkable` (`world.odin:70-74`) has zero callers, and its logic makes the
   `.Walkable` flag meaningless (`walkable OR not solid` ≡ not solid).
 - `Enemy_Store.free_head` (`game_state.odin:87`) — the plan says "free-list
@@ -143,7 +143,7 @@ pointers, deserves the real treatment.
 latter — it changes `Save_Data` layout), and reword the misleading no-op case
 comments to "not yet implemented."
 
-### B5. Input writes `player.inventory.selected` directly
+### B5. ~~Input writes `player.inventory.selected` directly~~ — RESOLVED (documented as a deliberate exemption in CLAUDE.md)
 `input.odin:38,45` mutates player data, while the rules say input may only push
 events and toggle `UI_State`. It's benign, but it's the kind of small exception
 that erodes the rule. Either move `selected` into `UI_State` (it *is* UI state —
@@ -153,7 +153,7 @@ which slot is highlighted) or note the exemption in CLAUDE.md.
 
 ## C. Robustness / correctness details
 
-### C1. Save format: any struct edit silently requires a version bump
+### C1. ~~Save format: any struct edit silently requires a version bump~~ — FIXED (compile-time size assert pins Save_Data; bump version + size together)
 `Save_Data` is a raw memcpy including compiler padding (`save.odin`). The
 size + version checks catch most drift, but a semantic change that keeps the same
 size (e.g. reordering two `f32` fields, changing what `carry` means) loads
@@ -165,7 +165,7 @@ and adopt the habit: touching any saved struct = bump version in the same commit
 plan.md promised "versioned binary with migration path" — there is no migration
 path (old saves are discarded); fine for pre-1.0, just say so in the doc.
 
-### C2. Mining a tile clobbers an existing drop on that cell
+### C2. ~~Mining a tile clobbers an existing drop on that cell~~ — FIXED (stacks matching drops, never clobbers a different item)
 `handle_tile_mined` (`events.odin:184-188`) overwrites `items[idx]`/`item_counts`
 unconditionally. Sequence: mine ore (drop appears) → place a block on that cell →
 mine the block → the original drop is replaced, not stacked. Rare but a real item
@@ -203,16 +203,10 @@ place for the Phase 6 fade/loading hook.
 
 ## D. Minor / cosmetic (batch these opportunistically)
 
-- `update.odin:36`: the `frame % 300` flush check runs in release builds too;
-  the no-op is inside `flush_action_log`. Wrap the call in `when GAME_DEBUG` for
-  clarity (the log itself already is).
-- `debug_log.odin:42`: the action log writes to `enemy_action.log` but records
-  *all* actions (crafting, rituals, level entry). Rename to `action.log`.
-- `player.odin:60`: sky fall-through threshold `85` is a magic number two rows
-  below the base platform at 80 — name it (`SKY_FALL_Y`) next to the sky-gen
-  constants it depends on.
-- `eq_push` drops silently when full; plan.md says "log in debug." Add the
-  debug log line — a saturated queue is exactly the bug you'll want evidence for.
+- ~~flush check in release builds~~ — FIXED (wrapped in `when GAME_DEBUG`)
+- ~~`enemy_action.log` misnomer~~ — FIXED (renamed to `action.log`)
+- ~~sky fall-through magic number~~ — FIXED (`SKY_FALL_Y` next to sky gen)
+- ~~`eq_push` drops silently~~ — FIXED (drop counter, logged per frame in debug)
 - `astar_dig` puts ~130 KB on the stack per call (`g_cost` + `closed` + `nodes`)
   and re-initializes the full 20,736-cell `g_cost` each replan. Fine at 3
   builders; if Phase 4's soak test shows replan spikes, move the scratch buffers
@@ -241,12 +235,18 @@ place for the Phase 6 fade/loading hook.
 
 ---
 
-## Suggested order of attack
+## Status (2026-07-04)
 
-1. **Before the human playtest:** A5 (mining reach), A4 (dead-player actions) —
-   both change what the playtest measures. ~1 hour including tests.
-2. **Phase 4 kickoff, before new code:** A1 (entity_map decision), A3 (eq_clear),
-   B3 (`@(rodata)`), B4 (dead code + save version bump) — all small, all get more
-   expensive once builder economy code lands on top.
-3. **Phase 5 kickoff:** A2 (unified physics) as the first task, before Garm.
-4. **Whenever touching the files anyway:** B1/B2 doc reconciliation, C-items, D-items.
+Everything except the items below is done (see FIXED markers above; 14 tests
+green). Still open, in priority order:
+
+1. **A2 — unified physics** (Phase 5 kickoff, before Garm). Deliberately
+   deferred: it can subtly change movement feel and needs a human playtest to
+   sign off.
+2. **C4 — ritual not gated to the sky level** (before adding more sky tiers).
+3. **C5 — level transition swaps the world mid-frame** (do together with the
+   Phase 6 fade/loading hook).
+4. **C3 — fragile `cstring(raw_data(name))` casts in ui.odin** (whenever
+   touching that file).
+5. **D perf notes** — astar scratch buffers, draw_world batching; only if
+   profiling says so.
