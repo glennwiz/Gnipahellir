@@ -60,6 +60,16 @@ update_input :: proc(gs: ^Game_State) {
         if rl.IsKeyPressed(.F3) {
             gs.ui.show_debug = !gs.ui.show_debug
         }
-    }
+        if rl.IsKeyPressed(.F1) {
+            gs.debug.menu_open = !gs.debug.menu_open
+        }
+        inp.fly_up   = rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
+        inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
 
+        if gs.debug.menu_open && rl.IsMouseButtonPressed(.LEFT) {
+            switch debug_menu_row_at_cursor(gs) {
+            case 0: gs.debug.fly = !gs.debug.fly
+            }
+        }
+    }
 }

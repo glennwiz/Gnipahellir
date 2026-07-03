@@ -172,6 +172,8 @@ Input_State :: struct {
     mine:         bool,
     interact:     bool,
     drop_item:    bool,
+    fly_up:       bool,   // debug fly mode only (W/S held)
+    fly_down:     bool,
     mouse_tile:   [2]i32,
     mouse_world:  [2]f32,
 }
@@ -184,6 +186,13 @@ UI_State :: struct {
     show_debug:      bool,
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
+}
+
+// ─── Debug Menu (F1, debug builds only) ───────────────────────────────────────
+
+Debug_State :: struct {
+    menu_open: bool,
+    fly:       bool,
 }
 
 // ─── Sim ──────────────────────────────────────────────────────────────────────
@@ -252,6 +261,7 @@ Game_State :: struct {
     delta_time:   f32,
 
     debug_log:   Debug_Log,
+    debug:       Debug_State,
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────

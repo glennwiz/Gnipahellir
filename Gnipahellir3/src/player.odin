@@ -4,6 +4,7 @@ GRAVITY        :: f32(28.0)
 MOVE_SPEED     :: f32(8.0)
 JUMP_VEL       :: f32(-13.0)
 MAX_FALL_SPEED :: f32(25.0)
+FLY_SPEED      :: f32(14.0)  // debug fly mode
 
 PLAYER_W :: f32(0.8)   // tile units
 PLAYER_H :: f32(1.8)   // tile units
@@ -16,21 +17,33 @@ update_player :: proc(gs: ^Game_State) {
 
     inp := &gs.input
 
-    // ── Horizontal intent ─────────────────────────────────────────
-    p.vel.x = 0
-    if inp.move_left  { p.vel.x = -MOVE_SPEED; p.facing = -1 }
-    if inp.move_right { p.vel.x =  MOVE_SPEED; p.facing =  1 }
+    flying := false
+    when GAME_DEBUG do flying = gs.debug.fly
 
-    // ── Jump ──────────────────────────────────────────────────────
-    if inp.jump && p.grounded {
-        p.vel.y    = JUMP_VEL
-        p.grounded = false
-        eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Jump)}})
+    if flying {
+        // ── Debug fly: directional movement, no gravity, no jump ──
+        p.vel = {}
+        if inp.move_left  { p.vel.x = -FLY_SPEED; p.facing = -1 }
+        if inp.move_right { p.vel.x =  FLY_SPEED; p.facing =  1 }
+        if inp.fly_up     { p.vel.y = -FLY_SPEED }
+        if inp.fly_down   { p.vel.y =  FLY_SPEED }
+    } else {
+        // ── Horizontal intent ─────────────────────────────────────
+        p.vel.x = 0
+        if inp.move_left  { p.vel.x = -MOVE_SPEED; p.facing = -1 }
+        if inp.move_right { p.vel.x =  MOVE_SPEED; p.facing =  1 }
+
+        // ── Jump ──────────────────────────────────────────────────
+        if inp.jump && p.grounded {
+            p.vel.y    = JUMP_VEL
+            p.grounded = false
+            eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Jump)}})
+        }
+
+        // ── Gravity ───────────────────────────────────────────────
+        p.vel.y += GRAVITY * dt
+        if p.vel.y > MAX_FALL_SPEED do p.vel.y = MAX_FALL_SPEED
     }
-
-    // ── Gravity ───────────────────────────────────────────────────
-    p.vel.y += GRAVITY * dt
-    if p.vel.y > MAX_FALL_SPEED do p.vel.y = MAX_FALL_SPEED
 
     // ── AABB movement + collision ─────────────────────────────────
     prev_center := [2]int{
@@ -57,7 +70,7 @@ update_player :: proc(gs: ^Game_State) {
     }
 
     // ── Fell through the clouds: back to the surface ─────────────
-    if gs.level_index == LEVEL_SKY && p.pos.y > 85 {
+    if gs.level_index == LEVEL_SKY && p.pos.y > 85 && !flying {
         level_transition(gs, &level_portals[LEVEL_SKY][0])
         return
     }

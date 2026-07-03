@@ -23,10 +23,50 @@ panel_border  := rl.Color{90, 90, 120, 255}
 slot_bg       := rl.Color{35, 35, 50, 255}
 text_dim      := rl.Color{140, 140, 150, 255}
 
+// ─── Debug Menu (F1, debug builds only) ───────────────────────────────────────
+
+DBG_MENU_X     :: 24
+DBG_MENU_Y     :: 80
+DBG_MENU_W     :: 200
+DBG_MENU_ROW_H :: 24
+DBG_MENU_ROWS  :: 1   // row 0: fly mode
+
+// Menu row under the cursor, or -1.
+debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
+    mx := i32(gs.input.mouse_world.x)
+    my := i32(gs.input.mouse_world.y)
+    if mx < DBG_MENU_X || mx >= DBG_MENU_X + DBG_MENU_W do return -1
+    r := int((my - DBG_MENU_Y) / DBG_MENU_ROW_H)
+    if my < DBG_MENU_Y || r >= DBG_MENU_ROWS do return -1
+    return r
+}
+
+draw_debug_menu :: proc(gs: ^Game_State) {
+    h := i32(DBG_MENU_ROWS * DBG_MENU_ROW_H)
+    rl.DrawRectangle(DBG_MENU_X - 6, DBG_MENU_Y - 26, DBG_MENU_W + 12, h + 34, panel_bg)
+    rl.DrawRectangleLines(DBG_MENU_X - 6, DBG_MENU_Y - 26, DBG_MENU_W + 12, h + 34, panel_border)
+    rl.DrawText("DEBUG (F1)", DBG_MENU_X, DBG_MENU_Y - 20, 10, rl.YELLOW)
+
+    fly_col := gs.debug.fly ? rl.GREEN : text_dim
+    rl.DrawText(gs.debug.fly ? cstring("Fly mode: ON") : cstring("Fly mode: OFF"),
+        DBG_MENU_X, DBG_MENU_Y + 7, 10, fly_col)
+
+    if debug_menu_row_at_cursor(gs) == 0 {
+        rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + 1, DBG_MENU_W + 4, DBG_MENU_ROW_H - 2, rl.YELLOW)
+    }
+}
+
 // True when the cursor is over an open UI panel (blocks mining/placing).
 cursor_over_ui :: proc(gs: ^Game_State) -> bool {
     mx := i32(gs.input.mouse_world.x)
     my := i32(gs.input.mouse_world.y)
+    when GAME_DEBUG {
+        if gs.debug.menu_open &&
+           mx >= DBG_MENU_X - 6 && mx < DBG_MENU_X + DBG_MENU_W + 6 &&
+           my >= DBG_MENU_Y - 26 && my < DBG_MENU_Y + DBG_MENU_ROWS*DBG_MENU_ROW_H + 8 {
+            return true
+        }
+    }
     if gs.ui.show_inventory &&
        mx >= INV_X && mx < INV_X + INV_COLS*SLOT_PX &&
        my >= INV_Y && my < INV_Y + INV_ROWS*SLOT_PX {
@@ -68,6 +108,9 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
+    when GAME_DEBUG {
+        if gs.debug.menu_open do draw_debug_menu(gs)
+    }
 }
 
 draw_hud :: proc(gs: ^Game_State) {
