@@ -230,6 +230,24 @@ mining_respects_reach :: proc(t: ^testing.T) {
 }
 
 @(test)
+mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+    set_tile(&gs.world, 32, SURFACE_Y - 3, .Leaves)
+
+    gs.input.mine = true
+    gs.input.mouse_tile = {32, i32(SURFACE_Y - 3)}
+    update_player(gs)
+    process_events(gs)
+
+    // Above the surface line the hole opens to air (not void), leaf drops
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y - 3), Tile_Type.Air)
+    testing.expect_value(t, gs.world.items[grid_idx(32, SURFACE_Y - 3)], Item.Leaf)
+}
+
+@(test)
 dead_player_cannot_act :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

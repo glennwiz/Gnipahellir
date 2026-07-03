@@ -176,8 +176,11 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     old_tile := gs.world.terrain[idx]
     drop := terrain_table[old_tile].drop_item
 
-    // Mined tiles open to void underground, to air in the sky
-    fill: Tile_Type = gs.level_index == LEVEL_SKY ? .Air : .Void
+    // Mined tiles open to air above the surface line, to void underground
+    fill: Tile_Type = .Void
+    if gs.level_index == LEVEL_SKY || (gs.level_index == LEVEL_SURFACE && y < SURFACE_Y) {
+        fill = .Air
+    }
     set_tile(&gs.world, x, y, fill)
     audio_play(&gs.audio, .Mine)
 
