@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 import "core:fmt"
 
 // ─── UI Layout (virtual-resolution pixels) ────────────────────────────────────

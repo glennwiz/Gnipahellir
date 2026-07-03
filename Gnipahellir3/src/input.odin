@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 
 update_input :: proc(gs: ^Game_State) {
     inp := &gs.input
