@@ -81,10 +81,9 @@ Enemy :: struct {
 }
 
 Enemy_Store :: struct {
-    data:      [MAX_ENEMIES]Enemy,
-    active:    [MAX_ENEMIES]bool,
-    count:     int,
-    free_head: int,
+    data:   [MAX_ENEMIES]Enemy,
+    active: [MAX_ENEMIES]bool,   // enemy_alloc scans this linearly
+    count:  int,
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────
@@ -278,8 +277,6 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
     gs.player.equipped    = .Mine_Wand
-
-    gs.enemies.free_head = 0
 
     world_init(&gs.world)
     spawn_level_1_enemies(gs)

@@ -35,10 +35,10 @@ process_events :: proc(gs: ^Game_State) {
 
         #partial switch e.type {
         case .Player_Moved:
-            // handled by player system
+            // informational; no handler yet
 
         case .Enemy_Moved:
-            // handled by enemy system
+            // informational; no handler yet
 
         case .Damage_Dealt:
             if e.target == PLAYER_ID && !gs.player.dead {
@@ -62,10 +62,10 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Place)
 
         case .Lava_Spread:
-            // sim handles lava adjacency
+            // sim system not implemented yet (Phase 4+)
 
         case .Tree_Grew:
-            // sim handles tree growth
+            // sim system not implemented yet (Phase 4+)
 
         case .Item_Pickup:
             audio_play(&gs.audio, .Pickup)
@@ -79,7 +79,7 @@ process_events :: proc(gs: ^Game_State) {
             }
 
         case .Item_Dropped:
-            // interaction handles world item placement
+            // drop-to-world (Q key) not implemented yet
 
         case .Craft_Request:
             handle_craft_request(gs, e)
@@ -88,28 +88,28 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Pickup)
 
         case .Projectile_Fired:
-            // projectile system handles
+            // projectile system not implemented yet (Phase 5)
 
         case .Projectile_Impact:
-            // projectile system handles
+            // projectile system not implemented yet (Phase 5)
 
         case .Play_Sound:
             audio_play(&gs.audio, Sound_ID(e.payload.int_val))
 
         case .Play_Music:
-            // audio system handles
+            // music tracks land in Phase 7
 
         case .Stop_Music:
-            // audio system handles
+            // music tracks land in Phase 7
 
         case .Level_Enter:
-            // level transition
+            // transition already performed by level_transition; informational
 
         case .Level_Exit:
-            // level transition
+            // informational; no handler yet
 
         case .Level_Locked:
-            // notify player
+            // on-screen notification lands in Phase 6
 
         case .Player_Died:
             gs.player.dead = true
@@ -153,7 +153,7 @@ process_events :: proc(gs: ^Game_State) {
             handle_ritual_request(gs)
 
         case .Game_Won:
-            // handle win screen
+            // win screen lands in Phase 5
         }
     }
 }

@@ -67,12 +67,6 @@ is_solid :: #force_inline proc(w: ^World_Grid, x, y: int) -> bool {
     return .Solid in terrain_table[t].flags
 }
 
-is_walkable :: #force_inline proc(w: ^World_Grid, x, y: int) -> bool {
-    t := get_tile(w, x, y)
-    tb := terrain_table[t]
-    return .Walkable in tb.flags || (!(.Solid in tb.flags))
-}
-
 // ─── World Generation Helpers ─────────────────────────────────────────────────
 
 // Deterministic hash — u32 wraps naturally, no overflow concerns

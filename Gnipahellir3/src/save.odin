@@ -11,7 +11,14 @@ import "core:os"
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
-SAVE_VERSION :: i32(2)
+SAVE_VERSION :: i32(3)
+
+// Tripwire: the save is a raw memory snapshot, so ANY layout change to a
+// saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
+// size and silently invalidates old saves.  When this assert fires: bump
+// SAVE_VERSION and update the expected size in the same commit.
+SAVE_DATA_EXPECTED_SIZE :: 1_783_944
+#assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {
     version:      i32,
