@@ -207,3 +207,55 @@ cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     testing.expect_value(t, w.items[grid_idx(12, 101)], Item.Blueprint_B)
     testing.expect_value(t, get_tile(w, 6, 14), Tile_Type.Cave_Entrance)
 }
+
+@(test)
+mining_respects_reach :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+    gs.input.mine = true
+
+    // Within reach: grass 2 tiles away gets mined (opens to void)
+    gs.input.mouse_tile = {32, i32(SURFACE_Y)}
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Void)
+
+    // Out of reach: grass 20 tiles away is untouched
+    gs.input.mouse_tile = {50, i32(SURFACE_Y)}
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, 50, SURFACE_Y), Tile_Type.Grass)
+}
+
+@(test)
+dead_player_cannot_act :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos  = {30, f32(SURFACE_Y) - PLAYER_H}
+    gs.player.dead = true
+    inv := &gs.player.inventory
+
+    // Place rejected (target itself is valid)
+    set_tile(&gs.world, 32, SURFACE_Y - 1, .Air)
+    inventory_insert(inv, .Stone_Block, 5)
+    inv.selected = 0
+    handle_place_request(gs, Event{tile = {32, i32(SURFACE_Y) - 1}})
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y - 1), Tile_Type.Air)
+    testing.expect_value(t, inventory_count(inv, .Stone_Block), 5)
+
+    // Craft rejected (hand recipe, ingredients present)
+    inventory_insert(inv, .Wood_Log, 1)
+    handle_craft_request(gs, Event{payload = {int_val = 0}})
+    testing.expect_value(t, inventory_count(inv, .Plank), 0)
+
+    // Ritual rejected (blueprint + materials present)
+    gs.progression.blueprint_found[0] = true
+    inventory_insert(inv, .Cloud_Stone, 8)
+    inventory_insert(inv, .Plank, 4)
+    handle_ritual_request(gs)
+    process_events(gs)
+    testing.expect(t, !gs.progression.sky_structure_complete[0], "dead player cannot perform the ritual")
+}

@@ -59,7 +59,7 @@ directly after `process_events` with a comment stating "systems after this point
 must not push events." One line now saves a "why doesn't my particle sound play"
 hunt in Phase 7.
 
-### A4. Dead player can still place, craft, and perform rituals
+### A4. ~~Dead player can still place, craft, and perform rituals~~ — FIXED (guards in all three handlers + `dead_player_cannot_act` test)
 `update_player` early-outs when `p.dead` (`player.odin:15`), which gates mining
 and interact. But `update_input` pushes `Place_Request` / `Craft_Request`
 unconditionally (`input.odin:42-58`), and `handle_place_request`,
@@ -70,7 +70,7 @@ A corpse can build.
 three handlers). Worth fixing before the playtest — death is the roguelike's core
 loss condition.
 
-### A5. Mining has no reach limit
+### A5. ~~Mining has no reach limit~~ — FIXED (shared `PLAYER_REACH` for mining + placing, `mining_respects_reach` test)
 Placement enforces `PLACE_REACH :: 5` (`placement.odin:29`), but the mining path
 in `update_player` (`player.odin:75-88`) checks only that the mouse tile is
 mineable. Since the whole 192×108 grid is on screen, the player can excavate the

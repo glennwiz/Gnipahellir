@@ -5,9 +5,10 @@ package game
 //  Right-click places the selected inventory item as a tile.  Input pushes
 //  Place_Request with the target tile; the handler validates and mutates.
 
-PLACE_REACH :: 5  // tiles, chebyshev from player center
+PLAYER_REACH :: 5  // tiles, chebyshev from player center; shared by placing and mining
 
 handle_place_request :: proc(gs: ^Game_State, e: Event) {
+    if gs.player.dead do return
     inv  := &gs.player.inventory
     slot := &inv.slots[inv.selected]
     if slot.item == .None || slot.count <= 0 do return
@@ -26,7 +27,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     // Within reach of the player
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
-    if abs(x - pcx) > PLACE_REACH || abs(y - pcy) > PLACE_REACH do return
+    if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return
 
     // Needs a solid neighbour to attach to
     if !is_solid(&gs.world, x-1, y) && !is_solid(&gs.world, x+1, y) &&

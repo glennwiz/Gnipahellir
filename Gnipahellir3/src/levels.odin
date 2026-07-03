@@ -155,6 +155,7 @@ structure_costs := [MAX_PROGRESSION_TIERS][2]Ingredient{
 }
 
 handle_ritual_request :: proc(gs: ^Game_State) {
+    if gs.player.dead do return
     // First tier whose blueprint is found but structure unbuilt
     tier := -1
     for t in 0 ..< MAX_PROGRESSION_TIERS {

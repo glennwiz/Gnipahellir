@@ -51,6 +51,7 @@ recipe_craftable :: proc(gs: ^Game_State, r: ^Recipe) -> bool {
 }
 
 handle_craft_request :: proc(gs: ^Game_State, e: Event) {
+    if gs.player.dead do return
     idx := int(e.payload.int_val)
     if idx < 0 || idx >= len(recipe_table) do return
     r := &recipe_table[idx]
