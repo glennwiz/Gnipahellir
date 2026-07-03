@@ -48,6 +48,7 @@ Draw_Style :: enum u8 {
     Pixel_Flower,
 }
 
+@(rodata)
 tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Wood   = .Pixel_Wood,
     .Leaves = .Pixel_Leaves,

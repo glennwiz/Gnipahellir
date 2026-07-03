@@ -24,6 +24,7 @@ Sound_ID :: enum u8 {
     Fanfare,
 }
 
+@(rodata)
 sound_file := [Sound_ID]cstring{
     .None          = "",
     .Jump          = "sounds/splash_bang_pop/sound_woosh.wav",
@@ -38,6 +39,7 @@ sound_file := [Sound_ID]cstring{
     .Fanfare       = "sounds/splash_bang_pop/sound_level_up.wav",
 }
 
+@(rodata)
 sound_base_volume := [Sound_ID]f32{
     .None          = 0,
     .Jump          = 0.4,

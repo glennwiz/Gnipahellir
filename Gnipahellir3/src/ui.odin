@@ -18,10 +18,10 @@ CRAFT_Y     :: INV_Y
 CRAFT_W     :: 430
 CRAFT_ROW_H :: 26
 
-panel_bg      := rl.Color{15, 15, 25, 230}
-panel_border  := rl.Color{90, 90, 120, 255}
-slot_bg       := rl.Color{35, 35, 50, 255}
-text_dim      := rl.Color{140, 140, 150, 255}
+panel_bg     :: rl.Color{15, 15, 25, 230}
+panel_border :: rl.Color{90, 90, 120, 255}
+slot_bg      :: rl.Color{35, 35, 50, 255}
+text_dim     :: rl.Color{140, 140, 150, 255}
 
 // ─── Debug Menu (F1, debug builds only) ───────────────────────────────────────
 

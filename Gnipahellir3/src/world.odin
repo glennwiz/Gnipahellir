@@ -13,6 +13,7 @@ Terrain_Behavior :: struct {
     drop_item:         Item,
 }
 
+@(rodata)
 terrain_table := [Tile_Type]Terrain_Behavior{
     .Air            = { "Air",           {},                                                         rl.Color{135, 206, 235, 255}, 1,   0,   .None          },
     .Void           = { "Void",          {},                                                         rl.Color{20,  20,  30,  255}, 1,   0,   .None          },
@@ -77,6 +78,7 @@ whash :: proc(n: u32) -> u32 {
 }
 
 // Crown offsets relative to the top of the trunk
+@(rodata)
 CROWN_OFFSETS := [][2]int{
     {0, -2},
     {-1, -1}, {0, -1}, {1, -1},

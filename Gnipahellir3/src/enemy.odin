@@ -55,16 +55,19 @@ Build_Template :: struct {
     tiles: []Template_Tile,
 }
 
+@(rodata)
 CAIRN_TILES := [?]Template_Tile{
     {{-1, 0}, .Stone}, {{0, 0}, .Stone}, {{1, 0}, .Stone},
     {{0, -1}, .Stone},
 }
 
+@(rodata)
 PILLAR_TILES := [?]Template_Tile{
     {{0, 0}, .Stone}, {{0, -1}, .Stone}, {{0, -2}, .Stone}, {{0, -3}, .Stone},
     {{-1, -3}, .Stone}, {{1, -3}, .Stone},
 }
 
+@(rodata)
 SHELTER_TILES := [?]Template_Tile{
     // carve the interior + doorway
     {{-1, 0}, .Void}, {{0, 0}, .Void}, {{1, 0}, .Void}, {{2, 0}, .Void},
@@ -78,6 +81,9 @@ SHELTER_TILES := [?]Template_Tile{
     {{-2, -3}, .Wood}, {{-1, -3}, .Wood}, {{0, -3}, .Wood}, {{1, -3}, .Wood}, {{2, -3}, .Wood},
 }
 
+// Static table; cannot be @(rodata) because the slice initializers are not
+// compile-time constants.  The arrays it points into ARE rodata — treat this
+// as read-only.
 build_templates := [Build_Kind]Build_Template{
     .Cairn   = {"cairn",   CAIRN_TILES[:]},
     .Pillar  = {"pillar",  PILLAR_TILES[:]},

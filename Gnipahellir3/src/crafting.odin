@@ -21,6 +21,7 @@ Recipe :: struct {
     ingredients:  [3]Ingredient,   // .None entries are unused
 }
 
+@(rodata)
 recipe_table := [?]Recipe{
     { .Plank,          4, false, {{.Wood_Log, 1},    {},               {}} },
     { .Crafting_Bench, 1, false, {{.Plank, 4},       {},               {}} },

@@ -14,6 +14,7 @@ LEVEL_CAVE3   :: 2
 LEVEL_SKY     :: 3
 NUM_LEVELS    :: 4
 
+@(rodata)
 level_names := [NUM_LEVELS]string{"Surface", "Deep Cave", "Gnipahellir", "Low Sky"}
 
 Level_Store :: struct {
@@ -31,6 +32,7 @@ Portal :: struct {
 
 MAX_LEVEL_PORTALS :: 2
 
+@(rodata)
 level_portals := [NUM_LEVELS][MAX_LEVEL_PORTALS]Portal{
     LEVEL_SURFACE = {
         // Deep in cave 1 → cave 2 (locked behind sky structure A)
@@ -148,6 +150,7 @@ player_interact :: proc(gs: ^Game_State) {
 //  One cost per progression tier.  v1.0 has a single sky level, so tier 1
 //  mixes sky and cave-2 materials instead of the cut sky -2 level's ore.
 
+@(rodata)
 structure_costs := [MAX_PROGRESSION_TIERS][2]Ingredient{
     { {.Cloud_Stone, 8},  {.Plank, 4}      },   // A → unlocks cave 2
     { {.Cloud_Stone, 12}, {.Silver_Ore, 6} },   // B → unlocks cave 3

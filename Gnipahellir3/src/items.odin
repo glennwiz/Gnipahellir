@@ -12,6 +12,7 @@ Item_Info :: struct {
     place_tile: Tile_Type,   // .Air = not placeable
 }
 
+@(rodata)
 item_table := [Item]Item_Info{
     .None           = { "None",            {0,   0,   0,   0  }, .Air },
     .Sword          = { "Sword",           {200, 200, 210, 255}, .Air },
