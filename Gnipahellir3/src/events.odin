@@ -3,7 +3,10 @@ package game
 // ─── Event Queue ──────────────────────────────────────────────────────────────
 
 eq_push :: proc(eq: ^Event_Queue, e: Event) {
-    if eq.size >= MAX_EVENTS do return  // drop silently when full
+    if eq.size >= MAX_EVENTS {  // drop when full; game_update logs the count in debug
+        eq.dropped += 1
+        return
+    }
     eq.events[eq.tail] = e
     eq.tail = (eq.tail + 1) % MAX_EVENTS
     eq.size += 1

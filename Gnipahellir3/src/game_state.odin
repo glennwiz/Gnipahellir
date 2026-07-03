@@ -157,10 +157,11 @@ Particle_Store :: struct {
 // ─── Event Queue ──────────────────────────────────────────────────────────────
 
 Event_Queue :: struct {
-    events: [MAX_EVENTS]Event,
-    head:   int,
-    tail:   int,
-    size:   int,
+    events:  [MAX_EVENTS]Event,
+    head:    int,
+    tail:    int,
+    size:    int,
+    dropped: int,   // pushes rejected because the queue was full (debug telemetry)
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
