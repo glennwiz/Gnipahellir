@@ -167,6 +167,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
     } else {
         audio_play(&gs.audio, .Kill)
         gs.stats.total_kills += 1
+        despawn_enemy(gs, entity_id_to_enemy_index(e.source))
     }
 }
 

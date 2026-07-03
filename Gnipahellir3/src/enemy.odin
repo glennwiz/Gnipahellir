@@ -92,6 +92,15 @@ build_templates := [Build_Kind]Build_Template{
 
 // ─── Enemy Pool ───────────────────────────────────────────────────────────────
 
+// Entity_ID convention: PLAYER_ID is 0; enemy slot i maps to Entity_ID(i + 1).
+enemy_entity_id :: #force_inline proc(i: int) -> Entity_ID {
+    return Entity_ID(i + 1)
+}
+
+entity_id_to_enemy_index :: #force_inline proc(id: Entity_ID) -> int {
+    return int(id) - 1
+}
+
 enemy_alloc :: proc(es: ^Enemy_Store) -> (id: int, ok: bool) {
     for i in 0 ..< MAX_ENEMIES {
         if !es.active[i] {
@@ -586,6 +595,14 @@ spawn_builder :: proc(gs: ^Game_State, start_x: int) {
     }
 
     e.pos = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1}
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+}
+
+// Clear the entity-map marker and release the pool slot.
+despawn_enemy :: proc(gs: ^Game_State, i: int) {
+    if i < 0 || i >= MAX_ENEMIES || !gs.enemies.active[i] { return }
+    entity_map_clear(&gs.world, enemy_entity_id(i), builder_tile(&gs.enemies.data[i]))
+    enemy_free(&gs.enemies, i)
 }
 
 spawn_level_1_enemies :: proc(gs: ^Game_State) {
@@ -1112,7 +1129,7 @@ builder_hunt :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             b.attack_timer = ATTACK_TIME
             eq_push(&gs.events, Event{
                 type    = .Damage_Dealt,
-                source  = Entity_ID(id + 1),
+                source  = enemy_entity_id(id),
                 target  = PLAYER_ID,
                 payload = {int_val = ATTACK_DAMAGE},
             })
@@ -1164,11 +1181,13 @@ update_enemies :: proc(gs: ^Game_State) {
     for i in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[i] { continue }
         e := &gs.enemies.data[i]
+        prev := builder_tile(e)
         switch e.kind {
         case .Builder:
             enemy_physics(e, &gs.world, dt, BUILDER_W, BUILDER_H)
             update_builder(e, i, gs, dt)
         case .Garm, .Undead, .Fire_Sprite:
         }
+        entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }
 }

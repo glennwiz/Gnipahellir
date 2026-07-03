@@ -248,6 +248,53 @@ mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
 }
 
 @(test)
+entity_map_tracks_enemies :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Level 0 spawns 2 builders; each must be registered at its center tile
+    registered := 0
+    for i in 0 ..< GRID_W * GRID_H {
+        id := gs.world.entity_map[i]
+        if id != PLAYER_ID && id != INVALID_ENTITY do registered += 1
+    }
+    testing.expect_value(t, registered, gs.enemies.count)
+
+    // Markers follow the enemy across an update tick
+    update_enemies(gs)
+    registered = 0
+    for i in 0 ..< GRID_W * GRID_H {
+        id := gs.world.entity_map[i]
+        if id != PLAYER_ID && id != INVALID_ENTITY do registered += 1
+    }
+    testing.expect_value(t, registered, gs.enemies.count)
+}
+
+@(test)
+enemy_death_despawns_and_clears_map :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Find an active builder
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    before := gs.enemies.count
+    tile   := builder_tile(&gs.enemies.data[idx])
+
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(idx)})
+    process_events(gs)
+
+    testing.expect(t, !gs.enemies.active[idx], "enemy slot freed on death")
+    testing.expect_value(t, gs.enemies.count, before - 1)
+    testing.expect(t, gs.world.entity_map[grid_idx(int(tile.x), int(tile.y))] != enemy_entity_id(idx),
+        "entity map cell cleared on despawn")
+    testing.expect_value(t, gs.stats.total_kills, 1)
+}
+
+@(test)
 dead_player_cannot_act :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

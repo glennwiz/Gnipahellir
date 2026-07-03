@@ -46,28 +46,12 @@ update_player :: proc(gs: ^Game_State) {
     }
 
     // ── AABB movement + collision ─────────────────────────────────
-    prev_center := [2]int{
-        int(p.pos.x + PLAYER_W * 0.5),
-        int(p.pos.y + PLAYER_H * 0.5),
-    }
+    prev_center := player_tile(p)
 
     player_move_x(gs, dt)
     player_move_y(gs, dt)
 
-    // Update entity_map (gameplay one-entity-per-tile tracking)
-    new_center := [2]int{
-        int(p.pos.x + PLAYER_W * 0.5),
-        int(p.pos.y + PLAYER_H * 0.5),
-    }
-    if in_bounds(prev_center.x, prev_center.y) {
-        idx := grid_idx(prev_center.x, prev_center.y)
-        if gs.world.entity_map[idx] == PLAYER_ID {
-            gs.world.entity_map[idx] = INVALID_ENTITY
-        }
-    }
-    if in_bounds(new_center.x, new_center.y) {
-        gs.world.entity_map[grid_idx(new_center.x, new_center.y)] = PLAYER_ID
-    }
+    entity_map_move(&gs.world, PLAYER_ID, prev_center, player_tile(p))
 
     // ── Fell through the clouds: back to the surface ─────────────
     if gs.level_index == LEVEL_SKY && p.pos.y > 85 && !flying {

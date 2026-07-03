@@ -79,11 +79,7 @@ portal_at_player :: proc(gs: ^Game_State) -> ^Portal {
 
 level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
     // Remove the player's entity-map marker from the level we are leaving
-    pc := [2]int{int(gs.player.pos.x + PLAYER_W*0.5), int(gs.player.pos.y + PLAYER_H*0.5)}
-    if in_bounds(pc.x, pc.y) {
-        idx := grid_idx(pc.x, pc.y)
-        if gs.world.entity_map[idx] == PLAYER_ID do gs.world.entity_map[idx] = INVALID_ENTITY
-    }
+    entity_map_clear(&gs.world, PLAYER_ID, player_tile(&gs.player))
 
     ls := &gs.levels
     ls.worlds[gs.level_index]  = gs.world

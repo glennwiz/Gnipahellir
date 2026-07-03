@@ -68,6 +68,29 @@ is_solid :: #force_inline proc(w: ^World_Grid, x, y: int) -> bool {
     return .Solid in terrain_table[t].flags
 }
 
+// ─── Entity Map ───────────────────────────────────────────────────────────────
+//
+//  entity_map is a per-tile position index (center tile, last-writer-wins),
+//  maintained by the player and enemy updates and used for entity lookups.
+//  It is NOT a movement constraint: bodies are continuous AABBs and may
+//  transiently overlap, in which case the later writer owns the cell.
+
+entity_map_move :: proc(w: ^World_Grid, id: Entity_ID, from, to: [2]i32) {
+    if in_bounds(int(from.x), int(from.y)) {
+        idx := grid_idx(int(from.x), int(from.y))
+        if w.entity_map[idx] == id do w.entity_map[idx] = INVALID_ENTITY
+    }
+    if in_bounds(int(to.x), int(to.y)) {
+        w.entity_map[grid_idx(int(to.x), int(to.y))] = id
+    }
+}
+
+entity_map_clear :: proc(w: ^World_Grid, id: Entity_ID, at: [2]i32) {
+    if !in_bounds(int(at.x), int(at.y)) do return
+    idx := grid_idx(int(at.x), int(at.y))
+    if w.entity_map[idx] == id do w.entity_map[idx] = INVALID_ENTITY
+}
+
 // ─── World Generation Helpers ─────────────────────────────────────────────────
 
 // Deterministic hash — u32 wraps naturally, no overflow concerns

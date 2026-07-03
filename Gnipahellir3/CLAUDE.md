@@ -91,7 +91,13 @@ These extend the general rules above. All are mandatory.
 - **Event-driven**: systems communicate via `Event_Queue`. No direct cross-system calls.
 - **Render is read-only**: draw procs never mutate `Game_State`. No game logic in render.
 - **Table-driven behavior**: terrain/item/enemy behavior in static tables. No `switch` sprawl.
-- **One entity per tile**: enforced via `World_Grid.entity_map`. Check before every move.
+- **Entity map**: `World_Grid.entity_map` is a per-tile position index — center
+  tile, last-writer-wins — maintained by player/enemy updates via
+  `entity_map_move`/`entity_map_clear` and used for entity lookups (combat
+  targeting). It is NOT a movement constraint: bodies are continuous AABBs and
+  may overlap. Entity_ID convention: player = 0, enemy slot i = i + 1
+  (`enemy_entity_id`). Despawn goes through `despawn_enemy`, never bare
+  `enemy_free`.
 - **Deterministic update order**: new systems get an explicit line in `game_update`. No implicit ordering.
 
 ### Module Dependency Rules
