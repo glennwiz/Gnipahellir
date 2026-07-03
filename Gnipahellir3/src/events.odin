@@ -189,8 +189,14 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     audio_play(&gs.audio, .Mine)
 
     if drop != .None {
-        // Place drop in world
-        gs.world.items[idx]       = drop
-        gs.world.item_counts[idx] = 1
+        // One drop stack per cell: stack onto a matching drop, claim an empty
+        // cell, but never clobber a different item already lying there.
+        existing := gs.world.items[idx]
+        if existing == drop && gs.world.item_counts[idx] > 0 {
+            if int(gs.world.item_counts[idx]) < MAX_STACK do gs.world.item_counts[idx] += 1
+        } else if existing == .None || gs.world.item_counts[idx] == 0 {
+            gs.world.items[idx]       = drop
+            gs.world.item_counts[idx] = 1
+        }
     }
 }

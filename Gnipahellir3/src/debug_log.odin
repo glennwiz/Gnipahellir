@@ -5,7 +5,7 @@ import "core:os"
 
 // ─── Action Log ───────────────────────────────────────────────────────────────
 //
-//  Fixed ring buffer written to "enemy_action.log" on game exit.
+//  Fixed ring buffer written to "action.log" on game exit.
 //  Call log_action anywhere that has a *Game_State.
 //  Call flush_action_log once before CloseWindow.
 
@@ -39,5 +39,5 @@ flush_action_log :: proc(gs: ^Game_State) {
     when !GAME_DEBUG { return }
     if gs.debug_log.pos == 0 { return }
     data := gs.debug_log.buf[:gs.debug_log.pos]
-    _ = os.write_entire_file("enemy_action.log", data)
+    _ = os.write_entire_file("action.log", data)
 }

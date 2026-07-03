@@ -321,6 +321,10 @@ carve_box :: proc(w: ^World_Grid, x0, y0, x1, y1: int) {
 //  Open air with cloud platforms; Cloud_Ore pockets sit on the platforms.
 //  The base platform holds the return portal.
 
+// Falling below this row on the sky level returns the player to the surface
+// (the base platform sits at row 80; see gen_sky_level).
+SKY_FALL_Y :: 85
+
 gen_sky_level :: proc(w: ^World_Grid) {
     w^ = {}
     for i in 0 ..< GRID_W * GRID_H {

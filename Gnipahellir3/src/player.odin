@@ -54,7 +54,7 @@ update_player :: proc(gs: ^Game_State) {
     entity_map_move(&gs.world, PLAYER_ID, prev_center, player_tile(p))
 
     // ── Fell through the clouds: back to the surface ─────────────
-    if gs.level_index == LEVEL_SKY && p.pos.y > 85 && !flying {
+    if gs.level_index == LEVEL_SKY && p.pos.y > SKY_FALL_Y && !flying {
         level_transition(gs, &level_portals[LEVEL_SKY][0])
         return
     }
