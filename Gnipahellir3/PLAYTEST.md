@@ -9,7 +9,7 @@ Tests: `odin test src` — headless, ~20 tests, runs in well under a second.
 |---|---|
 | A / D (or arrows) | Move |
 | W / ↑ / Space | Jump |
-| Left-click | Mine: **Pickaxe** chips adjacent tiles (3 hits, free); a crafted **Mine Wand** shoots a spark stream at range 2/4/8 (5 mana per shot) |
+| Left-click (hold) | Mine: the **Pickaxe** works the tile in the cursor's rough *direction* — no aiming at tiles; point roughly and hold. Forward carves head+feet height (a walkable tunnel), point down/up to dig those ways. 3 chips per tile, free. A crafted **Mine Wand** keeps precise cursor aim at range 2/4/8 (5 mana per shot) |
 | Left-click on enemy | Sword swing (needs a Sword in inventory; 2-tile reach, 2 dmg, 0.35 s cooldown) |
 | Right-click | Place selected item (5-tile reach, needs solid neighbour) |
 | TAB | Inventory (click slot or keys 1–8 to select) |

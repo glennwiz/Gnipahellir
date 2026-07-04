@@ -233,11 +233,13 @@ cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(w, 6, 14), Tile_Type.Cave_Entrance)
 }
 
-// One pick swing / wand attempt at the tile; returns after the events drain.
+// One pick swing / wand attempt pointing at the tile; the pick only reads
+// the rough direction, the wand reads the exact tile.
 @(private = "file")
 mine_swing :: proc(gs: ^Game_State, tile: [2]i32) {
-    gs.input.mine       = true
-    gs.input.mouse_tile = tile
+    gs.input.mine        = true
+    gs.input.mouse_tile  = tile
+    gs.input.mouse_world = {(f32(tile.x) + 0.5) * CELL_SIZE, (f32(tile.y) + 0.5) * CELL_SIZE}
     gs.player.mine_timer = 0
     update_player(gs)
     process_events(gs)
@@ -245,13 +247,14 @@ mine_swing :: proc(gs: ^Game_State, tile: [2]i32) {
 }
 
 @(test)
-pick_chips_adjacent_tiles_only :: proc(t: ^testing.T) {
+pick_chips_by_rough_direction :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
 
-    // Adjacent grass: two chips crack it, the third breaks it (opens to void)
+    // Down-forward: pointing at the diagonal grass — two chips crack it,
+    // the third breaks it (opens to void)
     T := [2]i32{31, i32(SURFACE_Y)}
     mine_swing(gs, T)
     mine_swing(gs, T)
@@ -260,12 +263,21 @@ pick_chips_adjacent_tiles_only :: proc(t: ^testing.T) {
     mine_swing(gs, T)
     testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y), Tile_Type.Void)
 
-    // Two tiles out with no wand: swings do nothing
+    // Pointing far with no wand: the pick only works adjacent tiles — with
+    // open air beside the body, distant grass is untouched
+    set_tile(&gs.world, 31, SURFACE_Y - 2, .Air)
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Air)
     far := [2]i32{33, i32(SURFACE_Y)}
     for _ in 0 ..< 5 { mine_swing(gs, far) }
     testing.expect_value(t, get_tile(&gs.world, 33, SURFACE_Y), Tile_Type.Grass)
 
-    // Switching targets resets the chip count
+    // Straight up: mines the tile above the head
+    set_tile(&gs.world, 30, SURFACE_Y - 3, .Stone)
+    up := [2]i32{30, i32(SURFACE_Y - 3)}
+    for _ in 0 ..< PICK_HITS { mine_swing(gs, up) }
+    testing.expect_value(t, get_tile(&gs.world, 30, SURFACE_Y - 3), Tile_Type.Air)
+
+    // Switching direction resets the chip count
     mine_swing(gs, {30, i32(SURFACE_Y)})
     mine_swing(gs, {29, i32(SURFACE_Y)})
     testing.expect_value(t, gs.player.chip_hits, u8(1))
@@ -309,7 +321,10 @@ wand_mines_at_range_for_mana :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Void)
     testing.expect(t, !gs.mining.active, "the shot is spent")
 
-    // Beyond the basic wand's reach (3 > 2): nothing fires
+    // Beyond the basic wand's reach (3 > 2): nothing fires (the swing falls
+    // back to the pick, which finds only the cleared air beside the body)
+    set_tile(&gs.world, 29, SURFACE_Y - 2, .Air)
+    set_tile(&gs.world, 29, SURFACE_Y - 1, .Air)
     mana_before := gs.player.mana
     mine_swing(gs, {27, i32(SURFACE_Y)})
     testing.expect(t, !gs.mining.active, "out-of-range shot must not fire")

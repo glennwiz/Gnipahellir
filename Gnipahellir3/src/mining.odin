@@ -37,52 +37,100 @@ best_wand :: proc(inv: ^Inventory) -> (best: Item, r: i32) {
     return
 }
 
+// The pick doesn't aim at the cursor — the cursor's rough DIRECTION from the
+// player picks one of 8 ways, and the pick works the adjacent tile(s) that
+// way.  Horizontal swings offer both head- and feet-height tiles (the body
+// is 2 tiles tall: a walkable tunnel needs both), top first.  The bands are
+// asymmetric — the horizontal band spans a full 45° up/down because "beside
+// my head" reads as forward, not up.
+@(private = "file")
+pick_targets :: proc(p: ^Player, mouse_world: [2]f32, out: ^[2][2]i32) -> int {
+    col := i32(p.pos.x + PLAYER_W*0.5)
+    top := i32(p.pos.y + 0.1)
+    bot := i32(p.pos.y + PLAYER_H - 0.1)
+
+    dx := mouse_world.x/CELL_SIZE - (p.pos.x + PLAYER_W*0.5)
+    dy := mouse_world.y/CELL_SIZE - (p.pos.y + PLAYER_H*0.5)
+    adx := abs(dx)
+    ady := abs(dy)
+
+    dir: [2]i32
+    if adx < 0.05 && ady < 0.05 {
+        dir = {i32(p.facing), 0}   // cursor on the body: swing the way we face
+    } else {
+        if adx >= 0.414*ady { dir.x = 1 if dx >= 0 else -1 }   // outside the pure-vertical cone
+        if ady >= adx       { dir.y = 1 if dy >= 0 else -1 }   // steeper than 45°
+    }
+
+    switch {
+    case dir.y < 0:
+        out[0] = {col + dir.x, top - 1}
+        return 1
+    case dir.y > 0:
+        out[0] = {col + dir.x, bot + 1}
+        return 1
+    case:
+        out[0] = {col + dir.x, top}
+        out[1] = {col + dir.x, bot}
+        return 2
+    }
+}
+
 // Called from update_player while the mine button is held.
 player_mine :: proc(gs: ^Game_State, dt: f32) {
     p := &gs.player
     p.mine_timer -= dt
     if !gs.input.mine || p.mine_timer > 0 { return }
 
-    T  := gs.input.mouse_tile
-    tx := int(T.x)
-    ty := int(T.y)
-    if !in_bounds(tx, ty) { return }
-    if .Mineable not_in terrain_table[get_tile(&gs.world, tx, ty)].flags { return }
-
+    // Wand: pointing at a mineable tile beyond arm's reach fires the best
+    // wand carried — precise cursor aim is what the upgrade buys.
+    T := gs.input.mouse_tile
     d := chebyshev(T, player_tile(p))
+    if d > PICK_RANGE && in_bounds(int(T.x), int(T.y)) &&
+       .Mineable in terrain_table[get_tile(&gs.world, int(T.x), int(T.y))].flags {
+        wand, wrange := best_wand(&p.inventory)
+        if wand != .None && d <= wrange {
+            if p.mana < WAND_MANA_COST {
+                p.mine_timer = 0.6   // rate-limits the reminder while held
+                notify(gs, "Not enough mana!")
+                return
+            }
+            p.mana      -= WAND_MANA_COST
+            p.mine_timer = WAND_COOLDOWN
+            gs.mining = {active = true, target = T, travel = WAND_TRAVEL_TIME}
+            spawn_wand_stream(gs, T)
+            eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wand_Fire)}})
+            return
+        }
+    }
 
-    // Pick: right in front, free, chips per tile.
-    if d <= PICK_RANGE {
-        if inventory_count(&p.inventory, .Pickaxe) == 0 { return }
+    // Pick: no aiming, just a rough direction — chip the first workable tile.
+    if inventory_count(&p.inventory, .Pickaxe) == 0 { return }
+    targets: [2][2]i32
+    n := pick_targets(p, gs.input.mouse_world, &targets)
+    for i in 0 ..< n {
+        C := targets[i]
+        if !in_bounds(int(C.x), int(C.y)) { continue }
+        if .Mineable not_in terrain_table[get_tile(&gs.world, int(C.x), int(C.y))].flags { continue }
+
+        if C.x != i32(p.pos.x + PLAYER_W*0.5) {
+            p.facing = 1 if C.x > i32(p.pos.x + PLAYER_W*0.5) else -1
+        }
         p.mine_timer = PICK_SWING_TIME
-        if p.chip_tile != T {
-            p.chip_tile = T
+        if p.chip_tile != C {
+            p.chip_tile = C
             p.chip_hits = 0
         }
         p.chip_hits += 1
-        spawn_chip_sparks(gs, T)
+        spawn_chip_sparks(gs, C)
         if int(p.chip_hits) >= PICK_HITS {
             p.chip_hits = 0
-            eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = T})
+            eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = C})
         } else {
             eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Mine)}})
         }
         return
     }
-
-    // Wand: reach beyond arm's length costs mana.
-    wand, wrange := best_wand(&p.inventory)
-    if wand == .None || d > wrange { return }
-    if p.mana < WAND_MANA_COST {
-        p.mine_timer = 0.6   // rate-limits the reminder while the button is held
-        notify(gs, "Not enough mana!")
-        return
-    }
-    p.mana      -= WAND_MANA_COST
-    p.mine_timer = WAND_COOLDOWN
-    gs.mining = {active = true, target = T, travel = WAND_TRAVEL_TIME}
-    spawn_wand_stream(gs, T)
-    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wand_Fire)}})
 }
 
 // Step 5 in game_update — pushes Tile_Mined, so it must precede process_events.
