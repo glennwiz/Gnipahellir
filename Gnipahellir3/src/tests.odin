@@ -316,6 +316,46 @@ fast_fall_does_not_tunnel :: proc(t: ^testing.T) {
 }
 
 @(test)
+builders_do_not_freeze :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // 60 simulated seconds of builder AI on the real level-0 world.
+    // Regression for the physics-margin bug where builders pinned against
+    // 1-high steps forever: a builder may legitimately idle a few seconds
+    // (cooldowns between jobs), but 10 s at the exact same position while
+    // active means the freeze is back.
+    last_pos:   [MAX_ENEMIES][2]f32
+    still_secs: [MAX_ENEMIES]int
+
+    for frame in 0 ..< 3600 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+
+        if frame % 60 != 0 do continue
+        for i in 0 ..< MAX_ENEMIES {
+            if !gs.enemies.active[i] do continue
+            e := &gs.enemies.data[i]
+            if e.pos == last_pos[i] {
+                still_secs[i] += 1
+                testing.expect(t, still_secs[i] < 10, "builder frozen in place for 10s")
+            } else {
+                still_secs[i] = 0
+                last_pos[i]   = e.pos
+            }
+        }
+    }
+
+    // With movement working, both level-0 builders finish their dens well
+    // within the minute (deterministic world gen + fixed dt).
+    for i in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[i] do continue
+        testing.expect(t, gs.enemies.data[i].builder.den_built, "builder should complete its den within 60s")
+    }
+}
+
+@(test)
 entity_map_tracks_enemies :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
