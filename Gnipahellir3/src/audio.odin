@@ -21,6 +21,7 @@ Sound_ID :: enum u8 {
     Kill,
     Builder_Dig,
     Builder_Place,
+    Builder_Shriek,
     Fanfare,
 }
 
@@ -34,9 +35,10 @@ sound_file := [Sound_ID]cstring{
     .Hurt          = "sounds/splash_bang_pop/sound_hit_ally.wav",
     .Death         = "sounds/splash_bang_pop/sound_enemy_defeat.wav",
     .Kill          = "sounds/splash_bang_pop/sound_enemy_defeat_small.wav",
-    .Builder_Dig   = "sounds/splash_bang_pop/sfx_ar_primary_attack.wav",
-    .Builder_Place = "sounds/splash_bang_pop/sound_hit_shield.wav",
-    .Fanfare       = "sounds/splash_bang_pop/sound_level_up.wav",
+    .Builder_Dig    = "sounds/splash_bang_pop/sfx_ar_primary_attack.wav",
+    .Builder_Place  = "sounds/splash_bang_pop/sound_hit_shield.wav",
+    .Builder_Shriek = "sounds/splash_bang_pop/sound_enrage_start.wav",
+    .Fanfare        = "sounds/splash_bang_pop/sound_level_up.wav",
 }
 
 @(rodata)
@@ -49,9 +51,10 @@ sound_base_volume := [Sound_ID]f32{
     .Hurt          = 0.8,
     .Death         = 0.9,
     .Kill          = 0.8,
-    .Builder_Dig   = 0.5,
-    .Builder_Place = 0.5,
-    .Fanfare       = 0.8,
+    .Builder_Dig    = 0.5,
+    .Builder_Place  = 0.5,
+    .Builder_Shriek = 0.9,   // the raid alarm — must cut through everything
+    .Fanfare        = 0.8,
 }
 
 AMBIENCE_FILE :: "sounds/splash_bang_pop/sound_horror_ambience.wav"

@@ -805,6 +805,7 @@ builder_alert :: proc(gs: ^Game_State, i: int) {
     if b.goal == .Hunt { return }
     log_action(gs, "Builder#%d den breached — hunting", i)
     notify(gs, "A builder shrieks — it hunts you!")
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
     b.goal        = .Hunt
     b.los_timer   = 0
     b.plan_target = {-99, -99}
