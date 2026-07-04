@@ -35,7 +35,7 @@ If real: add `enemy_entity_id :: proc(i: int) -> Entity_ID { return Entity_ID(i+
 wire `Entity_Died` → `enemy_free` + map clear. If aspirational until Phase 5:
 delete the claim from CLAUDE.md so nobody builds on an invariant that doesn't hold.
 
-### A2. Two independent physics/collision implementations
+### A2. ~~Two independent physics/collision implementations~~ — FIXED (shared move_body in physics.odin; sweeps crossed tiles so fast bodies can't tunnel; stable grounded; feel sign-off pending human playtest)
 `player_move_x/y` (`player.odin:133-211`) and `enemy_physics` +
 `enemy_collides_x/y` (`enemy.odin:482-543`) are separate AABB resolvers with
 different snap strategies (epsilon offset vs tile-flush snap), different gravity
@@ -240,9 +240,9 @@ place for the Phase 6 fade/loading hook.
 Everything except the items below is done (see FIXED markers above; 14 tests
 green). Still open, in priority order:
 
-1. **A2 — unified physics** (Phase 5 kickoff, before Garm). Deliberately
-   deferred: it can subtly change movement feel and needs a human playtest to
-   sign off.
+1. ~~A2 — unified physics~~ — DONE 2026-07-04; movement feel needs a
+   sign-off in the human playtest (player now stands flush-with-back-off and
+   collision margins changed from 0.01/0.001 to a uniform 0.001).
 2. **C4 — ritual not gated to the sky level** (before adding more sky tiers).
 3. **C5 — level transition swaps the world mid-frame** (do together with the
    Phase 6 fade/loading hook).

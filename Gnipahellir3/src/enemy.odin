@@ -4,11 +4,12 @@ import "core:math"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-BUILDER_W       :: f32(0.8)
-BUILDER_H       :: f32(1.0)
-BUILDER_SPEED   :: f32(4.0)
-BUILDER_JUMP    :: f32(-10.0)  // apex ~2.5 tiles — must clear the A*'s 2-up jumps
-BUILDER_GRAVITY :: f32(20.0)
+BUILDER_W        :: f32(0.8)
+BUILDER_H        :: f32(1.0)
+BUILDER_SPEED    :: f32(4.0)
+BUILDER_JUMP     :: f32(-10.0)  // apex ~2.5 tiles — must clear the A*'s 2-up jumps
+BUILDER_GRAVITY  :: f32(20.0)
+BUILDER_MAX_FALL :: f32(12.0)
 
 MINE_TIME       :: f32(0.4)   // pause after each mine/place action
 MAX_ASTAR_NODES :: 4096       // search budget (nodes pushed)
@@ -492,70 +493,8 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
     }
 }
 
-// ─── Physics ──────────────────────────────────────────────────────────────────
-
-enemy_physics :: proc(e: ^Enemy, w: ^World_Grid, dt: f32, ew, eh: f32) {
-    e.vel.y += BUILDER_GRAVITY * dt
-    if e.vel.y > 12 { e.vel.y = 12 }
-
-    // On collision, snap flush to the tile boundary.  Without the snap the
-    // body stops at an arbitrary sub-tile offset, and epsilon overlaps make
-    // int(pos + size - 0.01) count a phantom extra row/column — wedging the
-    // enemy inside a solid corner where every subsequent move collides.
-    new_x := e.pos.x + e.vel.x * dt
-    if !enemy_collides_x(w, new_x, e.pos.y, ew, eh) {
-        e.pos.x = new_x
-    } else {
-        snap_x: f32
-        if e.vel.x > 0 {
-            snap_x = f32(int(new_x + ew - 0.01)) - ew
-        } else {
-            snap_x = f32(int(new_x) + 1)
-        }
-        if !enemy_collides_x(w, snap_x, e.pos.y, ew, eh) { e.pos.x = snap_x }
-        e.vel.x = 0
-    }
-
-    new_y := e.pos.y + e.vel.y * dt
-    if !enemy_collides_y(w, e.pos.x, new_y, ew, eh) {
-        e.pos.y    = new_y
-        e.grounded = false
-    } else {
-        snap_y: f32
-        if e.vel.y > 0 {
-            snap_y = f32(int(new_y + eh - 0.01)) - eh
-        } else {
-            snap_y = f32(int(new_y) + 1)
-        }
-        if !enemy_collides_y(w, e.pos.x, snap_y, ew, eh) { e.pos.y = snap_y }
-        if e.vel.y > 0 { e.grounded = true }
-        e.vel.y = 0
-    }
-}
-
-enemy_collides_x :: proc(w: ^World_Grid, x, y, ew, eh: f32) -> bool {
-    left  := int(x)
-    right := int(x + ew - 0.01)
-    top   := int(y)
-    bot   := int(y + eh - 0.01)
-    for ty in top ..= bot {
-        if is_solid(w, left,  ty) { return true }
-        if is_solid(w, right, ty) { return true }
-    }
-    return false
-}
-
-enemy_collides_y :: proc(w: ^World_Grid, x, y, ew, eh: f32) -> bool {
-    left  := int(x)
-    right := int(x + ew - 0.01)
-    top   := int(y)
-    bot   := int(y + eh - 0.01)
-    for tx in left ..= right {
-        if is_solid(w, tx, top) { return true }
-        if is_solid(w, tx, bot) { return true }
-    }
-    return false
-}
+// Movement/collision resolution lives in physics.odin (move_body), shared
+// with the player.
 
 // ─── Spawn ────────────────────────────────────────────────────────────────────
 
@@ -726,14 +665,13 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
 // Last-resort rescue: if the body overlaps solid tiles (walled in by another
 // builder, or a physics edge case), mine every mineable tile it touches.
 builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
-    if !enemy_collides_x(&gs.world, e.pos.x, e.pos.y, BUILDER_W, BUILDER_H) &&
-       !enemy_collides_y(&gs.world, e.pos.x, e.pos.y, BUILDER_W, BUILDER_H) {
+    if !body_embedded(&gs.world, e.pos, {BUILDER_W, BUILDER_H}) {
         return
     }
     left  := int(e.pos.x)
-    right := int(e.pos.x + BUILDER_W - 0.01)
+    right := int(e.pos.x + BUILDER_W - BODY_EPS)
     top   := int(e.pos.y)
-    bot   := int(e.pos.y + BUILDER_H - 0.01)
+    bot   := int(e.pos.y + BUILDER_H - BODY_EPS)
     for y in top ..= bot {
         for x in left ..= right {
             if is_builder_mineable(&gs.world, x, y) {
@@ -1184,7 +1122,8 @@ update_enemies :: proc(gs: ^Game_State) {
         prev := builder_tile(e)
         switch e.kind {
         case .Builder:
-            enemy_physics(e, &gs.world, dt, BUILDER_W, BUILDER_H)
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_builder(e, i, gs, dt)
         case .Garm, .Undead, .Fire_Sprite:
         }

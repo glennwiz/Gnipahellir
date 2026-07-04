@@ -127,8 +127,9 @@ src/
   game_state.odin  -- All state structs + Game_State fat struct, init proc
   world.odin       -- Terrain table, grid + entity-map helpers, surface/cave-1 gen
   levels.odin      -- Level store, portals, transitions, ritual, cave 2-3 + sky gen
-  player.odin      -- Player update, physics, pickup, mining intent
-  enemy.odin       -- Enemy pool, builder AI (A*, dens, hunting), enemy physics
+  physics.odin     -- Shared AABB body resolver (move_body), used by all bodies
+  player.odin      -- Player update, intent, pickup, mining intent
+  enemy.odin       -- Enemy pool, builder AI (A*, dens, hunting)
   input.odin       -- Input polling → intents/events, UI toggles
   events.odin      -- Event_Queue ops, process_events dispatcher
   update.odin      -- game_update: explicit update order

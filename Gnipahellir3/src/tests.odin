@@ -248,6 +248,74 @@ mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
 }
 
 @(test)
+body_lands_and_grounded_is_stable :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Clear surface decoration above the landing column
+    for y in SURFACE_Y - 8 ..< SURFACE_Y do set_tile(&gs.world, 30, y, .Air)
+
+    pos      := [2]f32{30, f32(SURFACE_Y) - 6}
+    vel      := [2]f32{}
+    grounded := false
+    for _ in 0 ..< 120 {
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &grounded)
+    }
+    testing.expect(t, grounded, "body should land on the surface")
+    testing.expect(t, abs(pos.y + PLAYER_H - f32(SURFACE_Y)) < 0.01, "feet at the grass boundary")
+
+    // Regression: grounded must hold EVERY frame while standing (the old
+    // enemy resolver flickered grounded on alternating frames)
+    for _ in 0 ..< 10 {
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &grounded)
+        testing.expect(t, grounded, "grounded must not flicker while standing")
+    }
+}
+
+@(test)
+body_blocked_by_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Two-tile wall right of the body
+    set_tile(&gs.world, 33, SURFACE_Y - 1, .Stone)
+    set_tile(&gs.world, 33, SURFACE_Y - 2, .Stone)
+
+    pos      := [2]f32{30, f32(SURFACE_Y) - PLAYER_H}
+    vel      := [2]f32{}
+    grounded := true
+    for _ in 0 ..< 60 {
+        vel.x = MOVE_SPEED
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &grounded)
+    }
+    testing.expect(t, pos.x + PLAYER_W <= 33.0, "body must stop at the wall")
+    testing.expect(t, pos.x + PLAYER_W > 32.9, "body must stand right against the wall")
+}
+
+@(test)
+fast_fall_does_not_tunnel :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Worst case: terminal velocity at the 50 ms dt cap crosses > 1 tile.
+    // The grass row at SURFACE_Y is one tile thick with stone below removed.
+    for y in SURFACE_Y - 8 ..< SURFACE_Y do set_tile(&gs.world, 30, y, .Air)
+
+    pos      := [2]f32{30, f32(SURFACE_Y) - PLAYER_H - 0.5}
+    vel      := [2]f32{0, MAX_FALL_SPEED}
+    grounded := false
+    for _ in 0 ..< 10 {
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 0.05,
+            GRAVITY, MAX_FALL_SPEED, &grounded)
+    }
+    testing.expect(t, grounded, "body must land, not tunnel through the surface")
+    testing.expect(t, abs(pos.y + PLAYER_H - f32(SURFACE_Y)) < 0.01, "feet on the grass row")
+}
+
+@(test)
 entity_map_tracks_enemies :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

@@ -39,17 +39,13 @@ update_player :: proc(gs: ^Game_State) {
             p.grounded = false
             eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Jump)}})
         }
-
-        // ── Gravity ───────────────────────────────────────────────
-        p.vel.y += GRAVITY * dt
-        if p.vel.y > MAX_FALL_SPEED do p.vel.y = MAX_FALL_SPEED
     }
 
-    // ── AABB movement + collision ─────────────────────────────────
+    // ── AABB movement + collision (gravity applied inside) ───────
     prev_center := player_tile(p)
 
-    player_move_x(gs, dt)
-    player_move_y(gs, dt)
+    move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
+        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded)
 
     entity_map_move(&gs.world, PLAYER_ID, prev_center, player_tile(p))
 
@@ -128,84 +124,5 @@ player_pickup :: proc(gs: ^Game_State) {
     }
 }
 
-// Move horizontally, resolve against solid tiles.
-// Checks the full height of the player's bounding box on the leading edge.
-player_move_x :: proc(gs: ^Game_State, dt: f32) {
-    p := &gs.player
-    w := &gs.world
-    dx := p.vel.x * dt
-
-    if dx == 0 do return
-
-    new_x := p.pos.x + dx
-
-    if dx > 0 {
-        // Check right edge: column at floor(new_x + PLAYER_W)
-        right_tile_x := int(new_x + PLAYER_W)
-        top_tile_y   := int(p.pos.y)
-        bot_tile_y   := int(p.pos.y + PLAYER_H - 0.001)
-        for ty := top_tile_y; ty <= bot_tile_y; ty += 1 {
-            if is_solid(w, right_tile_x, ty) {
-                new_x    = f32(right_tile_x) - PLAYER_W - 0.001
-                p.vel.x  = 0
-                break
-            }
-        }
-    } else {
-        // Check left edge: column at floor(new_x)
-        left_tile_x := int(new_x)
-        top_tile_y  := int(p.pos.y)
-        bot_tile_y  := int(p.pos.y + PLAYER_H - 0.001)
-        for ty := top_tile_y; ty <= bot_tile_y; ty += 1 {
-            if is_solid(w, left_tile_x, ty) {
-                new_x   = f32(left_tile_x + 1) + 0.001
-                p.vel.x = 0
-                break
-            }
-        }
-    }
-
-    p.pos.x = clamp(new_x, 0, f32(GRID_W) - PLAYER_W - 0.001)
-}
-
-// Move vertically, resolve against solid tiles.
-// Checks the full width of the player's bounding box on the leading edge.
-player_move_y :: proc(gs: ^Game_State, dt: f32) {
-    p := &gs.player
-    w := &gs.world
-    dy := p.vel.y * dt
-
-    if dy == 0 do return
-
-    new_y := p.pos.y + dy
-
-    if dy > 0 {
-        // Check bottom edge: row at floor(new_y + PLAYER_H)
-        bot_tile_y  := int(new_y + PLAYER_H)
-        left_tile_x := int(p.pos.x)
-        right_tile_x := int(p.pos.x + PLAYER_W - 0.001)
-        p.grounded = false
-        for tx := left_tile_x; tx <= right_tile_x; tx += 1 {
-            if is_solid(w, tx, bot_tile_y) {
-                new_y      = f32(bot_tile_y) - PLAYER_H - 0.001
-                p.vel.y    = 0
-                p.grounded = true
-                break
-            }
-        }
-    } else {
-        // Check top edge: row at floor(new_y)
-        top_tile_y   := int(new_y)
-        left_tile_x  := int(p.pos.x)
-        right_tile_x := int(p.pos.x + PLAYER_W - 0.001)
-        for tx := left_tile_x; tx <= right_tile_x; tx += 1 {
-            if is_solid(w, tx, top_tile_y) {
-                new_y   = f32(top_tile_y + 1) + 0.001
-                p.vel.y = 0
-                break
-            }
-        }
-    }
-
-    p.pos.y = clamp(new_y, 0, f32(GRID_H) - PLAYER_H - 0.001)
-}
+// Movement/collision resolution lives in physics.odin (move_body), shared
+// with enemies.
