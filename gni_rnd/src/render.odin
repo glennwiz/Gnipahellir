@@ -325,8 +325,8 @@ draw_player :: proc(p: ^Player) {
     if ps_h < pixel_size { pixel_size = ps_h }
     if pixel_size < 1 { pixel_size = 1 }
 
-    // Allow forcing a larger visual scale for testing. Set test_tiles_high=2 to make
-    // the pixel sprite visually occupy 2 tiles high (rounded up).
+    // Allow forcing a larger visual scale for visibility. PLAYER_RENDER_SCALE can be
+    // adjusted if the player appears too small. Higher = larger rendering.
     test_tiles_high := 2
     forced_ps := i32((test_tiles_high * CELL_SIZE + FRAME_HEIGHT - 1) / FRAME_HEIGHT) // ceil
     if forced_ps > pixel_size { pixel_size = forced_ps }
