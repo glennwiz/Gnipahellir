@@ -1,0 +1,63 @@
+[INFO ] --- [2026-07-04 13:01:31] Starting test runner with 1 thread. Set with -define:ODIN_TEST_THREADS=n.
+[INFO ] --- [2026-07-04 13:01:31] The random seed sent to every test is: 561643152676860. Set with -define:ODIN_TEST_RANDOM_SEED=n.
+[INFO ] --- [2026-07-04 13:01:31] Memory tracking is enabled. Tests will log their memory usage if there's an issue.
+[INFO ] --- [2026-07-04 13:01:31] < Final Mem/ Total Mem> <  Peak Mem> (#Free/Alloc) :: [package.test_name]
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:62:diag_soak_states()] === minute 1 ===
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(51.1,78.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Silver_Ore pocket=5 target=(55,82) has=false stuck=2/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(136.1,84.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(136,91) has=true stuck=0/0.2 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:62:diag_soak_states()] === minute 2 ===
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(56.3,88.6) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Silver_Ore pocket=6 target=(59,93) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(145.8,102.8) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Silver_Ore pocket=0 target=(138,101) has=false stuck=0/0.2 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:62:diag_soak_states()] === minute 3 ===
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(64,77) has=false stuck=0/0.0 cooldown=1.4
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(153.9,98.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(154,93) has=false stuck=0/0.0 cooldown=1.7
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:62:diag_soak_states()] === minute 4 ===
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(64,77) has=true stuck=2/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(154.9,98.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(158,91) has=false stuck=0/0.0 cooldown=0.8
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:32:diag_soak_states()] B#0 grounded=true vel=(0.00,0.00) path len=0 cursor=0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=74  #######....I#####......##
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=75  ########..######.......S#
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=76  #...##S#..######.......#G
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=77  .....###...###T#......###
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=78  ............#S######I####
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=79  ##.#####.....##S########.
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=80  ..I#####........#I##SI#..
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=81  .#######..........####...
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=82  #####.#............##....
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=83  ####.....................
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=84  #.#.........B............
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=85  ##.##########............
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=86  ..........##.............
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=87  .........#.##............
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:57:diag_soak_states()] y=88  ........#.###......#.....
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:62:diag_soak_states()] === minute 5 ===
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(64,77) has=true stuck=1/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(151.9,97.2) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(153,90) has=true stuck=0/0.3 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:31] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:62:diag_soak_states()] === minute 6 ===
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(67,80) has=false stuck=0/0.0 cooldown=0.4
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(154.6,98.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(156,94) has=true stuck=0/0.3 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:62:diag_soak_states()] === minute 7 ===
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(67,80) has=false stuck=0/0.0 cooldown=1.1
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(154.9,98.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(159,92) has=false stuck=0/0.0 cooldown=1.1
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:62:diag_soak_states()] === minute 8 ===
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(67,80) has=false stuck=0/0.0 cooldown=1.7
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(154.3,98.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(154,93) has=true stuck=1/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:62:diag_soak_states()] === minute 9 ===
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(67,80) has=true stuck=2/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(150.1,97.0) goal=Fetch_Mineral resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(153,90) has=true stuck=2/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:62:diag_soak_states()] === minute 10 ===
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#0 pos=(61.9,84.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(51,72) step=19 carry=Air pocket=0 target=(65,79) has=false stuck=0/0.0 cooldown=0.0
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#1 pos=(154.9,98.0) goal=Cooldown resume=Fetch_Mineral den_built=true anchor=(144,76) step=19 carry=Air pocket=0 target=(156,94) has=false stuck=0/0.0 cooldown=1.4
+[INFO ] --- [2026-07-04 13:01:32] [diag_soak.odin:67:diag_soak_states()] B#2 pos=(88.6,67.0) goal=Encase_Den resume=Fetch_Mineral den_built=true anchor=(91,68) step=19 carry=Silver_Ore pocket=8 target=(91,77) has=false stuck=0/0.0 cooldown=-0.0
+
+Finished 1 test in 1.6472185s. The test was successful.
+

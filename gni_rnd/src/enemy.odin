@@ -12,6 +12,9 @@ BUILDER_GRAVITY  :: f32(20.0)
 BUILDER_MAX_FALL :: f32(12.0)
 
 MINE_TIME       :: f32(0.4)   // pause after each mine/place action
+HOME_TIMEOUT    :: f32(45.0)  // seconds away from den before forced homing attempts
+MAX_HOMING_ATTEMPTS :: int(8)  // repeated mine-up/place-under tries before giving up
+
 MAX_ASTAR_NODES :: 4096       // search budget (nodes pushed)
 
 BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
@@ -736,6 +739,62 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     log_action(gs, "Builder#%d digs itself free at (%.1f,%.1f)", id, e.pos.x, e.pos.y)
 }
 
+// Homing recovery: a conservative one-shot attempt to help a builder reach
+// its den when pathing failed during homing. The routine prefers mining
+// above for headroom (gives pocket credit) and otherwise places a block
+// underfoot using carried block or pocket. Returns true if an action was
+// performed.
+builder_homing_attempt :: proc(e: ^Enemy, id: int, gs: ^Game_State) -> bool {
+    b := &e.builder
+    nav := &e.nav
+    w := &gs.world
+
+    T := builder_tile(e)
+    x := int(T.x)
+    y := int(T.y)
+
+    // 1) If there's a mineable tile directly above, mine it for headroom.
+    //    Repeatable: this will be called multiple times to clear a vertical shaft.
+    ay := y - 1
+    if in_bounds(x, ay) && is_builder_mineable(w, x, ay) && !den_protected(gs, x, ay) {
+        set_tile(w, x, ay, .Void)
+        eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(ay)}})
+        log_action(gs, "Builder#%d homing: digs above (%d,%d)", id, x, ay)
+        b.pocket = min(b.pocket + 1, POCKET_MAX)
+        nav.mine_timer = MINE_TIME
+        e.vel.x = 0
+        return true
+    }
+
+    // 2) If headroom exists (above is empty), and the tile below is empty,
+    //    place a block underfoot (prefer carried then pocket) and jump up.
+    by := y + 1
+    if in_bounds(x, ay) && !is_solid(w, x, ay) && in_bounds(x, by) && !is_solid(w, x, by) {
+        if b.carry != .Air {
+            set_tile(w, x, by, b.carry)
+            eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(x), i32(by)}})
+            log_action(gs, "Builder#%d homing: places carried %v underfoot at (%d,%d) and jumps", id, b.carry, x, by)
+            b.carry = .Air
+            nav.mine_timer = MINE_TIME
+            e.vel.y = BUILDER_JUMP
+            e.grounded = false
+            return true
+        }
+        if b.pocket > 0 {
+            b.pocket -= 1
+            set_tile(w, x, by, .Stone)
+            eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(x), i32(by)}})
+            log_action(gs, "Builder#%d homing: places pocket stone underfoot at (%d,%d) and jumps", id, x, by)
+            nav.mine_timer = MINE_TIME
+            e.vel.y = BUILDER_JUMP
+            e.grounded = false
+            return true
+        }
+    }
+
+    return false
+}
+
 builder_alert :: proc(gs: ^Game_State, i: int) {
     e := &gs.enemies.data[i]
     b := &e.builder
@@ -823,6 +882,18 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         b.replan_timer = REPLAN_MIN
         from := [2]i32{i32(e.pos.x + BUILDER_W*0.5), i32(e.pos.y + BUILDER_H - 0.01)}
         if !astar_dig(gs, from, T, stop, int(b.pocket), &nav.path) {
+            // If we're homing, attempt a deterministic multi-step recovery
+            // sequence (mine-up, then place-under + jump) multiple times
+            // before giving up. This avoids the previous single-shot behavior.
+            if b.homing {
+                if b.homing_attempts < MAX_HOMING_ATTEMPTS {
+                    if builder_homing_attempt(e, id, gs) {
+                        b.homing_attempts += 1
+                        b.replan_timer = MINE_TIME
+                        return false
+                    }
+                }
+            }
             builder_strike(e, id, gs, "no path")
             return false
         }
@@ -1187,6 +1258,26 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     e.nav.mine_timer -= dt
     b.replan_timer   -= dt
     b.attack_timer   -= dt
+
+    // Track time away from home and enable homing when overdue
+    if b.anchor != DEN_UNSET {
+        home_dist := chebyshev(builder_tile(e), b.anchor)
+        if home_dist <= 2 {
+            b.time_since_home = 0
+            b.homing = false
+            b.homing_recovery_used = false
+            b.homing_attempts = 0
+        } else {
+            b.time_since_home += dt
+            if !b.homing && b.time_since_home >= HOME_TIMEOUT {
+                b.homing = true
+                b.goal = .Encase_Den
+                e.nav.path = {}
+                b.homing_attempts = 0
+                log_action(gs, "Builder#%d starting homing after %.1f s away", id, b.time_since_home)
+            }
+        }
+    }
 
     // Trespass: the player standing inside the den enrages its owner, no
     // line of sight needed (interior box: template carve + door corridor).

@@ -18,6 +18,9 @@ BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
 STUCK_TIME      :: f32(3.0)   // no path progress for this long => strike
 MAX_STRIKES     :: 3          // strikes before the current objective is dropped
+AVOID_RADIUS    :: i32(4)     // given-up targets blacklist their whole cluster —
+                              // unreachable ore (e.g. a ceiling vein over an open
+                              // basin) usually comes in groups
 JOB_COOLDOWN    :: f32(2.0)   // pause between objectives
 SITE_SPACING    :: 20         // min x-distance between two builders' dens
 
@@ -666,6 +669,12 @@ builder_place_tile :: proc(e: ^Enemy, gs: ^Game_State, T: [2]i32, t: Tile_Type) 
     y := int(T.y)
     if builder_overlaps_tile(e, x, y) {
         dir := f32(-1) if e.pos.x + BUILDER_W*0.5 < f32(x) + 0.5 else f32(1)
+        // Nearest side walled off (e.g. standing in a den wall hole beside
+        // the shell): step out the other way instead of pushing forever.
+        ahead_x := e.pos.x - 0.2 if dir < 0 else e.pos.x + BUILDER_W + 0.2
+        if is_solid(&gs.world, int(ahead_x), int(e.pos.y + BUILDER_H*0.5)) {
+            dir = -dir
+        }
         e.facing = int(dir)
         e.vel.x  = dir * BUILDER_SPEED
         return false
@@ -799,10 +808,12 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
     b   := &e.builder
     nav := &e.nav
 
+    // Arrival does NOT reset the watchdog: the on-site work loops (den step,
+    // encase placement) accumulate stuck_timer and reset it on each completed
+    // action, so a builder frozen at its worksite still strikes out.
     if chebyshev(builder_tile(e), T) <= stop {
-        e.vel.x       = 0
-        nav.path      = {}
-        b.stuck_timer = 0
+        e.vel.x  = 0
+        nav.path = {}
         return true
     }
 
@@ -920,7 +931,9 @@ builder_find_mineral :: proc(e: ^Enemy, gs: ^Game_State) -> (best: [2]i32, ok: b
                 if !want { continue }
                 cand := [2]i32{i32(x), i32(y)}
                 avoided := false
-                for a in b.avoid { if cand == a { avoided = true; break } }
+                for k in 0 ..< min(b.avoid_n, len(b.avoid)) {
+                    if chebyshev(cand, b.avoid[k]) <= AVOID_RADIUS { avoided = true; break }
+                }
                 if avoided { continue }
                 near_den := false
                 for a in 0 ..< n_anchors {

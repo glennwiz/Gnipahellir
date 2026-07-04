@@ -1,0 +1,11 @@
+*.exe
+*.pdb
+*.obj
+*.dll
+
+# Odin build artifacts
+build/
+bin/
+
+# Claude memory (local only)
+.claude/
