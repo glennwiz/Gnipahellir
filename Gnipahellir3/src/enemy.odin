@@ -13,11 +13,16 @@ BUILDER_MAX_FALL :: f32(12.0)
 
 MINE_TIME       :: f32(0.4)   // pause after each mine/place action
 MAX_ASTAR_NODES :: 4096       // search budget (nodes pushed)
+ASTAR_H_WEIGHT  :: f32(2.0)   // greedy-ish A*: with mining the whole rock mass is
+                              // searchable and an admissible h floods the budget
 
 BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
 STUCK_TIME      :: f32(3.0)   // no path progress for this long => strike
 MAX_STRIKES     :: 3          // strikes before the current objective is dropped
+AVOID_RADIUS    :: i32(4)     // given-up targets blacklist their whole cluster —
+                              // unreachable ore (e.g. a ceiling vein over an open
+                              // basin) usually comes in groups
 JOB_COOLDOWN    :: f32(2.0)   // pause between objectives
 SITE_SPACING    :: 20         // min x-distance between two builders' dens
 
@@ -310,7 +315,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         best_oi := 0
         for oi in 0 ..< open_size {
             ni := int(open[oi])
-            f  := nodes[ni].g + heuristic(nodes[ni].pos, to)
+            f  := nodes[ni].g + ASTAR_H_WEIGHT * heuristic(nodes[ni].pos, to)
             if f < best_f { best_f = f; best_oi = oi }
         }
 
@@ -404,11 +409,37 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
             }
 
-            // Mine out a diagonal step upward, then climb it (same head
-            // clearance requirement as step-up).
-            if is_builder_mineable(w, nx, y-1) && is_solid(w, nx, y) && !is_solid(w, x, y-1) &&
-               !is_solid(w, nx, y-2) && !den_protected(gs, nx, y-1) {
-                push_trans(&trans, &nt, i32(nx), i32(y-1), COST_MINE + 1)
+            // Diagonal step upward, mining whatever blocks the climb: the
+            // landing (nx,y-1), our own headroom (x,y-1) and the landing's
+            // headroom (nx,y-2) may each be open or mineable.  This is the
+            // builders' only way UP through solid rock (zigzag staircases);
+            // without it anything above a sheer wall is unreachable — dens
+            // included, which starves the whole economy.
+            if is_solid(w, nx, y) && in_bounds(nx, y-2) {
+                climb_tiles := [3][2]int{{nx, y - 1}, {x, y - 1}, {nx, y - 2}}
+                mines     := 0
+                climbable := true
+                for c in climb_tiles {
+                    if !is_solid(w, c.x, c.y) { continue }
+                    if is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y) {
+                        mines += 1
+                    } else {
+                        climbable = false
+                        break
+                    }
+                }
+                // mines == 0 is the plain step-up move handled above.
+                if climbable && mines > 0 {
+                    cost := COST_MINE*f32(mines) + 1
+                    // Alternating climbs (1-wide shafts) are self-contradicting:
+                    // one tile must be both carved (headroom) and left solid
+                    // (support).  Prefer straight staircases.
+                    if cur.parent >= 0 {
+                        pdx := cur.pos.x - nodes[cur.parent].pos.x
+                        if pdx != 0 && int(pdx) != d { cost += COST_MINE * 2 }
+                    }
+                    push_trans(&trans, &nt, i32(nx), i32(y-1), cost)
+                }
             }
 
             // Bridge a gap: place a block at (nx, y+1) and stand on it —
@@ -498,7 +529,10 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
     // tile-based, and the loose radius can tick it off while the builder's
     // center is still in the neighboring tile (replan livelock).
     accept := f32(0.85) if nav.path.cursor < nav.path.len - 1 else f32(0.35)
-    if math.sqrt(dx*dx + dy*dy) < accept {
+    // Never tick off an elevated waypoint while airborne: a jump arc sweeps
+    // through several climb waypoints' accept radii, leaving the cursor on
+    // one that is unreachable from the ground (jump-bounce livelock).
+    if math.sqrt(dx*dx + dy*dy) < accept && (e.grounded || dy > 0) {
         nav.path.cursor += 1
         return
     }
@@ -600,6 +634,29 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
     tx := int(target.x)
     ty := int(target.y)
 
+    // Climbing waypoint: the up-step needs our own headroom and the
+    // landing's headroom open too (see the A* climb move) — carve them.
+    // Grounded only: while airborne the builder tile fluctuates and the
+    // carves land on the wrong rows.
+    bt := builder_tile(e)
+    if target.y < bt.y && e.grounded {
+        climb := [2][2]i32{{bt.x, bt.y - 1}, {target.x, target.y - 1}}
+        for c in climb {
+            cx := int(c.x)
+            cy := int(c.y)
+            if is_solid(&gs.world, cx, cy) && is_builder_mineable(&gs.world, cx, cy) &&
+               !den_protected(gs, cx, cy) {
+                set_tile(&gs.world, cx, cy, .Void)
+                eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
+                log_action(gs, "Builder clears climb tile (%d,%d)", cx, cy)
+                e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
+                nav.mine_timer = MINE_TIME
+                e.vel.x = 0
+                return true
+            }
+        }
+    }
+
     // Mine: waypoint tile is solid and mineable (dens are off-limits).
     if is_builder_mineable(&gs.world, tx, ty) && !den_protected(gs, tx, ty) {
         set_tile(&gs.world, tx, ty, .Void)
@@ -613,8 +670,11 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
 
     // Bridge: no floor below waypoint — spend a pocket block on it.  An
     // empty pocket (floor mined out from under a planned waypoint) clears
-    // the path so the next replan routes around the gap instead.
-    if in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) {
+    // the path so the next replan routes around the gap instead.  Only for
+    // waypoints at or below our height: a floor under an elevated waypoint
+    // doesn't get us up there, and it feeds a place/carve livelock with
+    // the climb rule above.
+    if target.y >= bt.y && in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) {
         if e.builder.pocket == 0 {
             log_action(gs, "Builder out of blocks at (%d,%d) — replans", tx, ty+1)
             nav.path = {}
@@ -665,7 +725,15 @@ builder_place_tile :: proc(e: ^Enemy, gs: ^Game_State, T: [2]i32, t: Tile_Type) 
     x := int(T.x)
     y := int(T.y)
     if builder_overlaps_tile(e, x, y) {
-        dir := f32(-1) if e.pos.x + BUILDER_W*0.5 < f32(x) + 0.5 else f32(1)
+        // Step out of the slot TOWARD the anchor: stepping away can carry
+        // the builder out of its arrival radius and oscillate forever
+        // (arrive -> step out -> walk back -> arrive).  Flip if that side
+        // is walled off.
+        dir := f32(1) if f32(e.builder.anchor.x) + 0.5 > e.pos.x + BUILDER_W*0.5 else f32(-1)
+        ahead_x := e.pos.x - 0.2 if dir < 0 else e.pos.x + BUILDER_W + 0.2
+        if is_solid(&gs.world, int(ahead_x), int(e.pos.y + BUILDER_H*0.5)) {
+            dir = -dir
+        }
         e.facing = int(dir)
         e.vel.x  = dir * BUILDER_SPEED
         return false
@@ -697,11 +765,13 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
         } else {
             e.builder.step += 1   // unmineable obstruction — skip this step
         }
+        e.builder.stuck_timer = 0
         return
     }
 
     if builder_place_tile(e, gs, T, desired) {
         log_action(gs, "Builder#%d builds %v at (%d,%d)", id, desired, x, y)
+        e.builder.stuck_timer = 0
     }
 }
 
@@ -799,10 +869,12 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
     b   := &e.builder
     nav := &e.nav
 
+    // Arrival does NOT reset the watchdog: the on-site work loops (den step,
+    // encase placement) accumulate stuck_timer and reset it on each completed
+    // action, so a builder frozen at its worksite still strikes out.
     if chebyshev(builder_tile(e), T) <= stop {
-        e.vel.x       = 0
-        nav.path      = {}
-        b.stuck_timer = 0
+        e.vel.x  = 0
+        nav.path = {}
         return true
     }
 
@@ -920,7 +992,9 @@ builder_find_mineral :: proc(e: ^Enemy, gs: ^Game_State) -> (best: [2]i32, ok: b
                 if !want { continue }
                 cand := [2]i32{i32(x), i32(y)}
                 avoided := false
-                for a in b.avoid { if cand == a { avoided = true; break } }
+                for k in 0 ..< min(b.avoid_n, len(b.avoid)) {
+                    if chebyshev(cand, b.avoid[k]) <= AVOID_RADIUS { avoided = true; break }
+                }
                 if avoided { continue }
                 near_den := false
                 for a in 0 ..< n_anchors {
@@ -1024,6 +1098,12 @@ builder_build_den :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     T := b.anchor + t.off
     if builder_travel(e, id, gs, dt, T, BUILDER_REACH) {
         builder_do_step(e, id, gs, T, t.tile)
+        // do_step resets stuck_timer on every completed action; a builder
+        // frozen at the worksite (step-aside pinned) must still strike out.
+        b.stuck_timer += dt
+        if b.stuck_timer >= STUCK_TIME {
+            builder_strike(e, id, gs, "can't build")
+        }
     }
 }
 
@@ -1115,10 +1195,19 @@ builder_encase :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         // fetching.  This is the ore economy: builders drain the shared
         // veins for as long as they live, and the stockpile is raidable.
         builder_deposit_loot(e, id, gs)
+        b.stuck_timer = 0
         builder_pause(b, JOB_COOLDOWN, .Fetch_Mineral)
         return
     }
+    // Same worksite watchdog as den building: a pinned step-aside must
+    // strike out (3rd strike drops the block and refetches).
+    b.stuck_timer += dt
+    if b.stuck_timer >= STUCK_TIME {
+        builder_strike(e, id, gs, "can't place")
+        return
+    }
     if e.nav.mine_timer <= 0 && builder_place_tile(e, gs, T, b.carry) {
+        b.stuck_timer = 0
         log_action(gs, "Builder#%d encases den with %v at (%d,%d)",
             id, b.carry, T.x, T.y)
         b.carry = .Air

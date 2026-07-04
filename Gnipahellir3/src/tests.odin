@@ -2,6 +2,7 @@ package game
 
 import "core:testing"
 import "core:strings"
+import "core:log"
 
 // ─── Phase 3 system tests ─────────────────────────────────────────────────────
 //
@@ -511,6 +512,146 @@ den_trespass_triggers_hunt :: proc(t: ^testing.T) {
     gs.player.pos = {50.5 - PLAYER_W*0.5, 50.5 - PLAYER_H*0.5}
     update_builder(e, idx, gs, 1.0/60.0)
     testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+}
+
+// ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
+
+@(test)
+builder_soak_cave2_economy :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Fresh cave-2 world with 3 builders; player parked in the spawn chamber.
+    gen_cave_level(&gs.world, 1)
+    gs.enemies     = {}
+    gs.level_index = LEVEL_CAVE2
+    spawn_builder(gs, 40)
+    spawn_builder(gs, GRID_W - 40)
+    spawn_builder(gs, GRID_W / 2)
+    testing.expect_value(t, gs.enemies.count, 3)
+    gs.player.pos = {6, 10}
+
+    SOAK_MINUTES :: 60
+    WINDOW       :: 3600   // one simulated minute of frames
+
+    prev_carry:  [MAX_ENEMIES]Tile_Type
+    last_pickup: [MAX_ENEMIES]int
+    for i in 0 ..< MAX_ENEMIES { last_pickup[i] = -1 }
+    trip_total, trip_count: int
+
+    mined_in_window  := 0
+    dens_done_window := -1
+
+    for frame in 0 ..< SOAK_MINUTES * WINDOW {
+        update_enemies(gs)
+
+        // Count builder mining before the queue is drained.
+        n := gs.events.size
+        qi := gs.events.head
+        for _ in 0 ..< n {
+            if gs.events.events[qi].type == .Builder_Mined { mined_in_window += 1 }
+            qi = (qi + 1) % MAX_EVENTS
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+
+        // Fetch round trips: carry going empty -> loaded is a harvest pickup.
+        for bi in 0 ..< MAX_ENEMIES {
+            if !gs.enemies.active[bi] { continue }
+            c := gs.enemies.data[bi].builder.carry
+            if prev_carry[bi] == .Air && c != .Air {
+                if last_pickup[bi] >= 0 {
+                    trip_total += frame - last_pickup[bi]
+                    trip_count += 1
+                }
+                last_pickup[bi] = frame
+            }
+            prev_carry[bi] = c
+        }
+
+        if (frame + 1) % WINDOW == 0 {
+            window := (frame + 1) / WINDOW
+            all_built := true
+            for bi in 0 ..< MAX_ENEMIES {
+                if gs.enemies.active[bi] && !gs.enemies.data[bi].builder.den_built {
+                    all_built = false
+                }
+            }
+            if dens_done_window < 0 && all_built { dens_done_window = window }
+            // Once every den stands the economy must never stall: a silent
+            // minute across 3 builders means the 3-strike watchdog is looping.
+            if dens_done_window >= 0 && window > dens_done_window {
+                testing.expectf(t, mined_in_window > 0, "no builder mined anything in minute %d", window)
+            }
+            mined_in_window = 0
+        }
+    }
+
+    testing.expectf(t, dens_done_window >= 0 && dens_done_window <= 10,
+        "all dens should stand within 10 minutes (done at %d)", dens_done_window)
+
+    // The deposit loop must have produced raidable loot (builder deposits are
+    // the only world items in this cave besides the generated blueprint).
+    loot := 0
+    for i in 0 ..< GRID_W * GRID_H {
+        if gs.world.items[i] != .None && gs.world.items[i] != .Blueprint_B {
+            loot += int(gs.world.item_counts[i])
+        }
+    }
+    testing.expect(t, loot > 0, "den floors should hold stockpiled loot")
+
+    testing.expect(t, trip_count > 0, "builders should complete fetch round trips")
+    if trip_count > 0 {
+        log.infof("soak: %d fetch round trips, avg %.1f s; %d loot items banked",
+            trip_count, f32(trip_total) / f32(trip_count) / 60.0, loot)
+    }
+}
+
+@(test)
+hunt_escape_soak :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+
+    step :: proc(gs: ^Game_State) {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    for cycle in 0 ..< 10 {
+        gs.player.hp   = gs.player.hp_max
+        gs.player.dead = false
+
+        // Park the player 10 tiles out (inside hunt range, outside bite
+        // range) and enrage the builder.
+        gs.player.pos = {e.pos.x + 10, e.pos.y}
+        builder_alert(gs, idx)
+        testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+
+        // Chase for 2 simulated seconds.
+        for _ in 0 ..< 120 { step(gs) }
+
+        // Escape: teleport high above the cave, far beyond HUNT_LOSE_DIST.
+        gs.player.pos = {e.pos.x, 5}
+        escaped := false
+        for _ in 0 ..< int((LOS_MEMORY + 2.0) * 60) {
+            step(gs)
+            if e.builder.goal != .Hunt { escaped = true; break }
+        }
+        testing.expectf(t, escaped, "cycle %d: builder never gave up the hunt", cycle)
+        testing.expect_value(t, e.builder.stuck_count, 0)
+
+        // Let it settle back into work before the next cycle.
+        for _ in 0 ..< 300 { step(gs) }
+        testing.expect(t, e.builder.goal != .Hunt, "builder should be back at work between cycles")
+    }
 }
 
 @(test)
