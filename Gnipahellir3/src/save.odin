@@ -78,9 +78,10 @@ load_game :: proc(gs: ^Game_State) -> bool {
     return true
 }
 
-// Called once at shutdown: live runs persist, dead runs clear the save.
+// Called once at shutdown: live runs persist; dead and won runs clear the
+// save (roguelike semantics — the run is over either way).
 save_on_quit :: proc(gs: ^Game_State) {
-    if gs.player.dead {
+    if gs.player.dead || gs.game_won {
         os.remove(SAVE_FILE)
     } else {
         _ = save_game(gs)

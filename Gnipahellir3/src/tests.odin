@@ -904,6 +904,52 @@ garm_fight_soak :: proc(t: ^testing.T) {
         f32(frame_done) / 60.0, fireballs, player_hits)
 }
 
+@(test)
+garm_death_drops_key_and_wins_the_game :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    g := &gs.enemies.data[gi]
+    key_tile := builder_tile(g)
+
+    // The killing blow: Hell Key drops where he stood, boss flag set,
+    // and the gate never respawns him.
+    eq_push(&gs.events, Event{
+        type    = .Damage_Dealt,
+        source  = PLAYER_ID,
+        target  = enemy_entity_id(gi),
+        payload = {int_val = GARM_HP},
+    })
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    testing.expect(t, !gs.enemies.active[gi], "Garm should be dead")
+    idx := grid_idx(int(key_tile.x), int(key_tile.y))
+    testing.expect_value(t, gs.world.items[idx], Item.Hell_Key)
+    testing.expect(t, gs.progression.final_boss_defeated, "boss flag should be set")
+
+    gs.progression.cave_unlocked[2] = true
+    garm_maybe_awaken(gs)
+    testing.expect(t, !garm_present(gs), "a defeated Garm must not respawn")
+
+    // Claiming the key wins the run and banks the stats.
+    won_before := gs.stats.runs_won
+    gs.player.pos = {f32(key_tile.x), f32(key_tile.y + 1) - PLAYER_H}
+    player_pickup(gs)
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    testing.expect(t, gs.game_won, "picking up the Hell Key wins the game")
+    testing.expect_value(t, gs.stats.runs_won, won_before + 1)
+
+    // The win freezes the run exactly like death does.
+    pos_before := gs.player.pos
+    gs.input.move_right = true
+    update_player(gs)
+    testing.expect(t, gs.player.pos == pos_before, "no more moves after the win")
+}
+
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
 
 @(test)

@@ -298,6 +298,9 @@ Game_State :: struct {
     elapsed_time: f32,
     frame:        u64,
     delta_time:   f32,
+    game_won:     bool,   // run complete — not saved; a won run ends like a death
+
+
 
     debug_log:   Debug_Log,
     debug:       Debug_State,

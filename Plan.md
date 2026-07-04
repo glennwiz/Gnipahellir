@@ -196,9 +196,13 @@ Playtest findings (2026-07-04, round 1):
 - [x] Fireball attack + jump heuristics on the new pathfinding (fireballs die on solid
       tiles, so cover works without a line-of-sight test; jumps ride enemy_follow_path)
 - [x] Boss arena in cave 3 (generated room, not open cave)
-- [ ] Win condition: Garm dies → Hell_Key → win screen with run stats
+- [x] Win condition: Garm dies → Hell_Key drops where he stood → pickup fires
+      Boss_Defeated + Game_Won → win screen (run time, kills, runs won); runs_won++
+      persisted immediately. A won run clears the save on quit, same as death.
 
-**Milestone:** the game can be *beaten*.
+**Milestone reached (2026-07-05):** the game can be *beaten* — 36-test suite green,
+including a full 60 s simulated boss fight (garm_fight_soak). Glenn's hand playtest
+of the fight (feel, tuning: GARM_* constants in garm.odin) still open.
 
 ## Phase 6 — Shippability pass
 

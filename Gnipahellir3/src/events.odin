@@ -91,6 +91,8 @@ process_events :: proc(gs: ^Game_State) {
                 eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 1}})
             case .Blueprint_C:
                 eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 2}})
+            case .Hell_Key:
+                eq_push(&gs.events, Event{type = .Game_Won})
             }
 
         case .Item_Dropped:
@@ -174,6 +176,8 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Boss_Defeated:
             gs.progression.final_boss_defeated = true
+            audio_play(&gs.audio, .Fanfare)
+            notify(gs, "GARM has fallen — claim the Hell Key!")
 
         case .Builder_Mined:
             audio_play(&gs.audio, .Builder_Dig, audio_tile_gain(gs, e.tile))
@@ -188,7 +192,15 @@ process_events :: proc(gs: ^Game_State) {
             handle_ritual_request(gs)
 
         case .Game_Won:
-            // win screen lands in Phase 5
+            if !gs.game_won {
+                gs.game_won = true
+                gs.stats.runs_played += 1
+                gs.stats.runs_won    += 1
+                _ = save_stats(&gs.stats)   // the victory survives even a crash
+                audio_play(&gs.audio, .Fanfare)
+                log_action(gs, "GAME WON after %.0f s, %d kills",
+                    gs.elapsed_time, gs.stats.total_kills)
+            }
         }
     }
 }
@@ -202,7 +214,17 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
     } else {
         audio_play(&gs.audio, .Kill)
         gs.stats.total_kills += 1
-        despawn_enemy(gs, entity_id_to_enemy_index(e.source))
+        i := entity_id_to_enemy_index(e.source)
+        // The boss's last breath: the Hell Key falls where he stood.
+        if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] && gs.enemies.data[i].kind == .Garm {
+            T   := builder_tile(&gs.enemies.data[i])
+            idx := grid_idx(int(T.x), int(T.y))
+            gs.world.items[idx]       = .Hell_Key
+            gs.world.item_counts[idx] = 1
+            log_action(gs, "GARM slain — Hell Key drops at (%d,%d)", T.x, T.y)
+            eq_push(&gs.events, Event{type = .Boss_Defeated})
+        }
+        despawn_enemy(gs, i)
     }
 }
 

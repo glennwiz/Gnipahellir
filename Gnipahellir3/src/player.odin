@@ -19,6 +19,7 @@ update_player :: proc(gs: ^Game_State) {
     dt := gs.delta_time
 
     if p.dead do return
+    if gs.game_won do return   // the win screen is up — the run is over
 
     inp := &gs.input
 

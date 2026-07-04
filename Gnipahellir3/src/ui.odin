@@ -109,9 +109,34 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
+    if gs.game_won do draw_win_screen(gs)
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
     }
+}
+
+// The game is beaten: dark overlay, title, run stats.  Quitting ends the
+// run (save cleared on exit); menus and restart flow land in Phase 6.
+draw_win_screen :: proc(gs: ^Game_State) {
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{0, 0, 0, 200})
+
+    center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
+        tw := rl.MeasureText(text, size)
+        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+    }
+
+    center_text("GARM IS SLAIN", 380, 60, rl.Color{255, 200, 80, 255})
+    center_text("Gnipahellir is conquered", 450, 30, rl.Color{255, 240, 180, 255})
+
+    mins := int(gs.elapsed_time) / 60
+    secs := int(gs.elapsed_time) % 60
+
+    buf: [96]u8
+    fmt.bprintf(buf[:95], "Run time %d:%02d      Kills %d      Runs won %d",
+        mins, secs, gs.stats.total_kills, gs.stats.runs_won)
+    center_text(cstring(raw_data(buf[:])), 520, 20, rl.WHITE)
+
+    center_text("The hound guards the gate no more.", 580, 20, rl.Color{160, 160, 170, 255})
 }
 
 // Timed popups, stacked top-center, fading out over the last NOTIFY_FADE s.
