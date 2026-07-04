@@ -109,6 +109,7 @@ Player :: struct {
     mana:             f32,
     mana_max:         f32,
     mana_regen:       f32,
+    attack_timer:     f32,   // sword swing cooldown
     inventory:        Inventory,
     equipped:         Item,
     bucket_lava:      bool,
@@ -171,6 +172,7 @@ Input_State :: struct {
     move_right:   bool,
     jump:         bool,
     mine:         bool,
+    attack:       bool,   // discrete press — sword swing
     interact:     bool,
     drop_item:    bool,
     fly_up:       bool,   // debug fly mode only (W/S held)

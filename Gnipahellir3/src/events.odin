@@ -41,13 +41,28 @@ process_events :: proc(gs: ^Game_State) {
             // informational; no handler yet
 
         case .Damage_Dealt:
-            if e.target == PLAYER_ID && !gs.player.dead {
-                gs.player.hp -= int(e.payload.int_val)
-                audio_play(&gs.audio, .Hurt)
-                log_action(gs, "Player takes %d damage (hp %d)", e.payload.int_val, gs.player.hp)
-                if gs.player.hp <= 0 {
-                    gs.player.hp = 0
-                    eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+            if e.target == PLAYER_ID {
+                if !gs.player.dead {
+                    gs.player.hp -= int(e.payload.int_val)
+                    audio_play(&gs.audio, .Hurt)
+                    log_action(gs, "Player takes %d damage (hp %d)", e.payload.int_val, gs.player.hp)
+                    if gs.player.hp <= 0 {
+                        gs.player.hp = 0
+                        eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+                    }
+                }
+            } else {
+                i := entity_id_to_enemy_index(e.target)
+                if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
+                    en := &gs.enemies.data[i]
+                    en.hp -= int(e.payload.int_val)
+                    audio_play(&gs.audio, .Sword_Hit)
+                    log_action(gs, "Enemy#%d takes %d damage (hp %d)", i, e.payload.int_val, en.hp)
+                    if en.hp <= 0 {
+                        eq_push(&gs.events, Event{type = .Entity_Died, source = e.target})
+                    } else if en.kind == .Builder && e.source == PLAYER_ID {
+                        builder_alert(gs, i)   // a wounded builder retaliates
+                    }
                 }
             }
 

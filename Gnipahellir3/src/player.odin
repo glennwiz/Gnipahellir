@@ -9,6 +9,11 @@ FLY_SPEED      :: f32(14.0)  // debug fly mode
 PLAYER_W :: f32(0.8)   // tile units
 PLAYER_H :: f32(1.8)   // tile units
 
+// Melee (sword).
+MELEE_REACH    :: i32(2)     // chebyshev tiles from player center
+SWORD_DAMAGE   :: 2          // builder hp 6 -> three swings
+SWORD_COOLDOWN :: f32(0.35)
+
 update_player :: proc(gs: ^Game_State) {
     p  := &gs.player
     dt := gs.delta_time
@@ -63,6 +68,24 @@ update_player :: proc(gs: ^Game_State) {
 
     // ── Mana regen ────────────────────────────────────────────────
     p.mana = min(p.mana + p.mana_regen * dt, p.mana_max)
+
+    // ── Melee: click near an enemy swings the sword ───────────────
+    p.attack_timer -= dt
+    if inp.attack && p.attack_timer <= 0 &&
+       inventory_count(&p.inventory, .Sword) > 0 {
+        if id, found := enemy_near_tile(gs, gs.input.mouse_tile); found {
+            if chebyshev(builder_tile(&gs.enemies.data[id]), player_tile(p)) <= MELEE_REACH {
+                p.attack_timer = SWORD_COOLDOWN
+                eq_push(&gs.events, Event{
+                    type    = .Damage_Dealt,
+                    source  = PLAYER_ID,
+                    target  = enemy_entity_id(id),
+                    payload = {int_val = SWORD_DAMAGE},
+                })
+                log_action(gs, "Player strikes enemy#%d", id)
+            }
+        }
+    }
 
     // ── Mining ────────────────────────────────────────────────────
     if inp.mine {

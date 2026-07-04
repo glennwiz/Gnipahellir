@@ -11,7 +11,7 @@ import "core:os"
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
-SAVE_VERSION :: i32(4)   // v4: Builder_State.pocket (honest bridging)
+SAVE_VERSION :: i32(5)   // v5: Player.attack_timer (melee); v4: Builder_State.pocket
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this

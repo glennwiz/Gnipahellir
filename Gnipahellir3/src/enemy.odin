@@ -605,6 +605,23 @@ spawn_builder :: proc(gs: ^Game_State, start_x: int) {
     entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
 }
 
+// Enemy slot whose center tile is at or adjacent to T (the entity map is a
+// center-tile index, so a fat cursor makes bodies clickable) — melee targeting.
+enemy_near_tile :: proc(gs: ^Game_State, T: [2]i32) -> (idx: int, ok: bool) {
+    for dy in i32(-1) ..= i32(1) {
+        for dx in i32(-1) ..= i32(1) {
+            x := int(T.x + dx)
+            y := int(T.y + dy)
+            if !in_bounds(x, y) { continue }
+            id := gs.world.entity_map[grid_idx(x, y)]
+            if id == PLAYER_ID || id == INVALID_ENTITY { continue }
+            i := entity_id_to_enemy_index(id)
+            if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] { return i, true }
+        }
+    }
+    return 0, false
+}
+
 // Clear the entity-map marker and release the pool slot.
 despawn_enemy :: proc(gs: ^Game_State, i: int) {
     if i < 0 || i >= MAX_ENEMIES || !gs.enemies.active[i] { return }

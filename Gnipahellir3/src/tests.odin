@@ -515,6 +515,80 @@ den_trespass_triggers_hunt :: proc(t: ^testing.T) {
 }
 
 @(test)
+sword_melee_kills_builders :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+
+    // Park the builder beside the player, refresh its entity-map marker
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    prev := builder_tile(e)
+    e.pos = {31.5, f32(SURFACE_Y) - BUILDER_H}
+    entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
+
+    gs.input.attack     = true
+    gs.input.mouse_tile = builder_tile(e)
+
+    // No sword: the click hits nothing
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, 6)
+
+    // First swing wounds and enrages
+    inventory_insert(&gs.player.inventory, .Sword, 1)
+    gs.player.attack_timer = 0
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, 4)
+    testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+
+    // Cooldown gates the second swing
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, 4)
+
+    // Two more swings kill: slot freed, kill counted
+    for _ in 0 ..< 2 {
+        gs.player.attack_timer = 0
+        update_player(gs)
+        process_events(gs)
+    }
+    testing.expect(t, !gs.enemies.active[idx], "three sword hits kill a builder")
+    testing.expect_value(t, gs.stats.total_kills, 1)
+}
+
+@(test)
+sword_respects_reach :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    e := &gs.enemies.data[idx]
+
+    // Cursor on a builder far out of melee reach: no hit
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    prev := builder_tile(e)
+    e.pos = {40, f32(SURFACE_Y) - BUILDER_H}
+    entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
+
+    inventory_insert(&gs.player.inventory, .Sword, 1)
+    gs.input.attack     = true
+    gs.input.mouse_tile = builder_tile(e)
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, 6)
+}
+
+@(test)
 den_defense_persists_without_los :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

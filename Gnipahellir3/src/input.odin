@@ -22,6 +22,7 @@ update_input :: proc(gs: ^Game_State) {
     inp.move_right = rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT)
     inp.jump       = rl.IsKeyPressed(.W) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
     inp.mine       = rl.IsMouseButtonDown(.LEFT) && !cursor_over_ui(gs)
+    inp.attack     = rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs)
     inp.interact   = rl.IsKeyPressed(.E)
     inp.drop_item  = rl.IsKeyPressed(.Q)
 

@@ -10,6 +10,7 @@ Tests: `odin test src` — headless, ~20 tests, runs in well under a second.
 | A / D (or arrows) | Move |
 | W / ↑ / Space | Jump |
 | Left-click | Mine (5-tile reach, shared `PLAYER_REACH`) |
+| Left-click on enemy | Sword swing (needs a Sword in inventory; 2-tile reach, 2 dmg, 0.35 s cooldown) |
 | Right-click | Place selected item (5-tile reach, needs solid neighbour) |
 | TAB | Inventory (click slot or keys 1–8 to select) |
 | C | Crafting window (rows green = affordable; click to craft) |
@@ -47,12 +48,13 @@ session. This is how the builder-freeze regression was diagnosed.
    - Tier B: 12 Cloud Stone + 6 Silver Ore → unlocks Gnipahellir (cave 3)
    - Tier C: 20 Cloud Stone + 10 Gold Ore → boss gate flag only (no boss
      until Phase 5 — dead end by design)
-5. **Deep caves**: 3 builders each. They compete for ore, build dens, and
-   hunt on sight (~12-tile LOS, 1 dmg/0.8 s bite). There is **no player
-   attack yet** (Phase 5) — being cornered is death.
+5. **Deep caves**: 3 builders each. They compete for ore, build dens (raid
+   them for the floor stockpile — the owner shrieks and defends), and hunt
+   on sight (~12-tile LOS, 1 dmg/0.8 s bite). Craft a **Sword** at a bench
+   (2 Iron Ore + 1 Plank) — builders die in 3 hits and retaliate when struck.
 
 ## Known stubs (deliberate, don't file as bugs)
 
-- Smelter and Tree_Grower place but don't function (sim system stubbed)
+- Smelter and Tree_Grower place but don't function (sim system stubbed;
+  smelting deferred at Phase 4 kickoff — ores are used raw)
 - Iron_Bucket can't scoop lava; Q-drop does nothing; mining costs no mana
-- Sky altar works on any level, not just sky (review item C4, design call)

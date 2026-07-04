@@ -29,6 +29,7 @@ recipe_table := [?]Recipe{
     { .Tree_Grower,    1, true,  {{.Plank, 2},       {.Leaf, 4},       {}} },
     { .Iron_Bucket,    1, true,  {{.Iron_Ore, 3},    {},               {}} },
     { .Sky_Altar,      1, true,  {{.Stone_Block, 6}, {.Plank, 4},      {}} },
+    { .Sword,          1, true,  {{.Iron_Ore, 2},    {.Plank, 1},      {}} },
 }
 
 player_near_bench :: proc(gs: ^Game_State) -> bool {
