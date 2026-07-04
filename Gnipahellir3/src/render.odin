@@ -15,6 +15,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_portal_seals(gs)
     draw_player(&gs.player)
     draw_enemies(&gs.enemies)
+    draw_projectiles(&gs.projectiles)
     draw_ui(gs)
 
     when GAME_DEBUG {

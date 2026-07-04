@@ -589,6 +589,46 @@ sword_respects_reach :: proc(t: ^testing.T) {
 }
 
 @(test)
+projectiles_fly_hit_and_expire :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Wall hit: fired at the ground, dies on the solid tile, world intact
+    spawn_projectile(gs, {30, f32(SURFACE_Y) - 3}, {0, 20}, PLAYER_ID, 1)
+    testing.expect_value(t, gs.projectiles.count, 1)
+    for _ in 0 ..< 30 { update_projectiles(gs); eq_clear(&gs.events) }
+    testing.expect_value(t, gs.projectiles.count, 0)
+    testing.expect_value(t, get_tile(&gs.world, 30, SURFACE_Y), Tile_Type.Grass)
+
+    // Player hit: enemy-owned fireball flying at the player
+    // (clear the corridor first — surface gen may have tree trunks here)
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    for x in 30 ..= 36 { set_tile(&gs.world, x, SURFACE_Y - 1, .Air) }
+    spawn_projectile(gs, {34, f32(SURFACE_Y) - 1}, {-10, 0}, enemy_entity_id(0), 2)
+    for _ in 0 ..< 60 { update_projectiles(gs); process_events(gs); eq_clear(&gs.events) }
+    testing.expect_value(t, gs.player.hp, 8)
+    testing.expect_value(t, gs.projectiles.count, 0)
+
+    // Owner immunity: the player's own shot leaves the player unhurt
+    spawn_projectile(gs, {f32(30) + PLAYER_W*0.5, f32(SURFACE_Y) - 1}, {10, 0}, PLAYER_ID, 2)
+    for _ in 0 ..< 60 { update_projectiles(gs); process_events(gs); eq_clear(&gs.events) }
+    testing.expect_value(t, gs.player.hp, 8)
+
+    // Enemy hit: shot parked on a builder's center tile
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    e  := &gs.enemies.data[idx]
+    bt := builder_tile(e)
+    spawn_projectile(gs, {f32(bt.x) + 0.5, f32(bt.y) + 0.5}, {0, 0}, PLAYER_ID, 2)
+    update_projectiles(gs)
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, e.hp, 4)
+}
+
+@(test)
 den_defense_persists_without_los :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

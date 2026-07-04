@@ -132,6 +132,7 @@ Projectile :: struct {
     owner:  Entity_ID,
     active: bool,
     damage: int,
+    age:    f32,   // seconds alive; dies at PROJECTILE_LIFETIME
 }
 
 Projectile_Store :: struct {

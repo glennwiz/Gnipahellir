@@ -103,10 +103,11 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Pickup)
 
         case .Projectile_Fired:
-            // projectile system not implemented yet (Phase 5)
+            // informational — damage/impact handled in update_projectiles;
+            // fireball audio lands with Garm
 
         case .Projectile_Impact:
-            // projectile system not implemented yet (Phase 5)
+            // impact particles land in Phase 7
 
         case .Play_Sound:
             audio_play(&gs.audio, Sound_ID(e.payload.int_val))

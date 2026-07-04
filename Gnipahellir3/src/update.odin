@@ -14,8 +14,8 @@ game_update :: proc(gs: ^Game_State) {
     // 3. Enemies
     update_enemies(gs)
 
-    // 4. Projectiles  (stub)
-    // update_projectiles(gs)
+    // 4. Projectiles
+    update_projectiles(gs)
 
     // 5. Sim  (stub)
     // update_sim(gs)
