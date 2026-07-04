@@ -1265,7 +1265,6 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         if home_dist <= 2 {
             b.time_since_home = 0
             b.homing = false
-            b.homing_recovery_used = false
             b.homing_attempts = 0
         } else {
             b.time_since_home += dt

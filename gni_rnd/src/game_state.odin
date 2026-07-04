@@ -71,7 +71,6 @@ Builder_State :: struct {
     // Homing support
     time_since_home: f32,
     homing:          bool,
-    homing_recovery_used: bool,
     homing_attempts: int,
 }
 
