@@ -141,18 +141,32 @@ Playtest findings (tracked for later phases):
 
 ## Phase 4 — Builder economy (the differentiator)
 
-- [ ] **Shared resource pool:** builders visibly deplete the same ore veins the player wants
-- [ ] **Raidable dens:** builder stockpile stored inside the den as loot; breaking in
-      triggers Hunt on the intruder
-- [ ] **Fix conjured bridge blocks:** builders spend carried/stockpiled blocks to bridge,
-      or visibly detour to fetch one — no free matter
-- [ ] Tune fetch round-trip time (~40–60s currently) against player mining speed so
-      competition is felt but not oppressive
-- [ ] **AI soak test:** headless/fast-forward mode; run builders for simulated hours,
-      assert the progress watchdog never enters repeated 3-strike loops; soak-test the
-      "player escapes hunt" transition (currently code-verified only)
+Kickoff decisions (2026-07-04): smelting stays deferred (ores used raw, Smelter
+remains a stub); C4 resolved — the sky-altar ritual is gated to the sky level.
+
+- [x] **Shared resource pool:** builders drain the veins for as long as they live —
+      once the den shell is complete, hauls are banked as den loot instead of the old
+      idle-forever-holding-one-block behavior
+- [x] **Raidable dens:** stockpile deposited as item drops on the den floor; mining any
+      den/shell tile or standing inside the den flips the owner to Hunt (no line of
+      sight needed), announced with a notification
+- [x] **Fix conjured bridge blocks:** builders carry a pocket (cap 8) credited by every
+      tile they mine; bridging spends from it and the A* takes a bridge budget, so an
+      empty-handed builder plans tunnels and detours — no free matter
+- [x] Fetch round-trip instrumented: 60-min soak measures 210 trips/hour across
+      3 builders, avg ~32s/trip, 12 blocks banked. Feel-tuning vs player mining speed
+      pending the Phase 4 hand-playtest. Knobs: DEN_SHELL_LAYERS (3 layers ≈ an hour
+      before deposits flow — consider 2), JOB_COOLDOWN, MINE_TIME.
+- [x] **AI soak test:** 60-simulated-minute cave-2 economy soak (dens complete, mining
+      never falls silent, loot accumulates) + 10-cycle hunt-escape soak. The soak
+      exposed and drove out a chain of real livelocks — most importantly builders had
+      no way UP through solid rock (unreachable ceiling ore, hauls that could never
+      get home to an uphill den). The A* climb move now mines zigzag staircases;
+      details in commit 1643d9a.
 
 **Milestone:** a player who ignores builders loses ore; a player who raids them gains it — and risks it.
+**Playtest pending** — the automated economy holds for a simulated hour; Glenn's hand
+playtest decides the tuning (competition felt but not oppressive).
 
 ## Phase 5 — Garm as final boss
 
@@ -209,5 +223,11 @@ Playtest findings (tracked for later phases):
 - [x] Architecture review (suggestion.md) — all findings closed except C3/C4/C5
       (small, homes assigned) and two profile-first perf notes. Unified physics
       landed and playtest-verified.
-- [ ] Phase 4 next — builder economy (shared ore pool, raidable dens, honest
-      bridging, AI soak test — a minimal soak already exists in tests.odin)
+- [x] Phase 4 implementation complete (2026-07-04) — shared ore pool with den
+      stockpiles, raidable dens (break-in triggers Hunt), honest bridging (pocket
+      blocks), zigzag mine-up mobility, 26-test suite incl. 60-min economy soak +
+      hunt-escape soak. SAVE_VERSION bumped to 4. Hand playtest + tuning pass
+      still open before the phase closes.
+      Note: `feature/render-port` (R&D) accidentally swept in mid-phase copies of
+      enemy.odin/tests.odin — master holds the finished versions; prefer master
+      on any conflict.
