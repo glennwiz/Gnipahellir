@@ -17,9 +17,8 @@ SAVE_VERSION :: i32(5)   // v5: Builder_State homing fields added
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-// Temporarily disable the hard assert so tooling can compute the new size.
-SAVE_DATA_EXPECTED_SIZE :: 0
-//#assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
+SAVE_DATA_EXPECTED_SIZE :: 1_784_256
+#assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {
     version:      i32,
@@ -33,6 +32,7 @@ Save_Data :: struct {
     elapsed_time: f32,
     frame:        u64,
 }
+
 
 save_game :: proc(gs: ^Game_State) -> bool {
     sd := new(Save_Data)
