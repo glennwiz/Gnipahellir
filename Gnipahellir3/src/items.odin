@@ -14,11 +14,14 @@ Item_Info :: struct {
 
 @(rodata)
 item_table := [Item]Item_Info{
-    .None           = { "None",            {0,   0,   0,   0  }, .Air },
-    .Sword          = { "Sword",           {200, 200, 210, 255}, .Air },
-    .Potion_Health  = { "Health Potion",   {220, 40,  40,  255}, .Air },
-    .Potion_Mana    = { "Mana Potion",     {40,  40,  220, 255}, .Air },
-    .Mine_Wand      = { "Mine Wand",       {160, 60,  200, 255}, .Air },
+    .None             = { "None",             {0,   0,   0,   0  }, .Air },
+    .Sword            = { "Sword",            {200, 200, 210, 255}, .Air },
+    .Pickaxe          = { "Pickaxe",          {150, 110, 70,  255}, .Air },
+    .Potion_Health    = { "Health Potion",    {220, 40,  40,  255}, .Air },
+    .Potion_Mana      = { "Mana Potion",      {40,  40,  220, 255}, .Air },
+    .Mine_Wand        = { "Mine Wand",        {160, 60,  200, 255}, .Air },
+    .Mine_Wand_Silver = { "Silver Mine Wand", {210, 210, 235, 255}, .Air },
+    .Mine_Wand_Gold   = { "Gold Mine Wand",   {235, 195, 60,  255}, .Air },
     .Wood_Log       = { "Wood Log",        {139, 90,  43,  255}, .Wood },
     .Leaf           = { "Leaf",            {30,  160, 30,  255}, .Leaves },
     .Stone_Block    = { "Stone Block",     {128, 128, 128, 255}, .Stone },

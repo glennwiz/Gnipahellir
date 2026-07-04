@@ -58,7 +58,7 @@ placement_validates_and_places :: proc(t: ^testing.T) {
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
     set_tile(&gs.world, 32, SURFACE_Y - 1, .Air)  // clear any gen decoration
     inventory_insert(&gs.player.inventory, .Stone_Block, 5)
-    gs.player.inventory.selected = 0
+    gs.player.inventory.selected = 1   // slot 0 holds the starting Pickaxe
 
     // Valid: air tile on top of grass, within reach
     handle_place_request(gs, Event{tile = {32, i32(SURFACE_Y) - 1}})
@@ -233,25 +233,42 @@ cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(w, 6, 14), Tile_Type.Cave_Entrance)
 }
 
+// One pick swing / wand attempt at the tile; returns after the events drain.
+@(private = "file")
+mine_swing :: proc(gs: ^Game_State, tile: [2]i32) {
+    gs.input.mine       = true
+    gs.input.mouse_tile = tile
+    gs.player.mine_timer = 0
+    update_player(gs)
+    process_events(gs)
+    eq_clear(&gs.events)
+}
+
 @(test)
-mining_respects_reach :: proc(t: ^testing.T) {
+pick_chips_adjacent_tiles_only :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
-    gs.input.mine = true
 
-    // Within reach: grass 2 tiles away gets mined (opens to void)
-    gs.input.mouse_tile = {32, i32(SURFACE_Y)}
-    update_player(gs)
-    process_events(gs)
-    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Void)
+    // Adjacent grass: two chips crack it, the third breaks it (opens to void)
+    T := [2]i32{31, i32(SURFACE_Y)}
+    mine_swing(gs, T)
+    mine_swing(gs, T)
+    testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y), Tile_Type.Grass)
+    testing.expect_value(t, gs.player.chip_hits, u8(2))
+    mine_swing(gs, T)
+    testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y), Tile_Type.Void)
 
-    // Out of reach: grass 20 tiles away is untouched
-    gs.input.mouse_tile = {50, i32(SURFACE_Y)}
-    update_player(gs)
-    process_events(gs)
-    testing.expect_value(t, get_tile(&gs.world, 50, SURFACE_Y), Tile_Type.Grass)
+    // Two tiles out with no wand: swings do nothing
+    far := [2]i32{33, i32(SURFACE_Y)}
+    for _ in 0 ..< 5 { mine_swing(gs, far) }
+    testing.expect_value(t, get_tile(&gs.world, 33, SURFACE_Y), Tile_Type.Grass)
+
+    // Switching targets resets the chip count
+    mine_swing(gs, {30, i32(SURFACE_Y)})
+    mine_swing(gs, {29, i32(SURFACE_Y)})
+    testing.expect_value(t, gs.player.chip_hits, u8(1))
 }
 
 @(test)
@@ -260,16 +277,109 @@ mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
     defer free(gs)
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
-    set_tile(&gs.world, 32, SURFACE_Y - 3, .Leaves)
+    set_tile(&gs.world, 31, SURFACE_Y - 2, .Leaves)  // adjacent, above the surface line
 
-    gs.input.mine = true
-    gs.input.mouse_tile = {32, i32(SURFACE_Y - 3)}
-    update_player(gs)
-    process_events(gs)
+    T := [2]i32{31, i32(SURFACE_Y - 2)}
+    for _ in 0 ..< PICK_HITS { mine_swing(gs, T) }
 
     // Above the surface line the hole opens to air (not void), leaf drops
-    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y - 3), Tile_Type.Air)
-    testing.expect_value(t, gs.world.items[grid_idx(32, SURFACE_Y - 3)], Item.Leaf)
+    testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y - 2), Tile_Type.Air)
+    testing.expect_value(t, gs.world.items[grid_idx(31, SURFACE_Y - 2)], Item.Leaf)
+}
+
+@(test)
+wand_mines_at_range_for_mana :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+    inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
+
+    // Two tiles out: the wand fires, drinks mana, and the tile breaks on impact
+    mine_swing(gs, {32, i32(SURFACE_Y)})
+    testing.expect(t, gs.mining.active, "wand shot should be in flight")
+    testing.expect_value(t, gs.player.mana, 100 - WAND_MANA_COST)
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Grass)  // not yet
+
+    for _ in 0 ..< 15 {
+        update_mining(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Void)
+    testing.expect(t, !gs.mining.active, "the shot is spent")
+
+    // Beyond the basic wand's reach (3 > 2): nothing fires
+    mana_before := gs.player.mana
+    mine_swing(gs, {27, i32(SURFACE_Y)})
+    testing.expect(t, !gs.mining.active, "out-of-range shot must not fire")
+    testing.expect(t, gs.player.mana >= mana_before, "no mana spent on a refused shot")
+
+    // Out of mana: the wand refuses and says so
+    gs.player.mana = WAND_MANA_COST - 1
+    mine_swing(gs, {28, i32(SURFACE_Y)})
+    testing.expect(t, !gs.mining.active, "no mana, no shot")
+    testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
+wand_tiers_extend_reach :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+
+    fires_at :: proc(gs: ^Game_State, dx: i32) -> bool {
+        gs.mining = {}
+        gs.player.mana = 100
+        mine_swing(gs, {30 + dx, i32(SURFACE_Y)})
+        return gs.mining.active
+    }
+
+    inventory_insert(&gs.player.inventory, .Mine_Wand_Silver, 1)
+    testing.expect(t, fires_at(gs, 4), "silver wand reaches 4")
+    testing.expect(t, !fires_at(gs, 5), "silver wand stops at 4")
+
+    inventory_insert(&gs.player.inventory, .Mine_Wand_Gold, 1)  // best wand wins
+    testing.expect(t, fires_at(gs, 8), "gold wand reaches 8")
+    testing.expect(t, !fires_at(gs, 9), "gold wand stops at 8")
+}
+
+@(test)
+wand_crafting_ladder :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Plank, 2)
+    inventory_insert(inv, .Iron_Ore, 4)
+    inventory_insert(inv, .Silver_Ore, 6)
+    inventory_insert(inv, .Gold_Ore, 6)
+
+    craft :: proc(gs: ^Game_State, result: Item) {
+        for r, i in recipe_table {
+            if r.result == result {
+                handle_craft_request(gs, Event{payload = {int_val = i32(i)}})
+                return
+            }
+        }
+    }
+
+    // Each tier consumes the wand before it — never two wands at once.
+    craft(gs, .Mine_Wand)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand), 1)
+
+    craft(gs, .Mine_Wand_Silver)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 1)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand), 0)
+
+    craft(gs, .Mine_Wand_Gold)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand_Gold), 1)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 0)
+    testing.expect_value(t, inventory_count(inv, .Silver_Ore), 0)
+    testing.expect_value(t, inventory_count(inv, .Gold_Ore), 0)
 }
 
 @(test)
@@ -1149,7 +1259,7 @@ dead_player_cannot_act :: proc(t: ^testing.T) {
     // Place rejected (target itself is valid)
     set_tile(&gs.world, 32, SURFACE_Y - 1, .Air)
     inventory_insert(inv, .Stone_Block, 5)
-    inv.selected = 0
+    inv.selected = 1   // slot 0 holds the starting Pickaxe
     handle_place_request(gs, Event{tile = {32, i32(SURFACE_Y) - 1}})
     testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y - 1), Tile_Type.Air)
     testing.expect_value(t, inventory_count(inv, .Stone_Block), 5)

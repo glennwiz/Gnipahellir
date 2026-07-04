@@ -91,24 +91,8 @@ update_player :: proc(gs: ^Game_State) {
         }
     }
 
-    // ── Mining ────────────────────────────────────────────────────
-    if inp.mine {
-        tx := int(gs.input.mouse_tile.x)
-        ty := int(gs.input.mouse_tile.y)
-        pcx := int(p.pos.x + PLAYER_W * 0.5)
-        pcy := int(p.pos.y + PLAYER_H * 0.5)
-        if in_bounds(tx, ty) &&
-           abs(tx - pcx) <= PLAYER_REACH && abs(ty - pcy) <= PLAYER_REACH {
-            t := get_tile(&gs.world, tx, ty)
-            if .Mineable in terrain_table[t].flags {
-                eq_push(&gs.events, Event{
-                    type   = .Tile_Mined,
-                    source = PLAYER_ID,
-                    tile   = {i32(tx), i32(ty)},
-                })
-            }
-        }
-    }
+    // ── Mining: pick chips adjacent tiles, wands shoot further ───
+    player_mine(gs, dt)
 
     // ── Walk animation ───────────────────────────────────────────
     if p.vel.x != 0 && p.grounded {

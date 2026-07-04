@@ -26,6 +26,7 @@ Sound_ID :: enum u8 {
     Fanfare,
     Fireball,
     Garm_Roar,
+    Wand_Fire,
 }
 
 @(rodata)
@@ -45,6 +46,7 @@ sound_file := [Sound_ID]cstring{
     .Fanfare        = "sounds/splash_bang_pop/sound_level_up.wav",
     .Fireball       = "sounds/splash_bang_pop/sfx_br_flamehook_attack.wav",
     .Garm_Roar      = "sounds/splash_bang_pop/sound_enrage_blast.wav",
+    .Wand_Fire      = "sounds/splash_bang_pop/sfx_sr_magickedfleche_attack.wav",
 }
 
 @(rodata)
@@ -64,6 +66,7 @@ sound_base_volume := [Sound_ID]f32{
     .Fanfare        = 0.8,
     .Fireball       = 0.7,
     .Garm_Roar      = 1.0,   // a boss phase announcing itself — must dominate
+    .Wand_Fire      = 0.6,
 }
 
 AMBIENCE_FILE :: "sounds/splash_bang_pop/sound_horror_ambience.wav"

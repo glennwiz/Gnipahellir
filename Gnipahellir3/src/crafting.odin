@@ -30,6 +30,10 @@ recipe_table := [?]Recipe{
     { .Iron_Bucket,    1, true,  {{.Iron_Ore, 3},    {},               {}} },
     { .Sky_Altar,      1, true,  {{.Stone_Block, 6}, {.Plank, 4},      {}} },
     { .Sword,          1, true,  {{.Iron_Ore, 2},    {.Plank, 1},      {}} },
+    // The miner's ladder: each wand tier consumes the one before it.
+    { .Mine_Wand,        1, true, {{.Plank, 2},            {.Iron_Ore, 4},   {}} },
+    { .Mine_Wand_Silver, 1, true, {{.Mine_Wand, 1},        {.Silver_Ore, 6}, {}} },
+    { .Mine_Wand_Gold,   1, true, {{.Mine_Wand_Silver, 1}, {.Gold_Ore, 6},   {}} },
 }
 
 player_near_bench :: proc(gs: ^Game_State) -> bool {

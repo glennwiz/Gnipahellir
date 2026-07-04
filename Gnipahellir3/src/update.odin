@@ -17,7 +17,10 @@ game_update :: proc(gs: ^Game_State) {
     // 4. Projectiles
     update_projectiles(gs)
 
-    // 5. Sim  (stub)
+    // 5. Wand mining (delayed impact) — pushes Tile_Mined, must precede events
+    update_mining(gs)
+
+    // 5b. Sim  (stub)
     // update_sim(gs)
 
     // 6. Events — drains the queue completely, including events pushed by
@@ -29,8 +32,8 @@ game_update :: proc(gs: ^Game_State) {
     // 7. Notifications — ages/expires the popup stack (pushes no events)
     update_notifications(gs)
 
-    // 8. Particles  (stub — pushes events? move it above process_events)
-    // update_particles(gs)
+    // 8. Particles (visual only, pushes no events)
+    update_particles(gs)
 
     // 9. Audio (reads state only, never pushes events)
     update_audio(gs)

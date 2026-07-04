@@ -12,10 +12,12 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     rl.ClearBackground(rl.BLACK)
 
     draw_world(&gs.world)
+    draw_mining_cracks(gs)
     draw_portal_seals(gs)
     draw_player(&gs.player)
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
+    draw_particles(&gs.particles)
     draw_ui(gs)
 
     when GAME_DEBUG {
@@ -164,6 +166,23 @@ draw_pixel_flower :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+2, by+6, 6, 2, petal)
     // Stem
     rl.DrawRectangle(bx+4, by+8, 2, 2, stem)
+}
+
+// Crack marks on the tile the pick is working: one diagonal per chip landed.
+// Only drawn while the tile is still in pick range — stale chip state on a
+// tile the player walked away from stays invisible.
+draw_mining_cracks :: proc(gs: ^Game_State) {
+    p := &gs.player
+    if p.chip_hits == 0 { return }
+    if chebyshev(p.chip_tile, player_tile(p)) > PICK_RANGE { return }
+
+    px := p.chip_tile.x * CELL_SIZE
+    py := p.chip_tile.y * CELL_SIZE
+    dark := rl.Color{20, 15, 10, 220}
+    rl.DrawLine(px + 2, py + 3, px + 7, py + 8, dark)
+    if p.chip_hits >= 2 {
+        rl.DrawLine(px + 8, py + 2, px + 3, py + 9, dark)
+    }
 }
 
 // ─── Enemies ──────────────────────────────────────────────────────────────────

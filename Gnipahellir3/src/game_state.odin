@@ -128,6 +128,9 @@ Player :: struct {
     mana_regen:       f32,
     attack_timer:     f32,   // sword swing cooldown
     hazard_timer:     f32,   // accumulated tile damage (lava); 1 hp per unit
+    mine_timer:       f32,   // pick swing / wand shot cooldown
+    chip_tile:        [2]i32,// tile the pick is currently chipping
+    chip_hits:        u8,    // chips landed on it (PICK_HITS breaks it)
     inventory:        Inventory,
     equipped:         Item,
     bucket_lava:      bool,
@@ -140,6 +143,17 @@ Player :: struct {
     walk_anim_period: f32,
     clothing_color:   rl.Color,
     hair_color:       rl.Color,
+}
+
+// ─── Wand Mining (delayed impact) ─────────────────────────────────────────────
+
+// One shot in flight at a time (a new shot overwrites it, like G2).  Not part
+// of the save — a shot in flight at quit simply vanishes, like projectiles.
+Mining_Action :: struct {
+    active:  bool,
+    target:  [2]i32,
+    travel:  f32,   // seconds to impact
+    elapsed: f32,
 }
 
 // ─── Projectiles ──────────────────────────────────────────────────────────────
@@ -284,6 +298,7 @@ Game_State :: struct {
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,
+    mining:      Mining_Action,
     events:      Event_Queue,
 
     input:       Input_State,
@@ -318,7 +333,8 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.mana_regen  = 5
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
-    gs.player.equipped    = .Mine_Wand
+    gs.player.equipped    = .Pickaxe
+    inventory_insert(&gs.player.inventory, .Pickaxe, 1)
 
     world_init(&gs.world)
     spawn_level_1_enemies(gs)

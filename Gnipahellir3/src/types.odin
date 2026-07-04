@@ -66,9 +66,12 @@ Tile_Type :: enum u8 {
 Item :: enum u8 {
     None,
     Sword,
+    Pickaxe,
     Potion_Health,
     Potion_Mana,
     Mine_Wand,
+    Mine_Wand_Silver,
+    Mine_Wand_Gold,
     Wood_Log,
     Leaf,
     Stone_Block,
