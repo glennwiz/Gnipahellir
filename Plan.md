@@ -164,9 +164,10 @@ remains a stub); C4 resolved — the sky-altar ritual is gated to the sky level.
       get home to an uphill den). The A* climb move now mines zigzag staircases;
       details in commit 1643d9a.
 
-**Milestone:** a player who ignores builders loses ore; a player who raids them gains it — and risks it.
-**Playtest pending** — the automated economy holds for a simulated hour; Glenn's hand
-playtest decides the tuning (competition felt but not oppressive).
+**Milestone reached (2026-07-04):** builders drain the shared pool continuously,
+dens hold real stockpiles, raids shriek + trigger persistent den defense.
+Playtest round 1 done; further playtest waived by Glenn — remaining feel-tuning
+folds into the Phase 5 playtest.
 
 Playtest findings (2026-07-04, round 1):
 - **Break-in felt like nothing happened** — the hunt DID trigger (action.log:
