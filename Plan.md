@@ -175,6 +175,12 @@ Playtest findings (2026-07-04, round 1):
   defense mode — while the raider is on the den grounds (chebyshev ≤ 7 of the
   anchor) the owner never loses the hunt; test pins it. Re-test: the owner
   should now stay on you for the whole raid.
+- **The shriek notification went unnoticed** — text top-center is the wrong
+  channel mid-raid. FIXED: breach also fires sound_enrage_start.wav at 0.9.
+- **No floor loot to steal** — shells took ~an hour so the stockpile never
+  appeared in-session. TUNED: DEN_SHELL_LAYERS 3 → 2. Soak: 134 loot items
+  banked per hour (was 12), 306 trips at ~35s. Raiding an old 3-layer den from
+  a pre-tune save is fine — the orphaned outer ring is just free ore.
 
 ## Phase 5 — Garm as final boss
 

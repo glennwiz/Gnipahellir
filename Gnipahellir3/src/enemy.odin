@@ -43,8 +43,10 @@ LOS_MEMORY     :: f32(3.0)  // keep hunting this long after losing sight
 ATTACK_TIME    :: f32(0.8)  // seconds between bites
 ATTACK_DAMAGE  :: 1
 
-// Den shell.
-DEN_SHELL_LAYERS :: 3       // mineral layers placed around the den
+// Den shell.  Tuned 3 -> 2 after playtest round 1: with 3 layers a dome
+// took ~an hour of builder time, so the floor stockpile (the raid payout)
+// never appeared in a real session.
+DEN_SHELL_LAYERS :: 2       // mineral layers placed around the den
 
 DEN_UNSET :: [2]i32{0, 0}   // anchor sentinel: no den site chosen yet
 
