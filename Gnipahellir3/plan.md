@@ -136,6 +136,7 @@ src/
   crafting.odin    -- Recipe table, craft handler
   placement.odin   -- Place_Request validation + mutation
   items.odin       -- Item table, inventory ops
+  notify.odin      -- Timed popup notifications (pushed by event handlers)
   audio.odin       -- Sound table, event-driven playback, depth ambience
   render.odin      -- draw_* procs (read-only), pixel-art tiles, debug overlay
   ui.odin          -- HUD, inventory/crafting windows, debug menu, hit tests

@@ -157,16 +157,28 @@ handle_ritual_request :: proc(gs: ^Game_State) {
     if gs.player.dead do return
     // First tier whose blueprint is found but structure unbuilt
     tier := -1
+    all_built := true
     for t in 0 ..< MAX_PROGRESSION_TIERS {
-        if gs.progression.blueprint_found[t] && !gs.progression.sky_structure_complete[t] {
+        if gs.progression.sky_structure_complete[t] do continue
+        all_built = false
+        if gs.progression.blueprint_found[t] {
             tier = t
             break
         }
     }
-    if tier < 0 do return
+    if tier < 0 {
+        if all_built {
+            notify(gs, "The altar's work is done")
+        } else {
+            notify(gs, "The altar is silent — find a blueprint first")
+        }
+        return
+    }
 
     for ing in structure_costs[tier] {
-        if inventory_count(&gs.player.inventory, ing.item) < ing.count {
+        have := inventory_count(&gs.player.inventory, ing.item)
+        if have < ing.count {
+            notify(gs, "Ritual needs %d %s (you have %d)", ing.count, item_table[ing.item].name, have)
             log_action(gs, "Ritual tier %d: missing %v", tier, ing.item)
             return
         }

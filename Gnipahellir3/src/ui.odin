@@ -105,11 +105,33 @@ recipe_at_cursor :: proc(gs: ^Game_State) -> int {
 
 draw_ui :: proc(gs: ^Game_State) {
     draw_hud(gs)
+    draw_notifications(gs)
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
+    }
+}
+
+// Timed popups, stacked top-center, fading out over the last NOTIFY_FADE s.
+draw_notifications :: proc(gs: ^Game_State) {
+    NOTIFY_FONT :: 20
+    for i in 0 ..< gs.notify.count {
+        n := &gs.notify.items[i]
+
+        alpha := f32(1)
+        if remain := NOTIFY_DURATION - n.age; remain < NOTIFY_FADE {
+            alpha = remain / NOTIFY_FADE
+        }
+
+        text := cstring(raw_data(n.text[:]))  // buffer is zeroed on push
+        tw   := rl.MeasureText(text, NOTIFY_FONT)
+        x    := (i32(SCREEN_W) - tw) / 2
+        y    := i32(70 + i*28)
+
+        rl.DrawText(text, x + 1, y + 1, NOTIFY_FONT, rl.Color{0, 0, 0, u8(180 * alpha)})
+        rl.DrawText(text, x, y, NOTIFY_FONT, rl.Color{255, 240, 180, u8(255 * alpha)})
     }
 }
 

@@ -1,6 +1,7 @@
 package game
 
 import "core:testing"
+import "core:strings"
 
 // ─── Phase 3 system tests ─────────────────────────────────────────────────────
 //
@@ -313,6 +314,34 @@ fast_fall_does_not_tunnel :: proc(t: ^testing.T) {
     }
     testing.expect(t, grounded, "body must land, not tunnel through the surface")
     testing.expect(t, abs(pos.y + PLAYER_H - f32(SURFACE_Y)) < 0.01, "feet on the grass row")
+}
+
+@(test)
+notifications_explain_ritual_state :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    notify_text :: proc(gs: ^Game_State, i: int) -> string {
+        return string(gs.notify.items[i].text[:gs.notify.items[i].len])
+    }
+
+    // No blueprint: the altar explains itself instead of doing nothing
+    handle_ritual_request(gs)
+    testing.expect_value(t, gs.notify.count, 1)
+    testing.expect(t, strings.contains(notify_text(gs, 0), "blueprint"), "should point at the missing blueprint")
+
+    // Blueprint but no materials: names the first missing ingredient + counts
+    gs.progression.blueprint_found[0] = true
+    inventory_insert(&gs.player.inventory, .Cloud_Stone, 3)
+    handle_ritual_request(gs)
+    testing.expect_value(t, gs.notify.count, 2)
+    testing.expect(t, strings.contains(notify_text(gs, 1), "Cloud Stone"), "should name the missing material")
+    testing.expect(t, strings.contains(notify_text(gs, 1), "you have 3"), "should show the held count")
+
+    // Notifications expire after NOTIFY_DURATION
+    gs.delta_time = NOTIFY_DURATION + 0.1
+    update_notifications(gs)
+    testing.expect_value(t, gs.notify.count, 0)
 }
 
 @(test)

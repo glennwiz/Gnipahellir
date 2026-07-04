@@ -26,10 +26,13 @@ game_update :: proc(gs: ^Game_State) {
     process_events(gs)
     eq_clear(&gs.events)
 
-    // 7. Particles  (stub — pushes events? move it above process_events)
+    // 7. Notifications — ages/expires the popup stack (pushes no events)
+    update_notifications(gs)
+
+    // 8. Particles  (stub — pushes events? move it above process_events)
     // update_particles(gs)
 
-    // 8. Audio (reads state only, never pushes events)
+    // 9. Audio (reads state only, never pushes events)
     update_audio(gs)
 
     when GAME_DEBUG {

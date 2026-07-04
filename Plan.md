@@ -120,12 +120,12 @@ New files: `items.odin`, `crafting.odin`, `placement.odin`, `ui.odin`, `levels.o
       run ended by a builder kill in cave 3 (roguelike save-clear verified)
 
 Playtest findings (tracked for later phases):
-- **Ritual failure is silent** — the tester pressed E ~20 times at the altar
-  with materials missing; the reason only reaches the debug log. Needs an
-  on-screen notification (same handler Level_Locked needs). Phase 6 item,
-  strong candidate to pull earlier.
-- **Blueprints aren't inspectable** — ritual costs are invisible in-game;
-  the design doc's "inspect in inventory" feature is unimplemented. Phase 6.
+- ~~**Ritual failure is silent**~~ — FIXED post-playtest: notification system
+  (`notify.odin`, drawn top-center) now explains the altar's state: missing
+  blueprint, missing material with held count, success, cave unlocked. Also
+  covers Level_Locked and level-entry names.
+- **Blueprints aren't inspectable** — mitigated: the ritual cost is now shown
+  in a popup at blueprint pickup. Full inventory inspection UI remains Phase 6.
 - **No player attack** — a hunting builder is a death sentence. Fine pre-
   Phase 5, but combat ordering within Phase 5 should account for it.
 - Playtest also caught a physics regression (builders frozen against 1-high

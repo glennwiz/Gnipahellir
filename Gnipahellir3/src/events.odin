@@ -103,13 +103,17 @@ process_events :: proc(gs: ^Game_State) {
             // music tracks land in Phase 7
 
         case .Level_Enter:
-            // transition already performed by level_transition; informational
+            // transition already performed by level_transition
+            lvl := int(e.payload.int_val)
+            if lvl >= 0 && lvl < NUM_LEVELS {
+                notify(gs, "— %s —", level_names[lvl])
+            }
 
         case .Level_Exit:
             // informational; no handler yet
 
         case .Level_Locked:
-            // on-screen notification lands in Phase 6
+            notify(gs, "Sealed by runic magic — a sky structure must be built")
 
         case .Player_Died:
             gs.player.dead = true
@@ -118,6 +122,12 @@ process_events :: proc(gs: ^Game_State) {
             tier := int(e.payload.int_val)
             if tier >= 0 && tier < MAX_PROGRESSION_TIERS {
                 gs.progression.blueprint_found[tier] = true
+                // Blueprints aren't inspectable yet — surface the ritual
+                // cost at pickup so the player knows what to gather.
+                c := structure_costs[tier]
+                notify(gs, "Blueprint! Altar ritual needs %d %s + %d %s",
+                    c[0].count, item_table[c[0].item].name,
+                    c[1].count, item_table[c[1].item].name)
             }
 
         case .Structure_Complete:
@@ -125,6 +135,7 @@ process_events :: proc(gs: ^Game_State) {
             if tier >= 0 && tier < MAX_PROGRESSION_TIERS {
                 gs.progression.sky_structure_complete[tier] = true
                 audio_play(&gs.audio, .Fanfare)
+                notify(gs, "Sky structure complete!")
                 eq_push(&gs.events, Event{
                     type    = .Cave_Unlocked,
                     payload = e.payload,
@@ -135,6 +146,11 @@ process_events :: proc(gs: ^Game_State) {
             tier := int(e.payload.int_val)
             if tier >= 0 && tier < MAX_PROGRESSION_TIERS {
                 gs.progression.cave_unlocked[tier] = true
+                switch tier {
+                case 0: notify(gs, "The seal on %s has broken", level_names[LEVEL_CAVE2])
+                case 1: notify(gs, "The seal on %s has broken", level_names[LEVEL_CAVE3])
+                case 2: notify(gs, "The final depths tremble...")  // boss gate, Phase 5
+                }
             }
 
         case .Boss_Defeated:

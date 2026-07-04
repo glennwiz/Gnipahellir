@@ -188,6 +188,22 @@ UI_State :: struct {
     tooltip_text:    [64]u8,
 }
 
+// ─── Notifications (timed on-screen popups) ───────────────────────────────────
+
+MAX_NOTIFICATIONS :: 4
+NOTIFY_TEXT_LEN   :: 64
+
+Notification :: struct {
+    text: [NOTIFY_TEXT_LEN]u8,
+    len:  int,
+    age:  f32,
+}
+
+Notification_State :: struct {
+    items: [MAX_NOTIFICATIONS]Notification,
+    count: int,
+}
+
 // ─── Debug Menu (F1, debug builds only) ───────────────────────────────────────
 
 Debug_State :: struct {
@@ -250,6 +266,7 @@ Game_State :: struct {
 
     input:       Input_State,
     ui:          UI_State,
+    notify:      Notification_State,
 
     sim:         Sim_State,
     audio:       Audio_State,
