@@ -4,6 +4,10 @@ import rl "vendor:raylib/v55"
 import "core:fmt"
 import "core:math"
 
+// ─── Rendering Constants ──────────────────────────────────────────────────────
+
+PLAYER_RENDER_SCALE :: 2  // render player at this many tiles high for visibility
+
 // ─── Draw Entry Point ─────────────────────────────────────────────────────────
 
 draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
@@ -325,10 +329,9 @@ draw_player :: proc(p: ^Player) {
     if ps_h < pixel_size { pixel_size = ps_h }
     if pixel_size < 1 { pixel_size = 1 }
 
-    // Allow forcing a larger visual scale for visibility. PLAYER_RENDER_SCALE can be
-    // adjusted if the player appears too small. Higher = larger rendering.
-    test_tiles_high := 2
-    forced_ps := i32((test_tiles_high * CELL_SIZE + FRAME_HEIGHT - 1) / FRAME_HEIGHT) // ceil
+    // Scale player sprite to be visible at the desired height in tiles.
+    // Adjust PLAYER_RENDER_SCALE if player appears too small or too large.
+    forced_ps := i32((PLAYER_RENDER_SCALE * CELL_SIZE + FRAME_HEIGHT - 1) / FRAME_HEIGHT) // ceil
     if forced_ps > pixel_size { pixel_size = forced_ps }
 
     total_w := FRAME_WIDTH * pixel_size
