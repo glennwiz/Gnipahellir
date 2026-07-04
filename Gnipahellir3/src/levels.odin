@@ -155,6 +155,13 @@ structure_costs := [MAX_PROGRESSION_TIERS][2]Ingredient{
 
 handle_ritual_request :: proc(gs: ^Game_State) {
     if gs.player.dead do return
+    // The ritual only answers in the sky (design doc, review item C4) —
+    // altars built below are inert.
+    if gs.level_index != LEVEL_SKY {
+        notify(gs, "The altar is inert — the ritual only answers in the sky")
+        log_action(gs, "Ritual rejected: not on the sky level")
+        return
+    }
     // First tier whose blueprint is found but structure unbuilt
     tier := -1
     all_built := true

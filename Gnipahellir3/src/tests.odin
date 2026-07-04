@@ -107,6 +107,7 @@ ritual_consumes_and_unlocks :: proc(t: ^testing.T) {
     defer free(gs)
 
     inv := &gs.player.inventory
+    gs.level_index = LEVEL_SKY  // ritual is gated to the sky level
     gs.progression.blueprint_found[0] = true
 
     // Missing materials: nothing happens
@@ -123,6 +124,28 @@ ritual_consumes_and_unlocks :: proc(t: ^testing.T) {
     testing.expect(t, gs.progression.cave_unlocked[0], "cave 2 unlocked")
     testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 0)
     testing.expect_value(t, inventory_count(inv, .Plank), 0)
+}
+
+@(test)
+ritual_gated_to_sky_level :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Blueprint + full materials, but standing on the surface (C4): the
+    // altar must refuse and explain itself.
+    inv := &gs.player.inventory
+    gs.progression.blueprint_found[0] = true
+    inventory_insert(inv, .Cloud_Stone, 8)
+    inventory_insert(inv, .Plank, 4)
+
+    handle_ritual_request(gs)
+    process_events(gs)
+
+    testing.expect(t, !gs.progression.sky_structure_complete[0], "ritual must not fire off the sky level")
+    testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 8)
+    testing.expect_value(t, gs.notify.count, 1)
+    msg := string(gs.notify.items[0].text[:gs.notify.items[0].len])
+    testing.expect(t, strings.contains(msg, "sky"), "rejection should point at the sky")
 }
 
 @(test)
@@ -325,6 +348,8 @@ notifications_explain_ritual_state :: proc(t: ^testing.T) {
         return string(gs.notify.items[i].text[:gs.notify.items[i].len])
     }
 
+    gs.level_index = LEVEL_SKY  // ritual is gated to the sky level
+
     // No blueprint: the altar explains itself instead of doing nothing
     handle_ritual_request(gs)
     testing.expect_value(t, gs.notify.count, 1)
@@ -453,7 +478,8 @@ dead_player_cannot_act :: proc(t: ^testing.T) {
     handle_craft_request(gs, Event{payload = {int_val = 0}})
     testing.expect_value(t, inventory_count(inv, .Plank), 0)
 
-    // Ritual rejected (blueprint + materials present)
+    // Ritual rejected (blueprint + materials present, on the sky level)
+    gs.level_index = LEVEL_SKY
     gs.progression.blueprint_found[0] = true
     inventory_insert(inv, .Cloud_Stone, 8)
     inventory_insert(inv, .Plank, 4)
