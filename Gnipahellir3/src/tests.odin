@@ -410,6 +410,39 @@ builders_do_not_freeze :: proc(t: ^testing.T) {
 }
 
 @(test)
+bridging_spends_pocket_blocks :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A builder whose current waypoint hangs over a gap
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+
+    gap := builder_tile(e) + {3, 0}
+    set_tile(&gs.world, int(gap.x), int(gap.y),   .Void)
+    set_tile(&gs.world, int(gap.x), int(gap.y)+1, .Void)
+    e.nav.path = {tiles = {0 = gap}, len = 1, cursor = 0}
+    e.nav.mine_timer = 0
+
+    // Empty pocket: no block appears, path is dropped for a replan
+    e.builder.pocket = 0
+    builder_exec_action(e, &e.nav, gs)
+    testing.expect_value(t, get_tile(&gs.world, int(gap.x), int(gap.y)+1), Tile_Type.Void)
+    testing.expect_value(t, e.nav.path.len, 0)
+
+    // One pocket block: the bridge is placed and the pocket is spent
+    e.nav.path = {tiles = {0 = gap}, len = 1, cursor = 0}
+    e.builder.pocket = 1
+    builder_exec_action(e, &e.nav, gs)
+    testing.expect_value(t, get_tile(&gs.world, int(gap.x), int(gap.y)+1), Tile_Type.Stone)
+    testing.expect_value(t, e.builder.pocket, u8(0))
+}
+
+@(test)
 entity_map_tracks_enemies :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

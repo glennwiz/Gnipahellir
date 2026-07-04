@@ -27,6 +27,10 @@ COST_WALK  :: f32(1)
 COST_PLACE :: f32(4)   // bridge: place a block underfoot
 COST_MINE  :: f32(6)   // tunnel: mine a solid tile
 
+// Bridge blocks are not conjured: every tile a builder mines credits its
+// pocket, and every bridge block spends from it.
+POCKET_MAX :: u8(8)
+
 // Hunting.
 HUNT_RADIUS    :: f32(12)   // spot the player within this distance + line of sight
 HUNT_LOSE_DIST :: f32(20)   // give up the chase beyond this distance
@@ -213,11 +217,15 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 //  becomes current, so any in-bounds target surrounded by mineable rock is
 //  reachable and the search only fails on budget exhaustion.
 //
+//  Bridge blocks come from the builder's pocket: a path may plan at most
+//  `bridge_budget` bridge moves, so an empty-handed builder plans tunnels
+//  and detours instead of conjuring matter.
+//
 //  Succeeds when a node within chebyshev `stop_within` of `to` is expanded.
 //  If the found path exceeds MAX_NAV_PATH, the prefix nearest the start is
 //  kept — the builder walks it and replans from there.
 
-astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, out: ^Nav_Path) -> bool {
+astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path) -> bool {
     w := &gs.world
     out^ = {}
 
@@ -226,14 +234,16 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, out: ^Nav
     if chebyshev(sf, to) <= stop_within { return true }
 
     A_Node :: struct {
-        pos:    [2]i32,
-        g:      f32,
-        parent: i16,   // index into nodes[], -1 = start
+        pos:     [2]i32,
+        g:       f32,
+        parent:  i16,   // index into nodes[], -1 = start
+        bridges: u8,    // bridge moves on the path to this node
     }
 
     A_Trans :: struct {
-        pos:  [2]i32,
-        cost: f32,
+        pos:    [2]i32,
+        cost:   f32,
+        bridge: bool,
     }
 
     nodes:   [MAX_ASTAR_NODES]A_Node
@@ -261,8 +271,8 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, out: ^Nav
         return math.sqrt(dx*dx + dy*dy)
     }
 
-    push_trans :: proc(trans: ^[24]A_Trans, n: ^int, x, y: i32, cost: f32) {
-        if n^ < len(trans) { trans[n^] = {{x, y}, cost}; n^ += 1 }
+    push_trans :: proc(trans: ^[24]A_Trans, n: ^int, x, y: i32, cost: f32, bridge := false) {
+        if n^ < len(trans) { trans[n^] = {{x, y}, cost, bridge}; n^ += 1 }
     }
 
     // Seed the open set with the start node.
@@ -382,9 +392,11 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, out: ^Nav
                 push_trans(&trans, &nt, i32(nx), i32(y-1), COST_MINE + 1)
             }
 
-            // Bridge a gap: place a block at (nx, y+1) and stand on it.
-            if !is_solid(w, nx, y) && in_bounds(nx, y+1) && !is_solid(w, nx, y+1) {
-                push_trans(&trans, &nt, i32(nx), i32(y), COST_PLACE)
+            // Bridge a gap: place a block at (nx, y+1) and stand on it —
+            // only while the path still has pocket blocks to spend.
+            if int(cur.bridges) < bridge_budget &&
+               !is_solid(w, nx, y) && in_bounds(nx, y+1) && !is_solid(w, nx, y+1) {
+                push_trans(&trans, &nt, i32(nx), i32(y), COST_PLACE, bridge = true)
             }
         }
 
@@ -404,7 +416,8 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, out: ^Nav
             if n_count >= MAX_ASTAR_NODES || open_size >= MAX_ASTAR_NODES {
                 break outer   // budget exhausted
             }
-            nodes[n_count] = {pos = np, g = tentative_g, parent = i16(cur_idx)}
+            bridges := cur.bridges + (u8(1) if trans[i].bridge else u8(0))
+            nodes[n_count] = {pos = np, g = tentative_g, parent = i16(cur_idx), bridges = bridges}
             open[open_size] = i16(n_count)
             open_size += 1
             n_count   += 1
@@ -573,13 +586,23 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
         set_tile(&gs.world, tx, ty, .Void)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
         log_action(gs, "Builder mines (%d,%d)", tx, ty)
+        e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         nav.mine_timer = MINE_TIME
         e.vel.x = 0
         return true
     }
 
-    // Bridge: no floor below waypoint — place a stone block there.
+    // Bridge: no floor below waypoint — spend a pocket block on it.  An
+    // empty pocket (floor mined out from under a planned waypoint) clears
+    // the path so the next replan routes around the gap instead.
     if in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) {
+        if e.builder.pocket == 0 {
+            log_action(gs, "Builder out of blocks at (%d,%d) — replans", tx, ty+1)
+            nav.path = {}
+            e.vel.x  = 0
+            return true
+        }
+        e.builder.pocket -= 1
         set_tile(&gs.world, tx, ty+1, .Stone)
         eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(tx), i32(ty+1)}})
         log_action(gs, "Builder places at (%d,%d)", tx, ty+1)
@@ -650,6 +673,7 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
             set_tile(w, x, y, .Void)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = T})
             log_action(gs, "Builder#%d carves (%d,%d)", id, x, y)
+            e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
             nav.mine_timer = MINE_TIME
         } else {
             e.builder.step += 1   // unmineable obstruction — skip this step
@@ -677,6 +701,7 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
             if is_builder_mineable(&gs.world, x, y) {
                 set_tile(&gs.world, x, y, .Void)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
+                e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
             }
         }
     }
@@ -753,7 +778,7 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         }
         b.replan_timer = REPLAN_MIN
         from := [2]i32{i32(e.pos.x + BUILDER_W*0.5), i32(e.pos.y + BUILDER_H - 0.01)}
-        if !astar_dig(gs, from, T, stop, &nav.path) {
+        if !astar_dig(gs, from, T, stop, int(b.pocket), &nav.path) {
             builder_strike(e, id, gs, "no path")
             return false
         }

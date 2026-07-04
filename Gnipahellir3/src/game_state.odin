@@ -55,6 +55,7 @@ Builder_State :: struct {
     step:         int,          // next den template tile index
     den_built:    bool,
     carry:        Tile_Type,    // mineral being hauled (.Air = empty hands)
+    pocket:       u8,           // spare blocks from tiles it mined; spent on bridges
     target_tile:  [2]i32,       // current ore target
     has_target:   bool,
     avoid:        [4][2]i32,    // recently given-up targets, skipped in searches
