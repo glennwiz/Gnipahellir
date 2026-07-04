@@ -114,9 +114,22 @@ New files: `items.odin`, `crafting.odin`, `placement.odin`, `ui.odin`, `levels.o
 - [x] Sky fall-through returns the player to the surface
 - [x] Cave 2 gen: iron + silver present, majority open space, blueprint + portal placed
 
-**Human playtest still wanted** (feel, not correctness — `odin run src`):
-- [ ] UI feel: slot clicks, crafting clicks, tooltip, mining suppression over panels
-- [ ] One full loop by hand to sanity-check pacing and portal discoverability
+**Human playtest — DONE 2026-07-04:**
+- [x] UI feel: all six craftables built by hand in one session
+- [x] Full loop by hand: all three rituals completed, every level visited,
+      run ended by a builder kill in cave 3 (roguelike save-clear verified)
+
+Playtest findings (tracked for later phases):
+- **Ritual failure is silent** — the tester pressed E ~20 times at the altar
+  with materials missing; the reason only reaches the debug log. Needs an
+  on-screen notification (same handler Level_Locked needs). Phase 6 item,
+  strong candidate to pull earlier.
+- **Blueprints aren't inspectable** — ritual costs are invisible in-game;
+  the design doc's "inspect in inventory" feature is unimplemented. Phase 6.
+- **No player attack** — a hunting builder is a death sentence. Fine pre-
+  Phase 5, but combat ordering within Phase 5 should account for it.
+- Playtest also caught a physics regression (builders frozen against 1-high
+  steps) — fixed same day with a permanent soak regression test.
 
 **Known gaps (deliberate, tracked for later phases):**
 - Smelter places but doesn't smelt — ores are used raw; smelting recipes need a Phase 3.5
@@ -190,8 +203,11 @@ New files: `items.odin`, `crafting.odin`, `placement.odin`, `ui.odin`, `levels.o
 - [x] Phase 1 complete — save/load + stats persistence, verified round trip
 - [x] Phase 2 complete — audio engine, event triggers, builder attenuation, cave ambience
       (volume sliders deferred to Phase 6 with the settings screen)
-- [x] Phase 3 complete — all systems covered by the automated suite (`odin test src`);
-      human playtest of UI feel still welcome. Known gaps (smelting, sim, bucket)
-      tracked above; decide at Phase 4 kickoff whether smelting rides along.
-- [ ] Phase 4 next — builder economy (shared ore pool, raidable dens, honest bridging,
-      AI soak test)
+- [x] Phase 3 complete — automated suite green (18 tests) AND human-playtested
+      end to end (2026-07-04). Known gaps (smelting, sim, bucket) tracked above;
+      decide at Phase 4 kickoff whether smelting rides along.
+- [x] Architecture review (suggestion.md) — all findings closed except C3/C4/C5
+      (small, homes assigned) and two profile-first perf notes. Unified physics
+      landed and playtest-verified.
+- [ ] Phase 4 next — builder economy (shared ore pool, raidable dens, honest
+      bridging, AI soak test — a minimal soak already exists in tests.odin)
