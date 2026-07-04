@@ -313,15 +313,29 @@ draw_player :: proc(p: ^Player) {
     frame := player_frames[frame_index]
 
     // Position in pixels (virtual render texture space)
-    base_x_f := p.pos[0] * CELL_SIZE
-    base_y_f := p.pos[1] * CELL_SIZE
+    px := i32(p.pos[0] * CELL_SIZE)
+    py := i32(p.pos[1] * CELL_SIZE)
 
-    pixel_size := cell_pixel_size()
+    // Scale the 8×11 pixel sprite to best-fit the player's collision box
+    pw_px := i32(cast(f32)(PLAYER_W * CELL_SIZE))
+    ph_px := i32(cast(f32)(PLAYER_H * CELL_SIZE))
+    ps_w := pw_px / FRAME_WIDTH
+    ps_h := ph_px / FRAME_HEIGHT
+    pixel_size := ps_w
+    if ps_h < pixel_size { pixel_size = ps_h }
+    if pixel_size < 1 { pixel_size = 1 }
+
+    // Allow forcing a larger visual scale for testing. Set test_tiles_high=2 to make
+    // the pixel sprite visually occupy 2 tiles high (rounded up).
+    test_tiles_high := 2
+    forced_ps := i32((test_tiles_high * CELL_SIZE + FRAME_HEIGHT - 1) / FRAME_HEIGHT) // ceil
+    if forced_ps > pixel_size { pixel_size = forced_ps }
 
     total_w := FRAME_WIDTH * pixel_size
     total_h := FRAME_HEIGHT * pixel_size
-    origin_x := i32(base_x_f - cast(f32)total_w/2)
-    origin_y := i32(base_y_f - cast(f32)total_h + cast(f32)pixel_size) // anchor feet
+    // Center horizontally inside the player's collision box and align bottom to player's feet
+    origin_x := px + (pw_px - total_w)/2
+    origin_y := py + (ph_px - total_h) // anchor feet
 
     // Small bob while animating
     bob_offset := 0
@@ -335,7 +349,7 @@ draw_player :: proc(p: ^Player) {
                 if ch == ' ' do continue
                 shade := 0.85 + cast(f32)col / cast(f32)(FRAME_WIDTH-1) * 0.25
                 colr := player_pixel_color(p, ch, shade)
-                rl.DrawRectangle(origin_x + i32(col*pixel_size), origin_y + i32(row*pixel_size) + i32(bob_offset), i32(pixel_size), i32(pixel_size), colr)
+                rl.DrawRectangle(origin_x + i32(col) * i32(pixel_size), origin_y + i32(row) * i32(pixel_size) + i32(bob_offset), i32(pixel_size), i32(pixel_size), colr)
             }
         }
     } else {
@@ -346,7 +360,7 @@ draw_player :: proc(p: ^Player) {
                 flipped_col := FRAME_WIDTH - 1 - col
                 shade := 0.85 + cast(f32)flipped_col / cast(f32)(FRAME_WIDTH-1) * 0.25
                 colr := player_pixel_color(p, ch, shade)
-                rl.DrawRectangle(origin_x + i32(flipped_col*pixel_size), origin_y + i32(row*pixel_size) + i32(bob_offset), i32(pixel_size), i32(pixel_size), colr)
+                rl.DrawRectangle(origin_x + i32(flipped_col) * i32(pixel_size), origin_y + i32(row) * i32(pixel_size) + i32(bob_offset), i32(pixel_size), i32(pixel_size), colr)
             }
         }
     }
