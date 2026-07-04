@@ -721,6 +721,189 @@ garm_spawns_only_behind_boss_gate :: proc(t: ^testing.T) {
     testing.expect_value(t, g.hp, GARM_HP - SWORD_DAMAGE)
 }
 
+@(test)
+lava_damages_player :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Standing with the feet in a lava tile: dps 2 = 1 hp every 0.5 s.
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 30, SURFACE_Y - 1, .Lava)
+
+    step :: proc(gs: ^Game_State) {
+        update_player(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    for _ in 0 ..< 32 { step(gs) }
+    testing.expect_value(t, gs.player.hp, 9)
+    for _ in 0 ..< 30 { step(gs) }
+    testing.expect_value(t, gs.player.hp, 8)
+
+    // Out of the lava: the burn stops and the accumulator resets.
+    set_tile(&gs.world, 30, SURFACE_Y - 1, .Air)
+    for _ in 0 ..< 120 { step(gs) }
+    testing.expect_value(t, gs.player.hp, 8)
+}
+
+// Cave-3 world with only Garm in it; returns his slot index.
+@(private = "file")
+garm_fixture :: proc(gs: ^Game_State) -> (gi: int) {
+    gen_cave_level(&gs.world, 2)
+    gs.enemies     = {}
+    gs.level_index = LEVEL_CAVE3
+    spawn_garm(gs)
+    gi = -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] && gs.enemies.data[i].kind == .Garm { gi = i; break }
+    }
+    return
+}
+
+@(test)
+garm_phases_follow_hp :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+
+    // Dead player keeps him stationary — the channel must run regardless.
+    gs.player.dead = true
+    // Step him off the column slot (he spawns on it; solid stone is never
+    // conjured into a body, so the column would politely wait forever).
+    g.pos.x = f32(ARENA_X0 + 3)
+
+    step :: proc(gs: ^Game_State) {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    // Full hp: chase phase, no construction.
+    for _ in 0 ..< 300 { step(gs) }
+    testing.expect_value(t, g.garm.phase, Garm_Phase.Chase)
+    testing.expect(t, !is_solid(&gs.world, ARENA_CX, ARENA_Y1 - 5), "no column before phase 2")
+
+    // Phase 2: the center column rises, floor to 2 below the ceiling.
+    g.hp = GARM_PHASE2_HP
+    for _ in 0 ..< 600 { step(gs) }
+    testing.expect_value(t, g.garm.phase, Garm_Phase.Column)
+    for i in 0 ..< GARM_COLUMN_LEN {
+        testing.expectf(t, is_solid(&gs.world, ARENA_CX, ARENA_Y1 - i),
+            "column cell %d should be built", i)
+    }
+    testing.expect(t, !is_solid(&gs.world, ARENA_CX, ARENA_Y0 + 1), "the column leaves a gap at the top")
+
+    // Phase 3: the perimeter seals; its completion breaks into the flood.
+    g.hp = GARM_PHASE3_HP
+    for _ in 0 ..< 800 { step(gs) }
+    testing.expect_value(t, g.garm.phase, Garm_Phase.Flood)
+    for i in 0 ..= ARENA_Y1 - ARENA_Y0 {
+        testing.expectf(t, is_solid(&gs.world, ARENA_X0, ARENA_Y1 - i), "left ring cell %d", i)
+        testing.expectf(t, is_solid(&gs.world, ARENA_X1, ARENA_Y1 - i), "right ring cell %d", i)
+    }
+    for x in ARENA_X0 + 1 ..< ARENA_X1 {
+        testing.expectf(t, is_solid(&gs.world, x, ARENA_Y0), "ring roof cell x=%d", x)
+    }
+
+    // Flood: lava fills the arena floor up to GARM_LAVA_DEPTH rows.
+    for _ in 0 ..< int(GARM_FLOOD_INTERVAL * f32(GARM_FLOOD_LEN) * 60) + 300 { step(gs) }
+    for x in ARENA_X0 + 1 ..< ARENA_X1 {
+        lava_or_stone := get_tile(&gs.world, x, ARENA_Y1) == .Lava || is_solid(&gs.world, x, ARENA_Y1)
+        testing.expectf(t, lava_or_stone, "arena floor row should be flooded at x=%d", x)
+    }
+}
+
+@(test)
+garm_fight_soak :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+
+    // Deterministic bot: hop to a fresh arena spot every 6 s; the sword
+    // lands 2 damage every 4 s, so the whole fight runs ~60 s.
+    place_bot :: proc(gs: ^Game_State, cycle: int) {
+        h  := whash(u32(cycle) * 2654435761 + 17)
+        x  := ARENA_X0 + 2 + int(h % u32(ARENA_X1 - ARENA_X0 - 3))
+        sx, sy := snap_to_standable(&gs.world, x, ARENA_Y1 - 1)
+        gs.player.pos = {f32(sx) + (1 - PLAYER_W)*0.5, f32(sy) - PLAYER_H + 1}
+    }
+    place_bot(gs, 0)
+
+    player_hits, fireballs: int
+    closed_in:  bool
+    last_pos:   [2]f32
+    still_secs: int
+
+    MAX_FRAMES :: 4 * 60 * 60   // 4-minute cap; the fight should end well before
+
+    frame_done := 0
+    for frame in 0 ..< MAX_FRAMES {
+        frame_done = frame
+        if !gs.enemies.active[gi] { break }   // Garm slain — fight over
+
+        if frame % 360 == 0 && frame > 0 { place_bot(gs, frame / 360) }
+        gs.player.hp = 1000   // the bot outlives everything; hits are counted below
+
+        if frame % 240 == 0 && frame > 0 {
+            eq_push(&gs.events, Event{
+                type    = .Damage_Dealt,
+                source  = PLAYER_ID,
+                target  = enemy_entity_id(gi),
+                payload = {int_val = SWORD_DAMAGE},
+            })
+        }
+
+        update_enemies(gs)
+        update_projectiles(gs)
+
+        n  := gs.events.size
+        qi := gs.events.head
+        for _ in 0 ..< n {
+            ev := gs.events.events[qi]
+            if ev.type == .Damage_Dealt && ev.target == PLAYER_ID { player_hits += 1 }
+            if ev.type == .Projectile_Fired { fireballs += 1 }
+            qi = (qi + 1) % MAX_EVENTS
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+
+        if gs.enemies.active[gi] {
+            if chebyshev(builder_tile(g), player_tile(&gs.player)) <= GARM_BITE_REACH {
+                closed_in = true
+            }
+            // Freeze watchdog: standing still is only legitimate in biting
+            // range (or during a mine cooldown, far shorter than 10 s).
+            if frame % 60 == 0 {
+                far := chebyshev(builder_tile(g), player_tile(&gs.player)) > 4
+                if g.pos == last_pos && far {
+                    still_secs += 1
+                    testing.expect(t, still_secs < 10, "Garm frozen in place for 10 s")
+                } else {
+                    still_secs = 0
+                    last_pos   = g.pos
+                }
+            }
+        }
+    }
+
+    testing.expect(t, !gs.enemies.active[gi], "the fight must end in Garm's death")
+    testing.expect(t, closed_in, "Garm should reach biting range at least once")
+    testing.expect(t, player_hits >= 1, "Garm should land at least one hit")
+    testing.expectf(t, fireballs >= 5, "Garm should throw fireballs (got %d)", fireballs)
+    testing.expect(t, get_tile(&gs.world, ARENA_X0 + 5, ARENA_Y1) == .Lava ||
+        is_solid(&gs.world, ARENA_X0 + 5, ARENA_Y1), "the flood should have reached the floor")
+
+    log.infof("garm soak: fight lasted %.1f s, %d fireballs, %d hits on the player",
+        f32(frame_done) / 60.0, fireballs, player_hits)
+}
+
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
 
 @(test)

@@ -185,11 +185,17 @@ Playtest findings (2026-07-04, round 1):
 
 ## Phase 5 — Garm as final boss
 
-- [ ] Port Garm to G3, replacing his old planner with `astar_dig`
-- [ ] Keep his project phases as boss mechanics: builds center column → perimeter ring →
-      floods arena with lava over the fight's duration
-- [ ] Fireball attack + jump heuristics on the new pathfinding
-- [ ] Boss arena in cave 3 (generated room, not open cave)
+- [x] Port Garm to G3, replacing his old planner with `astar_dig` — he chases through
+      `builder_travel` (the builders' battle-hardened pathing) plus a "smash" rule that
+      carves the extra clearance his 1.6×1.8 body needs through 1-tile corridors
+- [x] Keep his project phases as boss mechanics: hp thresholds escalate him
+      Chase → Column (≤20 hp) → Ring (≤10 hp) → Flood (ring complete). Structures are
+      channeled at range, one tile per tick, while he keeps fighting; everything he
+      builds is mineable stone — the pickaxe answers every phase. Lava now actually
+      burns: the terrain table's damage_per_second is finally applied to the player.
+- [x] Fireball attack + jump heuristics on the new pathfinding (fireballs die on solid
+      tiles, so cover works without a line-of-sight test; jumps ride enemy_follow_path)
+- [x] Boss arena in cave 3 (generated room, not open cave)
 - [ ] Win condition: Garm dies → Hell_Key → win screen with run stats
 
 **Milestone:** the game can be *beaten*.

@@ -169,6 +169,14 @@ enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
     return {BUILDER_W, BUILDER_H}
 }
 
+// Ground speed by kind — the boss must outpace a walking builder.
+enemy_speed :: proc(kind: Enemy_Kind) -> f32 {
+    #partial switch kind {
+    case .Garm: return GARM_SPEED
+    }
+    return BUILDER_SPEED
+}
+
 // Center tile for any enemy kind (name predates Garm; used everywhere).
 builder_tile :: proc(e: ^Enemy) -> [2]i32 {
     size := enemy_body_size(e.kind)
@@ -529,11 +537,12 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
         return
     }
 
+    size := enemy_body_size(e.kind)
     target := nav.path.tiles[nav.path.cursor]
     tx := f32(target.x) + 0.5
     ty := f32(target.y) + 0.5
-    cx := e.pos.x + BUILDER_W*0.5
-    cy := e.pos.y + BUILDER_H*0.5
+    cx := e.pos.x + size.x*0.5
+    cy := e.pos.y + size.y*0.5
     dx := tx - cx
     dy := ty - cy
 
@@ -556,7 +565,7 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
     deadzone := f32(0.03) if below else f32(0.15)
     if abs(dx) > deadzone {
         e.facing = 1 if dx >= 0 else -1
-        e.vel.x  = f32(e.facing) * BUILDER_SPEED
+        e.vel.x  = f32(e.facing) * enemy_speed(e.kind)
     } else {
         e.vel.x = 0
     }
@@ -564,7 +573,7 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
     // Jump when the waypoint is above, or when walking into a wall.
     if e.grounded {
         waypoint_above := dy < -0.4
-        wall_ahead     := is_solid(w, int(e.pos.x + f32(e.facing)*(BUILDER_W + 0.1)), int(e.pos.y + BUILDER_H - 0.5))
+        wall_ahead     := is_solid(w, int(e.pos.x + f32(e.facing)*(size.x + 0.1)), int(e.pos.y + size.y - 0.5))
         if waypoint_above || wall_ahead {
             e.vel.y = BUILDER_JUMP
         }
@@ -735,10 +744,11 @@ tile_satisfied :: proc(w: ^World_Grid, T: [2]i32, desired: Tile_Type) -> bool {
 }
 
 builder_overlaps_tile :: proc(e: ^Enemy, x, y: int) -> bool {
+    size  := enemy_body_size(e.kind)
     left  := int(e.pos.x)
-    right := int(e.pos.x + BUILDER_W - 0.01)
+    right := int(e.pos.x + size.x - 0.01)
     top   := int(e.pos.y)
-    bot   := int(e.pos.y + BUILDER_H - 0.01)
+    bot   := int(e.pos.y + size.y - 0.01)
     return x >= left && x <= right && y >= top && y <= bot
 }
 
@@ -807,13 +817,14 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
 // Last-resort rescue: if the body overlaps solid tiles (walled in by another
 // builder, or a physics edge case), mine every mineable tile it touches.
 builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
-    if !body_embedded(&gs.world, e.pos, {BUILDER_W, BUILDER_H}) {
+    size := enemy_body_size(e.kind)
+    if !body_embedded(&gs.world, e.pos, size) {
         return
     }
     left  := int(e.pos.x)
-    right := int(e.pos.x + BUILDER_W - BODY_EPS)
+    right := int(e.pos.x + size.x - BODY_EPS)
     top   := int(e.pos.y)
-    bot   := int(e.pos.y + BUILDER_H - BODY_EPS)
+    bot   := int(e.pos.y + size.y - BODY_EPS)
     for y in top ..= bot {
         for x in left ..= right {
             if is_builder_mineable(&gs.world, x, y) {
@@ -865,6 +876,7 @@ builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
     if b.stuck_count >= MAX_STRIKES {
         b.stuck_count = 0
         builder_dig_free(e, id, gs)
+        if e.kind == .Garm { return }   // the boss has no goals to shuffle — replan and keep hunting
         #partial switch b.goal {
         case .Build_Den:
             log_action(gs, "Builder#%d abandons den site (%d,%d)", id, b.anchor.x, b.anchor.y)
@@ -914,7 +926,8 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
             return false
         }
         b.replan_timer = REPLAN_MIN
-        from := [2]i32{i32(e.pos.x + BUILDER_W*0.5), i32(e.pos.y + BUILDER_H - 0.01)}
+        size := enemy_body_size(e.kind)
+        from := [2]i32{i32(e.pos.x + size.x*0.5), i32(e.pos.y + size.y - 0.01)}
         if !astar_dig(gs, from, T, stop, int(b.pocket), &nav.path) {
             builder_strike(e, id, gs, "no path")
             return false

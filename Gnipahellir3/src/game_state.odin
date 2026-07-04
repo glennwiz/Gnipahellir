@@ -69,6 +69,22 @@ Builder_State :: struct {
     stuck_count:  int,
 }
 
+// Boss phases escalate with lost hp; order matters (a phase never regresses).
+Garm_Phase :: enum u8 {
+    Chase,   // full hp: hunt + fireballs only
+    Column,  // <= GARM_PHASE2_HP: raises the center column
+    Ring,    // <= GARM_PHASE3_HP: seals the arena perimeter
+    Flood,   // ring complete: lava rises from the arena floor
+}
+
+Garm_State :: struct {
+    build_i:     int,        // progress index into the current phase's structure
+    build_timer: f32,        // seconds until the next boss-magic tile
+    fire_timer:  f32,        // fireball cooldown
+    bite_timer:  f32,        // melee cooldown
+    phase:       Garm_Phase,
+}
+
 Enemy :: struct {
     pos:      [2]f32,
     vel:      [2]f32,
@@ -79,6 +95,7 @@ Enemy :: struct {
     grounded: bool,
     nav:      Enemy_Nav,
     builder:  Builder_State,
+    garm:     Garm_State,
 }
 
 Enemy_Store :: struct {
@@ -110,6 +127,7 @@ Player :: struct {
     mana_max:         f32,
     mana_regen:       f32,
     attack_timer:     f32,   // sword swing cooldown
+    hazard_timer:     f32,   // accumulated tile damage (lava); 1 hp per unit
     inventory:        Inventory,
     equipped:         Item,
     bucket_lava:      bool,

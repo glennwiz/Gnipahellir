@@ -24,6 +24,8 @@ Sound_ID :: enum u8 {
     Builder_Shriek,
     Sword_Hit,
     Fanfare,
+    Fireball,
+    Garm_Roar,
 }
 
 @(rodata)
@@ -41,6 +43,8 @@ sound_file := [Sound_ID]cstring{
     .Builder_Shriek = "sounds/splash_bang_pop/sound_enrage_start.wav",
     .Sword_Hit      = "sounds/splash_bang_pop/sound_melee_hit.wav",
     .Fanfare        = "sounds/splash_bang_pop/sound_level_up.wav",
+    .Fireball       = "sounds/splash_bang_pop/sfx_br_flamehook_attack.wav",
+    .Garm_Roar      = "sounds/splash_bang_pop/sound_enrage_blast.wav",
 }
 
 @(rodata)
@@ -58,6 +62,8 @@ sound_base_volume := [Sound_ID]f32{
     .Builder_Shriek = 0.9,   // the raid alarm — must cut through everything
     .Sword_Hit      = 0.8,
     .Fanfare        = 0.8,
+    .Fireball       = 0.7,
+    .Garm_Roar      = 1.0,   // a boss phase announcing itself — must dominate
 }
 
 AMBIENCE_FILE :: "sounds/splash_bang_pop/sound_horror_ambience.wav"

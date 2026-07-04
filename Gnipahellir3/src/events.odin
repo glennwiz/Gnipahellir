@@ -103,8 +103,8 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Pickup)
 
         case .Projectile_Fired:
-            // informational — damage/impact handled in update_projectiles;
-            // fireball audio lands with Garm
+            // damage/impact handled in update_projectiles
+            audio_play(&gs.audio, .Fireball, audio_tile_gain(gs, e.tile))
 
         case .Projectile_Impact:
             // impact particles land in Phase 7

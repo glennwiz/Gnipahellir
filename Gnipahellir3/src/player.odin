@@ -60,6 +60,9 @@ update_player :: proc(gs: ^Game_State) {
         return
     }
 
+    // ── Tile hazards: lava burns at the table's damage_per_second ─
+    player_tile_hazard(gs, dt)
+
     // ── Item pickup (walk over drops) ─────────────────────────────
     player_pickup(gs)
 
@@ -116,6 +119,39 @@ update_player :: proc(gs: ^Game_State) {
     } else {
         p.anim_frame = 0
         p.anim_timer = 0
+    }
+}
+
+// Damaging tiles (lava, void sky) hurt while the body overlaps them: the
+// strongest overlapped tile's damage_per_second accumulates into hazard_timer,
+// which buys 1 hp of damage per unit — dps 2 means 1 damage every 0.5 s.
+player_tile_hazard :: proc(gs: ^Game_State, dt: f32) {
+    p := &gs.player
+    left  := int(p.pos.x)
+    right := int(p.pos.x + PLAYER_W - 0.001)
+    top   := int(p.pos.y)
+    bot   := int(p.pos.y + PLAYER_H - 0.001)
+
+    dps := f32(0)
+    for ty in top ..= bot {
+        for tx in left ..= right {
+            b := terrain_table[get_tile(&gs.world, tx, ty)]
+            if .Damaging in b.flags { dps = max(dps, b.damage_per_second) }
+        }
+    }
+    if dps <= 0 {
+        p.hazard_timer = 0
+        return
+    }
+    p.hazard_timer += dps * dt
+    if p.hazard_timer >= 1 {
+        p.hazard_timer -= 1
+        eq_push(&gs.events, Event{
+            type    = .Damage_Dealt,
+            source  = INVALID_ENTITY,   // the world itself
+            target  = PLAYER_ID,
+            payload = {int_val = 1},
+        })
     }
 }
 
