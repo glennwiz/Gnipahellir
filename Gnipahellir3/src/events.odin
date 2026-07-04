@@ -196,6 +196,12 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     old_tile := gs.world.terrain[idx]
     drop := terrain_table[old_tile].drop_item
 
+    // Mining into a den's structure is a break-in: the owner hunts.
+    // (Only the player pushes Tile_Mined — builders emit Builder_Mined.)
+    if owner := den_owner_index(gs, e.tile); owner >= 0 {
+        builder_alert(gs, owner)
+    }
+
     // Mined tiles open to air above the surface line, to void underground
     fill: Tile_Type = .Void
     if gs.level_index == LEVEL_SKY || (gs.level_index == LEVEL_SURFACE && y < SURFACE_Y) {

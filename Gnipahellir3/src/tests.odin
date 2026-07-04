@@ -442,6 +442,77 @@ bridging_spends_pocket_blocks :: proc(t: ^testing.T) {
     testing.expect_value(t, e.builder.pocket, u8(0))
 }
 
+// Builder with a finished shelter den at (50, 50) — shared setup for the
+// stockpile and raid tests.
+@(private = "file")
+den_owner_fixture :: proc(gs: ^Game_State) -> (idx: int) {
+    idx = -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    b := &gs.enemies.data[idx].builder
+    b.build     = .Shelter
+    b.anchor    = {50, 50}
+    b.den_built = true
+    b.goal      = .Fetch_Mineral
+    return
+}
+
+@(test)
+den_stockpile_deposits_loot :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := den_owner_fixture(gs)
+    e := &gs.enemies.data[idx]
+    e.builder.carry = .Iron_Ore
+
+    builder_deposit_loot(e, idx, gs)
+    floor := grid_idx(50, 50)
+    testing.expect_value(t, gs.world.items[floor], Item.Iron_Ore)
+    testing.expect_value(t, gs.world.item_counts[floor], u8(1))
+    testing.expect_value(t, e.builder.carry, Tile_Type.Air)
+
+    // Second haul stacks onto the same pile
+    e.builder.carry = .Iron_Ore
+    builder_deposit_loot(e, idx, gs)
+    testing.expect_value(t, gs.world.item_counts[floor], u8(2))
+}
+
+@(test)
+den_break_in_triggers_hunt :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Mining a den wall tile (template offset {-2, 0}) enrages the owner
+    idx := den_owner_fixture(gs)
+    handle_tile_mined(gs, Event{tile = {48, 50}})
+    testing.expect_value(t, gs.enemies.data[idx].builder.goal, Builder_Goal.Hunt)
+    testing.expect_value(t, gs.notify.count, 1)
+
+    // Mining unrelated rock far away does not
+    gs2 := test_state()
+    defer free(gs2)
+    idx2 := den_owner_fixture(gs2)
+    handle_tile_mined(gs2, Event{tile = {100, 90}})
+    testing.expect(t, gs2.enemies.data[idx2].builder.goal != .Hunt, "distant mining must not alert the den owner")
+}
+
+@(test)
+den_trespass_triggers_hunt :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := den_owner_fixture(gs)
+    e := &gs.enemies.data[idx]
+    e.pos = {48, 48}  // owner at home — beyond HUNT_LOSE_DIST it gives up
+
+    // Player center inside the den interior (center tile = anchor)
+    gs.player.pos = {50.5 - PLAYER_W*0.5, 50.5 - PLAYER_H*0.5}
+    update_builder(e, idx, gs, 1.0/60.0)
+    testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+}
+
 @(test)
 entity_map_tracks_enemies :: proc(t: ^testing.T) {
     gs := test_state()

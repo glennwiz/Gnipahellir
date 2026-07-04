@@ -158,6 +158,45 @@ builder_tile :: proc(e: ^Enemy) -> [2]i32 {
     return {i32(e.pos.x + BUILDER_W*0.5), i32(e.pos.y + BUILDER_H*0.5)}
 }
 
+// T lies on a den's structure geometry: template solids or shell ring cells
+// (the door corridor is open and never part of the structure).
+den_structure_slot :: proc(b: ^Builder_State, T: [2]i32) -> bool {
+    rel := T - b.anchor
+    if rel.x < i32(-2 - DEN_SHELL_LAYERS) || rel.x > i32(2 + DEN_SHELL_LAYERS) ||
+       rel.y < i32(-3 - DEN_SHELL_LAYERS) || rel.y > 1 {
+        return false
+    }
+    // Den template solids.
+    for t in build_templates[b.build].tiles {
+        if t.tile == .Void || t.tile == .Air { continue }
+        if rel == t.off { return true }
+    }
+    // Shell ring cells (door corridor stays open).
+    for k in 1 ..= DEN_SHELL_LAYERS {
+        x0 := i32(-2 - k)
+        x1 := i32( 2 + k)
+        y0 := i32(-3 - k)
+        y1 := i32( 1)
+        if rel.x < x0 || rel.x > x1 || rel.y < y0 || rel.y > y1 { continue }
+        if rel.x != x0 && rel.x != x1 && rel.y != y0 && rel.y != y1 { continue }
+        if rel.x == x1 && (rel.y == 0 || rel.y == -1) { continue }
+        return true
+    }
+    return false
+}
+
+// Builder index owning den structure at T, or -1.  Geometry only — natural
+// rock sitting in an unfilled shell slot still counts as the den's wall zone.
+den_owner_index :: proc(gs: ^Game_State, T: [2]i32) -> int {
+    for i in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[i] { continue }
+        o := &gs.enemies.data[i]
+        if o.kind != .Builder || !o.builder.den_built { continue }
+        if den_structure_slot(&o.builder, T) { return i }
+    }
+    return -1
+}
+
 // Den tiles and shell slots must never be mined while pathing — otherwise
 // builders tunnel through their own (or each other's) den walls and then loop
 // forever repairing them.  Only the structure itself is protected; natural
@@ -176,27 +215,7 @@ den_protected :: proc(gs: ^Game_State, x, y: int) -> bool {
         if !gs.enemies.active[i] { continue }
         o := &gs.enemies.data[i]
         if o.kind != .Builder || !o.builder.den_built { continue }
-        rel := T - o.builder.anchor
-        if rel.x < i32(-2 - DEN_SHELL_LAYERS) || rel.x > i32(2 + DEN_SHELL_LAYERS) ||
-           rel.y < i32(-3 - DEN_SHELL_LAYERS) || rel.y > 1 {
-            continue
-        }
-        // Den template solids.
-        for t in build_templates[o.builder.build].tiles {
-            if t.tile == .Void || t.tile == .Air { continue }
-            if rel == t.off { return true }
-        }
-        // Shell ring cells (door corridor stays unprotected).
-        for k in 1 ..= DEN_SHELL_LAYERS {
-            x0 := i32(-2 - k)
-            x1 := i32( 2 + k)
-            y0 := i32(-3 - k)
-            y1 := i32( 1)
-            if rel.x < x0 || rel.x > x1 || rel.y < y0 || rel.y > y1 { continue }
-            if rel.x != x0 && rel.x != x1 && rel.y != y0 && rel.y != y1 { continue }
-            if rel.x == x1 && (rel.y == 0 || rel.y == -1) { continue }
-            return true
-        }
+        if den_structure_slot(&o.builder, T) { return true }
     }
     return false
 }
@@ -708,6 +727,22 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     log_action(gs, "Builder#%d digs itself free at (%.1f,%.1f)", id, e.pos.x, e.pos.y)
 }
 
+// The den's owner senses harm to its home — mined structure or a trespasser
+// inside — and hunts the intruder regardless of line of sight.
+builder_alert :: proc(gs: ^Game_State, i: int) {
+    e := &gs.enemies.data[i]
+    b := &e.builder
+    if b.goal == .Hunt { return }
+    log_action(gs, "Builder#%d den breached — hunting", i)
+    notify(gs, "A builder shrieks — it hunts you!")
+    b.goal        = .Hunt
+    b.los_timer   = 0
+    b.plan_target = {-99, -99}
+    b.stuck_timer = 0
+    b.stuck_count = 0
+    e.nav.path    = {}
+}
+
 // Back to mineral duty after a hunt (or when prey is gone).
 builder_return_to_work :: proc(e: ^Enemy) {
     b := &e.builder
@@ -1032,6 +1067,36 @@ builder_fetch :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     }
 }
 
+// Bank the carried block as loot on the den floor: the stockpile a raider
+// can break in and steal.  Falls back to discarding when the floor stacks
+// are full (the den can only hold so much).
+builder_deposit_loot :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
+    b    := &e.builder
+    drop := terrain_table[b.carry].drop_item
+    if drop != .None {
+        FLOOR_OFFS :: [3][2]i32{{0, 0}, {-1, 0}, {1, 0}}
+        for off in FLOOR_OFFS {
+            T := b.anchor + off
+            if !in_bounds(int(T.x), int(T.y)) { continue }
+            idx      := grid_idx(int(T.x), int(T.y))
+            existing := gs.world.items[idx]
+            if existing == drop && gs.world.item_counts[idx] > 0 {
+                if int(gs.world.item_counts[idx]) < MAX_STACK {
+                    gs.world.item_counts[idx] += 1
+                    log_action(gs, "Builder#%d stockpiles %v at (%d,%d)", id, drop, T.x, T.y)
+                    break
+                }
+            } else if existing == .None || gs.world.item_counts[idx] == 0 {
+                gs.world.items[idx]       = drop
+                gs.world.item_counts[idx] = 1
+                log_action(gs, "Builder#%d stockpiles %v at (%d,%d)", id, drop, T.x, T.y)
+                break
+            }
+        }
+    }
+    b.carry = .Air
+}
+
 builder_encase :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     b := &e.builder
     if b.carry == .Air {
@@ -1046,8 +1111,11 @@ builder_encase :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     T, found := den_next_build_tile(e, gs)
     if !found {
-        // Fully encased and intact — check again shortly (repairs).
-        builder_pause(b, 2.0, .Encase_Den)
+        // Shell complete and intact — bank the haul as den loot and keep
+        // fetching.  This is the ore economy: builders drain the shared
+        // veins for as long as they live, and the stockpile is raidable.
+        builder_deposit_loot(e, id, gs)
+        builder_pause(b, JOB_COOLDOWN, .Fetch_Mineral)
         return
     }
     if e.nav.mine_timer <= 0 && builder_place_tile(e, gs, T, b.carry) {
@@ -1108,6 +1176,15 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     e.nav.mine_timer -= dt
     b.replan_timer   -= dt
     b.attack_timer   -= dt
+
+    // Trespass: the player standing inside the den enrages its owner, no
+    // line of sight needed (interior box: template carve + door corridor).
+    if b.den_built && b.goal != .Hunt && !gs.player.dead {
+        rel := player_tile(&gs.player) - b.anchor
+        if rel.x >= -1 && rel.x <= 2 && rel.y >= -2 && rel.y <= 0 {
+            builder_alert(gs, id)
+        }
+    }
 
     // Spot the player while out working (den construction stays focused).
     if (b.goal == .Fetch_Mineral || b.goal == .Encase_Den) &&
