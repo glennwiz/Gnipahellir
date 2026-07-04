@@ -318,6 +318,13 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int) {
         set_tile(w, 181, 102, .Cave_Entrance)
     }
 
+    // Boss arena (bottom-right) — cave 3 only: a generated room, not open
+    // cave.  Garm spawns here once structure C is built (see garm.odin).
+    if depth_tier == 2 {
+        carve_box(w, ARENA_X0, ARENA_Y0, ARENA_X1, ARENA_Y1)
+        for x in ARENA_X0 ..= ARENA_X1 do set_tile(w, x, ARENA_Y1 + 1, .Stone)
+    }
+
     // Blueprint chamber (bottom-left)
     carve_box(w, 8, 96, 16, 101)
     for x in 8 ..= 16 do set_tile(w, x, 102, .Stone)

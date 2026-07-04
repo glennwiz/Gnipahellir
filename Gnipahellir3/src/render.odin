@@ -179,10 +179,34 @@ draw_enemy :: proc(e: ^Enemy) {
     switch e.kind {
     case .Builder:
         draw_builder(e)
-    case .Garm, .Undead, .Fire_Sprite:
+    case .Garm:
+        draw_garm(e)
+    case .Undead, .Fire_Sprite:
         px := i32(e.pos.x * CELL_SIZE)
         py := i32(e.pos.y * CELL_SIZE)
         rl.DrawRectangle(px, py, i32(BUILDER_W * CELL_SIZE), i32(BUILDER_H * CELL_SIZE), rl.RED)
+    }
+}
+
+// Garm: hulking black hound, ember eyes, hp bar overhead.
+draw_garm :: proc(e: ^Enemy) {
+    px := i32(e.pos.x * CELL_SIZE)
+    py := i32(e.pos.y * CELL_SIZE)
+    pw := i32(GARM_W * CELL_SIZE)
+    ph := i32(GARM_H * CELL_SIZE)
+
+    rl.DrawRectangle(px, py, pw, ph, rl.Color{25, 20, 30, 255})
+    // Ember eyes on the facing side
+    eye_y := py + ph/5
+    eye_x := px + pw - pw/4 if e.facing >= 0 else px + pw/4 - 2
+    rl.DrawRectangle(eye_x,     eye_y, 3, 3, rl.Color{255, 60, 20, 255})
+    rl.DrawRectangle(eye_x - 5, eye_y, 3, 3, rl.Color{255, 60, 20, 255})
+
+    // HP bar
+    if e.hp < e.hp_max {
+        w := i32(f32(pw) * f32(e.hp) / f32(e.hp_max))
+        rl.DrawRectangle(px, py - 5, pw, 3, rl.Color{60, 0, 0, 255})
+        rl.DrawRectangle(px, py - 5, w,  3, rl.Color{220, 40, 40, 255})
     }
 }
 

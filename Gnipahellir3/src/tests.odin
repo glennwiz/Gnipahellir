@@ -657,6 +657,70 @@ den_defense_persists_without_los :: proc(t: ^testing.T) {
     testing.expect(t, e.builder.goal != .Hunt, "hunt must end once the raider leaves the den grounds")
 }
 
+// ─── Phase 5: boss arena + Garm gate ─────────────────────────────────────────
+
+@(test)
+cave3_has_boss_arena :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    w := &gs.levels.worlds[LEVEL_CAVE3]
+    gen_cave_level(w, 2)
+
+    // Arena interior fully carved, floor solid beneath
+    for y in ARENA_Y0 ..= ARENA_Y1 {
+        for x in ARENA_X0 ..= ARENA_X1 {
+            testing.expect(t, !is_solid(w, x, y), "arena interior must be open")
+        }
+    }
+    for x in ARENA_X0 ..= ARENA_X1 {
+        testing.expect(t, is_solid(w, x, ARENA_Y1 + 1), "arena floor must be solid")
+    }
+}
+
+@(test)
+garm_spawns_only_behind_boss_gate :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Caves open but structure C unbuilt: entering cave 3 spawns no boss
+    gs.progression.cave_unlocked[0] = true
+    gs.progression.cave_unlocked[1] = true
+    level_transition(gs, &level_portals[LEVEL_SURFACE][0])
+    level_transition(gs, &level_portals[LEVEL_CAVE2][1])
+    process_events(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_CAVE3)
+    testing.expect(t, !garm_present(gs), "no Garm before the boss gate")
+
+    // Structure C completes while inside cave 3: Garm awakens
+    gs.progression.blueprint_found[2] = true
+    inventory_insert(&gs.player.inventory, .Cloud_Stone, 20)
+    inventory_insert(&gs.player.inventory, .Gold_Ore, 10)
+    gs.level_index = LEVEL_SKY  // ritual gating
+    handle_ritual_request(gs)
+    gs.level_index = LEVEL_CAVE3
+    process_events(gs)
+    testing.expect(t, garm_present(gs), "Garm awakens when the boss gate opens")
+
+    // He stands on the arena floor and takes sword damage like anything else
+    gi := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] && gs.enemies.data[i].kind == .Garm { gi = i; break }
+    }
+    g := &gs.enemies.data[gi]
+    for _ in 0 ..< 60 { update_enemies(gs); process_events(gs); eq_clear(&gs.events) }
+    testing.expect(t, g.grounded, "Garm should land on the arena floor")
+
+    eq_push(&gs.events, Event{
+        type    = .Damage_Dealt,
+        source  = PLAYER_ID,
+        target  = enemy_entity_id(gi),
+        payload = {int_val = SWORD_DAMAGE},
+    })
+    process_events(gs)
+    testing.expect_value(t, g.hp, GARM_HP - SWORD_DAMAGE)
+}
+
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
 
 @(test)

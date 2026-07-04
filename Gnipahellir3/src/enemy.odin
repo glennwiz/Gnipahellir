@@ -161,8 +161,18 @@ chebyshev :: proc(a, b: [2]i32) -> i32 {
     return max(abs(a.x - b.x), abs(a.y - b.y))
 }
 
+// Body size by kind — Garm is bigger than a builder.
+enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
+    #partial switch kind {
+    case .Garm: return {GARM_W, GARM_H}
+    }
+    return {BUILDER_W, BUILDER_H}
+}
+
+// Center tile for any enemy kind (name predates Garm; used everywhere).
 builder_tile :: proc(e: ^Enemy) -> [2]i32 {
-    return {i32(e.pos.x + BUILDER_W*0.5), i32(e.pos.y + BUILDER_H*0.5)}
+    size := enemy_body_size(e.kind)
+    return {i32(e.pos.x + size.x*0.5), i32(e.pos.y + size.y*0.5)}
 }
 
 // T lies on a den's structure geometry: template solids or shell ring cells
@@ -1341,7 +1351,11 @@ update_enemies :: proc(gs: ^Game_State) {
             move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_builder(e, i, gs, dt)
-        case .Garm, .Undead, .Fire_Sprite:
+        case .Garm:
+            move_body(&gs.world, &e.pos, &e.vel, {GARM_W, GARM_H}, dt,
+                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
+            update_garm(e, i, gs, dt)
+        case .Undead, .Fire_Sprite:
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }

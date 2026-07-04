@@ -124,6 +124,7 @@ process_events :: proc(gs: ^Game_State) {
             if lvl >= 0 && lvl < NUM_LEVELS {
                 notify(gs, "— %s —", level_names[lvl])
             }
+            garm_maybe_awaken(gs)
 
         case .Level_Exit:
             // informational; no handler yet
@@ -165,7 +166,9 @@ process_events :: proc(gs: ^Game_State) {
                 switch tier {
                 case 0: notify(gs, "The seal on %s has broken", level_names[LEVEL_CAVE2])
                 case 1: notify(gs, "The seal on %s has broken", level_names[LEVEL_CAVE3])
-                case 2: notify(gs, "The final depths tremble...")  // boss gate, Phase 5
+                case 2:
+                    notify(gs, "The final depths tremble...")
+                    garm_maybe_awaken(gs)  // ritual completed while inside cave 3
                 }
             }
 
