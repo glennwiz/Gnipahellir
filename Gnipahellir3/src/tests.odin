@@ -514,6 +514,35 @@ den_trespass_triggers_hunt :: proc(t: ^testing.T) {
     testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
 }
 
+@(test)
+den_defense_persists_without_los :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Owner at home, raider lurking on the den grounds behind a wall
+    idx := den_owner_fixture(gs)
+    e := &gs.enemies.data[idx]
+    e.pos = {48, 48}
+    gs.player.pos = {54.5 - PLAYER_W*0.5, 50.5 - PLAYER_H*0.5}  // 3 east of anchor
+    set_tile(&gs.world, 52, 50, .Stone)  // sight line blocked
+
+    builder_alert(gs, idx)
+
+    // Way past LOS_MEMORY: the owner must still be hunting
+    for _ in 0 ..< int((LOS_MEMORY + 3.0) * 60) {
+        update_builder(e, idx, gs, 1.0/60.0)
+    }
+    testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+
+    // Raider actually flees the grounds: hunt ends
+    gs.player.pos = {100, 20}
+    for _ in 0 ..< int((LOS_MEMORY + 3.0) * 60) {
+        update_builder(e, idx, gs, 1.0/60.0)
+        if e.builder.goal != .Hunt { break }
+    }
+    testing.expect(t, e.builder.goal != .Hunt, "hunt must end once the raider leaves the den grounds")
+}
+
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
 
 @(test)

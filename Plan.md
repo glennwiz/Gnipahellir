@@ -168,6 +168,14 @@ remains a stub); C4 resolved — the sky-altar ritual is gated to the sky level.
 **Playtest pending** — the automated economy holds for a simulated hour; Glenn's hand
 playtest decides the tuning (competition felt but not oppressive).
 
+Playtest findings (2026-07-04, round 1):
+- **Break-in felt like nothing happened** — the hunt DID trigger (action.log:
+  breach → one bite → "lost the player" 6s later) but the den's own walls broke
+  line of sight and LOS_MEMORY (3s) ended the chase. FIXED same day: den
+  defense mode — while the raider is on the den grounds (chebyshev ≤ 7 of the
+  anchor) the owner never loses the hunt; test pins it. Re-test: the owner
+  should now stay on you for the whole raid.
+
 ## Phase 5 — Garm as final boss
 
 - [ ] Port Garm to G3, replacing his old planner with `astar_dig`

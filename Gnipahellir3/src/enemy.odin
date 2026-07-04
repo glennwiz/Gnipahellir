@@ -1226,12 +1226,17 @@ builder_hunt :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     pt := player_tile(&gs.player)
     bt := builder_tile(e)
 
-    if builder_sees_player(e, gs, HUNT_LOSE_DIST) {
+    // Den defense: a raider on the den's grounds is never "lost" — the
+    // den's own walls blocking sight must not protect the intruder.
+    raiding := b.den_built &&
+        chebyshev(pt, b.anchor) <= i32(2 + DEN_SHELL_LAYERS) + 2
+
+    if raiding || builder_sees_player(e, gs, HUNT_LOSE_DIST) {
         b.los_timer = 0
     } else {
         b.los_timer += dt
     }
-    if f32(chebyshev(bt, pt)) > HUNT_LOSE_DIST || b.los_timer > LOS_MEMORY {
+    if !raiding && (f32(chebyshev(bt, pt)) > HUNT_LOSE_DIST || b.los_timer > LOS_MEMORY) {
         log_action(gs, "Builder#%d lost the player — back to work", id)
         builder_return_to_work(e)
         return
