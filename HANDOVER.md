@@ -1,14 +1,29 @@
-# Handover — session 2026-07-05 (Phase 5 complete + mining rework)
-
-**Baton pass:** the last commits (Phase 5 M4/M5 + the mining rework) were
-Fable's work. **Opus takes over the project from today, 2026-07-05.**
+# Handover — 2026-07-05 (post polish session; sprite pass next)
 
 For the next session. Read `Plan.md` (roadmap), `Gnipahellir3/CLAUDE.md`
 (architecture rules — mandatory), `Gnipahellir3/PLAYTEST.md` (controls),
-`opus.md` (Fable's working notes on Glenn). Verify every change:
-`odin build src` + `odin test src` from `Gnipahellir3/` (40 tests, ~2s; if the
+`opus.md` (working notes on Glenn). Verify every change:
+`odin build src` + `odin test src` from `Gnipahellir3/` (48 tests, ~2s; if the
 game is running, add `-out:src_test.exe` or the linker can't write src.exe).
-Commit per verified milestone.
+Commit per verified milestone. Remote: push to `origin` (private
+github.com/glennwiz/Gnipahellir) — Glenn works across machines while travelling.
+
+## >>> NEXT UP: sprite pass (the reason for the fresh session)
+
+Wire `Gnipahellir3/sprites/gnipahellir_tile_spritesheet.png` into tile
+rendering, replacing the current flat-colour + procedural pixel tiles.
+- Tiles today: `render.odin` `draw_world` → `draw_tile`, dispatched by the
+  `tile_draw_style` table (`.Solid` = flat `terrain_table[t].color`; `.Pixel_*`
+  = hand-drawn `draw_pixel_wood/leaves/flower`). Replace/augment these with
+  spritesheet blits.
+- Asset load: textures load in `main.odin` (see the render-texture setup);
+  raylib `LoadTexture` + `DrawTextureRec` for a source cell per tile.
+- Rendering runs inside the supersampled zoom camera (SS_SCALE=3) — draw at
+  float positions (`DrawTexturePro`/`Rec`) so tiles glide, like the player.
+- CELL_SIZE is 10px/tile; pick a spritesheet cell size and map Tile_Type →
+  source rect (a table, mirroring `tile_draw_style`).
+- Ask Glenn the sheet's grid layout (cell size, which tile is where) before
+  wiring — the PNG is his, added 2026-07-05.
 
 ## Done this session (all on master, tree clean)
 
@@ -35,8 +50,18 @@ Commit per verified milestone.
 - F1 debug menu row 2: Ultra wand cheat (13-tile, free, 3×3 blast impact).
 - Particle store is live (`mining.odin`, `particles.odin`).
 
-SAVE_VERSION is 7. Save-layout changes trip the size assert in `save.odin` —
-bump version + expected size together.
+SAVE_VERSION is 8. Save-layout changes trip the size assert in `save.odin` —
+bump version + expected size together (probe the new size with a temp test).
+
+**Polish session (2026-07-05, after the above) — all committed + pushed:**
+pixel-art mage (animated feet, in-hand tool, swing); pickaxe found on the
+grass; interactive blueprint overlay (B); data-driven structure-build templates
+(`templates.odin`, per-tier altars, silver/gold placeable); reclaim any placed
+structure; flashy taller RGB portals; mouse-wheel zoom + 3× supersampling
+(glide); **player-built sky gate** (find Sky Blueprint → build surface altar →
+portal blooms above it, `sky_altar_pos`); build ghost preview (`placement_ok`);
+deselect held item (hotkey again / click slot / Esc); **autosave on every
+meaningful action** (`save_dirty`, written at frame end in `main.odin`).
 
 ## Left to do
 
@@ -47,24 +72,16 @@ bump version + expected size together.
   economics): `PICK_HITS`, `WAND_MANA_COST`, `wand_mine_range`, `pick_targets`
   direction bands.
 
-**G2 look-and-feel port (the one remaining NEW-direction item):**
-- Pixel 8-bit mage player (pickaxe, animated feet), mining particle polish.
-  References: `Gnipahellir2/src/render.odin` + `particles.odin`. Glenn's branch
-  `feature/render-port` already started this ("Port player pixel frames and
-  Mine_Wand overlay from G2, visuals only") — **cherry-pick the intent, don't
-  restart or merge**; it's now 16 behind / 11 ahead of master. Caveat: that
-  branch carries stale mid-Phase-4 copies of `enemy.odin`/`tests.odin` — on
-  conflict, master wins. It also has a `gni_rnd/` sandbox + docs worth a look.
-- The G2 mining *mechanics* port (wand + proximity feel) is DONE — this
-  remaining item is visuals only.
+**Boss/mining feel-tuning (still open):** full-run playtested 2026-07-05 — loop
+works end to end, player died to Garm. Garm is lethal (10→0 in ~7s once bitten);
+knobs `GARM_*` in `garm.odin` (bite cadence/damage) or player i-frames/hp.
+The pixel-mage half of the G2 look port is DONE; the tile **sprite pass** above
+is what's left of the visuals. (Old R&D branch `feature/render-port` is stale —
+cherry-pick intent only, prefer master on conflict.)
 
 **Later phases:** Phase 6 shippability (menus/settings/onboarding/death +
 win-restart flow), Phase 7 juice. `suggestion.md` still has C3/C5 + 2 perf
 notes open.
-
-## Repo note
-No git remote is configured — the repo is local-only, no off-machine backup.
-Set one up if you want it.
 
 ## Gotchas learned (timeless — keep these)
 - Log ring buffer is 256 KB and silently stops — reset `gs.debug_log.pos`
