@@ -33,6 +33,13 @@ process_events :: proc(gs: ^Game_State) {
         e, ok := eq_pop(&gs.events)
         if !ok do break
 
+        // Autosave trigger: meaningful player actions mark the run dirty (movement
+        // never does).  One save is written at frame end (main loop).
+        #partial switch e.type {
+        case .Tile_Placed, .Item_Pickup, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete:
+            gs.save_dirty = true
+        }
+
         #partial switch e.type {
         case .Player_Moved:
             // informational; no handler yet
@@ -93,6 +100,8 @@ process_events :: proc(gs: ^Game_State) {
                 eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 2}})
             case .Hell_Key:
                 eq_push(&gs.events, Event{type = .Game_Won})
+            case .Sky_Blueprint:
+                notify(gs, "Sky Blueprint found — raise a Sky Altar to open the way above (B)")
             }
 
         case .Item_Dropped:

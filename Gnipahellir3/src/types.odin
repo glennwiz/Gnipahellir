@@ -89,6 +89,7 @@ Item :: enum u8 {
     Blueprint_A,
     Blueprint_B,
     Blueprint_C,
+    Sky_Blueprint,
     Sky_Altar,
     Cloud_Stone,
     Aether_Crystal,

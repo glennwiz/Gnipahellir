@@ -20,6 +20,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_world(&gs.world)
     draw_mining_cracks(gs)
     draw_portals(gs)
+    draw_placement_ghost(gs)
     draw_player(&gs.player)
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
@@ -503,6 +504,29 @@ draw_enemies_debug :: proc(gs: ^Game_State) {
 //  and pull in pale motes; cave gates are ominous black-red maws veined with
 //  green that spew red motes inward once unlocked.
 
+// Translucent preview of the selected placeable tile under the cursor — green
+// where it would place, red where it wouldn't.  Mirrors placement_ok exactly.
+draw_placement_ghost :: proc(gs: ^Game_State) {
+    if gs.player.dead do return
+    inv  := &gs.player.inventory
+    if inv.selected < 0 do return  // nothing selected
+    slot := inv.slots[inv.selected]
+    if slot.item == .None || slot.count <= 0 do return
+    if item_table[slot.item].place_tile == .Air do return  // not a placeable item
+    if cursor_over_ui(gs) do return                         // cursor grabbed by a panel
+
+    t  := gs.ui.hover_tile
+    px := f32(t.x * CELL_SIZE)
+    py := f32(t.y * CELL_SIZE)
+    ok := placement_ok(gs, slot.item, int(t.x), int(t.y))
+
+    base    := terrain_table[item_table[slot.item].place_tile].color
+    fill    := ok ? rl.Color{base.r, base.g, base.b, 140} : rl.Color{200, 60, 60, 110}
+    outline := ok ? rl.Color{140, 255, 160, 230}          : rl.Color{255, 90, 90, 230}
+    rl.DrawRectangleRec({px, py, CELL_SIZE, CELL_SIZE}, fill)
+    rl.DrawRectangleLinesEx({px, py, CELL_SIZE, CELL_SIZE}, 1, outline)
+}
+
 draw_portals :: proc(gs: ^Game_State) {
     for &p in level_portals[gs.level_index] {
         if !portal_valid(&p) do continue
@@ -519,60 +543,80 @@ draw_portals :: proc(gs: ^Game_State) {
             draw_cave_portal(cx, cy, gs.frame, !locked)
         }
     }
-}
 
-// Motes streaming inward on a slow spiral — the "entering the portal" effect.
-draw_portal_inflow :: proc(cx, cy, radius: f32, count: int, frame: u64, col: rl.Color, speed: f32) {
-    for i in 0 ..< count {
-        ph := f32(frame)*speed + f32(i)/f32(count)
-        ph -= math.floor(ph)                    // 0..1, looping
-        ang := f32(i)*2.39996 + ph*2.0          // golden-angle spread, spiralling in
-        r   := radius * (1 - ph)                // rim (ph=0) → center (ph=1)
-        px  := cx + math.cos(ang)*r
-        py  := cy + math.sin(ang)*r
-        sz  := i32(1) + i32((1 - ph)*2)
-        a   := u8(f32(col.a) * (0.25 + 0.75*ph))
-        rl.DrawRectangle(i32(px), i32(py), sz, sz, rl.Color{col.r, col.g, col.b, a})
+    // The dynamic sky gate a surface altar raised — blooms above the altar.
+    if gs.level_index == LEVEL_SURFACE && gs.progression.sky_altar_pos != {0, 0} {
+        ap := gs.progression.sky_altar_pos
+        draw_sky_portal((f32(ap.x) + 0.5) * CELL_SIZE, (f32(ap.y) - 2.5) * CELL_SIZE, gs.frame)
     }
 }
 
-// Bright sky gate: pale core, glowing 4x4 frame, pale motes drawn in.
-draw_sky_portal :: proc(cx, cy: f32, frame: u64) {
-    pulse := 0.5 + 0.5*math.sin(f32(frame)*0.05)
-    c := f32(CELL_SIZE)       // half of the 2x2 core
-    o := 2 * f32(CELL_SIZE)   // half of the 4x4 frame
-
-    rl.DrawRectangleLinesEx(rl.Rectangle{cx - o, cy - o, o*2, o*2}, 2, rl.Color{120, 200, 255, u8(70 + 70*pulse)})
-    rl.DrawRectangle(i32(cx - c), i32(cy - c), i32(c*2), i32(c*2), rl.Color{90, 150, 230, 150})
-    rl.DrawRectangleLinesEx(rl.Rectangle{cx - c, cy - c, c*2, c*2}, 2, rl.Color{220, 240, 255, u8(160 + 60*pulse)})
-    draw_portal_inflow(cx, cy, o, 16, frame, rl.Color{205, 235, 255, 255}, 0.010)
+// Motes streaming inward on a slow elliptical spiral — the "entering the
+// portal" effect.  `seed` offsets phase/angle so stacked colour streams differ.
+draw_portal_inflow :: proc(cx, cy, rw, rh: f32, count: int, frame: u64, seed: f32, col: rl.Color, speed: f32) {
+    for i in 0 ..< count {
+        ph := f32(frame)*speed + f32(i)/f32(count) + seed
+        ph -= math.floor(ph)                            // 0..1, looping
+        ang := f32(i)*2.39996 + ph*2.5 + seed*6.2831853 // golden spread, spiralling in
+        rr  := 1 - ph                                   // rim (ph=0) → center (ph=1)
+        px  := cx + math.cos(ang)*rw*rr
+        py  := cy + math.sin(ang)*rh*rr
+        sz  := 1.5 + rr*2.5
+        a   := u8(f32(col.a) * (0.25 + 0.75*ph))
+        rl.DrawRectangleRec({px - sz*0.5, py - sz*0.5, sz, sz}, rl.Color{col.r, col.g, col.b, a})
+    }
 }
 
-// Ominous cave gate: black-red maw, green veins; red motes drawn in when active.
+// Tall, bright sky gate: glowing oval, pale core, red/green/blue motes drawn in.
+draw_sky_portal :: proc(cx, cy: f32, frame: u64) {
+    pulse := 0.5 + 0.5*math.sin(f32(frame)*0.05)
+    hw := 2.5 * f32(CELL_SIZE)   // 5 tiles wide
+    hh := 5.0 * f32(CELL_SIZE)   // 10 tiles tall — a tall doorway
+    cw := 1.2 * f32(CELL_SIZE)
+    ch := 2.6 * f32(CELL_SIZE)
+
+    rl.DrawEllipse(i32(cx), i32(cy), cw, ch, rl.Color{90, 150, 230, 150})
+    rl.DrawEllipseLines(i32(cx), i32(cy), cw, ch, rl.Color{220, 240, 255, u8(160 + 60*pulse)})
+    rl.DrawEllipseLines(i32(cx), i32(cy), hw*0.7, hh*0.7, rl.Color{150, 210, 255, u8(45 + 55*pulse)})
+    rl.DrawEllipseLines(i32(cx), i32(cy), hw, hh, rl.Color{120, 200, 255, u8(70 + 70*pulse)})
+
+    N :: 22
+    draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.00, rl.Color{255, 70, 70, 255},  0.010) // red
+    draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.33, rl.Color{70, 255, 110, 255}, 0.011) // green
+    draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.66, rl.Color{90, 130, 255, 255}, 0.012) // blue
+}
+
+// Tall, ominous cave gate: black maw, red ring, green veins, RGB motes when active.
 draw_cave_portal :: proc(cx, cy: f32, frame: u64, active: bool) {
     pulse := 0.5 + 0.5*math.sin(f32(frame)*0.06)
-    c := f32(CELL_SIZE)
-    o := 2 * f32(CELL_SIZE)
+    hw := 2.5 * f32(CELL_SIZE)
+    hh := 5.0 * f32(CELL_SIZE)
+    cw := 1.4 * f32(CELL_SIZE)
+    ch := 3.0 * f32(CELL_SIZE)
 
-    rl.DrawRectangle(i32(cx - c), i32(cy - c), i32(c*2), i32(c*2), rl.Color{12, 0, 12, 225})
+    rl.DrawEllipse(i32(cx), i32(cy), cw, ch, rl.Color{12, 0, 12, 230})
     ring_a := u8(active ? (150 + 90*pulse) : 70)
-    rl.DrawRectangleLinesEx(rl.Rectangle{cx - c, cy - c, c*2, c*2}, 2, rl.Color{190, 25, 25, ring_a})
+    rl.DrawEllipseLines(i32(cx), i32(cy), cw, ch, rl.Color{200, 25, 25, ring_a})
+    rl.DrawEllipseLines(i32(cx), i32(cy), hw, hh, rl.Color{140, 15, 40, u8(active ? 120 : 50)})
 
     // Green veins clawing around the maw.
-    green := rl.Color{40, 200, 80, u8(active ? 150 : 80)}
-    for i in 0 ..< 6 {
-        ang := f32(i)/6.0 * 6.2831853 + f32(frame)*0.002
-        x0  := cx + math.cos(ang)*c*1.1
-        y0  := cy + math.sin(ang)*c*1.1
-        x1  := cx + math.cos(ang + 0.35)*o*0.75
-        y1  := cy + math.sin(ang + 0.35)*o*0.75
-        x2  := cx + math.cos(ang)*o
-        y2  := cy + math.sin(ang)*o
+    green := rl.Color{40, 200, 80, u8(active ? 160 : 80)}
+    for i in 0 ..< 9 {
+        ang := f32(i)/9.0 * 6.2831853 + f32(frame)*0.002
+        x0  := cx + math.cos(ang)*cw*1.1
+        y0  := cy + math.sin(ang)*ch*1.1
+        x1  := cx + math.cos(ang + 0.35)*hw*0.8
+        y1  := cy + math.sin(ang + 0.35)*hh*0.8
+        x2  := cx + math.cos(ang)*hw
+        y2  := cy + math.sin(ang)*hh
         rl.DrawLineEx({x0, y0}, {x1, y1}, 1.5, green)
         rl.DrawLineEx({x1, y1}, {x2, y2}, 1.5, green)
     }
 
     if active {
-        draw_portal_inflow(cx, cy, o, 14, frame, rl.Color{230, 40, 30, 255}, 0.012)
+        N :: 20
+        draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.00, rl.Color{240, 40, 30, 255},  0.012) // red
+        draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.33, rl.Color{60, 220, 90, 255},  0.010) // green
+        draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.66, rl.Color{80, 110, 240, 255}, 0.013) // blue
     }
 }

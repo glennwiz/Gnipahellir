@@ -39,6 +39,7 @@ item_table := [Item]Item_Info{
     .Blueprint_A    = { "Blueprint A",     {80,  160, 255, 255}, .Air },
     .Blueprint_B    = { "Blueprint B",     {80,  160, 255, 255}, .Air },
     .Blueprint_C    = { "Blueprint C",     {80,  160, 255, 255}, .Air },
+    .Sky_Blueprint  = { "Sky Blueprint",   {120, 200, 255, 255}, .Air },
     .Sky_Altar      = { "Sky Altar",       {200, 200, 255, 255}, .Sky_Altar },
     .Cloud_Stone    = { "Cloud Stone",     {200, 220, 255, 255}, .Air },
     .Aether_Crystal = { "Aether Crystal",  {180, 255, 200, 255}, .Air },
@@ -46,7 +47,7 @@ item_table := [Item]Item_Info{
 }
 
 is_blueprint :: proc(it: Item) -> bool {
-    return it == .Blueprint_A || it == .Blueprint_B || it == .Blueprint_C
+    return it == .Blueprint_A || it == .Blueprint_B || it == .Blueprint_C || it == .Sky_Blueprint
 }
 
 // ─── Inventory Operations ─────────────────────────────────────────────────────

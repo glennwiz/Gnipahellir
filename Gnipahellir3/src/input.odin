@@ -49,16 +49,24 @@ update_input :: proc(gs: ^Game_State) {
         gs.ui.show_blueprint = !gs.ui.show_blueprint
     }
 
-    // Slot selection: number keys 1-8 pick the first inventory row
+    // Slot selection: number keys 1-8 pick the first inventory row; pressing the
+    // selected slot's key again deselects (-1 = nothing held).
     for key, i in ([8]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR, .FIVE, .SIX, .SEVEN, .EIGHT}) {
-        if rl.IsKeyPressed(key) do gs.player.inventory.selected = i
+        if rl.IsKeyPressed(key) {
+            gs.player.inventory.selected = gs.player.inventory.selected == i ? -1 : i
+        }
     }
+    if rl.IsKeyPressed(.ESCAPE) do gs.player.inventory.selected = -1  // deselect
 
     // Clicks on open UI panels
     if rl.IsMouseButtonPressed(.LEFT) {
         if gs.ui.show_inventory {
             if slot := slot_at_cursor(gs); slot >= 0 {
-                gs.player.inventory.selected = slot
+                if gs.player.inventory.selected == slot {
+                    gs.player.inventory.selected = -1  // click the selected slot again to deselect
+                } else {
+                    gs.player.inventory.selected = slot
+                }
                 if is_blueprint(gs.player.inventory.slots[slot].item) {
                     gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
                 }

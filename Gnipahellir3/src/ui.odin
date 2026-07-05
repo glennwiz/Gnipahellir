@@ -197,8 +197,9 @@ draw_hud :: proc(gs: ^Game_State) {
 
     // Level name + selected item
     name_buf: [64]u8
-    sel := gs.player.inventory.slots[gs.player.inventory.selected]
-    if sel.item != .None && sel.count > 0 {
+    inv := &gs.player.inventory
+    if inv.selected >= 0 && inv.slots[inv.selected].item != .None && inv.slots[inv.selected].count > 0 {
+        sel := inv.slots[inv.selected]
         fmt.bprintf(name_buf[:63], "%s   [%s x%d]",
             level_names[gs.level_index], item_table[sel.item].name, sel.count)
     } else {
@@ -282,6 +283,24 @@ draw_blueprint :: proc(gs: ^Game_State) {
     warm   := rl.Color{250, 220, 110, 255}
 
     rl.DrawText("[B] close", x + BP_W - 92, y + 14, 12, text_dim)
+
+    // Opening objective: with the Sky Blueprint in hand and no gate raised yet,
+    // show how to build the surface Sky Altar that opens the way above.
+    if inventory_count(&gs.player.inventory, .Sky_Blueprint) > 0 && gs.progression.sky_altar_pos == {0, 0} {
+        rl.DrawText("BLUEPRINT: The Sky Gate", x + 20, y + 18, 24, accent)
+        rl.DrawText("Raise a Sky Altar on the surface to open the way above.",
+            x + 20, y + 54, 16, rl.Color{225, 225, 240, 255})
+        tpl := &structure_templates[0]  // tier A: the stone-and-wood altar
+        rl.DrawText("BUILD THE ALTAR", x + 320, y + 90, 14, text_dim)
+        draw_template_diagram(tpl, x + 415, y + 120)
+        ly := y + 96
+        draw_legend(x + 30, ly,      terrain_table[.Stone].color, "Stone Block")
+        draw_legend(x + 30, ly + 22, terrain_table[.Wood].color,  "Wood (Plank/Log)")
+        draw_legend(x + 30, ly + 44, item_table[.Sky_Altar].color, "Sky Altar (cap)")
+        rl.DrawText("Build it on the grass — the portal blooms above the altar.",
+            x + 20, y + BP_H - 32, 14, text_dim)
+        return
+    }
 
     tier := blueprint_active_tier(gs)
     if tier < 0 {

@@ -137,6 +137,25 @@ camera_clamps_to_level_bounds :: proc(t: ^testing.T) {
 }
 
 @(test)
+player_actions_mark_autosave :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    testing.expect(t, !gs.save_dirty, "starts clean")
+
+    // A pickup is a meaningful action → marks the run for autosave.
+    eq_push(&gs.events, Event{type = .Item_Pickup, payload = {int_val = i32(Item.Stone_Block)}})
+    process_events(gs)
+    testing.expect(t, gs.save_dirty, "pickup marks dirty")
+
+    // Movement must NOT trigger a save.
+    gs.save_dirty = false
+    eq_push(&gs.events, Event{type = .Player_Moved})
+    process_events(gs)
+    testing.expect(t, !gs.save_dirty, "movement does not mark dirty")
+}
+
+@(test)
 pickup_collects_world_drops :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -297,9 +316,10 @@ transition_preserves_level_state :: proc(t: ^testing.T) {
     // Scar the surface so we can recognize it later
     set_tile(&gs.world, 50, 50, .Gold_Ore)
 
-    // Take the sky portal (always open)
-    sky_portal := &level_portals[LEVEL_SURFACE][1]
-    level_transition(gs, sky_portal)
+    // Take the dynamic sky gate (raised by a surface altar)
+    gs.progression.sky_altar_pos = {40, 52}
+    sky_portal := sky_gate_portal(gs)
+    level_transition(gs, &sky_portal)
     testing.expect_value(t, gs.level_index, LEVEL_SKY)
     testing.expect_value(t, get_tile(&gs.world, 95, 79), Tile_Type.Sky_Entrance)
 
@@ -311,7 +331,7 @@ transition_preserves_level_state :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, 50, 50), Tile_Type.Gold_Ore)
 
     // And the sky remembers the mined cloud
-    level_transition(gs, sky_portal)
+    level_transition(gs, &sky_portal)
     testing.expect_value(t, get_tile(&gs.world, 90, 80), Tile_Type.Air)
 }
 
@@ -320,12 +340,35 @@ sky_fall_returns_to_surface :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    level_transition(gs, &level_portals[LEVEL_SURFACE][1])
+    gs.progression.sky_altar_pos = {40, 52}
+    sky := sky_gate_portal(gs)
+    level_transition(gs, &sky)
     testing.expect_value(t, gs.level_index, LEVEL_SKY)
 
     gs.player.pos = {50, 90}  // below the cloud line
     update_player(gs)
     testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+}
+
+@(test)
+building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_SURFACE
+
+    testing.expect(t, gs.progression.sky_altar_pos == {0, 0}, "sky gate starts closed")
+
+    // Lay the tier-A foundation (5 stone, 3 wood) in clear air, then cap it.
+    ax, ay := 70, 30
+    for dx in -2 ..= 2 { set_tile(&gs.world, ax + dx, ay + 2, .Stone) }
+    for dx in -1 ..= 1 { set_tile(&gs.world, ax + dx, ay + 1, .Wood) }
+    inventory_insert(&gs.player.inventory, .Sky_Altar, 1)
+    gs.player.inventory.selected = 1  // slot 0 is the test pickaxe; Sky_Altar landed in slot 1
+    gs.player.pos = {f32(ax + 3), f32(ay)}  // beside the altar, within reach, not on it
+    handle_place_request(gs, Event{tile = {i32(ax), i32(ay)}})
+
+    testing.expect_value(t, get_tile(&gs.world, ax, ay), Tile_Type.Sky_Altar)
+    testing.expect(t, gs.progression.sky_altar_pos == {i32(ax), i32(ay)}, "gate opened at the altar")
 }
 
 @(test)

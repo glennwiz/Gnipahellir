@@ -37,8 +37,7 @@ level_portals := [NUM_LEVELS][MAX_LEVEL_PORTALS]Portal{
     LEVEL_SURFACE = {
         // Deep in cave 1 → cave 2 (locked behind sky structure A)
         { {{143, 94}, {144, 94}},  LEVEL_CAVE2,   {8, 15 - PLAYER_H},    0 },
-        // On the surface → low sky
-        { {{6, 53}, {7, 53}},      LEVEL_SKY,     {95, 80 - PLAYER_H},  -1 },
+        {},  // the sky gate is dynamic now — raised by a surface Sky Altar (sky_gate_portal)
     },
     LEVEL_CAVE2 = {
         // Spawn chamber → back to cave 1's portal chamber
@@ -127,6 +126,16 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
 
 // ─── Interaction (E key): portals, then the sky altar ritual ──────────────────
 
+// The sky gate a surface altar raises: travel surface → the low sky.
+sky_gate_portal :: proc(gs: ^Game_State) -> Portal {
+    return Portal{
+        tiles      = {gs.progression.sky_altar_pos, gs.progression.sky_altar_pos},
+        dest_level = LEVEL_SKY,
+        dest_pos   = {95, 80 - PLAYER_H},
+        gate_tier  = -1,
+    }
+}
+
 player_interact :: proc(gs: ^Game_State) {
     if portal := portal_at_player(gs); portal != nil {
         if portal.gate_tier >= 0 && !gs.progression.cave_unlocked[portal.gate_tier] {
@@ -138,13 +147,19 @@ player_interact :: proc(gs: ^Game_State) {
         return
     }
 
-    // Sky altar ritual: any Sky_Altar tile near the player
+    // A Sky_Altar tile near the player: in the sky it runs the ritual; on the
+    // surface it's the gate the player raised — step through to the heavens.
     cx := int(gs.player.pos.x + PLAYER_W*0.5)
     cy := int(gs.player.pos.y + PLAYER_H*0.5)
     for dy in -BENCH_RANGE ..= BENCH_RANGE {
         for dx in -BENCH_RANGE ..= BENCH_RANGE {
             if get_tile(&gs.world, cx+dx, cy+dy) == .Sky_Altar {
-                eq_push(&gs.events, Event{type = .Ritual_Request})
+                if gs.level_index == LEVEL_SURFACE && gs.progression.sky_altar_pos != {0, 0} {
+                    p := sky_gate_portal(gs)
+                    level_transition(gs, &p)
+                } else {
+                    eq_push(&gs.events, Event{type = .Ritual_Request})
+                }
                 return
             }
         }
@@ -432,7 +447,11 @@ carve_level0_portals :: proc(w: ^World_Grid) {
     w.items[idx]       = .Blueprint_A
     w.item_counts[idx] = 1
 
-    // Sky gate on the surface, west of spawn
-    set_tile(w, 6, SURFACE_Y - 1, .Sky_Entrance)
-    set_tile(w, 7, SURFACE_Y - 1, .Sky_Entrance)
+    // Sky Blueprint rests on the grass near spawn — it reveals the Sky Altar
+    // that, once built, opens the gate to the heavens.
+    sbp_x := GRID_W/2 - 12
+    set_tile(w, sbp_x, SURFACE_Y - 1, .Air)  // clear any decoration
+    sbp := grid_idx(sbp_x, SURFACE_Y - 1)
+    w.items[sbp]       = .Sky_Blueprint
+    w.item_counts[sbp] = 1
 }

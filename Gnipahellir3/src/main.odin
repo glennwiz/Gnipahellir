@@ -44,6 +44,13 @@ main :: proc() {
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
         game_update(gs)
+
+        // Autosave after a meaningful player action (place/pickup/mine/craft).
+        if gs.save_dirty {
+            gs.save_dirty = false
+            if !gs.player.dead && !gs.game_won do save_game(gs)
+        }
+
         draw_game(gs, target)
     }
 

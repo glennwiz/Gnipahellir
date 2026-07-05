@@ -279,6 +279,7 @@ Progression_State :: struct {
     sky_structure_complete: [MAX_PROGRESSION_TIERS]bool,
     cave_unlocked:          [MAX_PROGRESSION_TIERS]bool,
     final_boss_defeated:    bool,
+    sky_altar_pos:          [2]i32,  // surface tile of the built sky-gate altar; {0,0} = closed
 }
 
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
@@ -319,6 +320,7 @@ Game_State :: struct {
     delta_time:   f32,
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
+    save_dirty:   bool,   // a player action changed saved state; autosave at frame end
 
 
 
