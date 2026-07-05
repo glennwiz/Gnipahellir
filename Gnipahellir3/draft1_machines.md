@@ -434,12 +434,30 @@ assumes several dimensions running.
 
 **Decided:** hybrid model (§7.3); **4** active slots controlled by **Dimension
 Lock** (§7.2.1); locked = persist + background yield, unlocked = regenerate from
-seed; **Dimension Tablet** as the management view (§7.2.2).
+seed; **Dimension Tablet** as the management view (§7.2.2); **dimensions are
+finite** (§7.2.3).
 
-**Still open:**
+### 7.2.3 Finite dimensions — the rotation loop (DECIDED)
 
-- Are dimensions **finite** (deplete and collapse, forcing you to keep crafting
-  fresh blocks) or **infinite** yield while powered? Finite adds a "retire the
-  Lock, make a new one" loop that gives the Lock/Tablet more purpose; infinite is
-  simpler. *(My lean: finite — it makes the 4 slots a rotating strategic
-  resource rather than set-and-forget.)*
+A dimension holds a finite **reserve** (total mineable ore, set by the block's
+richness). Background yield draws the reserve down; when it hits zero the
+dimension is **played out** — it stops yielding and **collapses**, freeing its
+slot. This makes the 4 locked slots a **rotating strategic resource**, not
+set-and-forget:
+
+- The player watches the Tablet (§7.2.2), sees a dimension nearing depletion, and
+  **retires its Lock** to make room for a fresh, richer block. This is an ongoing
+  gameplay loop, not a one-time setup.
+- **Richness is a design knob:** a cheap block = small reserve + low rate; an
+  expensive block = huge reserve. The final-boss industrial craft (§7.4) implies
+  burning through *many* blocks over a run, which keeps the Dimension Creator and
+  the whole mana/mining economy relevant to the end.
+- **Depletion detail:** since a locked dimension may collapse while the player is
+  elsewhere, delivery to the home silo (Portal Link / §5 Path E) must keep up, or
+  drain the final reserve into the linked silo *at collapse* so nothing is lost.
+  Emit a `Dimension_Depleted` notification so the player isn't surprised.
+- **Balance lever:** finite reserves are the natural throttle on "just leave 4
+  dimensions running forever" — the player must keep *manufacturing* worlds, which
+  is the intended treadmill for the bulk economy.
+
+This supersedes any "infinite yield while powered" option.
