@@ -1,74 +1,82 @@
-# Handover — session 2026-07-04 (Phase 4 + Phase 5 start)
+# Handover — session 2026-07-05 (Phase 5 complete + mining rework)
+
+**Baton pass:** the last commits (Phase 5 M4/M5 + the mining rework) were
+Fable's work. **Opus takes over the project from today, 2026-07-05.**
 
 For the next session. Read `Plan.md` (roadmap), `Gnipahellir3/CLAUDE.md`
-(architecture rules — mandatory), `Gnipahellir3/PLAYTEST.md` (controls).
-Verify every change: `odin build src` + `odin test src` from `Gnipahellir3/`
-(32 tests, ~2s; if the game is running, add `-out:src_test.exe` or the linker
-can't write src.exe). Commit per verified milestone.
+(architecture rules — mandatory), `Gnipahellir3/PLAYTEST.md` (controls),
+`opus.md` (Fable's working notes on Glenn). Verify every change:
+`odin build src` + `odin test src` from `Gnipahellir3/` (40 tests, ~2s; if the
+game is running, add `-out:src_test.exe` or the linker can't write src.exe).
+Commit per verified milestone.
 
 ## Done this session (all on master, tree clean)
 
-**Phase 4 — builder economy: COMPLETE + playtested + tuned**
-- C4: sky-altar ritual gated to the sky level.
-- Honest bridging: pocket blocks (cap 8) earned by mining, spent on bridges;
-  A* takes a bridge budget.
-- Raidable dens: finished shells bank hauls as floor-item stockpiles; mining
-  den structure or trespassing → owner Hunts (shriek sound + notification);
-  den defense: hunt never drops while raider within cheb 7 of the anchor.
-- Builder mobility: A* climb move mines zigzag staircases (their only way UP
-  through rock — fixed total economy collapse), weighted A* (h×2), airborne
-  waypoint fix, avoid-radius blacklisting, worksite watchdogs.
-- Tuning: DEN_SHELL_LAYERS 3→2 (raids pay out in-session). Soak: 306
-  trips/hour, ~35s avg, 134 loot banked. 60-min economy soak + hunt-escape
-  soak are permanent tests.
+**Phase 5 — Garm final boss: COMPLETE (M4 + M5)**
+- M4: Garm AI — chases via `builder_travel`/`astar_dig` (reused, not
+  reinvented) + a "smash" rule carving the extra clearance his 1.6×1.8 body
+  needs through 1-tile corridors; fireballs via `spawn_projectile` (die on
+  solid tiles, so cover works with no LOS test); G2's project phases as boss
+  mechanics on hp thresholds: Chase → Column (≤20) → Ring (≤10) → Flood.
+  Structures channeled at range, one tile/tick, all mineable stone. Lava's
+  `damage_per_second` finally wired to the player.
+- M5: Win — Garm dies → Hell_Key drops where he stood → pickup fires
+  Boss_Defeated + Game_Won → win screen (run time, kills, runs won);
+  runs_won++ persisted immediately; a won run clears the save on quit.
+- `garm_fight_soak` (60s simulated fight) is a permanent test.
 
-**Phase 5 — Garm: M1–M3 of 5 done**
-- M1: Player melee — left-click press swings Sword (craft: 2 Iron Ore +
-  1 Plank @ bench; 2 dmg, 2-tile reach, 0.35s cd). Wounded builders retaliate.
-- M2: Projectile system live (slot 4, straight-line, owner-immune, entity-map
-  hits; drawn as orange circles).
-- M3: Boss arena carved in cave 3 (ARENA_* consts in garm.odin); Garm (30 hp)
-  spawns ONLY once structure C is built (spawn is the gate) — on Level_Enter
-  or on Cave_Unlocked tier 2. update_garm is a stub: he stands still.
+**Mining rework — COMPLETE + Glenn approved the feel**
+- Replaces old click-at-range-5. Start with a Pickaxe: aims by rough cursor
+  DIRECTION not exact tile (8-way, wide 45° horizontal band, forward carves
+  head+feet rows), adjacent only, 3 chips/tile, free.
+- Bench-crafted wand ladder Mine_Wand(2) → Silver(4) → Gold(8): keeps precise
+  cursor aim, each tier consumes the previous, 5 mana/shot from a 100 pool,
+  G2-style spark stream with delayed impact.
+- F1 debug menu row 2: Ultra wand cheat (13-tile, free, 3×3 blast impact).
+- Particle store is live (`mining.odin`, `particles.odin`).
 
-SAVE_VERSION is 5. Save-layout changes trip the size assert in save.odin —
+SAVE_VERSION is 7. Save-layout changes trip the size assert in `save.odin` —
 bump version + expected size together.
 
 ## Left to do
 
-**Phase 5 remainder (task list #9, #10):**
-- M4: Garm AI — chase via astar_dig/builder_travel infra, fireball via
-  spawn_projectile, and G2's phases as boss mechanics: center column →
-  perimeter ring → lava flood (G2 reference: Gnipahellir2/src/simple_garm.odin
-  — primitive, reimplement in G3 idiom). Garm needs a Garm_State struct in
-  Enemy (save bump!). Soak-style test like the builder ones.
-- M5: Win — Garm dies → Hell_Key drop → pickup → Boss_Defeated/Game_Won →
-  win screen + run stats; runs_won++.
+**Phase 5 playtest (only thing keeping the phase open):**
+- Glenn's hand playtest of the boss fight — feel + tuning. The soak bot took
+  66 hits in 60s vs player hp 10, so Garm may be tuned hot. Knobs: `GARM_*`
+  in `garm.odin`. Also re-feel the new mining (pick pace + wand mana
+  economics): `PICK_HITS`, `WAND_MANA_COST`, `wand_mine_range`, `pick_targets`
+  direction bands.
 
-**NEW direction from Glenn (start next session, maybe before/alongside M4):**
-1. **G2 look-and-feel port**: pixel 8-bit mage player (pickaxe, animated
-   feet), mining particle effects. References: Gnipahellir2/src/render.odin
-   (128 KB) + particles.odin. IMPORTANT: Glenn's branch `feature/render-port`
-   already started exactly this ("Port player pixel frames and Mine_Wand
-   overlay from G2, visuals only") — review/cherry-pick it rather than
-   restart. Caveat: that branch also accidentally contains stale mid-Phase-4
-   copies of Gnipahellir3 enemy.odin/tests.odin — on conflict, master wins.
-   It also has a gni_rnd/ sandbox + docs (ai_algo.md, enemy_ai.md) worth a look.
-2. **G2 mining mechanics**: Glenn wants G3's mining to work like G2's —
-   currently G3 mines instantly at 5-tile click range; G2 uses the wand and
-   proximity (see Gnipahellir2/src/wand_mining.odin). Clarify exact feel with
-   Glenn, then port. Ties into "mining costs no mana" known stub.
-   G3 particles store exists but update_particles is stubbed (slot 8 —
-   must move above process_events if it pushes events).
+**G2 look-and-feel port (the one remaining NEW-direction item):**
+- Pixel 8-bit mage player (pickaxe, animated feet), mining particle polish.
+  References: `Gnipahellir2/src/render.odin` + `particles.odin`. Glenn's branch
+  `feature/render-port` already started this ("Port player pixel frames and
+  Mine_Wand overlay from G2, visuals only") — **cherry-pick the intent, don't
+  restart or merge**; it's now 16 behind / 11 ahead of master. Caveat: that
+  branch carries stale mid-Phase-4 copies of `enemy.odin`/`tests.odin` — on
+  conflict, master wins. It also has a `gni_rnd/` sandbox + docs worth a look.
+- The G2 mining *mechanics* port (wand + proximity feel) is DONE — this
+  remaining item is visuals only.
 
-**Later phases:** Phase 6 shippability (menus/settings/onboarding/death
-screen), Phase 7 juice. suggestion.md still has C3/C5 + 2 perf notes open.
+**Later phases:** Phase 6 shippability (menus/settings/onboarding/death +
+win-restart flow), Phase 7 juice. `suggestion.md` still has C3/C5 + 2 perf
+notes open.
 
-## Gotchas learned this session
-- Log ring buffer is 256 KB and silently stops — reset gs.debug_log.pos
+## Repo note
+No git remote is configured — the repo is local-only, no off-machine backup.
+Set one up if you want it.
+
+## Gotchas learned (timeless — keep these)
+- Log ring buffer is 256 KB and silently stops — reset `gs.debug_log.pos`
   before capturing a window in long sims.
-- Never clobber action.log (Glenn's ground truth); write diag files elsewhere.
-- Diagnose builder stalls with a temporary diag test dumping per-frame state;
-  the frozen-position + cheap-frames signature means an early-return livelock.
+- Never clobber `action.log` (Glenn's ground truth); write diag files elsewhere.
+- Diagnose builder/enemy stalls with a temporary diag test dumping per-frame
+  state; frozen-position + suspiciously-cheap-frames + watchdog-silent means an
+  early-return livelock. **Trust the soak, not a code proof** — it caught
+  livelocks a proof missed twice.
 - Odin: compound literals in conditions need a temp var; `odin test` links
-  src.exe by default (collides with a running game).
+  src.exe by default (collides with a running game — use `-out:src_test.exe`).
+- raylib imports are pinned to `vendor:raylib/v55`; `physics.odin`'s
+  `BODY_EPS < BODY_MARGIN < gravity*dt²` ordering is load-bearing.
+- Glenn plays looking at his character, not the HUD — sound > text; if a
+  mechanic lands, it should shriek.
