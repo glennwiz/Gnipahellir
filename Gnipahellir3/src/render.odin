@@ -98,8 +98,25 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
 
+// Outline drawn on every solid tile (not sky/void) — a test grid.  The camera
+// works in virtual pixels (a tile is CELL_SIZE units), so GRID_LINE_PX is the
+// on-screen line width in virtual px; we divide by the zoom so the line stays a
+// constant width (and doesn't balloon or thrash) as you zoom.  Drawn as a quad
+// via DrawRectangleLinesEx — a plain DrawRectangleLines is a 1px framebuffer
+// hairline that flickers under the supersample.  Alpha + px are the knobs.
+GRID_LINE    :: rl.Color{0, 0, 0, 80}
+GRID_LINE_PX :: f32(2.5)
+// Grid fades in with zoom: hidden at/below LO (dense = noise), full at/above HI.
+GRID_FADE_LO :: f32(1.6)
+GRID_FADE_HI :: f32(2.6)
+
 draw_world :: proc(gs: ^Game_State) {
     w := &gs.world
+    grid_thick := GRID_LINE_PX / max(gs.zoom, ZOOM_MIN)
+    grid_fade  := clamp((gs.zoom - GRID_FADE_LO) / (GRID_FADE_HI - GRID_FADE_LO), 0, 1)
+    grid_col   := GRID_LINE
+    grid_col.a  = u8(f32(GRID_LINE.a) * grid_fade)
+    draw_grid  := grid_col.a > 0
     for y in 0 ..< GRID_H {
         for x in 0 ..< GRID_W {
             idx := grid_idx(x, y)
@@ -107,6 +124,10 @@ draw_world :: proc(gs: ^Game_State) {
             px  := i32(x * CELL_SIZE)
             py  := i32(y * CELL_SIZE)
             draw_tile(gs, t, x, y)
+
+            if draw_grid && t != .Air && t != .Void {
+                rl.DrawRectangleLinesEx({f32(px), f32(py), CELL_SIZE, CELL_SIZE}, grid_thick, grid_col)
+            }
 
             // World item drop: small glinting square
             it := w.items[idx]

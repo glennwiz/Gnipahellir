@@ -18,7 +18,12 @@ screen_transform :: proc() -> (scale: f32, offset: [2]f32) {
 }
 
 main :: proc() {
-    rl.SetConfigFlags({.WINDOW_RESIZABLE})
+    // VSYNC_HINT syncs buffer swaps to the display (no tearing); the 60-fps cap
+    // stays because the sim integrates on the real frame time and the physics
+    // constants are tuned for dt≈1/60 (BODY_MARGIN < gravity*dt², see
+    // physics.odin) — letting dt shrink on a high-refresh monitor flickers the
+    // grounded state.  Both together: vsync-clean present, locked to 60.
+    rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
     rl.InitWindow(1280, 720, "Gnipahellir III")
     rl.SetTargetFPS(60)
 
