@@ -275,3 +275,171 @@ Paths C is flavor we add when we want world-shaping depth.
   transport** puzzle (§4.3)?
 - Is **auto-progression** (base auto-feeds the Sky Altar) a goal or a step too
   far?
+
+---
+
+## 7. Parallel Dimensions — craftable mining worlds (big pillar)
+
+The idea: a **Dimension Creator** machine crafts **Dimension Blocks**; a block
+slotted into a **Dimension Spawner** opens a portal to a fresh, *themed*,
+mineable world. Want metal? Craft a **Metal Dimension** block. Want crystals? A
+**Crystal Dimension**. Each dimension is an ore-biased world you set up automated
+mining factories inside, then harvest at scale.
+
+This is the answer to "everything needs 1000x" — you don't grind one map, you
+**manufacture the map that's rich in what you need** and let machines strip it.
+
+### 7.1 Why this fits the engine almost for free
+
+The game *already* has the hard part: **levels are separate generated grids with
+portals** (`Level_Store.worlds: [NUM_LEVELS]World_Grid`, `level_portals`,
+`Cave_Entrance` transitions in `levels.odin`). A dimension is just:
+
+> a generated level, whose **generation is parameterized by the block's recipe**
+> (which ore, how dense, hazards), reached through a spawner portal instead of a
+> fixed cave entrance.
+
+So the machine chain is:
+
+```
+Dimension Creator  ── recipe + materials ─►  Dimension Block (item, carries a
+                                             theme + seed)
+        │
+        ▼
+Dimension Spawner  ── consumes/holds block ─►  portal ──►  themed mining world
+```
+
+`Dimension_Kind` is a **table** (theme → ore weights, hazard set, size), exactly
+the table-driven pattern the codebase already uses for terrain/recipes. New
+dimension type = new table row. No switch sprawl.
+
+### 7.2 The two real constraints (must design around these)
+
+Found by reading the code — these are hard limits, not preferences:
+
+1. **Bulk storage is a NEW requirement.** `MAX_STACK :: 99`, `MAX_INVENTORY :: 24`
+   → the player can carry **~2,400 items total**, and ground `item_counts` is a
+   `u8` (caps at 255). "1000s of items" **cannot** live in inventory or on
+   tiles. You need **Silo / Vault machines** — placed storage with a wide count
+   (`u32`/`int`) that drills and conduits feed into. Bulk items live in silos and
+   are consumed straight from them by the big crafts. This is a prerequisite for
+   the whole pillar, so design it first.
+
+2. **You cannot hold many live grids.** Each `World_Grid` is large (~20k cells ×
+   several arrays) and `Level_Store` freezes one per level. Dozens of persistent
+   dimension grids = memory blowout. **Resolved design (below):**
+   `MAX_ACTIVE_DIMENSIONS :: 4` locked slots, everything else regenerates from
+   seed.
+
+### 7.2.1 Dimension Lock — the player picks what stays alive (DECIDED)
+
+Hard cap: **4 active dimension slots.** The player controls *which* 4 by crafting
+and placing a **Dimension Lock** inside a dimension:
+
+- **Locked dimension** = one of the ≤4 persistent worlds. It keeps its mined
+  state, holds a real (or snapshotted) grid, and **yields in the background**
+  (§7.3). Costs one slot and ongoing mana.
+- **Unlocked dimension** = ephemeral. Its block stores a seed; you can portal in
+  to scout/hand-mine, but it **collapses (regenerates from seed) when you leave**
+  — no persistence cost.
+- **Removing a Lock** frees the slot and lets the player retire a played-out
+  dimension for a fresher one. This is the "pick and choose what's active"
+  control you want, and it *also* answers persist-vs-regenerate cleanly: locked =
+  persist + yield, unlocked = regenerate.
+
+Placing a Lock when all 4 slots are full fails gracefully ("no free dimension
+anchors") — same bounded-alloc discipline as enemies/machines.
+
+### 7.2.2 Dimension Tablet — the management view (DECIDED)
+
+A **Dimension Tablet** is an inventory item (like the Blueprints — inspectable,
+not consumed) that opens a **management window** listing every dimension the
+player has: theme, richness/seed, locked-or-not, which slot, current yield rate,
+linked silo, and mana draw. Read-only overview + the place to see at a glance
+what your 4 locked slots are doing.
+
+Fits the UI rules exactly: input toggles a `dimension_tablet_open` flag in
+`UI_State`, `ui.odin` draws it read-only, no world mutation. (If we later allow
+toggling a dimension's background-run on/off from the tablet, that goes through an
+event, not a direct write.)
+
+### 7.3 Two operating models (recommend a hybrid)
+
+- **Model A — Explorable factory dimensions.** A dimension is a real grid you
+  walk into, place drills/silos/conduits in, and physically build a factory.
+  Richest gameplay, but bounded by the active-slot pool (§7.2.2) and needs the
+  cross-level logistics to get goods *home* (§4 / Path E — Portal Link).
+
+- **Model B — Abstract yield dimensions (idle).** An open dimension portal has a
+  **yield rate**: while open (and powered by mana), it deposits its themed items
+  into a linked silo at `X items/sec`, richer blocks = faster. **No grid is
+  simulated** — it's a number going up, classic idle-game style. Cheap, scales to
+  many dimensions, trivially "fully automated," but shallow.
+
+**Recommended hybrid (locked by §7.2.1):** the player **sets up** a dimension by
+hand (Model A: walk in, place the drills, wire the silo) and **places a Dimension
+Lock** to anchor it; once locked it **runs in the background as a yield source**
+(Model B) whether or not the player is standing in it. Best of both — the *design*
+of the factory is hands-on and fun, the *operation* is automatic and
+idle-scalable. This also dodges the "simulate a grid you're not standing in"
+problem: a locked dimension collapses to a **rate**, and unlocked ones don't run
+at all. The 4-slot cap keeps total background yield (and mana draw) bounded.
+
+### 7.4 Feeding the bulk economy & the final craft
+
+New bulk minerals justify the whole pillar. Introduce a tier of materials that
+are **only** economical to get via dimensions — needed in the hundreds/thousands:
+
+- Metal Dimension → **Iron/Silver/Gold** at volume (also refined bars via the
+  alchemy chain, Path B).
+- Crystal Dimension → **Aether Crystal / new gems** at volume.
+- Corrupt Dimension → risky, drops rare reagents no safe dimension gives.
+- Runic Dimension → the end-tier material.
+
+The **final-boss craft** becomes a genuine industrial goal: e.g. the *Boss
+Summoning Altar* recipe demands
+`1000× Iron Bar + 800× Aether Crystal + 500× Runic Ore + 200× Void Shard`,
+which realistically requires **~5 custom dimensions running in parallel** feeding
+silos over real time. That's the "manufacture the world to beat the game"
+end-state — and it's *fully automatable*, satisfying the core promise.
+
+This also gives the mana economy (§1) real teeth: dimensions and their drills are
+**huge mana sinks**, so running 5 at once forces a serious power base (Solar
+Collectors + Geothermal + capacitors). The three systems — mana, machines,
+dimensions — reinforce each other instead of being parallel tracks.
+
+### 7.5 Where it sits in progression
+
+Dimensions are a **mid/late unlock**, not a starter — they'd trivialize early
+mining. Gate the **Dimension Creator** behind (say) the Cave 2 or first Sky
+structure, so the player learns hand-mining + basic factories first, *then*
+graduates to manufacturing worlds. The final-boss mega-craft is the capstone that
+assumes several dimensions running.
+
+### 7.6 Build order (after the §6 MVP proves out)
+
+1. **Silo machine** first — wide-count bulk storage. Without it, nothing else
+   about "1000x" works. → verify: a silo accumulates >255 of an item.
+2. **Dimension theme table** + one hardcoded **Metal Dimension** you can enter via
+   a manually-placed spawner. → verify: portal opens into an iron-rich grid.
+3. **Dimension Creator + Block item** — craft the block, slot it into the spawner
+   to choose the theme. → verify: a Crystal block opens a crystal world.
+4. **Background yield** (Model B) for an established dimension feeding a silo. →
+   verify: silo count climbs while player is on another level.
+5. **Cross-level delivery** (Portal Link, Path E) so dimension output reaches the
+   home base automatically. → verify: hands-off, base silos fill from a remote
+   dimension.
+6. **Final-boss industrial recipe** consuming from silos. → verify: boss can only
+   be summoned after sustained multi-dimension production.
+
+**Decided:** hybrid model (§7.3); **4** active slots controlled by **Dimension
+Lock** (§7.2.1); locked = persist + background yield, unlocked = regenerate from
+seed; **Dimension Tablet** as the management view (§7.2.2).
+
+**Still open:**
+
+- Are dimensions **finite** (deplete and collapse, forcing you to keep crafting
+  fresh blocks) or **infinite** yield while powered? Finite adds a "retire the
+  Lock, make a new one" loop that gives the Lock/Tablet more purpose; infinite is
+  simpler. *(My lean: finite — it makes the 4 slots a rotating strategic
+  resource rather than set-and-forget.)*
