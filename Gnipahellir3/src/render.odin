@@ -281,19 +281,151 @@ draw_builder :: proc(e: ^Enemy) {
     rl.DrawRectangle(px, py,          pw, head_h, head_color)
 }
 
-// ─── Player ───────────────────────────────────────────────────────────────────
+// ─── Player (pixel-art mage) ────────────────────────────────────────────────
+
+// 8×11 ascii sprite, two walk frames. Legend: Y hair, K face, C clothing
+// (left→right shaded), B boots. Ported from G2; colors come from the Player.
+PLAYER_RENDER_SCALE :: 2  // sprite height in tiles — the one knob for player size
+FRAME_WIDTH  :: 8
+FRAME_HEIGHT :: 11
+
+player_frames := [2][FRAME_HEIGHT][FRAME_WIDTH]rune{
+    { // frame 0 — feet together
+        {' ',' ',' ',' ',' ',' ',' ',' '},
+        {' ',' ','Y','Y',' ',' ',' ',' '},
+        {' ',' ',' ','Y','Y',' ',' ',' '},
+        {' ',' ','Y','Y','Y',' ',' ',' '},
+        {' ','Y','K','K','K','Y',' ',' '},
+        {' ','K','K','K','K','K',' ',' '},
+        {'C','K','K','K','K','C','C',' '},
+        {'C','C','C','C','C','C','C','C'},
+        {'C','C','C','C','C','C','C','C'},
+        {' ','C','C','C','C','C',' ',' '},
+        {' ',' ',' ','B','B','B',' ',' '},
+    },
+    { // frame 1 — mid-stride
+        {' ',' ','Y',' ',' ',' ',' ',' '},
+        {' ',' ',' ','Y',' ',' ',' ',' '},
+        {' ',' ',' ','Y','Y',' ',' ',' '},
+        {' ',' ','Y','Y','Y',' ',' ',' '},
+        {' ','Y','Y','K','Y','Y',' ',' '},
+        {' ','K','K','K','K','K',' ',' '},
+        {'C','K','K','K','K','C','C',' '},
+        {'C','C','C','C','C','C','C','C'},
+        {'C','C','C','C','C','C','C','C'},
+        {' ','C','C','C','C','C',' ',' '},
+        {' ',' ','B','B','B',' ',' ',' '},
+    },
+}
+
+player_pixel_color :: proc(p: ^Player, ch: rune, shade: f32) -> rl.Color {
+    switch ch {
+    case 'Y': return p.hair_color
+    case 'K': return rl.Color{40, 40, 50, 255}
+    case 'C': return rl.Color{
+        u8(clamp(f32(p.clothing_color.r) * shade, 0, 255)),
+        u8(clamp(f32(p.clothing_color.g) * shade, 0, 255)),
+        u8(clamp(f32(p.clothing_color.b) * shade, 0, 255)),
+        255,
+    }
+    case 'B': return rl.Color{110, 70, 40, 255}
+    case:     return rl.BLANK
+    }
+}
 
 draw_player :: proc(p: ^Player) {
+    if p.dead { return }
+
+    frame := player_frames[p.anim_frame]
+
     px := i32(p.pos.x * CELL_SIZE)
     py := i32(p.pos.y * CELL_SIZE)
-    pw := i32(PLAYER_W * CELL_SIZE)
-    ph := i32(PLAYER_H * CELL_SIZE)
+    pw_px := i32(PLAYER_W * CELL_SIZE)
+    ph_px := i32(PLAYER_H * CELL_SIZE)
 
-    head_h := i32(CELL_SIZE)
-    body_h := ph - head_h
+    // Best-fit the sprite to the collision box, then force it up to
+    // PLAYER_RENDER_SCALE tiles high so the mage reads clearly.
+    pixel_size := min(pw_px / FRAME_WIDTH, ph_px / FRAME_HEIGHT)
+    forced_ps := i32((PLAYER_RENDER_SCALE * CELL_SIZE + FRAME_HEIGHT - 1) / FRAME_HEIGHT) // ceil
+    if forced_ps > pixel_size { pixel_size = forced_ps }
+    if pixel_size < 1 { pixel_size = 1 }
 
-    rl.DrawRectangle(px, py + head_h, pw, body_h, p.clothing_color)
-    rl.DrawRectangle(px, py,          pw, head_h, p.hair_color)
+    total_w := FRAME_WIDTH * pixel_size
+    total_h := FRAME_HEIGHT * pixel_size
+    origin_x := px + (pw_px - total_w) / 2  // centered on the box
+    origin_y := py + (ph_px - total_h)      // feet on the box floor
+
+    bob := i32(0)
+    if p.anim_frame == 1 { bob = -pixel_size }  // little hop mid-stride
+
+    for row in 0 ..< FRAME_HEIGHT {
+        for col in 0 ..< FRAME_WIDTH {
+            ch := frame[row][col]
+            if ch == ' ' { continue }
+            draw_col := col
+            if p.facing < 0 { draw_col = FRAME_WIDTH - 1 - col }  // flip when facing left
+            shade := 0.85 + f32(draw_col) / f32(FRAME_WIDTH - 1) * 0.25
+            rl.DrawRectangle(
+                origin_x + i32(draw_col) * pixel_size,
+                origin_y + i32(row) * pixel_size + bob,
+                pixel_size, pixel_size,
+                player_pixel_color(p, ch, shade),
+            )
+        }
+    }
+
+    // Tool in hand, on the leading side. Derived from what the mage actually
+    // carries (mining reads its tool from the bag; the `equipped` field is
+    // vestigial). Best wand wins, else the pickaxe once it's been picked up.
+    held := held_tool(p)
+    if held != .None {
+        hand_x := origin_x + total_w - pixel_size * 2
+        if p.facing < 0 { hand_x = origin_x + pixel_size }
+        hand_y := origin_y + pixel_size * 6
+        if held == .Pickaxe {
+            // Swing arc driven by the chip cooldown: struck-down at the hit,
+            // recovering back up as the timer runs out.
+            deg := f32(0)
+            if p.mine_timer > 0 {
+                sw := p.mine_timer / PICK_SWING_TIME  // 1 at the strike → 0 recovered
+                deg = -30 + 60 * sw
+                if p.facing < 0 { deg = -deg }
+            }
+            draw_pickaxe(hand_x, hand_y, pixel_size, deg)
+        } else {  // a wand tier — shaft with a tier-colored tip
+            rl.DrawRectangle(hand_x, hand_y, pixel_size, pixel_size * 3, rl.Color{90, 60, 40, 255})
+            rl.DrawRectangle(hand_x + pixel_size, hand_y - pixel_size, pixel_size, pixel_size, item_table[held].color)
+        }
+    }
+}
+
+// The implement the mage visibly holds: best wand carried, else pickaxe.
+held_tool :: proc(p: ^Player) -> Item {
+    switch {
+    case inventory_count(&p.inventory, .Mine_Wand_Gold)   > 0: return .Mine_Wand_Gold
+    case inventory_count(&p.inventory, .Mine_Wand_Silver) > 0: return .Mine_Wand_Silver
+    case inventory_count(&p.inventory, .Mine_Wand)        > 0: return .Mine_Wand
+    case inventory_count(&p.inventory, .Pickaxe)          > 0: return .Pickaxe
+    }
+    return .None
+}
+
+// Small pickaxe: wooden shaft, iron head crossbar with two drooping tips.
+// Rotated `deg` degrees around the hand grip so it can swing while mining.
+draw_pickaxe :: proc(x, y, s: i32, deg: f32) {
+    wood  := rl.Color{140, 90, 50, 255}
+    iron  := rl.Color{185, 190, 200, 255}
+    pivot := rl.Vector2{f32(x) + f32(s) * 0.5, f32(y) + f32(s) * 2}  // hand grip
+
+    // Draw a rect whose unrotated top-left is (rx,ry), spun around `pivot`.
+    rot :: proc(rx, ry, w, h: f32, pivot: rl.Vector2, deg: f32, col: rl.Color) {
+        rl.DrawRectanglePro(rl.Rectangle{pivot.x, pivot.y, w, h}, {pivot.x - rx, pivot.y - ry}, deg, col)
+    }
+    fx, fy, fs := f32(x), f32(y), f32(s)
+    rot(fx,      fy - fs, fs,     fs * 4, pivot, deg, wood)  // shaft
+    rot(fx - fs, fy - fs, fs * 3, fs,     pivot, deg, iron)  // head crossbar
+    rot(fx - fs, fy,      fs,     fs,     pivot, deg, iron)  // left tip
+    rot(fx + fs, fy,      fs,     fs,     pivot, deg, iron)  // right tip
 }
 
 // ─── Debug Overlay ────────────────────────────────────────────────────────────
