@@ -153,6 +153,26 @@ structure_costs := [MAX_PROGRESSION_TIERS][2]Ingredient{
     { {.Cloud_Stone, 20}, {.Gold_Ore, 10}  },   // final → boss gate (Phase 5)
 }
 
+// The tier the blueprint overlay speaks to: the first blueprint found whose
+// sky structure isn't raised yet.  -1 = the player carries no active blueprint.
+blueprint_active_tier :: proc(gs: ^Game_State) -> int {
+    for t in 0 ..< MAX_PROGRESSION_TIERS {
+        if gs.progression.blueprint_found[t] && !gs.progression.sky_structure_complete[t] {
+            return t
+        }
+    }
+    return -1
+}
+
+// Which cave a tier's ritual unlocks — for the blueprint overlay text.
+blueprint_unlocks_name :: proc(tier: int) -> string {
+    switch tier {
+    case 0:  return level_names[LEVEL_CAVE2]
+    case 1:  return level_names[LEVEL_CAVE3]
+    case:    return "the final depths"
+    }
+}
+
 handle_ritual_request :: proc(gs: ^Game_State) {
     if gs.player.dead do return
     // The ritual only answers in the sky (design doc, review item C4) —

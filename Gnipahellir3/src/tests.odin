@@ -42,6 +42,79 @@ starter_pickaxe_waits_on_the_grass :: proc(t: ^testing.T) {
 }
 
 @(test)
+blueprint_overlay_tracks_the_active_objective :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // No blueprint found → nothing for the overlay to show.
+    testing.expect_value(t, blueprint_active_tier(gs), -1)
+
+    // Finding tier 0's blueprint makes it the active objective.
+    gs.progression.blueprint_found[0] = true
+    testing.expect_value(t, blueprint_active_tier(gs), 0)
+    testing.expect_value(t, blueprint_unlocks_name(0), level_names[LEVEL_CAVE2])
+
+    // Raising its structure advances to the next found blueprint, else none.
+    gs.progression.sky_structure_complete[0] = true
+    testing.expect_value(t, blueprint_active_tier(gs), -1)
+    gs.progression.blueprint_found[1] = true
+    testing.expect_value(t, blueprint_active_tier(gs), 1)
+    testing.expect_value(t, blueprint_unlocks_name(1), level_names[LEVEL_CAVE3])
+}
+
+@(test)
+placed_structures_can_be_reclaimed :: proc(t: ^testing.T) {
+    // Anything you place, you can chip back up — it drops its own item.
+    for tile in ([]Tile_Type{.Sky_Altar, .Crafting_Bench, .Tree_Grower, .Smelter}) {
+        b := terrain_table[tile]
+        testing.expect(t, .Mineable in b.flags, "placed structure must be mineable to reclaim")
+        testing.expect(t, b.drop_item != .None, "placed structure must drop its item when mined")
+    }
+}
+
+@(test)
+sky_altar_requires_its_template :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    tpl := &structure_templates[0]  // tier A: stone + wood
+
+    ax, ay := 70, 30  // clear sky, well above any tree
+
+    // Bare ground → the altar has no foundation.
+    ok, _ := structure_template_satisfied(&gs.world, tpl, ax, ay)
+    testing.expect(t, !ok, "template should be unsatisfied on bare ground")
+
+    // Lay 5 stone, then 3 wood centered on top.
+    for dx in -2 ..= 2 { set_tile(&gs.world, ax + dx, ay + 2, .Stone) }
+    for dx in -1 ..= 1 { set_tile(&gs.world, ax + dx, ay + 1, .Wood) }
+    ok2, _ := structure_template_satisfied(&gs.world, tpl, ax, ay)
+    testing.expect(t, ok2, "template should be satisfied once built")
+
+    // A gap in the stone row breaks it, and reports the missing tile.
+    set_tile(&gs.world, ax + 2, ay + 2, .Air)
+    ok3, want := structure_template_satisfied(&gs.world, tpl, ax, ay)
+    testing.expect(t, !ok3, "template should fail with a gap")
+    testing.expect_value(t, want, Tile_Type.Stone)
+}
+
+@(test)
+each_tier_raises_a_distinct_altar :: proc(t: ^testing.T) {
+    // Every progression tier has its own template, and the deeper ones call for
+    // silver and gold — so each blueprint reads differently.
+    a := &structure_templates[0]
+    b := &structure_templates[1]
+    testing.expect(t, a.name != b.name, "tier A and B templates should differ")
+    testing.expect(t, !structure_template_uses(a, .Gold_Ore), "tier A should not need gold")
+    testing.expect(t, structure_template_uses(b, .Silver_Ore), "tier B should need silver")
+    testing.expect(t, structure_template_uses(b, .Gold_Ore),   "tier B should need gold")
+
+    // Silver and gold ore are placeable blocks (that's what the altars are built from).
+    testing.expect_value(t, item_table[.Silver_Ore].place_tile, Tile_Type.Silver_Ore)
+    testing.expect_value(t, item_table[.Gold_Ore].place_tile,   Tile_Type.Gold_Ore)
+}
+
+@(test)
 pickup_collects_world_drops :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

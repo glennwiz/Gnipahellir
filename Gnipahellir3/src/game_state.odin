@@ -220,6 +220,7 @@ Input_State :: struct {
 UI_State :: struct {
     show_inventory:  bool,
     show_crafting:   bool,
+    show_blueprint:  bool,
     show_debug:      bool,
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,

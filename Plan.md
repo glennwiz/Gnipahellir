@@ -201,8 +201,17 @@ Playtest findings (2026-07-04, round 1):
       persisted immediately. A won run clears the save on quit, same as death.
 
 **Milestone reached (2026-07-05):** the game can be *beaten* — 36-test suite green,
-including a full 60 s simulated boss fight (garm_fight_soak). Glenn's hand playtest
-of the fight (feel, tuning: GARM_* constants in garm.odin) still open.
+including a full 60 s simulated boss fight (garm_fight_soak).
+
+**Hand playtest — DONE 2026-07-05 (full run):** Glenn played the whole loop —
+found blueprints, built the per-tier sky altars from their templates, completed
+tiers B and C rituals ("Sky structure 1/2 complete"), unlocked both caves,
+Garm awoke and the fight played out; run ended in death to Garm. New systems
+(interactive blueprint overlay, structure-build templates, altar reclaim, silver/
+gold placeable blocks) all held up in a real run (action.log 2026-07-05).
+Finding — **Garm is lethal**: once he lands bites the player drops 10→0 in
+~7 s (5 bites × 2 dmg). Confirms the soak's hot-tuning signal; needs a feel pass
+(GARM_* in garm.odin: bite cadence/damage, or player hp/i-frames).
 
 ## Phase 6 — Shippability pass
 

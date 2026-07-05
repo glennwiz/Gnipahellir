@@ -18,6 +18,12 @@ CRAFT_Y     :: INV_Y
 CRAFT_W     :: 430
 CRAFT_ROW_H :: 26
 
+// Blueprint overlay — centered panel.
+BP_W :: 540
+BP_H :: 360
+BP_X :: (SCREEN_W - BP_W) / 2
+BP_Y :: (SCREEN_H - BP_H) / 2
+
 panel_bg     :: rl.Color{15, 15, 25, 230}
 panel_border :: rl.Color{90, 90, 120, 255}
 slot_bg      :: rl.Color{35, 35, 50, 255}
@@ -82,6 +88,11 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
        my >= CRAFT_Y && my < CRAFT_Y + i32(len(recipe_table))*CRAFT_ROW_H + 8 {
         return true
     }
+    if gs.ui.show_blueprint &&
+       mx >= BP_X && mx < BP_X + BP_W &&
+       my >= BP_Y && my < BP_Y + BP_H {
+        return true
+    }
     return false
 }
 
@@ -114,6 +125,7 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
+    if gs.ui.show_blueprint do draw_blueprint(gs)
     if gs.game_won do draw_win_screen(gs)
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
@@ -252,6 +264,119 @@ draw_crafting :: proc(gs: ^Game_State) {
 
         col := recipe_craftable(gs, r) ? rl.GREEN : text_dim
         rl.DrawText(cstring(raw_data(row_buf[:])), CRAFT_X + 4, y + 6, 10, col)
+    }
+}
+
+// The interactive blueprint overlay (B, or click a blueprint in the bag):
+// what to gather, the build template for the altar, and the path to the cave.
+draw_blueprint :: proc(gs: ^Game_State) {
+    x, y := i32(BP_X), i32(BP_Y)
+    rl.DrawRectangle(x, y, BP_W, BP_H, panel_bg)
+    rl.DrawRectangleLines(x, y, BP_W, BP_H, panel_border)
+
+    accent := rl.Color{130, 180, 255, 255}
+    good   := rl.Color{120, 220, 120, 255}
+    warm   := rl.Color{250, 220, 110, 255}
+
+    rl.DrawText("[B] close", x + BP_W - 92, y + 14, 12, text_dim)
+
+    tier := blueprint_active_tier(gs)
+    if tier < 0 {
+        rl.DrawText("BLUEPRINT", x + 20, y + 18, 24, accent)
+        rl.DrawText("You carry no blueprint yet.", x + 20, y + 64, 18, text_dim)
+        rl.DrawText("Delve the caves — a sky blueprint waits in each.", x + 20, y + 92, 16, text_dim)
+        return
+    }
+
+    // Title + objective
+    rl.DrawText("BLUEPRINT: The Sky Ritual", x + 20, y + 18, 24, accent)
+    obj_buf: [96]u8
+    fmt.bprintf(obj_buf[:95], "Raise the sky structure to unlock %s.", blueprint_unlocks_name(tier))
+    rl.DrawText(cstring(raw_data(obj_buf[:])), x + 20, y + 52, 16, rl.Color{225, 225, 240, 255})
+
+    // LEFT — ritual material checklist: icon, name, have/need, check when met
+    rl.DrawText("THE ALTAR HUNGERS FOR", x + 20, y + 84, 14, text_dim)
+    all_met := true
+    for ing, i in structure_costs[tier] {
+        ry   := y + 104 + i32(i)*30
+        have := inventory_count(&gs.player.inventory, ing.item)
+        met  := have >= ing.count
+        if !met do all_met = false
+        rl.DrawRectangle(x + 30, ry, 20, 20, item_table[ing.item].color)
+        rl.DrawRectangleLines(x + 30, ry, 20, 20, panel_border)
+        rl.DrawText(cstring(raw_data(item_table[ing.item].name)), x + 60, ry + 3, 15, rl.WHITE)
+        cnt_buf: [32]u8
+        fmt.bprintf(cnt_buf[:31], "%d / %d", have, ing.count)
+        rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 210, ry + 3, 15, met ? good : warm)
+        if met do draw_check(x + 268, ry + 2, good)
+    }
+
+    // RIGHT — the active tier's altar build template, from templates.odin
+    tpl := &structure_templates[tier]
+    rl.DrawText("BUILD THE ALTAR", x + 320, y + 84, 14, text_dim)
+    name_buf: [32]u8
+    fmt.bprintf(name_buf[:31], "%s", tpl.name)
+    rl.DrawText(cstring(raw_data(name_buf[:])), x + 320, y + 100, 14, accent)
+    draw_template_diagram(tpl, x + 415, y + 118)
+    ly := y + 190
+    if structure_template_uses(tpl, .Stone)      { draw_legend(x + 330, ly, terrain_table[.Stone].color,      "Stone Block");    ly += 19 }
+    if structure_template_uses(tpl, .Wood)       { draw_legend(x + 330, ly, terrain_table[.Wood].color,       "Wood");           ly += 19 }
+    if structure_template_uses(tpl, .Silver_Ore) { draw_legend(x + 330, ly, terrain_table[.Silver_Ore].color, "Silver Ore");     ly += 19 }
+    if structure_template_uses(tpl, .Gold_Ore)   { draw_legend(x + 330, ly, terrain_table[.Gold_Ore].color,   "Gold Ore");       ly += 19 }
+    draw_legend(x + 330, ly, item_table[.Sky_Altar].color, "Sky Altar (cap)")
+
+    // Three-step path (left): find -> gather -> raise the altar
+    steps_done := [3]bool{ true, all_met, gs.progression.sky_structure_complete[tier] }
+    labels     := [3]cstring{ "FIND", "GATHER", "RAISE" }
+    current    := 3
+    for d, i in steps_done { if !d { current = i; break } }
+    for i in 0 ..< 3 {
+        nx  := x + 30 + i32(i)*90
+        ny  := y + 196
+        col := text_dim
+        if steps_done[i]      { col = good }
+        else if i == current  { col = warm }
+        rl.DrawRectangle(nx, ny, 34, 34, slot_bg)
+        rl.DrawRectangleLines(nx, ny, 34, 34, col)
+        num_buf: [4]u8
+        fmt.bprintf(num_buf[:3], "%d", i + 1)
+        rl.DrawText(cstring(raw_data(num_buf[:])), nx + 12, ny + 8, 20, col)
+        rl.DrawText(labels[i], nx - 2, ny + 40, 12, col)
+        if i < 2 do rl.DrawText(">", nx + 42, ny + 4, 24, text_dim)
+    }
+
+    rl.DrawText("Build the altar in the Low Sky, gather the offering, then press E.",
+        x + 20, y + BP_H - 32, 14, text_dim)
+}
+
+// A small checkmark drawn from two strokes (default font has no glyph for it).
+draw_check :: proc(x, y: i32, col: rl.Color) {
+    rl.DrawLineEx({f32(x), f32(y + 8)},  {f32(x + 5), f32(y + 14)}, 3, col)
+    rl.DrawLineEx({f32(x + 5), f32(y + 14)}, {f32(x + 14), f32(y)}, 3, col)
+}
+
+// A labelled colour swatch for the template legend.
+draw_legend :: proc(x, y: i32, col: rl.Color, label: cstring) {
+    rl.DrawRectangle(x, y, 14, 14, col)
+    rl.DrawRectangleLines(x, y, 14, 14, panel_border)
+    rl.DrawText(label, x + 20, y + 1, 13, text_dim)
+}
+
+// Draw a build template as stacked colour blocks, centered horizontally on cx.
+draw_template_diagram :: proc(tpl: ^Structure_Template, cx, top: i32) {
+    CELL :: 16
+    for line, r in tpl.rows {
+        rw := i32(len(line)) * CELL
+        rx := cx - rw/2
+        for glyph, c in line {
+            tile, kind := structure_template_cell(glyph)
+            if kind == .Empty do continue
+            col := kind == .Capstone ? item_table[tpl.capstone].color : terrain_table[tile].color
+            bx := rx + i32(c)*CELL
+            by := top + i32(r)*CELL
+            rl.DrawRectangle(bx + 1, by + 1, CELL - 2, CELL - 2, col)
+            rl.DrawRectangleLines(bx + 1, by + 1, CELL - 2, CELL - 2, panel_border)
+        }
     }
 }
 

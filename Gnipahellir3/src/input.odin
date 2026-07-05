@@ -33,6 +33,9 @@ update_input :: proc(gs: ^Game_State) {
     if rl.IsKeyPressed(.C) {
         gs.ui.show_crafting = !gs.ui.show_crafting
     }
+    if rl.IsKeyPressed(.B) {
+        gs.ui.show_blueprint = !gs.ui.show_blueprint
+    }
 
     // Slot selection: number keys 1-8 pick the first inventory row
     for key, i in ([8]rl.KeyboardKey{.ONE, .TWO, .THREE, .FOUR, .FIVE, .SIX, .SEVEN, .EIGHT}) {
@@ -44,6 +47,9 @@ update_input :: proc(gs: ^Game_State) {
         if gs.ui.show_inventory {
             if slot := slot_at_cursor(gs); slot >= 0 {
                 gs.player.inventory.selected = slot
+                if is_blueprint(gs.player.inventory.slots[slot].item) {
+                    gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
+                }
             }
         }
         if gs.ui.show_crafting {

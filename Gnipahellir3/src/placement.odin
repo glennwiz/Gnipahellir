@@ -29,6 +29,15 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return
 
+    // Templated structures (the Sky Altar) stand only on a finished foundation.
+    if tpl := structure_template_for(gs, slot.item); tpl != nil {
+        if ok, want := structure_template_satisfied(&gs.world, tpl, x, y); !ok {
+            notify(gs, "The %s needs its %s foundation — build the plan (press B)",
+                tpl.name, terrain_table[want].name)
+            return
+        }
+    }
+
     // Needs a solid neighbour to attach to
     if !is_solid(&gs.world, x-1, y) && !is_solid(&gs.world, x+1, y) &&
        !is_solid(&gs.world, x, y-1) && !is_solid(&gs.world, x, y+1) {

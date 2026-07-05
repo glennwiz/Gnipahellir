@@ -28,8 +28,8 @@ item_table := [Item]Item_Info{
     .Grass_Turf     = { "Grass Turf",      {34,  139, 34,  255}, .Grass },
     .Plank          = { "Plank",           {180, 140, 90,  255}, .Wood },
     .Iron_Ore       = { "Iron Ore",        {180, 130, 100, 255}, .Air },
-    .Silver_Ore     = { "Silver Ore",      {200, 200, 220, 255}, .Air },
-    .Gold_Ore       = { "Gold Ore",        {220, 180, 0,   255}, .Air },
+    .Silver_Ore     = { "Silver Ore",      {200, 200, 220, 255}, .Silver_Ore },
+    .Gold_Ore       = { "Gold Ore",        {220, 180, 0,   255}, .Gold_Ore   },
     .Gold_Rare_Ore  = { "Rare Gold Ore",   {255, 215, 50,  255}, .Air },
     .Crafting_Bench = { "Crafting Bench",  {160, 120, 60,  255}, .Crafting_Bench },
     .Tree_Grower    = { "Tree Grower",     {0,   140, 0,   255}, .Tree_Grower },
@@ -43,6 +43,10 @@ item_table := [Item]Item_Info{
     .Cloud_Stone    = { "Cloud Stone",     {200, 220, 255, 255}, .Air },
     .Aether_Crystal = { "Aether Crystal",  {180, 255, 200, 255}, .Air },
     .Runic_Sky_Ore  = { "Runic Sky Ore",   {255, 180, 255, 255}, .Air },
+}
+
+is_blueprint :: proc(it: Item) -> bool {
+    return it == .Blueprint_A || it == .Blueprint_B || it == .Blueprint_C
 }
 
 // ─── Inventory Operations ─────────────────────────────────────────────────────
