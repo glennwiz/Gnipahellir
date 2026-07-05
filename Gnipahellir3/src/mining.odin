@@ -145,6 +145,14 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
         }
         return
     }
+
+    // Whiffed — nothing mineable in reach. Still swing (and turn toward the
+    // cursor) so every click gives feedback, not just successful hits.
+    p.mine_timer = PICK_SWING_TIME
+    if n > 0 {
+        cx := i32(p.pos.x + PLAYER_W*0.5)
+        if targets[0].x != cx { p.facing = 1 if targets[0].x > cx else -1 }
+    }
 }
 
 // Step 5 in game_update — pushes Tile_Mined, so it must precede process_events.

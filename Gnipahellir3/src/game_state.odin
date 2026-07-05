@@ -335,8 +335,7 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.mana_regen  = 5
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
-    gs.player.equipped    = .Pickaxe
-    inventory_insert(&gs.player.inventory, .Pickaxe, 1)
+    // No starting tools — the pickaxe waits on the grass (see world_init).
 
     world_init(&gs.world)
     spawn_level_1_enemies(gs)

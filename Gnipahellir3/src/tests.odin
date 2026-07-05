@@ -15,7 +15,30 @@ test_state :: proc() -> ^Game_State {
     gs := new(Game_State)
     game_state_init(gs)
     gs.delta_time = 1.0 / 60.0
+    // Production spawns the pickaxe on the grass to be picked up; tests want a
+    // ready-to-mine player, so hand it over directly (slot 0).
+    inventory_insert(&gs.player.inventory, .Pickaxe, 1)
     return gs
+}
+
+@(test)
+starter_pickaxe_waits_on_the_grass :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs)  // production init — not test_state's pickaxe handout
+
+    // The player wakes empty-handed.
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Pickaxe), 0)
+
+    // A pickaxe rests on the grass east of spawn.
+    idx := grid_idx(GRID_W/2 - 4, SURFACE_Y - 1)
+    testing.expect_value(t, gs.world.items[idx], Item.Pickaxe)
+
+    // Walking onto it collects it and clears the tile.
+    gs.player.pos = {f32(GRID_W/2 - 4), f32(SURFACE_Y) - PLAYER_H}
+    player_pickup(gs)
+    testing.expect(t, inventory_count(&gs.player.inventory, .Pickaxe) >= 1, "pickaxe not collected")
+    testing.expect_value(t, gs.world.items[idx], Item.None)
 }
 
 @(test)

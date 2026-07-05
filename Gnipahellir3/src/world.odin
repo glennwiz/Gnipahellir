@@ -358,6 +358,14 @@ world_init :: proc(w: ^World_Grid) {
     set_tile(w, ent_x,   SURFACE_Y, .Cave_Entrance)
     set_tile(w, ent_x+1, SURFACE_Y, .Cave_Entrance)
 
+    // Starter pickaxe resting on the grass, a few steps east of the player's
+    // spawn (GRID_W/2 - 8) — the first thing to grab before any mining.
+    pick_x   := GRID_W/2 - 4
+    set_tile(w, pick_x, SURFACE_Y - 1, .Air)  // clear any decoration on the spot
+    pick_idx := grid_idx(pick_x, SURFACE_Y - 1)
+    w.items[pick_idx]       = .Pickaxe
+    w.item_counts[pick_idx] = 1
+
     // Portals to cave 2 and the sky, plus Blueprint A
     carve_level0_portals(w)
 }
