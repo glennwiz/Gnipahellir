@@ -27,7 +27,7 @@ working directory (`gnipahellir_save.dat`, `gnipahellir_stats.dat`,
 
 | Key | Tool |
 |---|---|
-| F1 | Debug menu — click "Fly mode" to toggle (W/S or ↑/↓ vertical, no gravity, collision stays on) |
+| F1 | Debug menu — click to toggle: **Fly mode** (W/S or ↑/↓ vertical, no gravity, collision stays on); **Ultra wand** (13-tile mining shots, free, impact blasts a 3×3 — needs no wand in the bag) |
 | F3 | Debug overlay: player pos/vel, builder scan rays, hover tile |
 
 `action.log` records everything (flushed every 5 s + on quit) — after a

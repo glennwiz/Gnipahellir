@@ -1,6 +1,7 @@
 package game
 
 import rl "vendor:raylib/v55"
+import "core:math"
 
 // ─── Particles ────────────────────────────────────────────────────────────────
 //
@@ -52,6 +53,20 @@ spawn_chip_sparks :: proc(gs: ^Game_State, T: [2]i32) {
         vel  := [2]f32{jitter(seed, 4), -2 + jitter(seed + 1, 2)}
         spawn_particle(&gs.particles, center, vel,
             rl.Color{255, 240, 180, 255}, 0.25)
+    }
+}
+
+// Ultra-wand impact: a ring of hot sparks thrown out from the blast center.
+spawn_blast_sparks :: proc(gs: ^Game_State, T: [2]i32) {
+    center := [2]f32{f32(T.x) + 0.5, f32(T.y) + 0.5}
+    RING :: 16
+    for i in 0 ..< RING {
+        seed  := u32(gs.frame)*13 + u32(i)*401
+        angle := f32(i) * (2 * 3.14159 / RING)
+        speed := 6 + jitter(seed, 2)
+        vel   := [2]f32{math.cos(angle) * speed, math.sin(angle) * speed}
+        color := rl.Color{255, 160, 40, 255} if i % 2 == 0 else rl.Color{255, 230, 80, 255}
+        spawn_particle(&gs.particles, center, vel, color, 0.35 + jitter(seed + 1, 0.1))
     }
 }
 

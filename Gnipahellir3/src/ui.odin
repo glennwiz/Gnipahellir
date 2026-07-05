@@ -29,7 +29,7 @@ DBG_MENU_X     :: 24
 DBG_MENU_Y     :: 80
 DBG_MENU_W     :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS  :: 1   // row 0: fly mode
+DBG_MENU_ROWS  :: 2   // row 0: fly mode; row 1: ultra wand
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -51,8 +51,13 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     rl.DrawText(gs.debug.fly ? cstring("Fly mode: ON") : cstring("Fly mode: OFF"),
         DBG_MENU_X, DBG_MENU_Y + 7, 10, fly_col)
 
-    if debug_menu_row_at_cursor(gs) == 0 {
-        rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + 1, DBG_MENU_W + 4, DBG_MENU_ROW_H - 2, rl.YELLOW)
+    uw_col := gs.debug.ultra_wand ? rl.GREEN : text_dim
+    rl.DrawText(gs.debug.ultra_wand ? cstring("Ultra wand: ON") : cstring("Ultra wand: OFF"),
+        DBG_MENU_X, DBG_MENU_Y + DBG_MENU_ROW_H + 7, 10, uw_col)
+
+    if r := debug_menu_row_at_cursor(gs); r >= 0 {
+        rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,
+            DBG_MENU_W + 4, DBG_MENU_ROW_H - 2, rl.YELLOW)
     }
 }
 

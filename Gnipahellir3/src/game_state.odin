@@ -151,6 +151,7 @@ Player :: struct {
 // of the save — a shot in flight at quit simply vanishes, like projectiles.
 Mining_Action :: struct {
     active:  bool,
+    blast:   bool,  // ultra-wand cheat: impact mines a 3×3 with a bang
     target:  [2]i32,
     travel:  f32,   // seconds to impact
     elapsed: f32,
@@ -243,8 +244,9 @@ Notification_State :: struct {
 // ─── Debug Menu (F1, debug builds only) ───────────────────────────────────────
 
 Debug_State :: struct {
-    menu_open: bool,
-    fly:       bool,
+    menu_open:  bool,
+    fly:        bool,
+    ultra_wand: bool,   // cheat: 13-tile mining wand, free, explosive impact
 }
 
 // ─── Sim ──────────────────────────────────────────────────────────────────────

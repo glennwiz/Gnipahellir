@@ -19,6 +19,10 @@ WAND_MANA_COST   :: f32(5)     // pool 100, regen 5/s: ~20-shot burst, then thro
 WAND_COOLDOWN    :: f32(0.25)
 WAND_TRAVEL_TIME :: f32(0.18)  // G2's spark travel
 
+// F1 cheat (debug builds): the ultimate mining wand — huge reach, free,
+// and the impact detonates a 3×3.
+ULTRA_WAND_RANGE :: i32(13)
+
 @(rodata)
 wand_mine_range := #partial [Item]i32{
     .Mine_Wand        = 2,
@@ -89,15 +93,25 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
     if d > PICK_RANGE && in_bounds(int(T.x), int(T.y)) &&
        .Mineable in terrain_table[get_tile(&gs.world, int(T.x), int(T.y))].flags {
         wand, wrange := best_wand(&p.inventory)
+        cost  := WAND_MANA_COST
+        blast := false
+        when GAME_DEBUG {
+            if gs.debug.ultra_wand {
+                wand   = .Mine_Wand_Gold   // cheat needs no wand in the bag
+                wrange = ULTRA_WAND_RANGE
+                cost   = 0
+                blast  = true
+            }
+        }
         if wand != .None && d <= wrange {
-            if p.mana < WAND_MANA_COST {
+            if p.mana < cost {
                 p.mine_timer = 0.6   // rate-limits the reminder while held
                 notify(gs, "Not enough mana!")
                 return
             }
-            p.mana      -= WAND_MANA_COST
+            p.mana      -= cost
             p.mine_timer = WAND_COOLDOWN
-            gs.mining = {active = true, target = T, travel = WAND_TRAVEL_TIME}
+            gs.mining = {active = true, blast = blast, target = T, travel = WAND_TRAVEL_TIME}
             spawn_wand_stream(gs, T)
             eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wand_Fire)}})
             return
@@ -140,8 +154,27 @@ update_mining :: proc(gs: ^Game_State) {
     m.elapsed += gs.delta_time
     if m.elapsed < m.travel { return }
 
-    T := m.target
+    T     := m.target
+    blast := m.blast
     m^ = {}
+
+    // Ultra-wand impact: a small explosion takes the whole 3×3.
+    if blast {
+        eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Blast)}})
+        spawn_blast_sparks(gs, T)
+        for dy in i32(-1) ..= 1 {
+            for dx in i32(-1) ..= 1 {
+                x := int(T.x + dx)
+                y := int(T.y + dy)
+                if !in_bounds(x, y) { continue }
+                if .Mineable in terrain_table[get_tile(&gs.world, x, y)].flags {
+                    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {T.x + dx, T.y + dy}})
+                }
+            }
+        }
+        return
+    }
+
     // The tile may have changed mid-flight (mined by a builder, flooded);
     // the impact only mines what is still mineable.
     if .Mineable in terrain_table[get_tile(&gs.world, int(T.x), int(T.y))].flags {

@@ -361,6 +361,49 @@ wand_tiers_extend_reach :: proc(t: ^testing.T) {
 }
 
 @(test)
+ultra_wand_cheat_blasts_a_3x3 :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+    gs.debug.ultra_wand = true
+
+    // 13 tiles out, nothing in the bag, a solid 3×3 around the target
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 { set_tile(&gs.world, 43 + dx, SURFACE_Y + 1 + dy, .Stone) }
+    }
+    mine_swing(gs, {43, i32(SURFACE_Y + 1)})
+    testing.expect(t, gs.mining.active, "ultra wand fires at 13 tiles with no wand carried")
+    testing.expect(t, gs.mining.blast, "ultra wand shots are explosive")
+    testing.expect_value(t, gs.player.mana, 100)   // the cheat is free
+
+    for _ in 0 ..< 15 {
+        update_mining(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 {
+            testing.expectf(t, !is_solid(&gs.world, 43 + dx, SURFACE_Y + 1 + dy),
+                "blast should clear (%d,%d)", 43 + dx, SURFACE_Y + 1 + dy)
+        }
+    }
+
+    // Beyond even the cheat's reach: nothing fires
+    set_tile(&gs.world, 31, SURFACE_Y - 2, .Air)
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Air)
+    set_tile(&gs.world, 45, SURFACE_Y + 1, .Stone)
+    mine_swing(gs, {45, i32(SURFACE_Y + 1)})   // chebyshev 15
+    testing.expect(t, !gs.mining.active, "15 tiles is out of ultra range")
+
+    // Cheat off: back to honest tools (no wand carried, so no shot at all)
+    gs.debug.ultra_wand = false
+    set_tile(&gs.world, 42, SURFACE_Y + 1, .Stone)
+    mine_swing(gs, {42, i32(SURFACE_Y + 1)})   // chebyshev 12
+    testing.expect(t, !gs.mining.active, "no cheat, no wand, no shot")
+}
+
+@(test)
 wand_crafting_ladder :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
