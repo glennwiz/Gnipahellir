@@ -35,7 +35,7 @@ DBG_MENU_X     :: 24
 DBG_MENU_Y     :: 80
 DBG_MENU_W     :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS  :: 2   // row 0: fly mode; row 1: ultra wand
+DBG_MENU_ROWS  :: 3   // row 0: fly mode; row 1: ultra wand; row 2: activate portals
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -60,6 +60,9 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     uw_col := gs.debug.ultra_wand ? rl.GREEN : text_dim
     rl.DrawText(gs.debug.ultra_wand ? cstring("Ultra wand: ON") : cstring("Ultra wand: OFF"),
         DBG_MENU_X, DBG_MENU_Y + DBG_MENU_ROW_H + 7, 10, uw_col)
+
+    // Action row (not a toggle): click to open this level's gated portals.
+    rl.DrawText("Activate portals >", DBG_MENU_X, DBG_MENU_Y + 2*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
 
     if r := debug_menu_row_at_cursor(gs); r >= 0 {
         rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,
@@ -400,18 +403,3 @@ draw_tile_tooltip :: proc(gs: ^Game_State) {
     rl.DrawText(cstring(raw_data(tip_buf[:])), mx + 12, my - 4, 10, rl.WHITE)
 }
 
-// Runic seals over locked portals on the active level.
-draw_portal_seals :: proc(gs: ^Game_State) {
-    for &p in level_portals[gs.level_index] {
-        if !portal_valid(&p) do continue
-        if p.gate_tier < 0 || gs.progression.cave_unlocked[p.gate_tier] do continue
-        for t in p.tiles {
-            x := t.x * CELL_SIZE
-            y := t.y * CELL_SIZE
-            seal := rl.Color{220, 40, 40, 220}
-            rl.DrawRectangleLines(x, y, CELL_SIZE, CELL_SIZE, seal)
-            rl.DrawLine(x, y, x + CELL_SIZE, y + CELL_SIZE, seal)
-            rl.DrawLine(x + CELL_SIZE, y, x, y + CELL_SIZE, seal)
-        }
-    }
-}

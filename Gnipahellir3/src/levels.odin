@@ -62,6 +62,16 @@ portal_valid :: proc(p: ^Portal) -> bool {
     return p.tiles[0] != {0, 0}
 }
 
+// Debug cheat: open every gated portal on the current level.
+debug_unlock_level_portals :: proc(gs: ^Game_State) {
+    for &p in level_portals[gs.level_index] {
+        if portal_valid(&p) && p.gate_tier >= 0 {
+            gs.progression.cave_unlocked[p.gate_tier] = true
+        }
+    }
+    notify(gs, "Debug: portals on this level activated")
+}
+
 // Portal the player is currently standing in, or nil.
 portal_at_player :: proc(gs: ^Game_State) -> ^Portal {
     pc := [2]i32{

@@ -13,7 +13,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 
     draw_world(&gs.world)
     draw_mining_cracks(gs)
-    draw_portal_seals(gs)
+    draw_portals(gs)
     draw_player(&gs.player)
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
@@ -457,5 +457,86 @@ draw_enemies_debug :: proc(gs: ^Game_State) {
         lx := i32(e.pos.x * CS)
         ly := i32(e.pos.y * CS) - 12
         rl.DrawText(cstring(raw_data(label_buf[:])), lx, ly, 9, rl.WHITE)
+    }
+}
+
+// ─── Portals ────────────────────────────────────────────────────────────────
+//
+//  Portals are drawn from the level_portals table, not the underlying tile, so
+//  we know each one's destination and lock state.  Sky-bound gates glow bright
+//  and pull in pale motes; cave gates are ominous black-red maws veined with
+//  green that spew red motes inward once unlocked.
+
+draw_portals :: proc(gs: ^Game_State) {
+    for &p in level_portals[gs.level_index] {
+        if !portal_valid(&p) do continue
+        // Pixel center of the two-tile-wide gate.
+        cx := (f32(p.tiles[0].x) + f32(p.tiles[1].x) + 1) * 0.5 * CELL_SIZE
+        cy := (f32(p.tiles[0].y) + 0.5) * CELL_SIZE
+
+        sky    := p.dest_level == LEVEL_SKY || gs.level_index == LEVEL_SKY
+        locked := p.gate_tier >= 0 && !gs.progression.cave_unlocked[p.gate_tier]
+
+        if sky {
+            draw_sky_portal(cx, cy, gs.frame)
+        } else {
+            draw_cave_portal(cx, cy, gs.frame, !locked)
+        }
+    }
+}
+
+// Motes streaming inward on a slow spiral — the "entering the portal" effect.
+draw_portal_inflow :: proc(cx, cy, radius: f32, count: int, frame: u64, col: rl.Color, speed: f32) {
+    for i in 0 ..< count {
+        ph := f32(frame)*speed + f32(i)/f32(count)
+        ph -= math.floor(ph)                    // 0..1, looping
+        ang := f32(i)*2.39996 + ph*2.0          // golden-angle spread, spiralling in
+        r   := radius * (1 - ph)                // rim (ph=0) → center (ph=1)
+        px  := cx + math.cos(ang)*r
+        py  := cy + math.sin(ang)*r
+        sz  := i32(1) + i32((1 - ph)*2)
+        a   := u8(f32(col.a) * (0.25 + 0.75*ph))
+        rl.DrawRectangle(i32(px), i32(py), sz, sz, rl.Color{col.r, col.g, col.b, a})
+    }
+}
+
+// Bright sky gate: pale core, glowing 4x4 frame, pale motes drawn in.
+draw_sky_portal :: proc(cx, cy: f32, frame: u64) {
+    pulse := 0.5 + 0.5*math.sin(f32(frame)*0.05)
+    c := f32(CELL_SIZE)       // half of the 2x2 core
+    o := 2 * f32(CELL_SIZE)   // half of the 4x4 frame
+
+    rl.DrawRectangleLinesEx(rl.Rectangle{cx - o, cy - o, o*2, o*2}, 2, rl.Color{120, 200, 255, u8(70 + 70*pulse)})
+    rl.DrawRectangle(i32(cx - c), i32(cy - c), i32(c*2), i32(c*2), rl.Color{90, 150, 230, 150})
+    rl.DrawRectangleLinesEx(rl.Rectangle{cx - c, cy - c, c*2, c*2}, 2, rl.Color{220, 240, 255, u8(160 + 60*pulse)})
+    draw_portal_inflow(cx, cy, o, 16, frame, rl.Color{205, 235, 255, 255}, 0.010)
+}
+
+// Ominous cave gate: black-red maw, green veins; red motes drawn in when active.
+draw_cave_portal :: proc(cx, cy: f32, frame: u64, active: bool) {
+    pulse := 0.5 + 0.5*math.sin(f32(frame)*0.06)
+    c := f32(CELL_SIZE)
+    o := 2 * f32(CELL_SIZE)
+
+    rl.DrawRectangle(i32(cx - c), i32(cy - c), i32(c*2), i32(c*2), rl.Color{12, 0, 12, 225})
+    ring_a := u8(active ? (150 + 90*pulse) : 70)
+    rl.DrawRectangleLinesEx(rl.Rectangle{cx - c, cy - c, c*2, c*2}, 2, rl.Color{190, 25, 25, ring_a})
+
+    // Green veins clawing around the maw.
+    green := rl.Color{40, 200, 80, u8(active ? 150 : 80)}
+    for i in 0 ..< 6 {
+        ang := f32(i)/6.0 * 6.2831853 + f32(frame)*0.002
+        x0  := cx + math.cos(ang)*c*1.1
+        y0  := cy + math.sin(ang)*c*1.1
+        x1  := cx + math.cos(ang + 0.35)*o*0.75
+        y1  := cy + math.sin(ang + 0.35)*o*0.75
+        x2  := cx + math.cos(ang)*o
+        y2  := cy + math.sin(ang)*o
+        rl.DrawLineEx({x0, y0}, {x1, y1}, 1.5, green)
+        rl.DrawLineEx({x1, y1}, {x2, y2}, 1.5, green)
+    }
+
+    if active {
+        draw_portal_inflow(cx, cy, o, 14, frame, rl.Color{230, 40, 30, 255}, 0.012)
     }
 }

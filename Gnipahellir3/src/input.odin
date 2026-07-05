@@ -77,6 +77,7 @@ update_input :: proc(gs: ^Game_State) {
             switch debug_menu_row_at_cursor(gs) {
             case 0: gs.debug.fly        = !gs.debug.fly
             case 1: gs.debug.ultra_wand = !gs.debug.ultra_wand
+            case 2: debug_unlock_level_portals(gs)
             }
         }
     }
