@@ -17,7 +17,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     world_cam.offset = {world_cam.offset.x * SS_SCALE, world_cam.offset.y * SS_SCALE}
     world_cam.zoom  *= SS_SCALE
     rl.BeginMode2D(world_cam)
-    draw_world(&gs.world)
+    draw_world(gs)
     draw_mining_cracks(gs)
     draw_portals(gs)
     draw_placement_ghost(gs)
@@ -98,14 +98,15 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
 
-draw_world :: proc(w: ^World_Grid) {
+draw_world :: proc(gs: ^Game_State) {
+    w := &gs.world
     for y in 0 ..< GRID_H {
         for x in 0 ..< GRID_W {
             idx := grid_idx(x, y)
             t   := w.terrain[idx]
             px  := i32(x * CELL_SIZE)
             py  := i32(y * CELL_SIZE)
-            draw_tile(t, px, py)
+            draw_tile(gs, t, x, y)
 
             // World item drop: small glinting square
             it := w.items[idx]
@@ -117,7 +118,17 @@ draw_world :: proc(w: ^World_Grid) {
     }
 }
 
-draw_tile :: proc(t: Tile_Type, px, py: i32) {
+draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
+    px := i32(x * CELL_SIZE)
+    py := i32(y * CELL_SIZE)
+    if gs.assets.loaded {
+        if sp, ok := tile_sprite(gs, t, x, y); ok {
+            dst := rl.Rectangle{f32(px), f32(py), CELL_SIZE, CELL_SIZE}
+            rl.DrawTexturePro(gs.assets.tile_atlas, tile_atlas_rect(sp), dst, {0, 0}, 0, rl.WHITE)
+            if t == .Stone do rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, STONE_TINT)
+            return
+        }
+    }
     switch tile_draw_style[t] {
     case .Pixel_Wood:   draw_pixel_wood(px, py)
     case .Pixel_Leaves: draw_pixel_leaves(px, py)

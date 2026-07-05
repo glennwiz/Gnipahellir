@@ -31,6 +31,7 @@ main :: proc() {
     defer free(gs)
     game_state_init(gs)
     audio_init(&gs.audio)
+    assets_init(&gs.assets)
 
     if !load_game(gs) {
         // Fresh run: spawn player on the surface, a few tiles left of the cave entrance
@@ -57,6 +58,7 @@ main :: proc() {
     save_on_quit(gs)
     flush_action_log(gs)
     audio_shutdown(&gs.audio)
+    assets_shutdown(&gs.assets)
     rl.UnloadRenderTexture(target)
     rl.CloseWindow()
 }

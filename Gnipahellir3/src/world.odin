@@ -16,7 +16,7 @@ Terrain_Behavior :: struct {
 @(rodata)
 terrain_table := [Tile_Type]Terrain_Behavior{
     .Air            = { "Air",           {},                                                         rl.Color{135, 206, 235, 255}, 1,   0,   .None          },
-    .Void           = { "Void",          {},                                                         rl.Color{20,  20,  30,  255}, 1,   0,   .None          },
+    .Void           = { "Void",          {},                                                         rl.Color{0,   0,   0,   255}, 1,   0,   .None          },
     .Grass          = { "Grass",         {.Solid, .Mineable},                                        rl.Color{34,  139, 34,  255}, 0,   0,   .Grass_Turf    },
     .Stone          = { "Stone",         {.Solid, .Mineable},                                        rl.Color{128, 128, 128, 255}, 0,   0,   .Stone_Block   },
     .Water          = { "Water",         {.Walkable, .Swimmable},                                    rl.Color{30,  100, 200, 200}, 2,   0,   .None          },

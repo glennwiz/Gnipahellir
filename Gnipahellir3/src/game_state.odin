@@ -312,6 +312,7 @@ Game_State :: struct {
 
     sim:         Sim_State,
     audio:       Audio_State,
+    assets:      Assets,
     progression: Progression_State,
     stats:       Persistent_Stats,
 
