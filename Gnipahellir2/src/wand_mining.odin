@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 
 // Delayed mining action for Mine_Wand: sends small yellow projectiles that impact then mine.
 

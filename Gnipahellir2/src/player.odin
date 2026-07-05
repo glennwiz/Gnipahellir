@@ -1,7 +1,7 @@
 package gnipahellir
 
 import "core:math"
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 
 // Player data & movement (Phase 1)
 

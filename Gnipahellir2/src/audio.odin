@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"

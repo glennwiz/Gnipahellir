@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 import "core:strings"
 import "core:math"
 import "core:fmt"

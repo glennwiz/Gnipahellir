@@ -4,7 +4,7 @@ package gnipahellir
 // Will be replaced with actual event polling & key handling (raylib) in later phases.
 
 import "core:os"
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 
 handle_input :: proc(game: ^Game_State) {
 	// Handle menu input first

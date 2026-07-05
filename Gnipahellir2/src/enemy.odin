@@ -1,7 +1,7 @@
 package gnipahellir
 
 import "core:math"
-import rl "vendor:raylib"
+import rl "vendor:raylib/v55"
 import fmt "core:fmt"
 
 // Enemy data structure for Garm the hell hound
