@@ -11,6 +11,12 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     rl.BeginTextureMode(target)
     rl.ClearBackground(rl.BLACK)
 
+    // World renders through the zoom camera, scaled up into the supersampled
+    // texture (fold SS into the camera so gameplay/input keep the 1:1 camera).
+    world_cam := game_camera(gs)
+    world_cam.offset = {world_cam.offset.x * SS_SCALE, world_cam.offset.y * SS_SCALE}
+    world_cam.zoom  *= SS_SCALE
+    rl.BeginMode2D(world_cam)
     draw_world(&gs.world)
     draw_mining_cracks(gs)
     draw_portals(gs)
@@ -18,23 +24,53 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
     draw_particles(&gs.particles)
-    draw_ui(gs)
-
     when GAME_DEBUG {
         if gs.ui.show_debug do draw_debug(gs)
     }
+    rl.EndMode2D()
+
+    // UI is screen-space (1920×1080 logical); scale it up to the SS texture.
+    rl.BeginMode2D(rl.Camera2D{zoom = SS_SCALE})
+    draw_ui(gs)
+    rl.EndMode2D()
 
     rl.EndTextureMode()
 
     // ...then scales letterboxed onto the real window.
     scale, offset := screen_transform()
-    src := rl.Rectangle{0, 0, f32(SCREEN_W), -f32(SCREEN_H)}  // negative height: render textures are y-flipped
+    src := rl.Rectangle{0, 0, f32(target.texture.width), -f32(target.texture.height)}  // negative height: render textures are y-flipped
     dst := rl.Rectangle{offset.x, offset.y, f32(SCREEN_W)*scale, f32(SCREEN_H)*scale}
 
     rl.BeginDrawing()
     rl.ClearBackground(rl.BLACK)
     rl.DrawTexturePro(target.texture, src, dst, {0, 0}, 0, rl.WHITE)
     rl.EndDrawing()
+}
+
+// ─── Zoom Camera ──────────────────────────────────────────────────────────────
+
+ZOOM_STEP :: f32(0.15)   // per mouse-wheel notch
+ZOOM_MIN  :: f32(1.0)    // 1.0 = whole level (the level is exactly SCREEN_W×SCREEN_H)
+ZOOM_MAX  :: f32(4.0)
+
+// Player-centered camera, clamped so we never show past the level edges.  At
+// zoom 1.0 the clamp pins it to level-center → the whole level, as before.
+// Shared by render and input so both agree on the world↔screen mapping.
+game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
+    zoom   := max(gs.zoom, ZOOM_MIN)
+    half_w := f32(SCREEN_W) * 0.5 / zoom
+    half_h := f32(SCREEN_H) * 0.5 / zoom
+    // Exact float player center — the supersampled texture + float sprite draw
+    // let both glide sub-pixel, so no integer snapping is needed here.
+    px := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE
+    py := (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
+    return rl.Camera2D{
+        target   = {clamp(px, half_w, f32(SCREEN_W) - half_w),
+                    clamp(py, half_h, f32(SCREEN_H) - half_h)},
+        offset   = {f32(SCREEN_W)*0.5, f32(SCREEN_H)*0.5},
+        rotation = 0,
+        zoom     = zoom,
+    }
 }
 
 // ─── Tile Draw Style ──────────────────────────────────────────────────────────
@@ -338,25 +374,28 @@ draw_player :: proc(p: ^Player) {
 
     frame := player_frames[p.anim_frame]
 
-    px := i32(p.pos.x * CELL_SIZE)
-    py := i32(p.pos.y * CELL_SIZE)
-    pw_px := i32(PLAYER_W * CELL_SIZE)
-    ph_px := i32(PLAYER_H * CELL_SIZE)
+    // Float world-pixel positions so the sprite glides sub-pixel under the
+    // supersampled camera instead of snapping to whole tiles.
+    px    := p.pos.x * CELL_SIZE
+    py    := p.pos.y * CELL_SIZE
+    pw_px := f32(PLAYER_W * CELL_SIZE)
+    ph_px := f32(PLAYER_H * CELL_SIZE)
 
     // Best-fit the sprite to the collision box, then force it up to
     // PLAYER_RENDER_SCALE tiles high so the mage reads clearly.
-    pixel_size := min(pw_px / FRAME_WIDTH, ph_px / FRAME_HEIGHT)
+    pixel_size := min(i32(pw_px) / FRAME_WIDTH, i32(ph_px) / FRAME_HEIGHT)
     forced_ps := i32((PLAYER_RENDER_SCALE * CELL_SIZE + FRAME_HEIGHT - 1) / FRAME_HEIGHT) // ceil
     if forced_ps > pixel_size { pixel_size = forced_ps }
     if pixel_size < 1 { pixel_size = 1 }
+    ps := f32(pixel_size)
 
-    total_w := FRAME_WIDTH * pixel_size
-    total_h := FRAME_HEIGHT * pixel_size
-    origin_x := px + (pw_px - total_w) / 2  // centered on the box
-    origin_y := py + (ph_px - total_h)      // feet on the box floor
+    total_w := f32(FRAME_WIDTH) * ps
+    total_h := f32(FRAME_HEIGHT) * ps
+    origin_x := px + (pw_px - total_w) * 0.5  // centered on the box
+    origin_y := py + (ph_px - total_h)        // feet on the box floor
 
-    bob := i32(0)
-    if p.anim_frame == 1 { bob = -pixel_size }  // little hop mid-stride
+    bob := f32(0)
+    if p.anim_frame == 1 { bob = -ps }  // little hop mid-stride
 
     for row in 0 ..< FRAME_HEIGHT {
         for col in 0 ..< FRAME_WIDTH {
@@ -365,10 +404,8 @@ draw_player :: proc(p: ^Player) {
             draw_col := col
             if p.facing < 0 { draw_col = FRAME_WIDTH - 1 - col }  // flip when facing left
             shade := 0.85 + f32(draw_col) / f32(FRAME_WIDTH - 1) * 0.25
-            rl.DrawRectangle(
-                origin_x + i32(draw_col) * pixel_size,
-                origin_y + i32(row) * pixel_size + bob,
-                pixel_size, pixel_size,
+            rl.DrawRectangleRec(
+                {origin_x + f32(draw_col)*ps, origin_y + f32(row)*ps + bob, ps, ps},
                 player_pixel_color(p, ch, shade),
             )
         }
@@ -379,9 +416,9 @@ draw_player :: proc(p: ^Player) {
     // vestigial). Best wand wins, else the pickaxe once it's been picked up.
     held := held_tool(p)
     if held != .None {
-        hand_x := origin_x + total_w - pixel_size * 2
-        if p.facing < 0 { hand_x = origin_x + pixel_size }
-        hand_y := origin_y + pixel_size * 6
+        hand_x := origin_x + total_w - ps * 2
+        if p.facing < 0 { hand_x = origin_x + ps }
+        hand_y := origin_y + ps * 6
         if held == .Pickaxe {
             // Swing arc driven by the chip cooldown: struck-down at the hit,
             // recovering back up as the timer runs out.
@@ -391,10 +428,10 @@ draw_player :: proc(p: ^Player) {
                 deg = -30 + 60 * sw
                 if p.facing < 0 { deg = -deg }
             }
-            draw_pickaxe(hand_x, hand_y, pixel_size, deg)
+            draw_pickaxe(hand_x, hand_y, ps, deg)
         } else {  // a wand tier — shaft with a tier-colored tip
-            rl.DrawRectangle(hand_x, hand_y, pixel_size, pixel_size * 3, rl.Color{90, 60, 40, 255})
-            rl.DrawRectangle(hand_x + pixel_size, hand_y - pixel_size, pixel_size, pixel_size, item_table[held].color)
+            rl.DrawRectangleRec({hand_x, hand_y, ps, ps * 3}, rl.Color{90, 60, 40, 255})
+            rl.DrawRectangleRec({hand_x + ps, hand_y - ps, ps, ps}, item_table[held].color)
         }
     }
 }
@@ -412,20 +449,19 @@ held_tool :: proc(p: ^Player) -> Item {
 
 // Small pickaxe: wooden shaft, iron head crossbar with two drooping tips.
 // Rotated `deg` degrees around the hand grip so it can swing while mining.
-draw_pickaxe :: proc(x, y, s: i32, deg: f32) {
+draw_pickaxe :: proc(x, y, s: f32, deg: f32) {
     wood  := rl.Color{140, 90, 50, 255}
     iron  := rl.Color{185, 190, 200, 255}
-    pivot := rl.Vector2{f32(x) + f32(s) * 0.5, f32(y) + f32(s) * 2}  // hand grip
+    pivot := rl.Vector2{x + s * 0.5, y + s * 2}  // hand grip
 
     // Draw a rect whose unrotated top-left is (rx,ry), spun around `pivot`.
     rot :: proc(rx, ry, w, h: f32, pivot: rl.Vector2, deg: f32, col: rl.Color) {
         rl.DrawRectanglePro(rl.Rectangle{pivot.x, pivot.y, w, h}, {pivot.x - rx, pivot.y - ry}, deg, col)
     }
-    fx, fy, fs := f32(x), f32(y), f32(s)
-    rot(fx,      fy - fs, fs,     fs * 4, pivot, deg, wood)  // shaft
-    rot(fx - fs, fy - fs, fs * 3, fs,     pivot, deg, iron)  // head crossbar
-    rot(fx - fs, fy,      fs,     fs,     pivot, deg, iron)  // left tip
-    rot(fx + fs, fy,      fs,     fs,     pivot, deg, iron)  // right tip
+    rot(x,     y - s, s,     s * 4, pivot, deg, wood)  // shaft
+    rot(x - s, y - s, s * 3, s,     pivot, deg, iron)  // head crossbar
+    rot(x - s, y,     s,     s,     pivot, deg, iron)  // left tip
+    rot(x + s, y,     s,     s,     pivot, deg, iron)  // right tip
 }
 
 // ─── Debug Overlay ────────────────────────────────────────────────────────────

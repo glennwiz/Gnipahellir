@@ -212,7 +212,8 @@ Input_State :: struct {
     fly_up:       bool,   // debug fly mode only (W/S held)
     fly_down:     bool,
     mouse_tile:   [2]i32,
-    mouse_world:  [2]f32,
+    mouse_world:  [2]f32,   // world-pixel space (camera-inverse) — mining/placement
+    mouse_screen: [2]f32,   // virtual-screen space — UI hit-testing
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
@@ -317,6 +318,7 @@ Game_State :: struct {
     frame:        u64,
     delta_time:   f32,
     game_won:     bool,   // run complete — not saved; a won run ends like a death
+    zoom:         f32,    // view zoom (1.0 = whole level); not saved
 
 
 
@@ -336,6 +338,7 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.mana_regen  = 5
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
+    gs.zoom               = 1.0
     // No starting tools — the pickaxe waits on the grass (see world_init).
 
     world_init(&gs.world)

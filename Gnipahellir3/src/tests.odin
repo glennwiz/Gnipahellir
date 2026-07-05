@@ -115,6 +115,28 @@ each_tier_raises_a_distinct_altar :: proc(t: ^testing.T) {
 }
 
 @(test)
+camera_clamps_to_level_bounds :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // At zoom 1.0 the camera is pinned to level center — whole level visible,
+    // identical to the pre-zoom view, wherever the player stands.
+    gs.zoom = 1.0
+    gs.player.pos = {5, 5}
+    cam := game_camera(gs)
+    testing.expect_value(t, cam.target.x, f32(SCREEN_W)*0.5)
+    testing.expect_value(t, cam.target.y, f32(SCREEN_H)*0.5)
+
+    // Zoomed 2x in the top-left corner: follows the player but clamps at the
+    // edge (half-view = SCREEN/4 from the corner).
+    gs.zoom = 2.0
+    gs.player.pos = {0, 0}
+    cam2 := game_camera(gs)
+    testing.expect_value(t, cam2.target.x, f32(SCREEN_W)*0.25)
+    testing.expect_value(t, cam2.target.y, f32(SCREEN_H)*0.25)
+}
+
+@(test)
 pickup_collects_world_drops :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

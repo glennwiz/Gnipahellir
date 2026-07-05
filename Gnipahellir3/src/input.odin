@@ -5,16 +5,28 @@ import rl "vendor:raylib/v55"
 update_input :: proc(gs: ^Game_State) {
     inp := &gs.input
 
-    // Mouse tile position first (window space -> virtual space, letterbox-aware);
-    // everything below hit-tests against the fresh position.
+    // Mouse in virtual-screen space (window -> virtual, letterbox-aware).  UI
+    // hit-testing uses this directly; gameplay uses the camera-inverse below.
     mouse := rl.GetMousePosition()
     scale, offset := screen_transform()
     vx := (mouse.x - offset.x) / scale
     vy := (mouse.y - offset.y) / scale
-    inp.mouse_world = {vx, vy}
-    inp.mouse_tile  = {
-        clamp(i32(vx) / CELL_SIZE, 0, GRID_W - 1),
-        clamp(i32(vy) / CELL_SIZE, 0, GRID_H - 1),
+    inp.mouse_screen = {vx, vy}
+
+    // Mouse wheel zooms toward the player (game_camera stays clamped to bounds).
+    if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+        gs.zoom = clamp(gs.zoom + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+    }
+
+    // World-space mouse: invert the (same) game camera.
+    cam := game_camera(gs)
+    inp.mouse_world = {
+        (vx - cam.offset.x)/cam.zoom + cam.target.x,
+        (vy - cam.offset.y)/cam.zoom + cam.target.y,
+    }
+    inp.mouse_tile = {
+        clamp(i32(inp.mouse_world.x) / CELL_SIZE, 0, GRID_W - 1),
+        clamp(i32(inp.mouse_world.y) / CELL_SIZE, 0, GRID_H - 1),
     }
     gs.ui.hover_tile = inp.mouse_tile
 

@@ -6,6 +6,7 @@ import rl "vendor:raylib/v55"
 // the result is scaled (letterboxed) onto whatever the real window is.
 SCREEN_W :: GRID_W * CELL_SIZE  // 1920
 SCREEN_H :: GRID_H * CELL_SIZE  // 1080
+SS_SCALE :: 3                   // world render supersample factor (glide when zoomed)
 
 // Maps virtual space onto the current window: uniform scale + letterbox offset.
 screen_transform :: proc() -> (scale: f32, offset: [2]f32) {
@@ -21,7 +22,9 @@ main :: proc() {
     rl.InitWindow(1280, 720, "Gnipahellir III")
     rl.SetTargetFPS(60)
 
-    target := rl.LoadRenderTexture(SCREEN_W, SCREEN_H)
+    // Supersample: render the world at SS_SCALE× and bilinear-downscale to the
+    // window, so zoomed motion glides sub-pixel instead of stepping by tile.
+    target := rl.LoadRenderTexture(SCREEN_W * SS_SCALE, SCREEN_H * SS_SCALE)
     rl.SetTextureFilter(target.texture, .BILINEAR)
 
     gs := new(Game_State)

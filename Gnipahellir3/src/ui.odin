@@ -39,8 +39,8 @@ DBG_MENU_ROWS  :: 3   // row 0: fly mode; row 1: ultra wand; row 2: activate por
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
-    mx := i32(gs.input.mouse_world.x)
-    my := i32(gs.input.mouse_world.y)
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
     if mx < DBG_MENU_X || mx >= DBG_MENU_X + DBG_MENU_W do return -1
     r := int((my - DBG_MENU_Y) / DBG_MENU_ROW_H)
     if my < DBG_MENU_Y || r >= DBG_MENU_ROWS do return -1
@@ -72,8 +72,8 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 
 // True when the cursor is over an open UI panel (blocks mining/placing).
 cursor_over_ui :: proc(gs: ^Game_State) -> bool {
-    mx := i32(gs.input.mouse_world.x)
-    my := i32(gs.input.mouse_world.y)
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
     when GAME_DEBUG {
         if gs.debug.menu_open &&
            mx >= DBG_MENU_X - 6 && mx < DBG_MENU_X + DBG_MENU_W + 6 &&
@@ -101,8 +101,8 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 
 // Inventory slot under the cursor, or -1.
 slot_at_cursor :: proc(gs: ^Game_State) -> int {
-    mx := i32(gs.input.mouse_world.x)
-    my := i32(gs.input.mouse_world.y)
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
     if mx < INV_X || my < INV_Y do return -1
     c := int((mx - INV_X) / SLOT_PX)
     r := int((my - INV_Y) / SLOT_PX)
@@ -112,8 +112,8 @@ slot_at_cursor :: proc(gs: ^Game_State) -> int {
 
 // Crafting row under the cursor, or -1.
 recipe_at_cursor :: proc(gs: ^Game_State) -> int {
-    mx := i32(gs.input.mouse_world.x)
-    my := i32(gs.input.mouse_world.y)
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
     if mx < CRAFT_X || mx >= CRAFT_X + CRAFT_W do return -1
     r := int((my - CRAFT_Y - 4) / CRAFT_ROW_H)
     if r < 0 || r >= len(recipe_table) do return -1
@@ -398,8 +398,8 @@ draw_tile_tooltip :: proc(gs: ^Game_State) {
     } else {
         fmt.bprintf(tip_buf[:63], "%s", terrain_table[t].name)
     }
-    mx := i32(gs.input.mouse_world.x)
-    my := i32(gs.input.mouse_world.y)
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
     rl.DrawText(cstring(raw_data(tip_buf[:])), mx + 12, my - 4, 10, rl.WHITE)
 }
 
