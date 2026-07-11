@@ -225,6 +225,9 @@ UI_State :: struct {
     show_debug:      bool,
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
     show_title:      bool,   // boot title screen; any key dismisses it into the menu
+    show_settings:   bool,   // volume sliders + key rebinding screen
+    settings_capture: int,   // action index awaiting a new key, -1 = none
+    settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
 }
@@ -309,6 +312,7 @@ Game_State :: struct {
     events:      Event_Queue,
 
     input:       Input_State,
+    bindings:    [Action]rl.KeyboardKey,   // rebindable keys (settings screen)
     ui:          UI_State,
     notify:      Notification_State,
 
@@ -334,20 +338,37 @@ Game_State :: struct {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+@(rodata)
+default_bindings := [Action]rl.KeyboardKey{
+    .Move_Left  = .A,
+    .Move_Right = .D,
+    .Jump       = .W,
+    .Interact   = .E,
+    .Drop_Item  = .Q,
+    .Inventory  = .TAB,
+    .Crafting   = .C,
+    .Blueprint  = .B,
+}
+
 game_state_init :: proc(gs: ^Game_State) {
     // Preserved across a reset (audio/assets are live GPU/OS handles set up
-    // once in main(); stats persist across runs). debug_log is NOT preserved
-    // here: it's a 256KB buffer, too large to stack-copy, and losing its
-    // unflushed tail on a New Game is harmless (diagnostic only).
-    audio  := gs.audio
-    assets := gs.assets
-    stats  := gs.stats
+    // once in main(); stats and key bindings persist across runs). debug_log
+    // is NOT preserved here: it's a 256KB buffer, too large to stack-copy,
+    // and losing its unflushed tail on a New Game is harmless (diagnostic only).
+    audio    := gs.audio
+    assets   := gs.assets
+    stats    := gs.stats
+    bindings := gs.bindings
 
     gs^ = {}  // zero all fields
 
     gs.audio  = audio
     gs.assets = assets
     gs.stats  = stats
+    // First boot arrives zeroed (KEY_NULL) — take the defaults then.
+    gs.bindings = bindings[.Move_Left] == .KEY_NULL ? default_bindings : bindings
+    gs.ui.settings_capture = -1
+    gs.ui.settings_drag    = -1
 
     gs.player.hp          = 10
     gs.player.hp_max      = 10

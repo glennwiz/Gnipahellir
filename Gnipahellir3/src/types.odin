@@ -96,6 +96,22 @@ Item :: enum u8 {
     Runic_Sky_Ore,
 }
 
+// ─── Rebindable Actions ───────────────────────────────────────────────────────
+//
+//  Every action the settings screen can rebind.  The key table lives in
+//  Game_State.bindings; arrows/space stay as fixed movement alternates.
+
+Action :: enum u8 {
+    Move_Left,
+    Move_Right,
+    Jump,
+    Interact,
+    Drop_Item,
+    Inventory,
+    Crafting,
+    Blueprint,
+}
+
 // ─── Terrain Flags ────────────────────────────────────────────────────────────
 
 Terrain_Flag :: enum u8 {

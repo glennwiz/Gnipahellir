@@ -40,6 +40,12 @@ update_input :: proc(gs: ^Game_State) {
         return
     }
 
+    // Settings screen: volume sliders + key rebinding. ESC returns to the menu.
+    if gs.ui.show_settings {
+        update_settings_input(gs)
+        return
+    }
+
     // Pause menu takes over all input while open: ESC (or Resume) closes it,
     // New Game / Save and Quit are queued as events for process_events to
     // handle. Nothing below this block runs — the sim is frozen (see
@@ -51,29 +57,33 @@ update_input :: proc(gs: ^Game_State) {
         if rl.IsMouseButtonPressed(.LEFT) {
             switch menu_row_at_cursor(gs) {
             case 0: gs.ui.show_menu = false                                // Resume
-            case 1: eq_push(&gs.events, Event{type = .New_Game_Request})
-            case 2: eq_push(&gs.events, Event{type = .Quit_Request})
+            case 1: gs.ui.show_menu = false; gs.ui.show_settings = true    // Settings
+            case 2: eq_push(&gs.events, Event{type = .New_Game_Request})
+            case 3: eq_push(&gs.events, Event{type = .Quit_Request})
             }
         }
         return
     }
 
-    inp.move_left  = rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT)
-    inp.move_right = rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT)
-    inp.jump       = rl.IsKeyPressed(.W) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
+    // Rebindable keys come from the bindings table (settings screen); arrows
+    // and space stay as fixed movement/jump alternates.
+    bind := gs.bindings
+    inp.move_left  = rl.IsKeyDown(bind[.Move_Left])  || rl.IsKeyDown(.LEFT)
+    inp.move_right = rl.IsKeyDown(bind[.Move_Right]) || rl.IsKeyDown(.RIGHT)
+    inp.jump       = rl.IsKeyPressed(bind[.Jump]) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
     inp.mine       = rl.IsMouseButtonDown(.LEFT) && !cursor_over_ui(gs)
     inp.attack     = rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs)
-    inp.interact   = rl.IsKeyPressed(.E)
-    inp.drop_item  = rl.IsKeyPressed(.Q)
+    inp.interact   = rl.IsKeyPressed(bind[.Interact])
+    inp.drop_item  = rl.IsKeyPressed(bind[.Drop_Item])
 
     // UI toggles
-    if rl.IsKeyPressed(.TAB) {
+    if rl.IsKeyPressed(bind[.Inventory]) {
         gs.ui.show_inventory = !gs.ui.show_inventory
     }
-    if rl.IsKeyPressed(.C) {
+    if rl.IsKeyPressed(bind[.Crafting]) {
         gs.ui.show_crafting = !gs.ui.show_crafting
     }
-    if rl.IsKeyPressed(.B) {
+    if rl.IsKeyPressed(bind[.Blueprint]) {
         gs.ui.show_blueprint = !gs.ui.show_blueprint
     }
 
@@ -121,7 +131,7 @@ update_input :: proc(gs: ^Game_State) {
         if rl.IsKeyPressed(.F1) {
             gs.debug.menu_open = !gs.debug.menu_open
         }
-        inp.fly_up   = rl.IsKeyDown(.W) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
+        inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
         inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
 
         if gs.debug.menu_open && rl.IsMouseButtonPressed(.LEFT) {
@@ -130,6 +140,62 @@ update_input :: proc(gs: ^Game_State) {
             case 1: gs.debug.ultra_wand = !gs.debug.ultra_wand
             case 2: debug_unlock_level_portals(gs)
             }
+        }
+    }
+}
+
+// Settings screen input: slider drags, bind-row clicks, and key capture.
+// Edits apply live (audio_play reads the volume fields at play time) and
+// persist via save_settings whenever something changes.
+update_settings_input :: proc(gs: ^Game_State) {
+    // Rebind capture: the next key becomes the binding; ESC cancels.
+    if gs.ui.settings_capture >= 0 {
+        k := rl.GetKeyPressed()
+        if k == .ESCAPE {
+            gs.ui.settings_capture = -1
+        } else if k != .KEY_NULL {
+            a := Action(gs.ui.settings_capture)
+            // If the key already drives another action, hand that action the
+            // old key — a duplicate could strand the player without a control.
+            for other in Action {
+                if other != a && gs.bindings[other] == k {
+                    gs.bindings[other] = gs.bindings[a]
+                }
+            }
+            gs.bindings[a] = k
+            gs.ui.settings_capture = -1
+            _ = save_settings(gs)
+        }
+        return
+    }
+
+    if rl.IsKeyPressed(.ESCAPE) {
+        gs.ui.show_settings = false
+        gs.ui.show_menu     = true
+        _ = save_settings(gs)
+        return
+    }
+
+    if rl.IsMouseButtonPressed(.LEFT) {
+        gs.ui.settings_drag = settings_slider_at_cursor(gs)
+        if row := settings_bind_at_cursor(gs); row >= 0 {
+            gs.ui.settings_capture = row
+        }
+    }
+
+    // A started drag follows the cursor while the button is held.
+    if gs.ui.settings_drag >= 0 {
+        if rl.IsMouseButtonDown(.LEFT) {
+            v := clamp((gs.input.mouse_screen.x - f32(SET_SLIDER_X)) / f32(SET_SLIDER_W), 0, 1)
+            switch gs.ui.settings_drag {
+            case 0: gs.audio.master_volume = v
+            case 1: gs.audio.sfx_volume    = v
+            case 2: gs.audio.music_volume  = v
+            }
+        } else {
+            gs.ui.settings_drag = -1
+            audio_play(&gs.audio, .Pickup)  // preview the new loudness
+            _ = save_settings(gs)
         }
     }
 }

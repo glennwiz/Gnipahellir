@@ -132,14 +132,14 @@ draw_title :: proc(gs: ^Game_State) {
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
 
-MENU_ROWS  :: 3   // row 0: Resume; row 1: New Game; row 2: Save and Quit
+MENU_ROWS  :: 4   // row 0: Resume; 1: Settings; 2: New Game; 3: Save and Quit
 MENU_W     :: 360
 MENU_ROW_H :: 56
 MENU_X     :: (SCREEN_W - MENU_W) / 2
 MENU_Y     :: (SCREEN_H - MENU_ROWS*MENU_ROW_H) / 2
 
 @(rodata)
-menu_labels := [MENU_ROWS]cstring{"Resume", "New Game", "Save and Quit"}
+menu_labels := [MENU_ROWS]cstring{"Resume", "Settings", "New Game", "Save and Quit"}
 
 // Menu row under the cursor, or -1.
 menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -168,6 +168,108 @@ draw_menu :: proc(gs: ^Game_State) {
         rl.DrawRectangleLines(MENU_X, y, MENU_W, MENU_ROW_H - 6, panel_border)
         tw := rl.MeasureText(menu_labels[i], 22)
         rl.DrawText(menu_labels[i], MENU_X + (MENU_W - tw)/2, y + 13, 22, rl.WHITE)
+    }
+}
+
+// ─── Settings Screen (volumes + key binds) ────────────────────────────────────
+
+SET_W        :: 640
+SET_ROW_H    :: 44
+SET_X        :: (SCREEN_W - SET_W) / 2
+SET_Y        :: 160
+SET_VOL_Y    :: SET_Y + 100                       // first volume slider row
+SET_BIND_Y   :: SET_VOL_Y + 3*SET_ROW_H + 60      // first key-bind row
+SET_H        :: SET_BIND_Y + len(Action)*SET_ROW_H + 40 - SET_Y
+SET_SLIDER_X :: SET_X + 280
+SET_SLIDER_W :: 300
+
+@(rodata)
+action_labels := [Action]cstring{
+    .Move_Left  = "Move Left",
+    .Move_Right = "Move Right",
+    .Jump       = "Jump",
+    .Interact   = "Interact",
+    .Drop_Item  = "Drop Item",
+    .Inventory  = "Inventory",
+    .Crafting   = "Crafting",
+    .Blueprint  = "Blueprint",
+}
+
+@(rodata)
+volume_labels := [3]cstring{"Master", "Effects", "Music"}
+
+// Volume slider row under the cursor, or -1.
+settings_slider_at_cursor :: proc(gs: ^Game_State) -> int {
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    if mx < SET_SLIDER_X - 10 || mx >= SET_SLIDER_X + SET_SLIDER_W + 10 do return -1
+    for i in 0 ..< 3 {
+        y := i32(SET_VOL_Y + i*SET_ROW_H)
+        if my >= y && my < y + SET_ROW_H - 12 do return i
+    }
+    return -1
+}
+
+// Key-bind row under the cursor, or -1.
+settings_bind_at_cursor :: proc(gs: ^Game_State) -> int {
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    if mx < SET_X + 20 || mx >= SET_X + SET_W - 20 do return -1
+    r := int((my - SET_BIND_Y) / SET_ROW_H)
+    if my < SET_BIND_Y || r >= len(Action) do return -1
+    return r
+}
+
+draw_settings :: proc(gs: ^Game_State) {
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{0, 0, 0, 190})
+    rl.DrawRectangle(SET_X, SET_Y, SET_W, SET_H, panel_bg)
+    rl.DrawRectangleLines(SET_X, SET_Y, SET_W, SET_H, panel_border)
+    rl.DrawText("SETTINGS", SET_X + 24, SET_Y + 20, 30, rl.Color{240, 205, 130, 255})
+    rl.DrawText("[ESC] back", SET_X + SET_W - 110, SET_Y + 28, 14, text_dim)
+
+    // Volume sliders
+    rl.DrawText("VOLUME", SET_X + 24, SET_VOL_Y - 30, 14, text_dim)
+    volumes := [3]f32{gs.audio.master_volume, gs.audio.sfx_volume, gs.audio.music_volume}
+    for i in 0 ..< 3 {
+        y := i32(SET_VOL_Y + i*SET_ROW_H)
+        rl.DrawText(volume_labels[i], SET_X + 24, y + 6, 20, rl.WHITE)
+
+        bar_h := i32(SET_ROW_H - 22)
+        rl.DrawRectangle(SET_SLIDER_X, y + 4, SET_SLIDER_W, bar_h, slot_bg)
+        fill := i32(f32(SET_SLIDER_W) * volumes[i])
+        rl.DrawRectangle(SET_SLIDER_X, y + 4, fill, bar_h, rl.Color{200, 150, 70, 255})
+        hover := settings_slider_at_cursor(gs) == i || gs.ui.settings_drag == i
+        rl.DrawRectangleLines(SET_SLIDER_X, y + 4, SET_SLIDER_W, bar_h,
+            hover ? rl.YELLOW : panel_border)
+
+        pct_buf: [8]u8
+        fmt.bprintf(pct_buf[:7], "%d%%", int(volumes[i]*100 + 0.5))
+        rl.DrawText(cstring(raw_data(pct_buf[:])), SET_SLIDER_X + SET_SLIDER_W + 14, y + 6, 20, text_dim)
+    }
+
+    // Key binds
+    rl.DrawText("KEY BINDS", SET_X + 24, SET_BIND_Y - 30, 14, text_dim)
+    hover_bind := settings_bind_at_cursor(gs)
+    for a, i in Action {
+        y := i32(SET_BIND_Y + i*SET_ROW_H)
+        if i == hover_bind {
+            rl.DrawRectangle(SET_X + 20, y, SET_W - 40, SET_ROW_H - 8, rl.Color{50, 50, 75, 255})
+        }
+        rl.DrawText(action_labels[a], SET_X + 36, y + 8, 20, rl.WHITE)
+
+        // Key chip on the right — or the capture prompt while rebinding.
+        if gs.ui.settings_capture == i {
+            rl.DrawText("PRESS A KEY...", SET_X + SET_W - 220, y + 8, 20, rl.YELLOW)
+        } else {
+            key_buf: [24]u8
+            fmt.bprintf(key_buf[:23], "%v", gs.bindings[a])
+            key_str := cstring(raw_data(key_buf[:]))
+            kw := rl.MeasureText(key_str, 20)
+            kx := i32(SET_X + SET_W - 60) - kw
+            rl.DrawRectangle(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, slot_bg)
+            rl.DrawRectangleLines(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, panel_border)
+            rl.DrawText(key_str, kx, y + 8, 20, rl.Color{255, 220, 140, 255})
+        }
     }
 }
 
@@ -238,7 +340,7 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
        my >= BP_Y && my < BP_Y + BP_H {
         return true
     }
-    if gs.ui.show_menu || gs.ui.show_title {
+    if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings {
         return true  // full-screen modals — everything behind them is blocked
     }
     return false
@@ -278,8 +380,9 @@ draw_ui :: proc(gs: ^Game_State) {
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
     }
-    if gs.ui.show_menu  do draw_menu(gs)   // modal overlays — always drawn last, on top
-    if gs.ui.show_title do draw_title(gs)  // title covers everything, menu included
+    if gs.ui.show_menu     do draw_menu(gs)      // modal overlays — always drawn last, on top
+    if gs.ui.show_settings do draw_settings(gs)
+    if gs.ui.show_title    do draw_title(gs)     // title covers everything, menu included
 }
 
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the

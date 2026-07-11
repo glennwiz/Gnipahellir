@@ -101,6 +101,53 @@ save_on_quit :: proc(gs: ^Game_State) {
         _ = save_game(gs)
     }
     _ = save_stats(&gs.stats)
+    _ = save_settings(gs)
+}
+
+// ─── Settings (volumes + key bindings) ────────────────────────────────────────
+//
+//  Separate small file: settings survive across runs and deaths, like stats.
+//  Saved when the settings screen closes / a binding changes, and on quit.
+
+SETTINGS_FILE    :: "gnipahellir_settings.dat"
+SETTINGS_VERSION :: i32(1)
+
+Settings_Data :: struct {
+    version:  i32,
+    master:   f32,
+    sfx:      f32,
+    music:    f32,
+    bindings: [Action]rl.KeyboardKey,
+}
+
+save_settings :: proc(gs: ^Game_State) -> bool {
+    sd := Settings_Data{
+        version  = SETTINGS_VERSION,
+        master   = gs.audio.master_volume,
+        sfx      = gs.audio.sfx_volume,
+        music    = gs.audio.music_volume,
+        bindings = gs.bindings,
+    }
+    return os.write_entire_file(SETTINGS_FILE, mem.ptr_to_bytes(&sd)) == nil
+}
+
+load_settings :: proc(gs: ^Game_State) -> bool {
+    data, err := os.read_entire_file_from_path(SETTINGS_FILE, context.allocator)
+    if err != nil do return false
+    defer delete(data)
+    if len(data) != size_of(Settings_Data) do return false
+
+    sd: Settings_Data
+    mem.copy(&sd, raw_data(data), size_of(Settings_Data))
+    if sd.version != SETTINGS_VERSION do return false
+
+    gs.audio.master_volume = clamp(sd.master, 0, 1)
+    gs.audio.sfx_volume    = clamp(sd.sfx, 0, 1)
+    gs.audio.music_volume  = clamp(sd.music, 0, 1)
+    for a in Action {
+        if sd.bindings[a] != .KEY_NULL do gs.bindings[a] = sd.bindings[a]
+    }
+    return true
 }
 
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
