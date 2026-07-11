@@ -110,6 +110,9 @@ GRID_LINE_PX :: f32(2.5)
 GRID_FADE_LO :: f32(1.6)
 GRID_FADE_HI :: f32(2.6)
 
+// Ground-item blueprint pulse: radians/sec for the glow sine wave.
+BLUEPRINT_PULSE_SPEED :: f32(4.0)
+
 draw_world :: proc(gs: ^Game_State) {
     w := &gs.world
     grid_thick := GRID_LINE_PX / max(gs.zoom, ZOOM_MIN)
@@ -132,6 +135,17 @@ draw_world :: proc(gs: ^Game_State) {
             // World item drop: small glinting square
             it := w.items[idx]
             if it != .None && w.item_counts[idx] > 0 {
+                if is_blueprint(it) {
+                    // Blueprints pulse in a warm gold, with a dark halo behind
+                    // it so the ring reads against the light-blue sky instead
+                    // of blending into it.
+                    pulse    := (math.sin(gs.elapsed_time * BLUEPRINT_PULSE_SPEED) + 1) * 0.5
+                    grow     := i32(pulse * 5)
+                    halo_ext := grow + 2
+                    rl.DrawRectangle(px + 2 - halo_ext, py + 2 - halo_ext, 6 + halo_ext*2, 6 + halo_ext*2, rl.Color{0, 0, 0, 100})
+                    glow_col := rl.Color{255, 220, 80, u8(150 + pulse * 105)}
+                    rl.DrawRectangle(px + 2 - grow, py + 2 - grow, 6 + grow*2, 6 + grow*2, glow_col)
+                }
                 rl.DrawRectangle(px + 2, py + 2, 6, 6, item_table[it].color)
                 rl.DrawRectangleLines(px + 1, py + 1, 8, 8, rl.WHITE)
             }
