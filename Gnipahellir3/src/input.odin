@@ -30,6 +30,16 @@ update_input :: proc(gs: ^Game_State) {
     }
     gs.ui.hover_tile = inp.mouse_tile
 
+    // Title screen: any key or click advances to the menu.
+    if gs.ui.show_title {
+        if rl.GetKeyPressed() != .KEY_NULL ||
+           rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT) {
+            gs.ui.show_title = false
+            gs.ui.show_menu  = true
+        }
+        return
+    }
+
     // Pause menu takes over all input while open: ESC (or Resume) closes it,
     // New Game / Save and Quit are queued as events for process_events to
     // handle. Nothing below this block runs — the sim is frozen (see

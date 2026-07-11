@@ -2,6 +2,7 @@ package game
 
 import rl "vendor:raylib/v55"
 import "core:fmt"
+import "core:math"
 
 // ─── UI Layout (virtual-resolution pixels) ────────────────────────────────────
 //
@@ -28,6 +29,106 @@ panel_bg     :: rl.Color{15, 15, 25, 230}
 panel_border :: rl.Color{90, 90, 120, 255}
 slot_bg      :: rl.Color{35, 35, 50, 255}
 text_dim     :: rl.Color{140, 140, 150, 255}
+
+// ─── Title Screen (boot only; any key → menu) ─────────────────────────────────
+//
+//  Fully procedural: a slowly rotating ring of Elder Futhark runes spelling
+//  GNIPAHELLIR, drifting embers, and the glowing title.  Animates on wall
+//  clock (rl.GetTime) because the sim — and gs.elapsed_time — is frozen
+//  while the title is up.
+
+// Rune strokes in a unit box (y down), up to 4 segments of {x1,y1,x2,y2}.
+Rune_Glyph :: struct {
+    n:   int,
+    seg: [4][4]f32,
+}
+
+@(rodata)
+title_runes := [11]Rune_Glyph{  // G N I P A H E L L I R
+    { 2, {{0.0, 0, 1.0, 1}, {1.0, 0, 0.0, 1}, {}, {}} },                                  // Gebo
+    { 2, {{0.5, 0, 0.5, 1}, {0.2, 0.62, 0.8, 0.38}, {}, {}} },                            // Nauthiz
+    { 1, {{0.5, 0, 0.5, 1}, {}, {}, {}} },                                                // Isa
+    { 4, {{0.3, 0, 0.3, 1}, {0.3, 0, 0.7, 0.3}, {0.3, 1, 0.7, 0.7}, {0.7, 0.3, 0.7, 0.7}} }, // Perthro
+    { 3, {{0.3, 0, 0.3, 1}, {0.3, 0.08, 0.8, 0.35}, {0.3, 0.42, 0.8, 0.69}, {}} },        // Ansuz
+    { 3, {{0.25, 0, 0.25, 1}, {0.75, 0, 0.75, 1}, {0.25, 0.35, 0.75, 0.6}, {}} },         // Hagalaz
+    { 4, {{0.2, 0, 0.2, 1}, {0.8, 0, 0.8, 1}, {0.2, 0, 0.5, 0.45}, {0.5, 0.45, 0.8, 0}} },// Ehwaz
+    { 2, {{0.4, 0, 0.4, 1}, {0.4, 0, 0.8, 0.4}, {}, {}} },                                // Laguz
+    { 2, {{0.4, 0, 0.4, 1}, {0.4, 0, 0.8, 0.4}, {}, {}} },                                // Laguz
+    { 1, {{0.5, 0, 0.5, 1}, {}, {}, {}} },                                                // Isa
+    { 4, {{0.3, 0, 0.3, 1}, {0.3, 0, 0.7, 0.22}, {0.7, 0.22, 0.3, 0.5}, {0.3, 0.5, 0.75, 1}} }, // Raidho
+}
+
+// One glyph, rotated about its own center, glow pass under the core stroke.
+draw_title_rune :: proc(g: Rune_Glyph, cx, cy, size, rot: f32, col: rl.Color) {
+    cr := math.cos(rot)
+    sr := math.sin(rot)
+    for k in 0 ..< g.n {
+        p1 := [2]f32{g.seg[k][0] - 0.5, g.seg[k][1] - 0.5} * size
+        p2 := [2]f32{g.seg[k][2] - 0.5, g.seg[k][3] - 0.5} * size
+        a  := rl.Vector2{cx + p1.x*cr - p1.y*sr, cy + p1.x*sr + p1.y*cr}
+        b  := rl.Vector2{cx + p2.x*cr - p2.y*sr, cy + p2.x*sr + p2.y*cr}
+        glow := col
+        glow.a = col.a / 4
+        rl.DrawLineEx(a, b, 8, glow)
+        rl.DrawLineEx(a, b, 3, col)
+    }
+}
+
+draw_title :: proc(gs: ^Game_State) {
+    t  := f32(rl.GetTime())
+    cx := f32(SCREEN_W) / 2
+    cy := f32(SCREEN_H) / 2 - 40
+
+    // Night backdrop, warming toward a fire-lit horizon.
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{8, 8, 14, 255})
+    rl.DrawRectangleGradientV(0, SCREEN_H*2/3, SCREEN_W, SCREEN_H/3,
+        rl.Color{8, 8, 14, 255}, rl.Color{42, 20, 10, 255})
+    // The cave mouth smolders below the horizon.
+    rl.DrawCircleGradient(i32(cx), SCREEN_H + 100, 420,
+        rl.Color{255, 120, 30, 70}, rl.Color{0, 0, 0, 0})
+
+    // Embers: stateless — each i hashes to a column/speed, y wraps on time.
+    for i in 0 ..< 70 {
+        h     := whash(u32(i) * 7919 + 13)
+        speed := 18 + f32(h % 70)
+        x     := f32(h % SCREEN_W) + math.sin(t*1.3 + f32(i)) * 16
+        y     := f32(SCREEN_H) - math.mod(t*speed + f32(h % SCREEN_H), f32(SCREEN_H + 60))
+        rl.DrawRectangle(i32(x), i32(y), 3, 3,
+            rl.Color{255, u8(110 + h % 90), 40, u8(70 + h % 130)})
+    }
+
+    // The rune ring: GNIPAHELLIR in Elder Futhark, wheeling slowly, each
+    // glyph breathing on its own phase.  Faint rings frame the band.
+    ring_col := rl.Color{200, 150, 70, 45}
+    radius   := f32(310)
+    rl.DrawRing({cx, cy}, radius - 54, radius - 50, 0, 360, 96, ring_col)
+    rl.DrawRing({cx, cy}, radius + 50, radius + 54, 0, 360, 96, ring_col)
+    for g, i in title_runes {
+        ang    := t*0.12 + f32(i) * (2*math.PI / f32(len(title_runes)))
+        rx     := cx + math.cos(ang) * radius
+        ry     := cy + math.sin(ang) * radius
+        breath := 0.55 + 0.45*math.sin(t*1.7 + f32(i)*2.4)
+        col    := rl.Color{255, 200, 110, u8(120 + 135*breath)}
+        draw_title_rune(g, rx, ry, 40, ang + math.PI/2, col)
+    }
+
+    center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
+        tw := rl.MeasureText(text, size)
+        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+    }
+
+    // Title, haloed in ember-light.
+    ty     := i32(cy) - 70
+    pulse  := 0.6 + 0.4*math.sin(t*1.5)
+    center_text("GNIPAHELLIR", ty + 4, 110, rl.Color{120, 40, 10, u8(140 * pulse)})
+    center_text("GNIPAHELLIR", ty - 4, 110, rl.Color{120, 40, 10, u8(140 * pulse)})
+    center_text("GNIPAHELLIR", ty, 110, rl.Color{240, 205, 130, 255})
+    center_text("— III —", ty + 120, 30, rl.Color{200, 150, 70, 255})
+    center_text("The hound howls before the cliff-cave", ty + 170, 20, text_dim)
+
+    prompt := u8(120 + 135*(0.5 + 0.5*math.sin(t*2.5)))
+    center_text("PRESS ANY KEY", SCREEN_H - 130, 26, rl.Color{255, 240, 180, prompt})
+}
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
 
@@ -137,8 +238,8 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
        my >= BP_Y && my < BP_Y + BP_H {
         return true
     }
-    if gs.ui.show_menu {
-        return true  // the menu is a full-screen modal — everything behind it is blocked
+    if gs.ui.show_menu || gs.ui.show_title {
+        return true  // full-screen modals — everything behind them is blocked
     }
     return false
 }
@@ -177,7 +278,8 @@ draw_ui :: proc(gs: ^Game_State) {
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
     }
-    if gs.ui.show_menu do draw_menu(gs)  // modal overlay — always drawn last, on top
+    if gs.ui.show_menu  do draw_menu(gs)   // modal overlays — always drawn last, on top
+    if gs.ui.show_title do draw_title(gs)  // title covers everything, menu included
 }
 
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the

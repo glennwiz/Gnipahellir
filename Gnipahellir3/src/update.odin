@@ -7,9 +7,10 @@ game_update :: proc(gs: ^Game_State) {
     // 1. Input — always polled so ESC and menu clicks work while paused
     update_input(gs)
 
-    // Pause menu: freezes the sim entirely. Only the menu's own requests
-    // (New Game / Save and Quit), queued as events by input, still run.
-    if gs.ui.show_menu {
+    // Title screen and pause menu freeze the sim entirely. Only the menu's
+    // own requests (New Game / Save and Quit), queued as events by input,
+    // still run.
+    if gs.ui.show_menu || gs.ui.show_title {
         process_events(gs)
         eq_clear(&gs.events)
         return

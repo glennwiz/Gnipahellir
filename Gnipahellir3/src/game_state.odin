@@ -224,6 +224,7 @@ UI_State :: struct {
     show_blueprint:  bool,
     show_debug:      bool,
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
+    show_title:      bool,   // boot title screen; any key dismisses it into the menu
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
 }
@@ -356,7 +357,7 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
     gs.zoom               = 1.0
-    gs.ui.show_menu       = true   // menu is the first thing shown
+    gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu
     // No starting tools — the pickaxe waits on the grass (see world_init).
 
     world_init(&gs.world)
