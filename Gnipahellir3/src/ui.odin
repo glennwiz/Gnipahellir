@@ -377,12 +377,68 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
     if gs.ui.show_blueprint do draw_blueprint(gs)
     if gs.game_won do draw_win_screen(gs)
+    if gs.player.dead do draw_death_screen(gs)
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
     }
     if gs.ui.show_menu     do draw_menu(gs)      // modal overlays — always drawn last, on top
     if gs.ui.show_settings do draw_settings(gs)
     if gs.ui.show_title    do draw_title(gs)     // title covers everything, menu included
+}
+
+// ─── Death Screen ─────────────────────────────────────────────────────────────
+//
+//  Roguelike death: the run is over and the save burns with it.  Blood-dark
+//  fade paced by player.death_timer, the rune ring wheeling in red, and after
+//  a beat the prompt to carve a new hero (ENTER/click → New_Game_Request).
+
+DEATH_INPUT_DELAY :: f32(1.2)   // seconds before restart input is accepted
+
+draw_death_screen :: proc(gs: ^Game_State) {
+    t    := f32(rl.GetTime())
+    fade := clamp(gs.player.death_timer, 0, 1)
+
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{25, 0, 0, u8(215 * fade)})
+
+    center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
+        tw := rl.MeasureText(text, size)
+        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+    }
+
+    cx := f32(SCREEN_W) / 2
+    cy := f32(SCREEN_H) / 2 - 40
+
+    // The rune ring again — but wheeling backwards, in blood.
+    radius := f32(270)
+    for g, i in title_runes {
+        ang    := -t*0.08 + f32(i) * (2*math.PI / f32(len(title_runes)))
+        rx     := cx + math.cos(ang) * radius
+        ry     := cy + math.sin(ang) * radius
+        breath := 0.55 + 0.45*math.sin(t*1.1 + f32(i)*2.4)
+        col    := rl.Color{220, 60, 40, u8((90 + 120*breath) * fade)}
+        draw_title_rune(g, rx, ry, 36, ang + math.PI/2, col)
+    }
+
+    ty := i32(cy) - 60
+    center_text("YOU HAVE FALLEN", ty, 80, rl.Color{230, 60, 40, u8(255 * fade)})
+    center_text("The Norns have cut your thread", ty + 100,
+        24, rl.Color{200, 160, 140, u8(255 * fade)})
+
+    mins := int(gs.elapsed_time) / 60
+    secs := int(gs.elapsed_time) % 60
+    buf: [96]u8
+    fmt.bprintf(buf[:95], "Your saga lasted %d:%02d      Kills %d      Runs %d",
+        mins, secs, gs.stats.total_kills, gs.stats.runs_played)
+    center_text(cstring(raw_data(buf[:])), ty + 150, 20, rl.Color{255, 255, 255, u8(255 * fade)})
+
+    center_text("Death is final — the save burns on the pyre.", ty + 200,
+        18, rl.Color{160, 130, 120, u8(255 * fade)})
+
+    if gs.player.death_timer > DEATH_INPUT_DELAY {
+        pulse := u8(120 + 135*(0.5 + 0.5*math.sin(t*2.5)))
+        center_text("PRESS [ENTER] — CARVE A NEW HERO", SCREEN_H - 150, 26,
+            rl.Color{255, 220, 140, pulse})
+    }
 }
 
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the

@@ -65,6 +65,19 @@ update_input :: proc(gs: ^Game_State) {
         return
     }
 
+    // Death screen: the fallen give no orders. After a short beat, ENTER or a
+    // click carves a new hero (roguelike — the old run is ash). ESC still
+    // reaches the pause menu for Save and Quit.
+    if gs.player.dead {
+        if rl.IsKeyPressed(.ESCAPE) {
+            gs.ui.show_menu = true
+        } else if gs.player.death_timer > DEATH_INPUT_DELAY &&
+           (rl.IsKeyPressed(.ENTER) || rl.IsMouseButtonPressed(.LEFT)) {
+            eq_push(&gs.events, Event{type = .New_Game_Request})
+        }
+        return
+    }
+
     // Rebindable keys come from the bindings table (settings screen); arrows
     // and space stay as fixed movement/jump alternates.
     bind := gs.bindings
