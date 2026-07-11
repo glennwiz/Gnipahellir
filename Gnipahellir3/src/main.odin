@@ -46,6 +46,7 @@ main :: proc() {
         gs.player.hair_color     = rl.ORANGE
     }
     load_stats(&gs.stats)
+    load_settings(gs)  // after audio_init: overrides its default volumes
 
     for !rl.WindowShouldClose() && !gs.quit_requested {
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
