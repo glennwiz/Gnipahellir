@@ -174,6 +174,10 @@ Event_Type :: enum u8 {
     // Player world interaction
     Place_Request,   // tile = target; places the selected inventory item
     Ritual_Request,  // player activated a sky altar
+
+    // Menu
+    New_Game_Request,   // "New Game" clicked — wipes the save and resets state
+    Quit_Request,       // "Save and Quit" clicked — the run is saved on shutdown
 }
 
 Event_Payload :: struct #raw_union {

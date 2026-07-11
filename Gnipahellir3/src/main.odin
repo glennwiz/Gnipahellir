@@ -26,6 +26,7 @@ main :: proc() {
     rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
     rl.InitWindow(1280, 720, "Gnipahellir III")
     rl.SetTargetFPS(60)
+    rl.SetExitKey(.KEY_NULL)  // ESC opens the pause menu instead of closing the window
 
     // Supersample: render the world at SS_SCALE× and bilinear-downscale to the
     // window, so zoomed motion glides sub-pixel instead of stepping by tile.
@@ -46,7 +47,7 @@ main :: proc() {
     }
     load_stats(&gs.stats)
 
-    for !rl.WindowShouldClose() {
+    for !rl.WindowShouldClose() && !gs.quit_requested {
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
         game_update(gs)
