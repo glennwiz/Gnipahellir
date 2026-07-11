@@ -30,6 +30,24 @@ update_input :: proc(gs: ^Game_State) {
     }
     gs.ui.hover_tile = inp.mouse_tile
 
+    // Pause menu takes over all input while open: ESC (or Resume) closes it,
+    // New Game / Save and Quit are queued as events for process_events to
+    // handle. Nothing below this block runs — the sim is frozen (see
+    // game_update), and clicks shouldn't reach mining/placement/inventory.
+    if gs.ui.show_menu {
+        if rl.IsKeyPressed(.ESCAPE) {
+            gs.ui.show_menu = false
+        }
+        if rl.IsMouseButtonPressed(.LEFT) {
+            switch menu_row_at_cursor(gs) {
+            case 0: gs.ui.show_menu = false                                // Resume
+            case 1: eq_push(&gs.events, Event{type = .New_Game_Request})
+            case 2: eq_push(&gs.events, Event{type = .Quit_Request})
+            }
+        }
+        return
+    }
+
     inp.move_left  = rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT)
     inp.move_right = rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT)
     inp.jump       = rl.IsKeyPressed(.W) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
@@ -56,7 +74,10 @@ update_input :: proc(gs: ^Game_State) {
             gs.player.inventory.selected = gs.player.inventory.selected == i ? -1 : i
         }
     }
-    if rl.IsKeyPressed(.ESCAPE) do gs.player.inventory.selected = -1  // deselect
+    if rl.IsKeyPressed(.ESCAPE) {
+        gs.player.inventory.selected = -1  // deselect
+        gs.ui.show_menu = true
+    }
 
     // Clicks on open UI panels
     if rl.IsMouseButtonPressed(.LEFT) {

@@ -223,6 +223,7 @@ UI_State :: struct {
     show_crafting:   bool,
     show_blueprint:  bool,
     show_debug:      bool,
+    show_menu:       bool,   // Resume / New Game / Save and Quit overlay
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
 }
@@ -322,6 +323,7 @@ Game_State :: struct {
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
+    quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
 
 
 
@@ -332,7 +334,19 @@ Game_State :: struct {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 game_state_init :: proc(gs: ^Game_State) {
+    // Preserved across a reset (audio/assets are live GPU/OS handles set up
+    // once in main(); stats persist across runs). debug_log is NOT preserved
+    // here: it's a 256KB buffer, too large to stack-copy, and losing its
+    // unflushed tail on a New Game is harmless (diagnostic only).
+    audio  := gs.audio
+    assets := gs.assets
+    stats  := gs.stats
+
     gs^ = {}  // zero all fields
+
+    gs.audio  = audio
+    gs.assets = assets
+    gs.stats  = stats
 
     gs.player.hp          = 10
     gs.player.hp_max      = 10
@@ -342,6 +356,7 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
     gs.zoom               = 1.0
+    gs.ui.show_menu       = true   // menu is the first thing shown
     // No starting tools — the pickaxe waits on the grass (see world_init).
 
     world_init(&gs.world)

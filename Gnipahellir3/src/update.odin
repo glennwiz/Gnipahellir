@@ -1,12 +1,21 @@
 package game
 
 game_update :: proc(gs: ^Game_State) {
-    gs.delta_time    = clamp(gs.delta_time, 0, 0.05)  // cap at 50ms
-    gs.elapsed_time += gs.delta_time
-    gs.frame        += 1
+    gs.delta_time = clamp(gs.delta_time, 0, 0.05)  // cap at 50ms
+    gs.frame     += 1
 
-    // 1. Input
+    // 1. Input — always polled so ESC and menu clicks work while paused
     update_input(gs)
+
+    // Pause menu: freezes the sim entirely. Only the menu's own requests
+    // (New Game / Save and Quit), queued as events by input, still run.
+    if gs.ui.show_menu {
+        process_events(gs)
+        eq_clear(&gs.events)
+        return
+    }
+
+    gs.elapsed_time += gs.delta_time
 
     // 2. Player
     update_player(gs)

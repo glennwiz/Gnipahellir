@@ -200,6 +200,12 @@ process_events :: proc(gs: ^Game_State) {
         case .Ritual_Request:
             handle_ritual_request(gs)
 
+        case .New_Game_Request:
+            start_new_game(gs)
+
+        case .Quit_Request:
+            gs.quit_requested = true
+
         case .Game_Won:
             if !gs.game_won {
                 gs.game_won = true

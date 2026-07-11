@@ -29,6 +29,47 @@ panel_border :: rl.Color{90, 90, 120, 255}
 slot_bg      :: rl.Color{35, 35, 50, 255}
 text_dim     :: rl.Color{140, 140, 150, 255}
 
+// ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
+
+MENU_ROWS  :: 3   // row 0: Resume; row 1: New Game; row 2: Save and Quit
+MENU_W     :: 360
+MENU_ROW_H :: 56
+MENU_X     :: (SCREEN_W - MENU_W) / 2
+MENU_Y     :: (SCREEN_H - MENU_ROWS*MENU_ROW_H) / 2
+
+@(rodata)
+menu_labels := [MENU_ROWS]cstring{"Resume", "New Game", "Save and Quit"}
+
+// Menu row under the cursor, or -1.
+menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    if mx < MENU_X || mx >= MENU_X + MENU_W do return -1
+    r := int((my - MENU_Y) / MENU_ROW_H)
+    if my < MENU_Y || r >= MENU_ROWS do return -1
+    return r
+}
+
+draw_menu :: proc(gs: ^Game_State) {
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{0, 0, 0, 190})
+
+    center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
+        tw := rl.MeasureText(text, size)
+        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+    }
+    center_text("GNIPAHELLIR", MENU_Y - 90, 48, rl.Color{255, 220, 140, 255})
+
+    hover := menu_row_at_cursor(gs)
+    for i in 0 ..< MENU_ROWS {
+        y  := i32(MENU_Y + i*MENU_ROW_H)
+        bg := i == hover ? rl.Color{60, 60, 95, 255} : slot_bg
+        rl.DrawRectangle(MENU_X, y, MENU_W, MENU_ROW_H - 6, bg)
+        rl.DrawRectangleLines(MENU_X, y, MENU_W, MENU_ROW_H - 6, panel_border)
+        tw := rl.MeasureText(menu_labels[i], 22)
+        rl.DrawText(menu_labels[i], MENU_X + (MENU_W - tw)/2, y + 13, 22, rl.WHITE)
+    }
+}
+
 // ─── Debug Menu (F1, debug builds only) ───────────────────────────────────────
 
 DBG_MENU_X     :: 24
@@ -96,6 +137,9 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
        my >= BP_Y && my < BP_Y + BP_H {
         return true
     }
+    if gs.ui.show_menu {
+        return true  // the menu is a full-screen modal — everything behind it is blocked
+    }
     return false
 }
 
@@ -133,6 +177,7 @@ draw_ui :: proc(gs: ^Game_State) {
     when GAME_DEBUG {
         if gs.debug.menu_open do draw_debug_menu(gs)
     }
+    if gs.ui.show_menu do draw_menu(gs)  // modal overlay — always drawn last, on top
 }
 
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the
