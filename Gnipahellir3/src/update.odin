@@ -46,10 +46,13 @@ game_update :: proc(gs: ^Game_State) {
     // 7. Notifications — ages/expires the popup stack (pushes no events)
     update_notifications(gs)
 
-    // 8. Particles (visual only, pushes no events)
+    // 8. Ambience — spawns drifting motes / station sparks (visual only)
+    update_ambience(gs)
+
+    // 9. Particles (visual only, pushes no events)
     update_particles(gs)
 
-    // 9. Audio (reads state only, never pushes events)
+    // 10. Audio (reads state only, never pushes events)
     update_audio(gs)
 
     when GAME_DEBUG {
