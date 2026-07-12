@@ -12,20 +12,21 @@ INV_COLS :: 8
 INV_ROWS :: 3
 SLOT_PX  :: 44
 
-// The inventory is a centered popup: header, then a paperdoll column of
+// The inventory is a near-centered popup (nudged left so the crafting list
+// fits beside it on the UI canvas): header, then a paperdoll column of
 // equip slots on the left and the bag grid to its right.
 INV_PANEL_W :: 24 + 100 + 16 + INV_COLS*SLOT_PX + 24
 INV_PANEL_H :: 450
-INV_PANEL_X :: (SCREEN_W - INV_PANEL_W) / 2
-INV_PANEL_Y :: (SCREEN_H - INV_PANEL_H) / 2
+INV_PANEL_X :: (UI_W - INV_PANEL_W) / 2 - 40
+INV_PANEL_Y :: (UI_H - INV_PANEL_H) / 2
 INV_X       :: INV_PANEL_X + 140                // bag grid origin
 INV_Y       :: INV_PANEL_Y + 70
 
-// Crafting: tall list right of the inventory popup (28 recipes needs the room).
-CRAFT_X     :: INV_PANEL_X + INV_PANEL_W + 24
+// Crafting: tall list right of the inventory popup, taking the remaining width.
+CRAFT_X     :: INV_PANEL_X + INV_PANEL_W + 8
 CRAFT_Y     :: 160
-CRAFT_W     :: 430
-CRAFT_ROW_H :: 20   // 37 rows + anvil header must fit 1080p when all stations are near
+CRAFT_W     :: UI_W - CRAFT_X - 6
+CRAFT_ROW_H :: 20   // hand + one station's rows (max ~17) + anvil header must fit UI_H
 CRAFT_OFFER_H  :: 132   // anvil header: offer slots + candidate results
 CRAFT_SLOT_GAP :: 6
 
@@ -43,8 +44,8 @@ equip_slot_labels := [7]cstring{"WPN", "HEAD", "CHEST", "HANDS", "LEGS", "FEET",
 // Blueprint overlay — centered panel.
 BP_W :: 540
 BP_H :: 360
-BP_X :: (SCREEN_W - BP_W) / 2
-BP_Y :: (SCREEN_H - BP_H) / 2
+BP_X :: (UI_W - BP_W) / 2
+BP_Y :: (UI_H - BP_H) / 2
 
 panel_bg     :: rl.Color{15, 15, 25, 230}
 panel_border :: rl.Color{90, 90, 120, 255}
@@ -105,23 +106,23 @@ draw_title_rune :: proc(g: Rune_Glyph, cx, cy, size, rot: f32, col: rl.Color) {
 
 draw_title :: proc(gs: ^Game_State) {
     t  := f32(rl.GetTime())
-    cx := f32(SCREEN_W) / 2
-    cy := f32(SCREEN_H) / 2 - 40
+    cx := f32(UI_W) / 2
+    cy := f32(UI_H) / 2 - 40
 
     // Night backdrop, warming toward a fire-lit horizon.
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{8, 8, 14, 255})
-    rl.DrawRectangleGradientV(0, SCREEN_H*2/3, SCREEN_W, SCREEN_H/3,
+    rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{8, 8, 14, 255})
+    rl.DrawRectangleGradientV(0, UI_H*2/3, UI_W, UI_H/3,
         rl.Color{8, 8, 14, 255}, rl.Color{42, 20, 10, 255})
     // The cave mouth smolders below the horizon.
-    rl.DrawCircleGradient(i32(cx), SCREEN_H + 100, 420,
+    rl.DrawCircleGradient(i32(cx), UI_H + 100, 420,
         rl.Color{255, 120, 30, 70}, rl.Color{0, 0, 0, 0})
 
     // Embers: stateless — each i hashes to a column/speed, y wraps on time.
     for i in 0 ..< 70 {
         h     := whash(u32(i) * 7919 + 13)
         speed := 18 + f32(h % 70)
-        x     := f32(h % SCREEN_W) + math.sin(t*1.3 + f32(i)) * 16
-        y     := f32(SCREEN_H) - math.mod(t*speed + f32(h % SCREEN_H), f32(SCREEN_H + 60))
+        x     := f32(h % UI_W) + math.sin(t*1.3 + f32(i)) * 16
+        y     := f32(UI_H) - math.mod(t*speed + f32(h % UI_H), f32(UI_H + 60))
         rl.DrawRectangle(i32(x), i32(y), 3, 3,
             rl.Color{255, u8(110 + h % 90), 40, u8(70 + h % 130)})
     }
@@ -143,7 +144,7 @@ draw_title :: proc(gs: ^Game_State) {
 
     center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
         tw := rl.MeasureText(text, size)
-        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+        rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
     }
 
     // Title, haloed in ember-light.
@@ -156,7 +157,7 @@ draw_title :: proc(gs: ^Game_State) {
     center_text("The hound howls before the cliff-cave", ty + 170, 20, text_dim)
 
     prompt := u8(120 + 135*(0.5 + 0.5*math.sin(t*2.5)))
-    center_text("PRESS ANY KEY", SCREEN_H - 130, 26, rl.Color{255, 240, 180, prompt})
+    center_text("PRESS ANY KEY", UI_H - 130, 26, rl.Color{255, 240, 180, prompt})
 }
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
@@ -164,8 +165,8 @@ draw_title :: proc(gs: ^Game_State) {
 MENU_ROWS  :: 4   // row 0: Resume; 1: Settings; 2: New Game; 3: Save and Quit
 MENU_W     :: 360
 MENU_ROW_H :: 56
-MENU_X     :: (SCREEN_W - MENU_W) / 2
-MENU_Y     :: (SCREEN_H - MENU_ROWS*MENU_ROW_H) / 2
+MENU_X     :: (UI_W - MENU_W) / 2
+MENU_Y     :: (UI_H - MENU_ROWS*MENU_ROW_H) / 2
 
 @(rodata)
 menu_labels := [MENU_ROWS]cstring{"Resume", "Settings", "New Game", "Save and Quit"}
@@ -184,12 +185,12 @@ draw_menu :: proc(gs: ^Game_State) {
     t := f32(rl.GetTime())
 
     // Dim the world, deepen the top and bottom edges.
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{8, 6, 10, 215})
-    rl.DrawRectangleGradientV(0, 0, SCREEN_W, 220, rl.Color{0, 0, 0, 180}, rl.Color{0, 0, 0, 0})
-    rl.DrawRectangleGradientV(0, SCREEN_H - 220, SCREEN_W, 220, rl.Color{0, 0, 0, 0}, rl.Color{0, 0, 0, 180})
+    rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{8, 6, 10, 215})
+    rl.DrawRectangleGradientV(0, 0, UI_W, 220, rl.Color{0, 0, 0, 180}, rl.Color{0, 0, 0, 0})
+    rl.DrawRectangleGradientV(0, UI_H - 220, UI_W, 220, rl.Color{0, 0, 0, 0}, rl.Color{0, 0, 0, 180})
 
-    cx := f32(SCREEN_W) / 2
-    cy := f32(SCREEN_H) / 2
+    cx := f32(UI_W) / 2
+    cy := f32(UI_H) / 2
 
     // The rune wheel turns slowly behind the menu, framed by faint rings.
     radius := f32(350)
@@ -207,7 +208,7 @@ draw_menu :: proc(gs: ^Game_State) {
 
     center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
         tw := rl.MeasureText(text, size)
-        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+        rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
     }
 
     // Ember-haloed title above the buttons.
@@ -242,8 +243,8 @@ draw_menu :: proc(gs: ^Game_State) {
 
 SET_W        :: 640
 SET_ROW_H    :: 44
-SET_X        :: (SCREEN_W - SET_W) / 2
-SET_Y        :: (SCREEN_H - 684) / 2   // 684 = the panel's content height (SET_H)
+SET_X        :: (UI_W - SET_W) / 2
+SET_Y        :: (UI_H - 684) / 2   // 684 = the panel's content height (SET_H)
 SET_VOL_Y    :: SET_Y + 100                       // first volume slider row
 SET_BIND_Y   :: SET_VOL_Y + 3*SET_ROW_H + 60      // first key-bind row
 SET_H        :: SET_BIND_Y + len(Action)*SET_ROW_H + 40 - SET_Y
@@ -288,7 +289,7 @@ settings_bind_at_cursor :: proc(gs: ^Game_State) -> int {
 }
 
 draw_settings :: proc(gs: ^Game_State) {
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{8, 6, 10, 215})
+    rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{8, 6, 10, 215})
     rl.DrawRectangle(SET_X, SET_Y, SET_W, SET_H, NORSE_PANEL)
     rl.DrawRectangleLinesEx({SET_X, SET_Y, SET_W, SET_H}, 2, NORSE_BORDER)
     rl.DrawText("SETTINGS", SET_X + 24, SET_Y + 20, 30, NORSE_GOLD_HOT)
@@ -348,7 +349,7 @@ DBG_MENU_X     :: 24
 DBG_MENU_Y     :: 80
 DBG_MENU_W     :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS  :: 3   // row 0: fly mode; row 1: ultra wand; row 2: activate portals
+DBG_MENU_ROWS  :: 7   // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -374,8 +375,12 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     rl.DrawText(gs.debug.ultra_wand ? cstring("Ultra wand: ON") : cstring("Ultra wand: OFF"),
         DBG_MENU_X, DBG_MENU_Y + DBG_MENU_ROW_H + 7, 10, uw_col)
 
-    // Action row (not a toggle): click to open this level's gated portals.
+    // Action rows (click to invoke)
     rl.DrawText("Activate portals >", DBG_MENU_X, DBG_MENU_Y + 2*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Add all structures >", DBG_MENU_X, DBG_MENU_Y + 3*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Add resource stack >", DBG_MENU_X, DBG_MENU_Y + 4*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Full HP >", DBG_MENU_X, DBG_MENU_Y + 5*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Max mana >", DBG_MENU_X, DBG_MENU_Y + 6*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
 
     if r := debug_menu_row_at_cursor(gs); r >= 0 {
         rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,
@@ -492,9 +497,21 @@ craft_result_at_cursor :: proc(gs: ^Game_State) -> int {
 
 // ─── Drawing ──────────────────────────────────────────────────────────────────
 
+// "[E] CRAFTING BENCH" while a station is in reach — hidden once the window
+// is open.  Reads the focus computed by update_station_focus.
+draw_station_prompt :: proc(gs: ^Game_State) {
+    if gs.ui.focus_station == .None || gs.ui.show_crafting do return
+    buf: [48]u8
+    fmt.bprintf(buf[:47], "[%v] %v", gs.bindings[.Interact], station_title[gs.ui.focus_station])
+    text := cstring(raw_data(buf[:]))
+    w := rl.MeasureText(text, 20)
+    rl.DrawText(text, (UI_W - w)/2, UI_H - 130, 20, NORSE_GOLD_HOT)
+}
+
 draw_ui :: proc(gs: ^Game_State) {
     draw_hud(gs)
     draw_notifications(gs)
+    draw_station_prompt(gs)
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
@@ -527,15 +544,15 @@ draw_death_screen :: proc(gs: ^Game_State) {
     t    := f32(rl.GetTime())
     fade := clamp(gs.player.death_timer, 0, 1)
 
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{25, 0, 0, u8(215 * fade)})
+    rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{25, 0, 0, u8(215 * fade)})
 
     center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
         tw := rl.MeasureText(text, size)
-        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+        rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
     }
 
-    cx := f32(SCREEN_W) / 2
-    cy := f32(SCREEN_H) / 2 - 40
+    cx := f32(UI_W) / 2
+    cy := f32(UI_H) / 2 - 40
 
     // The rune ring again — but wheeling backwards, in blood.
     radius := f32(270)
@@ -565,7 +582,7 @@ draw_death_screen :: proc(gs: ^Game_State) {
 
     if gs.player.death_timer > DEATH_INPUT_DELAY {
         pulse := u8(120 + 135*(0.5 + 0.5*math.sin(t*2.5)))
-        center_text("PRESS [ENTER] — CARVE A NEW HERO", SCREEN_H - 150, 26,
+        center_text("PRESS [ENTER] — CARVE A NEW HERO", UI_H - 150, 26,
             rl.Color{255, 220, 140, pulse})
     }
 }
@@ -573,11 +590,11 @@ draw_death_screen :: proc(gs: ^Game_State) {
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the
 // run (save cleared on exit); menus and restart flow land in Phase 6.
 draw_win_screen :: proc(gs: ^Game_State) {
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{0, 0, 0, 200})
+    rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{0, 0, 0, 200})
 
     center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
         tw := rl.MeasureText(text, size)
-        rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
+        rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
     }
 
     center_text("GARM IS SLAIN", 380, 60, rl.Color{255, 200, 80, 255})
@@ -607,7 +624,7 @@ draw_notifications :: proc(gs: ^Game_State) {
 
         text := cstring(raw_data(n.text[:]))  // buffer is zeroed on push
         tw   := rl.MeasureText(text, NOTIFY_FONT)
-        x    := (i32(SCREEN_W) - tw) / 2
+        x    := (i32(UI_W) - tw) / 2
         y    := i32(70 + i*28)
 
         rl.DrawText(text, x + 1, y + 1, NOTIFY_FONT, rl.Color{0, 0, 0, u8(180 * alpha)})
@@ -724,14 +741,13 @@ draw_inventory :: proc(gs: ^Game_State) {
 draw_crafting :: proc(gs: ^Game_State) {
     vis: [len(recipe_table)]int
     n := visible_recipes(gs, &vis)
-    near := stations_in_range(gs)
-    any_station := near[.Bench] || near[.Forge] || near[.Rune_Altar]
+    in_reach := player_near_station(gs, gs.ui.active_station)
 
     h := i32(CRAFT_OFFER_H) + i32(n)*CRAFT_ROW_H + 8
     rl.DrawRectangle(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_bg)
     rl.DrawRectangleLines(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_border)
-    rl.DrawText("CRAFTING", CRAFT_X, CRAFT_Y - 22, 10,
-        any_station ? rl.GREEN : text_dim)
+    rl.DrawText(station_title[gs.ui.active_station], CRAFT_X, CRAFT_Y - 22, 10,
+        in_reach ? rl.GREEN : text_dim)
 
     // Anvil: offer slots hold references — the items themselves stay in the
     // bag until a result is actually crafted.

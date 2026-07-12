@@ -21,6 +21,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_mining_cracks(gs)
     draw_portals(gs)
     draw_placement_ghost(gs)
+    draw_station_focus(gs)
     draw_player(&gs.player)
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
@@ -30,8 +31,8 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     }
     rl.EndMode2D()
 
-    // UI is screen-space (1920×1080 logical); scale it up to the SS texture.
-    rl.BeginMode2D(rl.Camera2D{zoom = SS_SCALE})
+    // UI is screen-space (UI_W×UI_H logical); scale it up to the SS texture.
+    rl.BeginMode2D(rl.Camera2D{zoom = SS_SCALE * UI_SCALE})
     draw_ui(gs)
     rl.EndMode2D()
 
@@ -549,6 +550,14 @@ draw_enemies_debug :: proc(gs: ^Game_State) {
 //  we know each one's destination and lock state.  Sky-bound gates glow bright
 //  and pull in pale motes; cave gates are ominous black-red maws veined with
 //  green that spew red motes inward once unlocked.
+
+// Gold outline on the station tile the player can interact with (read-only;
+// the focus is computed in update_station_focus).
+draw_station_focus :: proc(gs: ^Game_State) {
+    if gs.player.dead || gs.ui.focus_station == .None do return
+    rl.DrawRectangleLines(gs.ui.focus_tile.x * CELL_SIZE, gs.ui.focus_tile.y * CELL_SIZE,
+        CELL_SIZE, CELL_SIZE, NORSE_GOLD_HOT)
+}
 
 // Translucent preview of the selected placeable tile under the cursor — green
 // where it would place, red where it wouldn't.  Mirrors placement_ok exactly.

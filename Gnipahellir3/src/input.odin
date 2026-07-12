@@ -6,12 +6,13 @@ update_input :: proc(gs: ^Game_State) {
     inp := &gs.input
 
     // Mouse in virtual-screen space (window -> virtual, letterbox-aware).  UI
-    // hit-testing uses this directly; gameplay uses the camera-inverse below.
+    // hit-testing uses the UI-canvas version; gameplay uses the camera-inverse
+    // below on the world-virtual coords.
     mouse := rl.GetMousePosition()
     scale, offset := screen_transform()
     vx := (mouse.x - offset.x) / scale
     vy := (mouse.y - offset.y) / scale
-    inp.mouse_screen = {vx, vy}
+    inp.mouse_screen = {vx / UI_SCALE, vy / UI_SCALE}
 
     // Mouse wheel zooms toward the player (game_camera stays clamped to bounds).
     if wheel := rl.GetMouseWheelMove(); wheel != 0 {
@@ -89,13 +90,30 @@ update_input :: proc(gs: ^Game_State) {
     inp.interact   = rl.IsKeyPressed(bind[.Interact])
     inp.drop_item  = rl.IsKeyPressed(bind[.Drop_Item])
 
+    // Clicking a station tile in reach opens its crafting window instead of
+    // striking it (the press is eaten so it doesn't also mine/attack).
+    if rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None {
+        if st := station_at_tile(&gs.world, inp.mouse_tile.x, inp.mouse_tile.y); st != .None {
+            px := i32(gs.player.pos.x + PLAYER_W*0.5)
+            py := i32(gs.player.pos.y + PLAYER_H*0.5)
+            if max(abs(inp.mouse_tile.x - px), abs(inp.mouse_tile.y - py)) <= BENCH_RANGE {
+                eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})
+                inp.mine   = false
+                inp.attack = false
+            }
+        }
+    }
+
     // UI toggles
     if rl.IsKeyPressed(bind[.Inventory]) {
         gs.ui.show_inventory = !gs.ui.show_inventory
     }
     if rl.IsKeyPressed(bind[.Crafting]) {
         gs.ui.show_crafting = !gs.ui.show_crafting
-        if gs.ui.show_crafting do gs.ui.show_inventory = true  // the anvil drags from the bag
+        if gs.ui.show_crafting {
+            gs.ui.active_station = .None  // the hotkey is hand crafting only
+            gs.ui.show_inventory = true   // the anvil drags from the bag
+        }
     }
     if rl.IsKeyPressed(bind[.Blueprint]) {
         gs.ui.show_blueprint = !gs.ui.show_blueprint
@@ -110,7 +128,11 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        gs.ui.show_menu = true
+        if gs.ui.show_crafting {
+            gs.ui.show_crafting = false  // close the crafting window first
+        } else {
+            gs.ui.show_menu = true
+        }
     }
 
     // Clicks on open UI panels
@@ -185,6 +207,10 @@ update_input :: proc(gs: ^Game_State) {
             case 0: gs.debug.fly        = !gs.debug.fly
             case 1: gs.debug.ultra_wand = !gs.debug.ultra_wand
             case 2: debug_unlock_level_portals(gs)
+            case 3: debug_add_all_structures(gs)
+            case 4: debug_add_resources(gs)
+            case 5: gs.player.hp = gs.player.hp_max
+            case 6: gs.player.mana = gs.player.mana_max
             }
         }
     }

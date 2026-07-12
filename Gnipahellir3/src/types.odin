@@ -209,6 +209,7 @@ Event_Type :: enum u8 {
     Item_Dropped,
     Craft_Request,
     Craft_Complete,
+    Station_Interact,
 
     // Projectiles
     Projectile_Fired,
