@@ -518,7 +518,7 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.ui.drag_item != .None {
         mx := i32(gs.input.mouse_screen.x)
         my := i32(gs.input.mouse_screen.y)
-        rl.DrawRectangle(mx - 12, my - 12, 24, 24, item_table[gs.ui.drag_item].color)
+        draw_item_icon(gs.ui.drag_item, mx - 12, my - 12, 24)
         rl.DrawRectangleLines(mx - 12, my - 12, 24, 24, NORSE_GOLD_HOT)
     }
     if gs.ui.show_blueprint do draw_blueprint(gs)
@@ -672,7 +672,7 @@ draw_hud :: proc(gs: ^Game_State) {
         rl.DrawRectangleLines(24, y, 20, 20, panel_border)
         rl.DrawText(equip_slot_labels[i], 50, y + 5, 10, text_dim)
         if it := p.equipment[s]; it != .None {
-            rl.DrawRectangle(28, y + 4, 12, 12, item_table[it].color)
+            draw_item_icon(it, 27, y + 3, 14)
             rl.DrawText(cstring(raw_data(item_table[it].name)), 82, y + 5, 10, rl.WHITE)
         }
     }
@@ -699,7 +699,7 @@ draw_inventory :: proc(gs: ^Game_State) {
             hovered ? NORSE_GOLD_HOT : NORSE_BORDER)
         rl.DrawText(equip_slot_labels[i], x + SLOT_PX + 6, y + 17, 10, text_dim)
         if it := gs.player.equipment[s]; it != .None {
-            rl.DrawRectangle(x + 10, y + 10, 24, 24, item_table[it].color)
+            draw_item_icon(it, x + 10, y + 10, 24)
         }
     }
 
@@ -714,7 +714,7 @@ draw_inventory :: proc(gs: ^Game_State) {
 
         s := inv.slots[i]
         if s.item != .None && s.count > 0 {
-            rl.DrawRectangle(x + 10, y + 8, 24, 24, item_table[s.item].color)
+            draw_item_icon(s.item, x + 10, y + 8, 24)
             cnt_buf: [8]u8
             fmt.bprintf(cnt_buf[:7], "%d", s.count)
             rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
@@ -760,7 +760,7 @@ draw_crafting :: proc(gs: ^Game_State) {
         rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX},
             hov_offer == i ? 2 : 1, hov_offer == i ? NORSE_GOLD_HOT : panel_border)
         if it != .None {
-            rl.DrawRectangle(x + 10, y + 8, 24, 24, item_table[it].color)
+            draw_item_icon(it, x + 10, y + 8, 24)
             cnt_buf: [8]u8
             fmt.bprintf(cnt_buf[:7], "%d", inventory_count(&gs.player.inventory, it))
             rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
@@ -792,9 +792,7 @@ draw_crafting :: proc(gs: ^Game_State) {
         border := panel_border
         if ok do border = hov_result == matches[j] ? NORSE_GOLD_HOT : rl.GREEN
         rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX}, ok ? 2 : 1, border)
-        col := item_table[r.result].color
-        if !ok do col.a = 110
-        rl.DrawRectangle(x + 10, y + 8, 24, 24, col)
+        draw_item_icon(r.result, x + 10, y + 8, 24, ok ? 255 : 110)
         if r.result_count > 1 {
             cnt_buf: [8]u8
             fmt.bprintf(cnt_buf[:7], "x%d", r.result_count)
@@ -880,7 +878,7 @@ draw_blueprint :: proc(gs: ^Game_State) {
         have := inventory_count(&gs.player.inventory, ing.item)
         met  := have >= ing.count
         if !met do all_met = false
-        rl.DrawRectangle(x + 30, ry, 20, 20, item_table[ing.item].color)
+        draw_item_icon(ing.item, x + 30, ry, 20)
         rl.DrawRectangleLines(x + 30, ry, 20, 20, panel_border)
         rl.DrawText(cstring(raw_data(item_table[ing.item].name)), x + 60, ry + 3, 15, rl.WHITE)
         cnt_buf: [32]u8

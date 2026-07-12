@@ -1787,3 +1787,30 @@ dead_player_cannot_act :: proc(t: ^testing.T) {
     process_events(gs)
     testing.expect(t, !gs.progression.sky_structure_complete[0], "dead player cannot perform the ritual")
 }
+
+@(test)
+item_icons_are_well_formed :: proc(t: ^testing.T) {
+    // Every item has 12 rows of 12 chars, every char resolves to a palette
+    // color or transparent, and no icon but .None is fully invisible.
+    for icon, it in item_icons {
+        if it == .None do continue
+        opaque := 0
+        for row, gy in icon.grid {
+            if len(row) != ICON_GRID {
+                log.errorf("%v row %d is %d chars, want %d", it, gy, len(row), ICON_GRID)
+                testing.fail(t)
+                continue
+            }
+            for gx in 0 ..< len(row) {
+                ch := row[gx]
+                if _, ok := icon_pixel(icon.pal, ch); ok {
+                    opaque += 1
+                } else if ch != '.' {
+                    log.errorf("%v has char %c mapping to nothing (palette slot unset?)", it, ch)
+                    testing.fail(t)
+                }
+            }
+        }
+        testing.expect(t, opaque > 0, "icon draws nothing")
+    }
+}
