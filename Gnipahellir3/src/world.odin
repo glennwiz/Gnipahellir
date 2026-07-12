@@ -41,6 +41,8 @@ terrain_table := [Tile_Type]Terrain_Behavior{
     .Wind_Current   = { "Wind Current",  {.Walkable},                                                rl.Color{200, 240, 255, 150}, 1,   0,   .None          },
     .Void_Sky       = { "Void Sky",      {.Walkable, .Damaging},                                     rl.Color{0,   0,   0,   255}, 1,   1,   .None          },
     .Flower         = { "Flower",        {.Walkable},                                                 rl.Color{255, 220,  50, 255}, 1,   0,   .None          },
+    .Dvergr_Forge   = { "Dvergr Forge",  {.Solid, .Placeable, .Mineable},                             rl.Color{105, 105, 125, 255}, 0,   0,   .Dvergr_Forge  },
+    .Rune_Altar     = { "Rune Altar",    {.Solid, .Placeable, .Mineable},                             rl.Color{150, 90,  220, 255}, 0,   0,   .Rune_Altar    },
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────

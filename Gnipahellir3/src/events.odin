@@ -246,14 +246,14 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
         audio_play(&gs.audio, .Kill)
         gs.stats.total_kills += 1
         i := entity_id_to_enemy_index(e.source)
-        // The boss's last breath: the Hell Key falls where he stood.
-        if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] && gs.enemies.data[i].kind == .Garm {
-            T   := builder_tile(&gs.enemies.data[i])
-            idx := grid_idx(int(T.x), int(T.y))
-            gs.world.items[idx]       = .Hell_Key
-            gs.world.item_counts[idx] = 1
-            log_action(gs, "GARM slain — Hell Key drops at (%d,%d)", T.x, T.y)
-            eq_push(&gs.events, Event{type = .Boss_Defeated})
+        if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
+            en := &gs.enemies.data[i]
+            T  := builder_tile(en)
+            roll_enemy_drops(gs, en.kind, T)   // loot lands where they fell
+            if en.kind == .Garm {
+                log_action(gs, "GARM slain — Hell Key drops at (%d,%d)", T.x, T.y)
+                eq_push(&gs.events, Event{type = .Boss_Defeated})
+            }
         }
         despawn_enemy(gs, i)
     }

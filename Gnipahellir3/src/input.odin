@@ -84,8 +84,8 @@ update_input :: proc(gs: ^Game_State) {
     inp.move_left  = rl.IsKeyDown(bind[.Move_Left])  || rl.IsKeyDown(.LEFT)
     inp.move_right = rl.IsKeyDown(bind[.Move_Right]) || rl.IsKeyDown(.RIGHT)
     inp.jump       = rl.IsKeyPressed(bind[.Jump]) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
-    inp.mine       = rl.IsMouseButtonDown(.LEFT) && !cursor_over_ui(gs)
-    inp.attack     = rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs)
+    inp.mine       = rl.IsMouseButtonDown(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None
+    inp.attack     = rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None
     inp.interact   = rl.IsKeyPressed(bind[.Interact])
     inp.drop_item  = rl.IsKeyPressed(bind[.Drop_Item])
 
@@ -95,6 +95,7 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(bind[.Crafting]) {
         gs.ui.show_crafting = !gs.ui.show_crafting
+        if gs.ui.show_crafting do gs.ui.show_inventory = true  // the anvil drags from the bag
     }
     if rl.IsKeyPressed(bind[.Blueprint]) {
         gs.ui.show_blueprint = !gs.ui.show_blueprint
@@ -124,13 +125,36 @@ update_input :: proc(gs: ^Game_State) {
                 if is_blueprint(gs.player.inventory.slots[slot].item) {
                     gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
                 }
+                // Grabbing a bag stack starts an anvil drag while crafting is open
+                if gs.ui.show_crafting {
+                    s := gs.player.inventory.slots[slot]
+                    if s.item != .None && s.count > 0 do gs.ui.drag_item = s.item
+                }
             }
         }
         if gs.ui.show_crafting {
-            if row := recipe_at_cursor(gs); row >= 0 {
-                eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = i32(row)}})
+            if off := craft_offer_at_cursor(gs); off >= 0 {
+                gs.ui.craft_offer[off] = .None  // take an offering back off the anvil
+            } else if idx := craft_result_at_cursor(gs); idx >= 0 {
+                eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = i32(idx)}})
+            } else if row := recipe_at_cursor(gs); row >= 0 {
+                // A hint row lays its materials on the anvil for you
+                for ing, i in recipe_table[row].ingredients {
+                    gs.ui.craft_offer[i] = ing.item
+                }
             }
         }
+    }
+
+    // Dropping a dragged stack onto an anvil slot offers it (a reference —
+    // the items stay in the bag).  Anything already offered is not doubled.
+    if rl.IsMouseButtonReleased(.LEFT) && gs.ui.drag_item != .None {
+        if off := craft_offer_at_cursor(gs); off >= 0 {
+            already := false
+            for it in gs.ui.craft_offer do if it == gs.ui.drag_item do already = true
+            if !already do gs.ui.craft_offer[off] = gs.ui.drag_item
+        }
+        gs.ui.drag_item = .None
     }
 
     // Right-click in the open bag equips the item; on an equip box, unequips.

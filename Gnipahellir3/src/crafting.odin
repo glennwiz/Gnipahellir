@@ -2,12 +2,37 @@ package game
 
 // ─── Crafting ─────────────────────────────────────────────────────────────────
 //
-//  Static recipe table.  Hand recipes work anywhere; bench recipes need a
-//  Crafting_Bench tile within BENCH_RANGE of the player.  Crafting flows
+//  Static recipe table.  Hand recipes (.None) work anywhere; station recipes
+//  need their station's tile within BENCH_RANGE of the player.  Stations form
+//  a ladder — Bench (iron) → Dvergr Forge (silver/gold) → Rune Altar (sky
+//  magic) — but higher stations do not include lower ones.  Crafting flows
 //  through events: input pushes Craft_Request (payload = recipe index),
 //  handle_craft_request validates, consumes and inserts.
 
 BENCH_RANGE :: 3  // tiles, chebyshev
+
+Station :: enum u8 {
+    None,        // craftable by hand, anywhere
+    Bench,
+    Forge,
+    Rune_Altar,
+}
+
+@(rodata)
+station_tile := [Station]Tile_Type{
+    .None       = .Air,
+    .Bench      = .Crafting_Bench,
+    .Forge      = .Dvergr_Forge,
+    .Rune_Altar = .Rune_Altar,
+}
+
+@(rodata)
+station_tag := [Station]string{
+    .None       = "",
+    .Bench      = "[bench]",
+    .Forge      = "[forge]",
+    .Rune_Altar = "[altar]",
+}
 
 Ingredient :: struct {
     item:  Item,
@@ -17,60 +42,131 @@ Ingredient :: struct {
 Recipe :: struct {
     result:       Item,
     result_count: int,
-    needs_bench:  bool,
+    station:      Station,
     ingredients:  [3]Ingredient,   // .None entries are unused
 }
 
 @(rodata)
 recipe_table := [?]Recipe{
-    { .Plank,          4, false, {{.Wood_Log, 1},    {},               {}} },
-    { .Crafting_Bench, 1, false, {{.Plank, 4},       {},               {}} },
-    { .Smelter,        1, true,  {{.Stone_Block, 8}, {.Iron_Ore, 2},   {}} },
-    { .Tree_Grower,    1, true,  {{.Plank, 2},       {.Leaf, 4},       {}} },
-    { .Iron_Bucket,    1, true,  {{.Iron_Ore, 3},    {},               {}} },
-    { .Sky_Altar,      1, true,  {{.Stone_Block, 6}, {.Plank, 4},      {}} },
-    { .Sword,          1, true,  {{.Iron_Ore, 2},    {.Plank, 1},      {}} },
+    { .Plank,          4, .None,  {{.Wood_Log, 1},    {},               {}} },
+    { .Crafting_Bench, 1, .None,  {{.Plank, 4},       {},               {}} },
+    { .Smelter,        1, .Bench, {{.Stone_Block, 8}, {.Iron_Ore, 2},   {}} },
+    { .Tree_Grower,    1, .Bench, {{.Plank, 2},       {.Leaf, 4},       {}} },
+    { .Iron_Bucket,    1, .Bench, {{.Iron_Ore, 3},    {},               {}} },
+    { .Sky_Altar,      1, .Bench, {{.Stone_Block, 6}, {.Plank, 4},      {}} },
+    { .Sword,          1, .Bench, {{.Iron_Ore, 2},    {.Plank, 1},      {}} },
+    // The station ladder: forge is smithed at the bench, the altar raised at
+    // the forge — and its cloud stone means reaching the sky first.
+    { .Dvergr_Forge,   1, .Bench, {{.Stone_Block, 10}, {.Iron_Ore, 5},   {}} },
+    { .Rune_Altar,     1, .Forge, {{.Gold_Ore, 4},     {.Cloud_Stone, 6}, {}} },
     // The miner's ladder: each wand tier consumes the one before it.
-    { .Mine_Wand,        1, true, {{.Plank, 2},            {.Iron_Ore, 4},   {}} },
-    { .Mine_Wand_Silver, 1, true, {{.Mine_Wand, 1},        {.Silver_Ore, 6}, {}} },
-    { .Mine_Wand_Gold,   1, true, {{.Mine_Wand_Silver, 1}, {.Gold_Ore, 6},   {}} },
+    { .Mine_Wand,        1, .Bench, {{.Plank, 2},            {.Iron_Ore, 4},   {}} },
+    { .Mine_Wand_Silver, 1, .Forge, {{.Mine_Wand, 1},        {.Silver_Ore, 6}, {}} },
+    { .Mine_Wand_Gold,   1, .Forge, {{.Mine_Wand_Silver, 1}, {.Gold_Ore, 6},   {}} },
     // Weapon ladder — same pattern as the wands.
-    { .Silver_Sword,   1, true,  {{.Sword, 1},        {.Silver_Ore, 6}, {}} },
-    { .Gold_Sword,     1, true,  {{.Silver_Sword, 1}, {.Gold_Ore, 6},   {}} },
+    { .Silver_Sword,   1, .Forge, {{.Sword, 1},        {.Silver_Ore, 6}, {}} },
+    { .Gold_Sword,     1, .Forge, {{.Silver_Sword, 1}, {.Gold_Ore, 6},   {}} },
     // Armor: forge iron pieces, then upgrade each through silver into gold
     // (right-click a piece in the bag to wear it).
-    { .Iron_Helm,       1, true, {{.Iron_Ore, 3}, {.Plank, 1}, {}} },
-    { .Iron_Chestplate, 1, true, {{.Iron_Ore, 5}, {.Plank, 2}, {}} },
-    { .Iron_Gauntlets,  1, true, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
-    { .Iron_Greaves,    1, true, {{.Iron_Ore, 4}, {.Plank, 1}, {}} },
-    { .Iron_Boots,      1, true, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
-    { .Silver_Helm,       1, true, {{.Iron_Helm, 1},       {.Silver_Ore, 4}, {}} },
-    { .Silver_Chestplate, 1, true, {{.Iron_Chestplate, 1}, {.Silver_Ore, 6}, {}} },
-    { .Silver_Gauntlets,  1, true, {{.Iron_Gauntlets, 1},  {.Silver_Ore, 3}, {}} },
-    { .Silver_Greaves,    1, true, {{.Iron_Greaves, 1},    {.Silver_Ore, 5}, {}} },
-    { .Silver_Boots,      1, true, {{.Iron_Boots, 1},      {.Silver_Ore, 3}, {}} },
-    { .Gold_Helm,       1, true, {{.Silver_Helm, 1},       {.Gold_Ore, 4}, {}} },
-    { .Gold_Chestplate, 1, true, {{.Silver_Chestplate, 1}, {.Gold_Ore, 6}, {}} },
-    { .Gold_Gauntlets,  1, true, {{.Silver_Gauntlets, 1},  {.Gold_Ore, 3}, {}} },
-    { .Gold_Greaves,    1, true, {{.Silver_Greaves, 1},    {.Gold_Ore, 5}, {}} },
-    { .Gold_Boots,      1, true, {{.Silver_Boots, 1},      {.Gold_Ore, 3}, {}} },
+    { .Iron_Helm,       1, .Bench, {{.Iron_Ore, 3}, {.Plank, 1}, {}} },
+    { .Iron_Chestplate, 1, .Bench, {{.Iron_Ore, 5}, {.Plank, 2}, {}} },
+    { .Iron_Gauntlets,  1, .Bench, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
+    { .Iron_Greaves,    1, .Bench, {{.Iron_Ore, 4}, {.Plank, 1}, {}} },
+    { .Iron_Boots,      1, .Bench, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
+    { .Silver_Helm,       1, .Forge, {{.Iron_Helm, 1},       {.Silver_Ore, 4}, {}} },
+    { .Silver_Chestplate, 1, .Forge, {{.Iron_Chestplate, 1}, {.Silver_Ore, 6}, {}} },
+    { .Silver_Gauntlets,  1, .Forge, {{.Iron_Gauntlets, 1},  {.Silver_Ore, 3}, {}} },
+    { .Silver_Greaves,    1, .Forge, {{.Iron_Greaves, 1},    {.Silver_Ore, 5}, {}} },
+    { .Silver_Boots,      1, .Forge, {{.Iron_Boots, 1},      {.Silver_Ore, 3}, {}} },
+    { .Gold_Helm,       1, .Forge, {{.Silver_Helm, 1},       {.Gold_Ore, 4}, {}} },
+    { .Gold_Chestplate, 1, .Forge, {{.Silver_Chestplate, 1}, {.Gold_Ore, 6}, {}} },
+    { .Gold_Gauntlets,  1, .Forge, {{.Silver_Gauntlets, 1},  {.Gold_Ore, 3}, {}} },
+    { .Gold_Greaves,    1, .Forge, {{.Silver_Greaves, 1},    {.Gold_Ore, 5}, {}} },
+    { .Gold_Boots,      1, .Forge, {{.Silver_Boots, 1},      {.Gold_Ore, 3}, {}} },
     // Trinkets
-    { .Aether_Charm,   1, true,  {{.Aether_Crystal, 3}, {.Gold_Ore, 1}, {}} },
+    { .Aether_Charm,   1, .Rune_Altar, {{.Aether_Crystal, 3}, {.Gold_Ore, 1}, {}} },
+    // Runic tier: gold gear reforged with sky runes at the altar.
+    { .Mine_Wand_Runic,  1, .Rune_Altar, {{.Mine_Wand_Gold, 1},  {.Runic_Sky_Ore, 6}, {}} },
+    { .Runic_Sword,      1, .Rune_Altar, {{.Gold_Sword, 1},      {.Runic_Sky_Ore, 6}, {}} },
+    { .Runic_Helm,       1, .Rune_Altar, {{.Gold_Helm, 1},       {.Runic_Sky_Ore, 4}, {}} },
+    { .Runic_Chestplate, 1, .Rune_Altar, {{.Gold_Chestplate, 1}, {.Runic_Sky_Ore, 6}, {}} },
+    { .Runic_Gauntlets,  1, .Rune_Altar, {{.Gold_Gauntlets, 1},  {.Runic_Sky_Ore, 3}, {}} },
+    { .Runic_Greaves,    1, .Rune_Altar, {{.Gold_Greaves, 1},    {.Runic_Sky_Ore, 5}, {}} },
+    { .Runic_Boots,      1, .Rune_Altar, {{.Gold_Boots, 1},      {.Runic_Sky_Ore, 3}, {}} },
 }
 
-player_near_bench :: proc(gs: ^Game_State) -> bool {
+// One scan of the tiles around the player: which stations are in range.
+// .None is always "in range" — hand recipes work anywhere.
+stations_in_range :: proc(gs: ^Game_State) -> [Station]bool {
+    near: [Station]bool
+    near[.None] = true
     cx := int(gs.player.pos.x + PLAYER_W*0.5)
     cy := int(gs.player.pos.y + PLAYER_H*0.5)
     for dy in -BENCH_RANGE ..= BENCH_RANGE {
         for dx in -BENCH_RANGE ..= BENCH_RANGE {
-            if get_tile(&gs.world, cx+dx, cy+dy) == .Crafting_Bench do return true
+            t := get_tile(&gs.world, cx+dx, cy+dy)
+            for st in Station {
+                if st != .None && station_tile[st] == t do near[st] = true
+            }
         }
     }
-    return false
+    return near
+}
+
+player_near_station :: proc(gs: ^Game_State, st: Station) -> bool {
+    if st == .None do return true
+    return stations_in_range(gs)[st]
+}
+
+// All recipes whose ingredient item-set equals the offered set (order-
+// insensitive, no extras, nothing missing) and whose station is in range.
+// One offer can match several recipes — iron + plank alone could become a
+// sword, a wand or any iron armor piece — so the anvil shows every candidate
+// and the player clicks the result they want.  Counts are NOT checked here:
+// candidates you lack materials for still show (dim), recipe_craftable gates
+// the actual craft.
+offer_matches :: proc(gs: ^Game_State, buf: ^[len(recipe_table)]int) -> int {
+    n_offer := 0
+    for it in gs.ui.craft_offer do if it != .None do n_offer += 1
+    if n_offer == 0 do return 0
+    near := stations_in_range(gs)
+    n := 0
+    outer: for r, i in recipe_table {
+        if !near[r.station] do continue
+        n_ing := 0
+        for ing in r.ingredients {
+            if ing.item == .None do continue
+            n_ing += 1
+            found := false
+            for it in gs.ui.craft_offer {
+                if it == ing.item { found = true; break }
+            }
+            if !found do continue outer
+        }
+        if n_ing == n_offer {
+            buf[n] = i
+            n += 1
+        }
+    }
+    return n
+}
+
+// Recipes shown in the crafting window: hand recipes plus those whose station
+// is in range.  Fills idx_buf with recipe-table indices, returns the count.
+// Draw and cursor hit-test both use this so rows always line up.
+visible_recipes :: proc(gs: ^Game_State, idx_buf: ^[len(recipe_table)]int) -> int {
+    near := stations_in_range(gs)
+    n := 0
+    for r, i in recipe_table {
+        if !near[r.station] do continue
+        idx_buf[n] = i
+        n += 1
+    }
+    return n
 }
 
 recipe_craftable :: proc(gs: ^Game_State, r: ^Recipe) -> bool {
-    if r.needs_bench && !player_near_bench(gs) do return false
+    if !player_near_station(gs, r.station) do return false
     for ing in r.ingredients {
         if ing.item == .None do continue
         if inventory_count(&gs.player.inventory, ing.item) < ing.count do return false

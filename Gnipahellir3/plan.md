@@ -133,7 +133,8 @@ src/
   input.odin       -- Input polling → intents/events, UI toggles
   events.odin      -- Event_Queue ops, process_events dispatcher
   update.odin      -- game_update: explicit update order
-  crafting.odin    -- Recipe table, craft handler
+  crafting.odin    -- Recipe table, stations, offer matching, craft handler
+  loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
   placement.odin   -- Place_Request validation + mutation
   items.odin       -- Item table, inventory ops
   notify.odin      -- Timed popup notifications (pushed by event handlers)
@@ -406,6 +407,8 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Cave_Entrance  |       |          |        | Portal to next cave level      |
 | Sky_Entrance   |       |          |        | Portal upward to sky levels    |
 | Sky_Altar      | X     |          |        | Activate sky structure (workstation) |
+| Dvergr_Forge   | X     |          |        | Tier-2 crafting station (silver/gold gear) |
+| Rune_Altar     | X     |          |        | Tier-3 crafting station (runic/magic gear) |
 | Cloud          |       |          |        | Sky platform, walkable         |
 | Cloud_Ore      | X     | X        |        | Drops Cloud_Stone (sky -1)     |
 | Aether_Ore     | X     | X        |        | Drops Aether_Crystal (sky -2)  |
@@ -441,6 +444,8 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Blueprint_B     |           |           | Found in Cave 2, inspectable     |
 | Blueprint_C     |           |           | Found in Cave 3, inspectable     |
 | Sky_Altar       | X         |           | Placeable workstation for sky structures |
+| Dvergr_Forge    | X         |           | Tier-2 station, crafted at the Bench     |
+| Rune_Altar      | X         |           | Tier-3 station, crafted at the Forge     |
 | Cloud_Stone     |           | X         | Sky -1 ore drop, structure ingredient   |
 | Aether_Crystal  |           | X         | Sky -2 ore drop, structure ingredient   |
 | Runic_Sky_Ore   |           | X         | Sky -3 ore drop, structure ingredient   |
@@ -456,7 +461,7 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Projectiles      | 32       | Wand stream + enemy fireballs  |
 | Events per frame | 512      | Ring buffer, cleared per frame |
 | Inventory slots  | 24       | Fixed per player               |
-| Crafting recipes | 16       | Static table                   |
+| Crafting recipes | 37       | Static table, station-gated (Hand/Bench/Forge/Rune Altar) |
 | Audio sounds     | 128      | Loaded at startup              |
 | Levels           | 16       | 0=surface, 1-12=caves, -1to-3=sky |
 
@@ -529,6 +534,12 @@ Player :: struct {
 | Garm  | 1  | 30 | Chase + builder AI     | Hell_Key  |
 
 More enemy types to be added per cave layer. Each gets a row in `enemy_behavior_table`.
+
+Enemy drops are table-driven: `enemy_drop_table` in `loot.odin` holds per-kind
+rows of {item, min–max count, chance}, rolled once on death via the xorshift
+PRNG in `Game_State` (`loot_rng`). Stacks land on or near the death tile
+(`spawn_ground_item` rings outward; guaranteed drops fall back to claiming the
+origin cell so the Hell Key can never be lost). New enemy loot = new rows.
 
 ---
 

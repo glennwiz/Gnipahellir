@@ -28,6 +28,7 @@ wand_mine_range := #partial [Item]i32{
     .Mine_Wand        = 2,
     .Mine_Wand_Silver = 4,
     .Mine_Wand_Gold   = 8,
+    .Mine_Wand_Runic  = 12,
 }
 
 // Longest-reaching wand in the inventory (0 = none carried).

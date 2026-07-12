@@ -59,6 +59,9 @@ Tile_Type :: enum u8 {
     Wind_Current,
     Void_Sky,
     Flower,
+    // Crafting stations (appended: terrain is saved as u8, order is frozen)
+    Dvergr_Forge,
+    Rune_Altar,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -104,6 +107,17 @@ Item :: enum u8 {
     Iron_Gauntlets,  Silver_Gauntlets,  Gold_Gauntlets,
     Iron_Greaves,    Silver_Greaves,    Gold_Greaves,
     Iron_Boots,      Silver_Boots,      Gold_Boots,
+    // Crafting stations (appended: items are saved as u8, order is frozen)
+    Dvergr_Forge,
+    Rune_Altar,
+    // Runic tier — gold gear reforged with Runic Sky Ore at the Rune Altar
+    Mine_Wand_Runic,
+    Runic_Sword,
+    Runic_Helm,
+    Runic_Chestplate,
+    Runic_Gauntlets,
+    Runic_Greaves,
+    Runic_Boots,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
