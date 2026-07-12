@@ -44,10 +44,134 @@ item_table := [Item]Item_Info{
     .Cloud_Stone    = { "Cloud Stone",     {200, 220, 255, 255}, .Air },
     .Aether_Crystal = { "Aether Crystal",  {180, 255, 200, 255}, .Air },
     .Runic_Sky_Ore  = { "Runic Sky Ore",   {255, 180, 255, 255}, .Air },
+    .Aether_Charm   = { "Aether Charm",    {150, 255, 210, 255}, .Air },
+    .Silver_Sword   = { "Silver Sword",    {210, 210, 235, 255}, .Air },
+    .Gold_Sword     = { "Gold Sword",      {235, 195, 60,  255}, .Air },
+    .Iron_Helm         = { "Iron Helm",         {150, 150, 165, 255}, .Air },
+    .Silver_Helm       = { "Silver Helm",       {205, 205, 225, 255}, .Air },
+    .Gold_Helm         = { "Gold Helm",         {235, 195, 60,  255}, .Air },
+    .Iron_Chestplate   = { "Iron Chestplate",   {150, 150, 165, 255}, .Air },
+    .Silver_Chestplate = { "Silver Chestplate", {205, 205, 225, 255}, .Air },
+    .Gold_Chestplate   = { "Gold Chestplate",   {235, 195, 60,  255}, .Air },
+    .Iron_Gauntlets    = { "Iron Gauntlets",    {150, 150, 165, 255}, .Air },
+    .Silver_Gauntlets  = { "Silver Gauntlets",  {205, 205, 225, 255}, .Air },
+    .Gold_Gauntlets    = { "Gold Gauntlets",    {235, 195, 60,  255}, .Air },
+    .Iron_Greaves      = { "Iron Greaves",      {150, 150, 165, 255}, .Air },
+    .Silver_Greaves    = { "Silver Greaves",    {205, 205, 225, 255}, .Air },
+    .Gold_Greaves      = { "Gold Greaves",      {235, 195, 60,  255}, .Air },
+    .Iron_Boots        = { "Iron Boots",        {150, 150, 165, 255}, .Air },
+    .Silver_Boots      = { "Silver Boots",      {205, 205, 225, 255}, .Air },
+    .Gold_Boots        = { "Gold Boots",        {235, 195, 60,  255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
     return it == .Blueprint_A || it == .Blueprint_B || it == .Blueprint_C || it == .Sky_Blueprint
+}
+
+// ─── Equipment & Stats ────────────────────────────────────────────────────────
+//
+//  Which slot an item occupies (.None = not equippable) and what it grants.
+//  New gear = one entry in each table; no code changes elsewhere.
+
+@(rodata)
+item_equip_slot := #partial [Item]Equip_Slot{
+    .Sword        = .Weapon,
+    .Silver_Sword = .Weapon,
+    .Gold_Sword   = .Weapon,
+    .Aether_Charm = .Charm,
+    .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,
+    .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest,
+    .Iron_Gauntlets  = .Hands, .Silver_Gauntlets  = .Hands, .Gold_Gauntlets  = .Hands,
+    .Iron_Greaves    = .Legs,  .Silver_Greaves    = .Legs,  .Gold_Greaves    = .Legs,
+    .Iron_Boots      = .Feet,  .Silver_Boots      = .Feet,  .Gold_Boots      = .Feet,
+}
+
+@(rodata)
+item_stat_bonus := #partial [Item][Stat]i32{
+    .Sword        = #partial {.Attack = SWORD_DAMAGE},
+    .Silver_Sword = #partial {.Attack = 3},
+    .Gold_Sword   = #partial {.Attack = 5},
+    .Aether_Charm = #partial {.Speed = 3},
+    // Helm/Greaves grow the health pool, the chestplate blunts blows,
+    // gauntlets add swing weight, boots add stride.
+    .Iron_Helm       = #partial {.Max_HP = 1},
+    .Silver_Helm     = #partial {.Max_HP = 2},
+    .Gold_Helm       = #partial {.Max_HP = 4},
+    .Iron_Chestplate   = #partial {.Defense = 1},
+    .Silver_Chestplate = #partial {.Defense = 2},
+    .Gold_Chestplate   = #partial {.Defense = 3},
+    .Iron_Gauntlets   = #partial {.Attack = 1},
+    .Silver_Gauntlets = #partial {.Attack = 1},
+    .Gold_Gauntlets   = #partial {.Attack = 2},
+    .Iron_Greaves   = #partial {.Max_HP = 1},
+    .Silver_Greaves = #partial {.Max_HP = 2},
+    .Gold_Greaves   = #partial {.Max_HP = 3},
+    .Iron_Boots   = #partial {.Speed = 1},
+    .Silver_Boots = #partial {.Speed = 2},
+    .Gold_Boots   = #partial {.Speed = 3},
+}
+
+@(rodata)
+player_base_stats := [Stat]i32{
+    .Attack  = 0,   // bare hands swing nothing — a weapon must be equipped
+    .Defense = 0,
+    .Max_HP  = 10,
+    .Speed   = i32(MOVE_SPEED),   // base stride; boots add on top
+}
+
+// Total for one stat: base + every equipped item's bonus.
+player_stat :: proc(p: ^Player, stat: Stat) -> i32 {
+    total := player_base_stats[stat]
+    for slot in Equip_Slot {
+        if slot == .None do continue
+        if it := p.equipment[slot]; it != .None {
+            total += item_stat_bonus[it][stat]
+        }
+    }
+    return total
+}
+
+// Max HP follows the stat; current hp is clamped, never raised for free.
+player_apply_max_hp :: proc(p: ^Player) {
+    p.hp_max = int(player_stat(p, .Max_HP))
+    p.hp     = min(p.hp, p.hp_max)
+}
+
+// Equip from an inventory slot: the item leaves the bag; whatever held the
+// equip slot returns to it.  No-op for non-equippable or empty slots, and
+// refused (nothing lost) when the displaced gear can't fit back in the bag.
+player_equip :: proc(gs: ^Game_State, inv_slot: int) {
+    p := &gs.player
+    s := &p.inventory.slots[inv_slot]
+    eq := item_equip_slot[s.item]
+    if eq == .None || s.count <= 0 do return
+
+    item := s.item
+    prev := p.equipment[eq]
+    s.count -= 1
+    if s.count == 0 do s.item = .None
+    if prev != .None && !inventory_insert(&p.inventory, prev, 1) {
+        s.item   = item   // no room for the displaced gear: undo the take
+        s.count += 1
+        return
+    }
+    p.equipment[eq] = item
+    player_apply_max_hp(p)
+    gs.save_dirty = true
+    log_action(gs, "Player equips %s", item_table[item].name)
+}
+
+// Unequip back into the bag; refused when the bag can't hold the item.
+player_unequip :: proc(gs: ^Game_State, slot: Equip_Slot) {
+    p := &gs.player
+    it := p.equipment[slot]
+    if it == .None do return
+    if !inventory_insert(&p.inventory, it, 1) do return
+
+    p.equipment[slot] = .None
+    player_apply_max_hp(p)
+    gs.save_dirty = true
+    log_action(gs, "Player unequips %s", item_table[it].name)
 }
 
 // ─── Inventory Operations ─────────────────────────────────────────────────────

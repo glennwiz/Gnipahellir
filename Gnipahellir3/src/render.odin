@@ -459,8 +459,8 @@ draw_player :: proc(p: ^Player) {
     }
 
     // Tool in hand, on the leading side. Derived from what the mage actually
-    // carries (mining reads its tool from the bag; the `equipped` field is
-    // vestigial). Best wand wins, else the pickaxe once it's been picked up.
+    // carries (mining reads its tool from the bag; `equipment` holds worn
+    // gear, not tools). Best wand wins, else the pickaxe once it's picked up.
     held := held_tool(p)
     if held != .None {
         hand_x := origin_x + total_w - ps * 2

@@ -128,11 +128,12 @@ Player :: struct {
     mana_regen:       f32,
     attack_timer:     f32,   // sword swing cooldown
     hazard_timer:     f32,   // accumulated tile damage (lava); 1 hp per unit
+    fall_peak_y:      f32,   // highest airborne y; fall damage measures from it on landing
     mine_timer:       f32,   // pick swing / wand shot cooldown
     chip_tile:        [2]i32,// tile the pick is currently chipping
     chip_hits:        u8,    // chips landed on it (PICK_HITS breaks it)
     inventory:        Inventory,
-    equipped:         Item,
+    equipment:        [Equip_Slot]Item,   // equipped gear; [.None] unused
     bucket_lava:      bool,
     grounded:         bool,
     facing:           int,

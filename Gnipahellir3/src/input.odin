@@ -133,6 +133,15 @@ update_input :: proc(gs: ^Game_State) {
         }
     }
 
+    // Right-click in the open bag equips the item; on an equip box, unequips.
+    if rl.IsMouseButtonPressed(.RIGHT) && gs.ui.show_inventory {
+        if slot := slot_at_cursor(gs); slot >= 0 {
+            eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(slot)}})
+        } else if es := equip_slot_at_cursor(gs); es != .None {
+            eq_push(&gs.events, Event{type = .Unequip_Request, payload = {int_val = i32(es)}})
+        }
+    }
+
     // Right-click: place the selected item at the mouse tile
     if rl.IsMouseButtonPressed(.RIGHT) && !cursor_over_ui(gs) {
         eq_push(&gs.events, Event{type = .Place_Request, tile = gs.input.mouse_tile})

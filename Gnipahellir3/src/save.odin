@@ -12,13 +12,13 @@ import "core:os"
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
-SAVE_VERSION :: i32(8)   // v8: Progression.sky_altar_pos; v7: pick/wand mining fields in Player
+SAVE_VERSION :: i32(9)   // v9: Player.equipment + fall_peak_y; v8: Progression.sky_altar_pos
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 1_791_656
+SAVE_DATA_EXPECTED_SIZE :: 1_791_664
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {

@@ -11,13 +11,32 @@ import "core:math"
 INV_COLS :: 8
 INV_ROWS :: 3
 SLOT_PX  :: 44
-INV_X    :: 24
-INV_Y    :: SCREEN_H - INV_ROWS*SLOT_PX - 32
 
-CRAFT_X     :: INV_X + INV_COLS*SLOT_PX + 32
-CRAFT_Y     :: INV_Y
+// The inventory is a centered popup: header, then a paperdoll column of
+// equip slots on the left and the bag grid to its right.
+INV_PANEL_W :: 24 + 100 + 16 + INV_COLS*SLOT_PX + 24
+INV_PANEL_H :: 450
+INV_PANEL_X :: (SCREEN_W - INV_PANEL_W) / 2
+INV_PANEL_Y :: (SCREEN_H - INV_PANEL_H) / 2
+INV_X       :: INV_PANEL_X + 140                // bag grid origin
+INV_Y       :: INV_PANEL_Y + 70
+
+// Crafting: tall list right of the inventory popup (28 recipes needs the room).
+CRAFT_X     :: INV_PANEL_X + INV_PANEL_W + 24
+CRAFT_Y     :: 160
 CRAFT_W     :: 430
 CRAFT_ROW_H :: 26
+
+// Equipment boxes — the paperdoll column (weapon, armor head→feet, charm).
+EQUIP_X    :: INV_PANEL_X + 24
+EQUIP_Y    :: INV_PANEL_Y + 70
+EQUIP_STEP :: 50
+
+@(rodata)
+equip_slot_order := [7]Equip_Slot{.Weapon, .Head, .Chest, .Hands, .Legs, .Feet, .Charm}
+
+@(rodata)
+equip_slot_labels := [7]cstring{"WPN", "HEAD", "CHEST", "HANDS", "LEGS", "FEET", "CHM"}
 
 // Blueprint overlay — centered panel.
 BP_W :: 540
@@ -29,6 +48,14 @@ panel_bg     :: rl.Color{15, 15, 25, 230}
 panel_border :: rl.Color{90, 90, 120, 255}
 slot_bg      :: rl.Color{35, 35, 50, 255}
 text_dim     :: rl.Color{140, 140, 150, 255}
+
+// Norse palette — shared by the title, pause menu, settings and death screens.
+NORSE_GOLD     :: rl.Color{200, 150, 70, 255}
+NORSE_GOLD_HOT :: rl.Color{255, 220, 140, 255}
+NORSE_PANEL    :: rl.Color{24, 20, 16, 235}
+NORSE_ROW      :: rl.Color{30, 26, 20, 225}
+NORSE_ROW_HOT  :: rl.Color{62, 46, 26, 235}
+NORSE_BORDER   :: rl.Color{115, 88, 52, 255}
 
 // ─── Title Screen (boot only; any key → menu) ─────────────────────────────────
 //
@@ -152,23 +179,61 @@ menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
 }
 
 draw_menu :: proc(gs: ^Game_State) {
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{0, 0, 0, 190})
+    t := f32(rl.GetTime())
+
+    // Dim the world, deepen the top and bottom edges.
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{8, 6, 10, 215})
+    rl.DrawRectangleGradientV(0, 0, SCREEN_W, 220, rl.Color{0, 0, 0, 180}, rl.Color{0, 0, 0, 0})
+    rl.DrawRectangleGradientV(0, SCREEN_H - 220, SCREEN_W, 220, rl.Color{0, 0, 0, 0}, rl.Color{0, 0, 0, 180})
+
+    cx := f32(SCREEN_W) / 2
+    cy := f32(SCREEN_H) / 2
+
+    // The rune wheel turns slowly behind the menu, framed by faint rings.
+    radius := f32(350)
+    ring_col := rl.Color{NORSE_GOLD.r, NORSE_GOLD.g, NORSE_GOLD.b, 35}
+    rl.DrawRing({cx, cy}, radius - 46, radius - 42, 0, 360, 96, ring_col)
+    rl.DrawRing({cx, cy}, radius + 42, radius + 46, 0, 360, 96, ring_col)
+    for g, i in title_runes {
+        ang    := t*0.1 + f32(i) * (2*math.PI / f32(len(title_runes)))
+        rx     := cx + math.cos(ang) * radius
+        ry     := cy + math.sin(ang) * radius
+        breath := 0.5 + 0.5*math.sin(t*1.4 + f32(i)*2.1)
+        col    := rl.Color{NORSE_GOLD.r, NORSE_GOLD.g, NORSE_GOLD.b, u8(60 + 90*breath)}
+        draw_title_rune(g, rx, ry, 30, ang + math.PI/2, col)
+    }
 
     center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
         tw := rl.MeasureText(text, size)
         rl.DrawText(text, (i32(SCREEN_W) - tw) / 2, y, size, color)
     }
-    center_text("GNIPAHELLIR", MENU_Y - 90, 48, rl.Color{255, 220, 140, 255})
+
+    // Ember-haloed title above the buttons.
+    pulse := 0.6 + 0.4*math.sin(t*1.5)
+    center_text("GNIPAHELLIR", MENU_Y - 136, 64, rl.Color{120, 40, 10, u8(140 * pulse)})
+    center_text("GNIPAHELLIR", MENU_Y - 140, 64, rl.Color{240, 205, 130, 255})
 
     hover := menu_row_at_cursor(gs)
     for i in 0 ..< MENU_ROWS {
-        y  := i32(MENU_Y + i*MENU_ROW_H)
-        bg := i == hover ? rl.Color{60, 60, 95, 255} : slot_bg
-        rl.DrawRectangle(MENU_X, y, MENU_W, MENU_ROW_H - 6, bg)
-        rl.DrawRectangleLines(MENU_X, y, MENU_W, MENU_ROW_H - 6, panel_border)
+        y       := i32(MENU_Y + i*MENU_ROW_H)
+        hovered := i == hover
+        rl.DrawRectangle(MENU_X, y, MENU_W, MENU_ROW_H - 6, hovered ? NORSE_ROW_HOT : NORSE_ROW)
+        rl.DrawRectangleLinesEx({MENU_X, f32(y), MENU_W, MENU_ROW_H - 6}, 2,
+            hovered ? NORSE_GOLD_HOT : NORSE_BORDER)
         tw := rl.MeasureText(menu_labels[i], 22)
-        rl.DrawText(menu_labels[i], MENU_X + (MENU_W - tw)/2, y + 13, 22, rl.WHITE)
+        rl.DrawText(menu_labels[i], MENU_X + (MENU_W - tw)/2, y + 13, 22,
+            hovered ? NORSE_GOLD_HOT : rl.Color{225, 215, 195, 255})
+
+        // Gebo marks flank the chosen row.
+        if hovered {
+            ry := f32(y) + (MENU_ROW_H - 6)/2
+            draw_title_rune(title_runes[0], f32(MENU_X) - 34, ry, 18, 0, NORSE_GOLD_HOT)
+            draw_title_rune(title_runes[0], f32(MENU_X + MENU_W) + 34, ry, 18, 0, NORSE_GOLD_HOT)
+        }
     }
+
+    center_text("The hound stirs beneath the cliff", MENU_Y + MENU_ROWS*MENU_ROW_H + 40,
+        18, rl.Color{150, 130, 110, 255})
 }
 
 // ─── Settings Screen (volumes + key binds) ────────────────────────────────────
@@ -176,7 +241,7 @@ draw_menu :: proc(gs: ^Game_State) {
 SET_W        :: 640
 SET_ROW_H    :: 44
 SET_X        :: (SCREEN_W - SET_W) / 2
-SET_Y        :: 160
+SET_Y        :: (SCREEN_H - 684) / 2   // 684 = the panel's content height (SET_H)
 SET_VOL_Y    :: SET_Y + 100                       // first volume slider row
 SET_BIND_Y   :: SET_VOL_Y + 3*SET_ROW_H + 60      // first key-bind row
 SET_H        :: SET_BIND_Y + len(Action)*SET_ROW_H + 40 - SET_Y
@@ -221,54 +286,56 @@ settings_bind_at_cursor :: proc(gs: ^Game_State) -> int {
 }
 
 draw_settings :: proc(gs: ^Game_State) {
-    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{0, 0, 0, 190})
-    rl.DrawRectangle(SET_X, SET_Y, SET_W, SET_H, panel_bg)
-    rl.DrawRectangleLines(SET_X, SET_Y, SET_W, SET_H, panel_border)
-    rl.DrawText("SETTINGS", SET_X + 24, SET_Y + 20, 30, rl.Color{240, 205, 130, 255})
-    rl.DrawText("[ESC] back", SET_X + SET_W - 110, SET_Y + 28, 14, text_dim)
+    rl.DrawRectangle(0, 0, SCREEN_W, SCREEN_H, rl.Color{8, 6, 10, 215})
+    rl.DrawRectangle(SET_X, SET_Y, SET_W, SET_H, NORSE_PANEL)
+    rl.DrawRectangleLinesEx({SET_X, SET_Y, SET_W, SET_H}, 2, NORSE_BORDER)
+    rl.DrawText("SETTINGS", SET_X + 24, SET_Y + 20, 30, NORSE_GOLD_HOT)
+    rl.DrawText("[ESC] back", SET_X + SET_W - 110, SET_Y + 28, 14, NORSE_GOLD)
+    // Gold rule under the header.
+    rl.DrawRectangle(SET_X + 24, SET_Y + 58, SET_W - 48, 2, NORSE_BORDER)
 
     // Volume sliders
-    rl.DrawText("VOLUME", SET_X + 24, SET_VOL_Y - 30, 14, text_dim)
+    rl.DrawText("VOLUME", SET_X + 24, SET_VOL_Y - 30, 14, NORSE_GOLD)
     volumes := [3]f32{gs.audio.master_volume, gs.audio.sfx_volume, gs.audio.music_volume}
     for i in 0 ..< 3 {
         y := i32(SET_VOL_Y + i*SET_ROW_H)
-        rl.DrawText(volume_labels[i], SET_X + 24, y + 6, 20, rl.WHITE)
+        rl.DrawText(volume_labels[i], SET_X + 24, y + 6, 20, rl.Color{225, 215, 195, 255})
 
         bar_h := i32(SET_ROW_H - 22)
-        rl.DrawRectangle(SET_SLIDER_X, y + 4, SET_SLIDER_W, bar_h, slot_bg)
+        rl.DrawRectangle(SET_SLIDER_X, y + 4, SET_SLIDER_W, bar_h, NORSE_ROW)
         fill := i32(f32(SET_SLIDER_W) * volumes[i])
-        rl.DrawRectangle(SET_SLIDER_X, y + 4, fill, bar_h, rl.Color{200, 150, 70, 255})
+        rl.DrawRectangle(SET_SLIDER_X, y + 4, fill, bar_h, NORSE_GOLD)
         hover := settings_slider_at_cursor(gs) == i || gs.ui.settings_drag == i
         rl.DrawRectangleLines(SET_SLIDER_X, y + 4, SET_SLIDER_W, bar_h,
-            hover ? rl.YELLOW : panel_border)
+            hover ? NORSE_GOLD_HOT : NORSE_BORDER)
 
         pct_buf: [8]u8
         fmt.bprintf(pct_buf[:7], "%d%%", int(volumes[i]*100 + 0.5))
-        rl.DrawText(cstring(raw_data(pct_buf[:])), SET_SLIDER_X + SET_SLIDER_W + 14, y + 6, 20, text_dim)
+        rl.DrawText(cstring(raw_data(pct_buf[:])), SET_SLIDER_X + SET_SLIDER_W + 14, y + 6, 20, NORSE_GOLD)
     }
 
     // Key binds
-    rl.DrawText("KEY BINDS", SET_X + 24, SET_BIND_Y - 30, 14, text_dim)
+    rl.DrawText("KEY BINDS", SET_X + 24, SET_BIND_Y - 30, 14, NORSE_GOLD)
     hover_bind := settings_bind_at_cursor(gs)
     for a, i in Action {
         y := i32(SET_BIND_Y + i*SET_ROW_H)
         if i == hover_bind {
-            rl.DrawRectangle(SET_X + 20, y, SET_W - 40, SET_ROW_H - 8, rl.Color{50, 50, 75, 255})
+            rl.DrawRectangle(SET_X + 20, y, SET_W - 40, SET_ROW_H - 8, NORSE_ROW_HOT)
         }
-        rl.DrawText(action_labels[a], SET_X + 36, y + 8, 20, rl.WHITE)
+        rl.DrawText(action_labels[a], SET_X + 36, y + 8, 20, rl.Color{225, 215, 195, 255})
 
         // Key chip on the right — or the capture prompt while rebinding.
         if gs.ui.settings_capture == i {
-            rl.DrawText("PRESS A KEY...", SET_X + SET_W - 220, y + 8, 20, rl.YELLOW)
+            rl.DrawText("PRESS A KEY...", SET_X + SET_W - 220, y + 8, 20, NORSE_GOLD_HOT)
         } else {
             key_buf: [24]u8
             fmt.bprintf(key_buf[:23], "%v", gs.bindings[a])
             key_str := cstring(raw_data(key_buf[:]))
             kw := rl.MeasureText(key_str, 20)
             kx := i32(SET_X + SET_W - 60) - kw
-            rl.DrawRectangle(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, slot_bg)
-            rl.DrawRectangleLines(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, panel_border)
-            rl.DrawText(key_str, kx, y + 8, 20, rl.Color{255, 220, 140, 255})
+            rl.DrawRectangle(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, NORSE_ROW)
+            rl.DrawRectangleLines(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, NORSE_BORDER)
+            rl.DrawText(key_str, kx, y + 8, 20, NORSE_GOLD_HOT)
         }
     }
 }
@@ -326,8 +393,8 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
         }
     }
     if gs.ui.show_inventory &&
-       mx >= INV_X && mx < INV_X + INV_COLS*SLOT_PX &&
-       my >= INV_Y && my < INV_Y + INV_ROWS*SLOT_PX {
+       mx >= INV_PANEL_X && mx < INV_PANEL_X + INV_PANEL_W &&
+       my >= INV_PANEL_Y && my < INV_PANEL_Y + INV_PANEL_H {
         return true
     }
     if gs.ui.show_crafting &&
@@ -344,6 +411,18 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
         return true  // full-screen modals — everything behind them is blocked
     }
     return false
+}
+
+// Equip box under the cursor, or .None (the boxes stack vertically).
+equip_slot_at_cursor :: proc(gs: ^Game_State) -> Equip_Slot {
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    if mx < EQUIP_X || mx >= EQUIP_X + SLOT_PX do return .None
+    for s, i in equip_slot_order {
+        y := i32(EQUIP_Y + i*EQUIP_STEP)
+        if my >= y && my < y + SLOT_PX do return s
+    }
+    return .None
 }
 
 // Inventory slot under the cursor, or -1.
@@ -512,19 +591,59 @@ draw_hud :: proc(gs: ^Game_State) {
         fmt.bprintf(name_buf[:63], "%s", level_names[gs.level_index])
     }
     rl.DrawText(cstring(raw_data(name_buf[:])), 24, 50, 10, rl.WHITE)
+
+    // Stat line (base + equipment)
+    stat_buf: [48]u8
+    fmt.bprintf(stat_buf[:47], "ATK %d  DEF %d  SPD %d",
+        player_stat(p, .Attack), player_stat(p, .Defense), player_stat(p, .Speed))
+    rl.DrawText(cstring(raw_data(stat_buf[:])), 24, 64, 10, text_dim)
+
+    // Equipped gear, always visible: one mini box per slot + item name.
+    for s, i in equip_slot_order {
+        y := i32(82 + i*24)
+        rl.DrawRectangle(24, y, 20, 20, slot_bg)
+        rl.DrawRectangleLines(24, y, 20, 20, panel_border)
+        rl.DrawText(equip_slot_labels[i], 50, y + 5, 10, text_dim)
+        if it := p.equipment[s]; it != .None {
+            rl.DrawRectangle(28, y + 4, 12, 12, item_table[it].color)
+            rl.DrawText(cstring(raw_data(item_table[it].name)), 82, y + 5, 10, rl.WHITE)
+        }
+    }
 }
 
 draw_inventory :: proc(gs: ^Game_State) {
     inv := &gs.player.inventory
-    rl.DrawRectangle(INV_X - 6, INV_Y - 6, INV_COLS*SLOT_PX + 12, INV_ROWS*SLOT_PX + 12, panel_bg)
-    rl.DrawRectangleLines(INV_X - 6, INV_Y - 6, INV_COLS*SLOT_PX + 12, INV_ROWS*SLOT_PX + 12, panel_border)
 
+    // Centered Norse panel: header, equipment row, bag grid, footer.
+    rl.DrawRectangle(INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H, NORSE_PANEL)
+    rl.DrawRectangleLinesEx({INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H}, 2, NORSE_BORDER)
+    rl.DrawText("INVENTORY", INV_PANEL_X + 24, INV_PANEL_Y + 16, 26, NORSE_GOLD_HOT)
+    rl.DrawText("[TAB] close", INV_PANEL_X + INV_PANEL_W - 106, INV_PANEL_Y + 24, 12, NORSE_GOLD)
+    rl.DrawRectangle(INV_PANEL_X + 24, INV_PANEL_Y + 52, INV_PANEL_W - 48, 2, NORSE_BORDER)
+
+    // Equipment paperdoll: right-click a bag item to equip, a box to doff.
+    rl.DrawText("GEAR", EQUIP_X, EQUIP_Y - 16, 12, NORSE_GOLD)
+    for s, i in equip_slot_order {
+        x := i32(EQUIP_X)
+        y := i32(EQUIP_Y + i*EQUIP_STEP)
+        hovered := equip_slot_at_cursor(gs) == s
+        rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, NORSE_ROW)
+        rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX}, hovered ? 2 : 1,
+            hovered ? NORSE_GOLD_HOT : NORSE_BORDER)
+        rl.DrawText(equip_slot_labels[i], x + SLOT_PX + 6, y + 17, 10, text_dim)
+        if it := gs.player.equipment[s]; it != .None {
+            rl.DrawRectangle(x + 10, y + 10, 24, 24, item_table[it].color)
+        }
+    }
+
+    // Bag grid
     for i in 0 ..< MAX_INVENTORY {
         c := i32(i % INV_COLS)
         r := i32(i / INV_COLS)
         x := i32(INV_X) + c*SLOT_PX
         y := i32(INV_Y) + r*SLOT_PX
-        rl.DrawRectangle(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, slot_bg)
+        rl.DrawRectangle(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, NORSE_ROW)
+        rl.DrawRectangleLines(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, rl.Color{70, 56, 38, 255})
 
         s := inv.slots[i]
         if s.item != .None && s.count > 0 {
@@ -534,15 +653,20 @@ draw_inventory :: proc(gs: ^Game_State) {
             rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
         }
         if i == inv.selected {
-            rl.DrawRectangleLines(x + 1, y + 1, SLOT_PX - 2, SLOT_PX - 2, rl.YELLOW)
+            rl.DrawRectangleLinesEx({f32(x) + 1, f32(y) + 1, SLOT_PX - 2, SLOT_PX - 2}, 2, NORSE_GOLD_HOT)
         }
     }
 
-    // Name of the hovered slot's item
+    // Footer: name of whatever is under the cursor (bag item or worn gear).
+    footer_y := i32(INV_PANEL_Y + INV_PANEL_H - 28)
     if hov := slot_at_cursor(gs); hov >= 0 {
         s := inv.slots[hov]
         if s.item != .None && s.count > 0 {
-            rl.DrawText(cstring(raw_data(item_table[s.item].name)), INV_X, INV_Y - 20, 10, rl.WHITE)
+            rl.DrawText(cstring(raw_data(item_table[s.item].name)), INV_X, footer_y, 12, NORSE_GOLD_HOT)
+        }
+    } else if es := equip_slot_at_cursor(gs); es != .None {
+        if it := gs.player.equipment[es]; it != .None {
+            rl.DrawText(cstring(raw_data(item_table[it].name)), INV_X, footer_y, 12, NORSE_GOLD_HOT)
         }
     }
 }
