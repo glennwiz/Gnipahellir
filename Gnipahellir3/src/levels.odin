@@ -455,3 +455,31 @@ carve_level0_portals :: proc(w: ^World_Grid) {
     w.items[sbp]       = .Sky_Blueprint
     w.item_counts[sbp] = 1
 }
+
+debug_add_all_structures :: proc(gs: ^Game_State) {
+    structures := [?]Item{.Crafting_Bench, .Tree_Grower, .Smelter, .Dvergr_Forge, .Rune_Altar, .Sky_Altar}
+    for s in structures {
+        for &slot in gs.player.inventory.slots {
+            if slot.item == .None {
+                slot.item = s
+                slot.count = 1
+                break
+            }
+        }
+    }
+    notify(gs, "Debug: added all structures to inventory")
+}
+
+debug_add_resources :: proc(gs: ^Game_State) {
+    resources := [?]Item{.Wood_Log, .Stone_Block, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore, .Cloud_Stone, .Aether_Crystal, .Runic_Sky_Ore}
+    for r in resources {
+        for &slot in gs.player.inventory.slots {
+            if slot.item == .None {
+                slot.item = r
+                slot.count = 64
+                break
+            }
+        }
+    }
+    notify(gs, "Debug: added resource stacks to inventory")
+}

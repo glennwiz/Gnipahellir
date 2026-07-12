@@ -348,7 +348,7 @@ DBG_MENU_X     :: 24
 DBG_MENU_Y     :: 80
 DBG_MENU_W     :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS  :: 3   // row 0: fly mode; row 1: ultra wand; row 2: activate portals
+DBG_MENU_ROWS  :: 7   // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -374,8 +374,12 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     rl.DrawText(gs.debug.ultra_wand ? cstring("Ultra wand: ON") : cstring("Ultra wand: OFF"),
         DBG_MENU_X, DBG_MENU_Y + DBG_MENU_ROW_H + 7, 10, uw_col)
 
-    // Action row (not a toggle): click to open this level's gated portals.
+    // Action rows (click to invoke)
     rl.DrawText("Activate portals >", DBG_MENU_X, DBG_MENU_Y + 2*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Add all structures >", DBG_MENU_X, DBG_MENU_Y + 3*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Add resource stack >", DBG_MENU_X, DBG_MENU_Y + 4*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Full HP >", DBG_MENU_X, DBG_MENU_Y + 5*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Max mana >", DBG_MENU_X, DBG_MENU_Y + 6*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
 
     if r := debug_menu_row_at_cursor(gs); r >= 0 {
         rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,

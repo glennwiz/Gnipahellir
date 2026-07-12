@@ -185,6 +185,10 @@ update_input :: proc(gs: ^Game_State) {
             case 0: gs.debug.fly        = !gs.debug.fly
             case 1: gs.debug.ultra_wand = !gs.debug.ultra_wand
             case 2: debug_unlock_level_portals(gs)
+            case 3: debug_add_all_structures(gs)
+            case 4: debug_add_resources(gs)
+            case 5: gs.player.hp = gs.player.hp_max
+            case 6: gs.player.mana = gs.player.mana_max
             }
         }
     }
