@@ -31,8 +31,8 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     }
     rl.EndMode2D()
 
-    // UI is screen-space (1920×1080 logical); scale it up to the SS texture.
-    rl.BeginMode2D(rl.Camera2D{zoom = SS_SCALE})
+    // UI is screen-space (UI_W×UI_H logical); scale it up to the SS texture.
+    rl.BeginMode2D(rl.Camera2D{zoom = SS_SCALE * UI_SCALE})
     draw_ui(gs)
     rl.EndMode2D()
 

@@ -8,6 +8,13 @@ SCREEN_W :: GRID_W * CELL_SIZE  // 1920
 SCREEN_H :: GRID_H * CELL_SIZE  // 1080
 SS_SCALE :: 3                   // world render supersample factor (glide when zoomed)
 
+// UI virtual resolution: the UI lays out on a smaller canvas than the world so
+// text and panels come out UI_SCALE× larger on screen.  Shrink UI_W/UI_H (same
+// 16:9) to enlarge the whole UI; layout constants in ui.odin are canvas-relative.
+UI_W     :: 1280
+UI_H     :: 720
+UI_SCALE :: f32(SCREEN_W) / f32(UI_W)  // 1.5
+
 // Maps virtual space onto the current window: uniform scale + letterbox offset.
 screen_transform :: proc() -> (scale: f32, offset: [2]f32) {
     win_w := f32(rl.GetScreenWidth())
@@ -25,6 +32,7 @@ main :: proc() {
     // grounded state.  Both together: vsync-clean present, locked to 60.
     rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT})
     rl.InitWindow(1280, 720, "Gnipahellir III")
+    rl.ToggleBorderlessWindowed()  // launch fullscreen on the current monitor; F11 returns to a window
     rl.SetTargetFPS(60)
     rl.SetExitKey(.KEY_NULL)  // ESC opens the pause menu instead of closing the window
 

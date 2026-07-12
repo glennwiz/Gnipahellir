@@ -6,12 +6,13 @@ update_input :: proc(gs: ^Game_State) {
     inp := &gs.input
 
     // Mouse in virtual-screen space (window -> virtual, letterbox-aware).  UI
-    // hit-testing uses this directly; gameplay uses the camera-inverse below.
+    // hit-testing uses the UI-canvas version; gameplay uses the camera-inverse
+    // below on the world-virtual coords.
     mouse := rl.GetMousePosition()
     scale, offset := screen_transform()
     vx := (mouse.x - offset.x) / scale
     vy := (mouse.y - offset.y) / scale
-    inp.mouse_screen = {vx, vy}
+    inp.mouse_screen = {vx / UI_SCALE, vy / UI_SCALE}
 
     // Mouse wheel zooms toward the player (game_camera stays clamped to bounds).
     if wheel := rl.GetMouseWheelMove(); wheel != 0 {
