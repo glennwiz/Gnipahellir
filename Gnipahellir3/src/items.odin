@@ -62,6 +62,15 @@ item_table := [Item]Item_Info{
     .Iron_Boots        = { "Iron Boots",        {150, 150, 165, 255}, .Air },
     .Silver_Boots      = { "Silver Boots",      {205, 205, 225, 255}, .Air },
     .Gold_Boots        = { "Gold Boots",        {235, 195, 60,  255}, .Air },
+    .Dvergr_Forge      = { "Dvergr Forge",      {105, 105, 125, 255}, .Dvergr_Forge },
+    .Rune_Altar        = { "Rune Altar",        {150, 90,  220, 255}, .Rune_Altar },
+    .Mine_Wand_Runic   = { "Runic Mine Wand",   {230, 150, 255, 255}, .Air },
+    .Runic_Sword       = { "Runic Sword",       {210, 130, 255, 255}, .Air },
+    .Runic_Helm        = { "Runic Helm",        {210, 130, 255, 255}, .Air },
+    .Runic_Chestplate  = { "Runic Chestplate",  {210, 130, 255, 255}, .Air },
+    .Runic_Gauntlets   = { "Runic Gauntlets",   {210, 130, 255, 255}, .Air },
+    .Runic_Greaves     = { "Runic Greaves",     {210, 130, 255, 255}, .Air },
+    .Runic_Boots       = { "Runic Boots",       {210, 130, 255, 255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
@@ -78,12 +87,13 @@ item_equip_slot := #partial [Item]Equip_Slot{
     .Sword        = .Weapon,
     .Silver_Sword = .Weapon,
     .Gold_Sword   = .Weapon,
+    .Runic_Sword  = .Weapon,
     .Aether_Charm = .Charm,
-    .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,
-    .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest,
-    .Iron_Gauntlets  = .Hands, .Silver_Gauntlets  = .Hands, .Gold_Gauntlets  = .Hands,
-    .Iron_Greaves    = .Legs,  .Silver_Greaves    = .Legs,  .Gold_Greaves    = .Legs,
-    .Iron_Boots      = .Feet,  .Silver_Boots      = .Feet,  .Gold_Boots      = .Feet,
+    .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,  .Runic_Helm       = .Head,
+    .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest, .Runic_Chestplate = .Chest,
+    .Iron_Gauntlets  = .Hands, .Silver_Gauntlets  = .Hands, .Gold_Gauntlets  = .Hands, .Runic_Gauntlets  = .Hands,
+    .Iron_Greaves    = .Legs,  .Silver_Greaves    = .Legs,  .Gold_Greaves    = .Legs,  .Runic_Greaves    = .Legs,
+    .Iron_Boots      = .Feet,  .Silver_Boots      = .Feet,  .Gold_Boots      = .Feet,  .Runic_Boots      = .Feet,
 }
 
 @(rodata)
@@ -109,6 +119,13 @@ item_stat_bonus := #partial [Item][Stat]i32{
     .Iron_Boots   = #partial {.Speed = 1},
     .Silver_Boots = #partial {.Speed = 2},
     .Gold_Boots   = #partial {.Speed = 3},
+    // Runic: the endgame rung above gold.
+    .Runic_Sword      = #partial {.Attack = 8},
+    .Runic_Helm       = #partial {.Max_HP = 6},
+    .Runic_Chestplate = #partial {.Defense = 5},
+    .Runic_Gauntlets  = #partial {.Attack = 3},
+    .Runic_Greaves    = #partial {.Max_HP = 5},
+    .Runic_Boots      = #partial {.Speed = 4},
 }
 
 @(rodata)

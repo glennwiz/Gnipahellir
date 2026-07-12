@@ -590,6 +590,12 @@ wand_crafting_ladder :: proc(t: ^testing.T) {
     craft(gs, .Mine_Wand)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand), 1)
 
+    // Silver tier is forge work: refused at a bare bench
+    craft(gs, .Mine_Wand_Silver)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 0)
+    testing.expect_value(t, inventory_count(inv, .Mine_Wand), 1)
+
+    set_tile(&gs.world, 29, SURFACE_Y - 1, .Dvergr_Forge)
     craft(gs, .Mine_Wand_Silver)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 1)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand), 0)
@@ -599,6 +605,195 @@ wand_crafting_ladder :: proc(t: ^testing.T) {
     testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 0)
     testing.expect_value(t, inventory_count(inv, .Silver_Ore), 0)
     testing.expect_value(t, inventory_count(inv, .Gold_Ore), 0)
+}
+
+@(test)
+station_ladder :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    inv := &gs.player.inventory
+
+    craft :: proc(gs: ^Game_State, result: Item) {
+        for r, i in recipe_table {
+            if r.result == result {
+                handle_craft_request(gs, Event{payload = {int_val = i32(i)}})
+                return
+            }
+        }
+    }
+
+    // In the wilderness only hand recipes are visible
+    vis: [len(recipe_table)]int
+    n := visible_recipes(gs, &vis)
+    for row in 0 ..< n {
+        testing.expect_value(t, recipe_table[vis[row]].station, Station.None)
+    }
+
+    // The forge is smithed at a bench
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    inventory_insert(inv, .Stone_Block, 10)
+    inventory_insert(inv, .Iron_Ore, 5)
+    craft(gs, .Dvergr_Forge)
+    testing.expect_value(t, inventory_count(inv, .Dvergr_Forge), 1)
+
+    // The altar is forge work: refused until a forge is placed
+    inventory_insert(inv, .Gold_Ore, 5)
+    inventory_insert(inv, .Cloud_Stone, 6)
+    inventory_insert(inv, .Aether_Crystal, 3)
+    craft(gs, .Rune_Altar)
+    testing.expect_value(t, inventory_count(inv, .Rune_Altar), 0)
+
+    set_tile(&gs.world, 29, SURFACE_Y - 1, .Dvergr_Forge)
+    craft(gs, .Rune_Altar)
+    testing.expect_value(t, inventory_count(inv, .Rune_Altar), 1)
+
+    // The charm is altar work: bench + forge are not enough
+    craft(gs, .Aether_Charm)
+    testing.expect_value(t, inventory_count(inv, .Aether_Charm), 0)
+
+    set_tile(&gs.world, 32, SURFACE_Y - 1, .Rune_Altar)
+    craft(gs, .Aether_Charm)
+    testing.expect_value(t, inventory_count(inv, .Aether_Charm), 1)
+}
+
+@(test)
+anvil_offer_matching :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    buf: [len(recipe_table)]int
+
+    // Empty anvil matches nothing
+    testing.expect_value(t, offer_matches(gs, &buf), 0)
+
+    // A wood log by hand: the plank recipe, counts not required to match
+    gs.ui.craft_offer = {.Wood_Log, .None, .None}
+    n := offer_matches(gs, &buf)
+    testing.expect_value(t, n, 1)
+    testing.expect_value(t, recipe_table[buf[0]].result, Item.Plank)
+
+    // Iron + plank in the wilderness: nothing — all its shapes are bench work
+    gs.ui.craft_offer = {.Iron_Ore, .Plank, .None}
+    testing.expect_value(t, offer_matches(gs, &buf), 0)
+
+    // At a bench the same offer is ambiguous: sword, wand and five armor pieces
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    testing.expect_value(t, offer_matches(gs, &buf), 7)
+
+    // An extra material breaks the set — no partial matches
+    gs.ui.craft_offer = {.Iron_Ore, .Plank, .Wood_Log}
+    testing.expect_value(t, offer_matches(gs, &buf), 0)
+}
+
+@(test)
+runic_gear_ladder :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Gold_Sword, 1)
+    inventory_insert(inv, .Runic_Sky_Ore, 6)
+
+    craft :: proc(gs: ^Game_State, result: Item) {
+        for r, i in recipe_table {
+            if r.result == result {
+                handle_craft_request(gs, Event{payload = {int_val = i32(i)}})
+                return
+            }
+        }
+    }
+
+    // Runic work needs the altar, and consumes the gold piece beneath it
+    craft(gs, .Runic_Sword)
+    testing.expect_value(t, inventory_count(inv, .Runic_Sword), 0)
+
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Rune_Altar)
+    craft(gs, .Runic_Sword)
+    testing.expect_value(t, inventory_count(inv, .Runic_Sword), 1)
+    testing.expect_value(t, inventory_count(inv, .Gold_Sword), 0)
+    testing.expect_value(t, inventory_count(inv, .Runic_Sky_Ore), 0)
+
+    // And it wears like the rest of the ladder
+    sword_slot := -1
+    for s, i in inv.slots {
+        if s.item == .Runic_Sword && s.count > 0 do sword_slot = i
+    }
+    testing.expect(t, sword_slot >= 0, "runic sword should be in the bag")
+    eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(sword_slot)}})
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Runic_Sword)
+    testing.expect_value(t, player_stat(&gs.player, .Attack), i32(8))
+}
+
+@(test)
+enemy_drop_tables :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A slain builder's guaranteed stone lands on or beside his death tile
+    spawn_builder(gs, 40)
+    bi := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] && gs.enemies.data[i].kind == .Builder do bi = i
+    }
+    testing.expect(t, bi >= 0, "builder should have spawned")
+    T := builder_tile(&gs.enemies.data[bi])
+
+    eq_push(&gs.events, Event{
+        type    = .Damage_Dealt,
+        source  = PLAYER_ID,
+        target  = enemy_entity_id(bi),
+        payload = {int_val = 99},
+    })
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    testing.expect(t, !gs.enemies.active[bi], "builder should be dead")
+    stone := 0
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        x, y := int(T.x) + dx, int(T.y) + dy
+        if !in_bounds(x, y) do continue
+        idx := grid_idx(x, y)
+        if gs.world.items[idx] == .Stone_Block do stone += int(gs.world.item_counts[idx])
+    }
+    testing.expect(t, stone >= 1 && stone <= 2, "builder death drops 1-2 stone")
+}
+
+@(test)
+ground_item_spillover :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+
+    // The death tile is taken by a different item: the drop spills to a
+    // neighbor instead of clobbering it.
+    T := [2]i32{60, i32(SURFACE_Y) - 3}
+    idx := grid_idx(int(T.x), int(T.y))
+    w.items[idx]       = .Leaf
+    w.item_counts[idx] = 5
+    spawn_ground_item(w, T, .Iron_Ore, 2)
+    testing.expect_value(t, w.items[idx], Item.Leaf)
+    found := 0
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        i2 := grid_idx(int(T.x) + dx, int(T.y) + dy)
+        if w.items[i2] == .Iron_Ore do found += int(w.item_counts[i2])
+    }
+    testing.expect_value(t, found, 2)
+
+    // Every nearby cell taken: the origin is claimed outright so a
+    // guaranteed drop (the Hell Key) is never lost.
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        i2 := grid_idx(int(T.x) + dx, int(T.y) + dy)
+        w.items[i2]       = .Leaf
+        w.item_counts[i2] = 1
+    }
+    spawn_ground_item(w, T, .Hell_Key, 1)
+    testing.expect_value(t, w.items[idx], Item.Hell_Key)
 }
 
 @(test)

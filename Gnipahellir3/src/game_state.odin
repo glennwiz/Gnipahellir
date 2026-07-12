@@ -1,6 +1,7 @@
 package game
 
 import rl "vendor:raylib/v55"
+import "core:time"
 
 // ─── World Grid ───────────────────────────────────────────────────────────────
 
@@ -229,6 +230,8 @@ UI_State :: struct {
     show_settings:   bool,   // volume sliders + key rebinding screen
     settings_capture: int,   // action index awaiting a new key, -1 = none
     settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
+    craft_offer:     [3]Item, // anvil offering slots — references, items stay in the bag
+    drag_item:       Item,    // bag stack being dragged onto the anvil (.None = no drag)
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
 }
@@ -326,6 +329,7 @@ Game_State :: struct {
     elapsed_time: f32,
     frame:        u64,
     delta_time:   f32,
+    loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
@@ -379,6 +383,7 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
     gs.zoom               = 1.0
+    gs.loot_rng           = u64(time.now()._nsec)  // fresh drop rolls each run
     gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu
     // No starting tools — the pickaxe waits on the grass (see world_init).
 

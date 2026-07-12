@@ -25,7 +25,9 @@ INV_Y       :: INV_PANEL_Y + 70
 CRAFT_X     :: INV_PANEL_X + INV_PANEL_W + 24
 CRAFT_Y     :: 160
 CRAFT_W     :: 430
-CRAFT_ROW_H :: 26
+CRAFT_ROW_H :: 20   // 37 rows + anvil header must fit 1080p when all stations are near
+CRAFT_OFFER_H  :: 132   // anvil header: offer slots + candidate results
+CRAFT_SLOT_GAP :: 6
 
 // Equipment boxes — the paperdoll column (weapon, armor head→feet, charm).
 EQUIP_X    :: INV_PANEL_X + 24
@@ -397,10 +399,13 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
        my >= INV_PANEL_Y && my < INV_PANEL_Y + INV_PANEL_H {
         return true
     }
-    if gs.ui.show_crafting &&
-       mx >= CRAFT_X && mx < CRAFT_X + CRAFT_W &&
-       my >= CRAFT_Y && my < CRAFT_Y + i32(len(recipe_table))*CRAFT_ROW_H + 8 {
-        return true
+    if gs.ui.show_crafting {
+        vis: [len(recipe_table)]int
+        n := visible_recipes(gs, &vis)
+        if mx >= CRAFT_X && mx < CRAFT_X + CRAFT_W &&
+           my >= CRAFT_Y && my < CRAFT_Y + CRAFT_OFFER_H + i32(n)*CRAFT_ROW_H + 8 {
+            return true
+        }
     }
     if gs.ui.show_blueprint &&
        mx >= BP_X && mx < BP_X + BP_W &&
@@ -436,14 +441,53 @@ slot_at_cursor :: proc(gs: ^Game_State) -> int {
     return r*INV_COLS + c
 }
 
-// Crafting row under the cursor, or -1.
+// Recipe-table index of the crafting row under the cursor, or -1.
 recipe_at_cursor :: proc(gs: ^Game_State) -> int {
     mx := i32(gs.input.mouse_screen.x)
     my := i32(gs.input.mouse_screen.y)
     if mx < CRAFT_X || mx >= CRAFT_X + CRAFT_W do return -1
-    r := int((my - CRAFT_Y - 4) / CRAFT_ROW_H)
-    if r < 0 || r >= len(recipe_table) do return -1
-    return r
+    if my < CRAFT_Y + CRAFT_OFFER_H do return -1   // anvil header, not the list
+    row := int((my - CRAFT_Y - CRAFT_OFFER_H - 4) / CRAFT_ROW_H)
+    vis: [len(recipe_table)]int
+    n := visible_recipes(gs, &vis)
+    if row < 0 || row >= n do return -1
+    return vis[row]
+}
+
+// Anvil offer slot i (0..2) top-left corner.
+craft_offer_rect :: proc(i: int) -> (x, y: i32) {
+    return i32(CRAFT_X + 4 + i*(SLOT_PX + CRAFT_SLOT_GAP)), i32(CRAFT_Y + 14)
+}
+
+// Candidate result slot j top-left corner.
+craft_result_rect :: proc(j: int) -> (x, y: i32) {
+    return i32(CRAFT_X + 4 + j*(SLOT_PX + CRAFT_SLOT_GAP)), i32(CRAFT_Y + 80)
+}
+
+// Anvil offer slot under the cursor, or -1.
+craft_offer_at_cursor :: proc(gs: ^Game_State) -> int {
+    if !gs.ui.show_crafting do return -1
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    for i in 0 ..< len(gs.ui.craft_offer) {
+        x, y := craft_offer_rect(i)
+        if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return i
+    }
+    return -1
+}
+
+// Recipe-table index of the candidate result under the cursor, or -1.
+craft_result_at_cursor :: proc(gs: ^Game_State) -> int {
+    if !gs.ui.show_crafting do return -1
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    matches: [len(recipe_table)]int
+    m := offer_matches(gs, &matches)
+    for j in 0 ..< m {
+        x, y := craft_result_rect(j)
+        if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return matches[j]
+    }
+    return -1
 }
 
 // ─── Drawing ──────────────────────────────────────────────────────────────────
@@ -454,6 +498,12 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
+    if gs.ui.drag_item != .None {
+        mx := i32(gs.input.mouse_screen.x)
+        my := i32(gs.input.mouse_screen.y)
+        rl.DrawRectangle(mx - 12, my - 12, 24, 24, item_table[gs.ui.drag_item].color)
+        rl.DrawRectangleLines(mx - 12, my - 12, 24, 24, NORSE_GOLD_HOT)
+    }
     if gs.ui.show_blueprint do draw_blueprint(gs)
     if gs.game_won do draw_win_screen(gs)
     if gs.player.dead do draw_death_screen(gs)
@@ -672,15 +722,75 @@ draw_inventory :: proc(gs: ^Game_State) {
 }
 
 draw_crafting :: proc(gs: ^Game_State) {
-    h := i32(len(recipe_table))*CRAFT_ROW_H + 8
+    vis: [len(recipe_table)]int
+    n := visible_recipes(gs, &vis)
+    near := stations_in_range(gs)
+    any_station := near[.Bench] || near[.Forge] || near[.Rune_Altar]
+
+    h := i32(CRAFT_OFFER_H) + i32(n)*CRAFT_ROW_H + 8
     rl.DrawRectangle(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_bg)
     rl.DrawRectangleLines(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_border)
     rl.DrawText("CRAFTING", CRAFT_X, CRAFT_Y - 22, 10,
-        player_near_bench(gs) ? rl.GREEN : text_dim)
+        any_station ? rl.GREEN : text_dim)
 
-    for i in 0 ..< len(recipe_table) {
-        r := &recipe_table[i]
-        y := i32(CRAFT_Y) + 4 + i32(i)*CRAFT_ROW_H
+    // Anvil: offer slots hold references — the items themselves stay in the
+    // bag until a result is actually crafted.
+    rl.DrawText("LAY ON THE ANVIL  (drag from bag, click to take back)",
+        CRAFT_X + 4, CRAFT_Y + 2, 10, text_dim)
+    hov_offer := craft_offer_at_cursor(gs)
+    for it, i in gs.ui.craft_offer {
+        x, y := craft_offer_rect(i)
+        rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, slot_bg)
+        rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX},
+            hov_offer == i ? 2 : 1, hov_offer == i ? NORSE_GOLD_HOT : panel_border)
+        if it != .None {
+            rl.DrawRectangle(x + 10, y + 8, 24, 24, item_table[it].color)
+            cnt_buf: [8]u8
+            fmt.bprintf(cnt_buf[:7], "%d", inventory_count(&gs.player.inventory, it))
+            rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
+        }
+    }
+
+    // Candidate results: everything the offered set could become here.
+    // Green = craftable now, dim = matching shape but missing amounts.
+    rl.DrawText("TAKES SHAPE", CRAFT_X + 4, CRAFT_Y + 66, 10, text_dim)
+    matches: [len(recipe_table)]int
+    m := offer_matches(gs, &matches)
+    hov_result := craft_result_at_cursor(gs)
+    if hov_result >= 0 {
+        rl.DrawText(cstring(raw_data(item_table[recipe_table[hov_result].result].name)),
+            CRAFT_X + 90, CRAFT_Y + 66, 10, NORSE_GOLD_HOT)
+    }
+    if m == 0 {
+        offered := false
+        for it in gs.ui.craft_offer do if it != .None do offered = true
+        rl.DrawText(offered ? "these materials shape nothing here" :
+            "lay materials to see what they may become",
+            CRAFT_X + 4, CRAFT_Y + 94, 10, text_dim)
+    }
+    for j in 0 ..< m {
+        r := &recipe_table[matches[j]]
+        x, y := craft_result_rect(j)
+        ok := recipe_craftable(gs, r)
+        rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, slot_bg)
+        border := panel_border
+        if ok do border = hov_result == matches[j] ? NORSE_GOLD_HOT : rl.GREEN
+        rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX}, ok ? 2 : 1, border)
+        col := item_table[r.result].color
+        if !ok do col.a = 110
+        rl.DrawRectangle(x + 10, y + 8, 24, 24, col)
+        if r.result_count > 1 {
+            cnt_buf: [8]u8
+            fmt.bprintf(cnt_buf[:7], "x%d", r.result_count)
+            rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
+        }
+    }
+
+    // Recipe hints: click a row to load its materials onto the anvil.
+    rl.DrawRectangle(CRAFT_X - 2, CRAFT_Y + CRAFT_OFFER_H - 6, CRAFT_W + 4, 1, panel_border)
+    for row in 0 ..< n {
+        r := &recipe_table[vis[row]]
+        y := i32(CRAFT_Y) + CRAFT_OFFER_H + 4 + i32(row)*CRAFT_ROW_H
 
         row_buf: [128]u8
         pos := 0
@@ -691,13 +801,13 @@ draw_crafting :: proc(gs: ^Game_State) {
             s = fmt.bprintf(row_buf[pos:120], "%d %s  ", ing.count, item_table[ing.item].name)
             pos += len(s)
         }
-        if r.needs_bench {
-            s = fmt.bprintf(row_buf[pos:126], "[bench]")
+        if r.station != .None {
+            s = fmt.bprintf(row_buf[pos:126], "%s", station_tag[r.station])
             pos += len(s)
         }
 
         col := recipe_craftable(gs, r) ? rl.GREEN : text_dim
-        rl.DrawText(cstring(raw_data(row_buf[:])), CRAFT_X + 4, y + 6, 10, col)
+        rl.DrawText(cstring(raw_data(row_buf[:])), CRAFT_X + 4, y + 5, 10, col)
     }
 }
 
