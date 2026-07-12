@@ -33,6 +33,10 @@ game_update :: proc(gs: ^Game_State) {
     // 5b. Sim  (stub)
     // update_sim(gs)
 
+    // 5c. Station focus — nearest interactable station, for the prompt,
+    //     tile highlight and click handler (writes UI_State only)
+    update_station_focus(gs)
+
     // 6. Events — drains the queue completely, including events pushed by
     //    handlers mid-drain.  Systems ordered AFTER this step must not push
     //    events: they would be destroyed unprocessed by the clear below.

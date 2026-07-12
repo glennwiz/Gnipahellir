@@ -123,6 +123,12 @@ process_events :: proc(gs: ^Game_State) {
         case .Craft_Complete:
             audio_play(&gs.audio, .Pickup)
 
+        case .Station_Interact:
+            gs.ui.active_station = Station(e.payload.int_val)
+            gs.ui.show_crafting  = true
+            gs.ui.show_inventory = true  // the anvil drags from the bag
+            log_action(gs, "Player opens %v station", gs.ui.active_station)
+
         case .Projectile_Fired:
             // damage/impact handled in update_projectiles
             audio_play(&gs.audio, .Fireball, audio_tile_gain(gs, e.tile))

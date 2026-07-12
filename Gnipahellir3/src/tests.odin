@@ -675,12 +675,14 @@ anvil_offer_matching :: proc(t: ^testing.T) {
     testing.expect_value(t, n, 1)
     testing.expect_value(t, recipe_table[buf[0]].result, Item.Plank)
 
-    // Iron + plank in the wilderness: nothing — all its shapes are bench work
+    // Iron + plank with the hand window: nothing — all its shapes are bench work
     gs.ui.craft_offer = {.Iron_Ore, .Plank, .None}
     testing.expect_value(t, offer_matches(gs, &buf), 0)
 
-    // At a bench the same offer is ambiguous: sword, wand and five armor pieces
+    // With the window opened at a bench the same offer is ambiguous:
+    // sword, wand and five armor pieces
     set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    gs.ui.active_station = .Bench
     testing.expect_value(t, offer_matches(gs, &buf), 7)
 
     // An extra material breaks the set — no partial matches

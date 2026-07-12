@@ -34,6 +34,15 @@ station_tag := [Station]string{
     .Rune_Altar = "[altar]",
 }
 
+// Window title and interact-prompt name, per station.
+@(rodata)
+station_title := [Station]cstring{
+    .None       = "CRAFTING",
+    .Bench      = "CRAFTING BENCH",
+    .Forge      = "DVERGR FORGE",
+    .Rune_Altar = "RUNE ALTAR",
+}
+
 Ingredient :: struct {
     item:  Item,
     count: int,
@@ -118,21 +127,57 @@ player_near_station :: proc(gs: ^Game_State, st: Station) -> bool {
     return stations_in_range(gs)[st]
 }
 
+// The station on a tile, or .None.
+station_at_tile :: proc(w: ^World_Grid, tx, ty: i32) -> Station {
+    t := get_tile(w, int(tx), int(ty))
+    for st in Station {
+        if st != .None && station_tile[st] == t do return st
+    }
+    return .None
+}
+
+// Nearest interactable station within BENCH_RANGE of the player — scanned
+// ring by ring (chebyshev) so the closest tile wins.  .None when nothing near.
+nearest_station :: proc(gs: ^Game_State) -> (st: Station, tile: [2]i32) {
+    cx := int(gs.player.pos.x + PLAYER_W*0.5)
+    cy := int(gs.player.pos.y + PLAYER_H*0.5)
+    for r in 0 ..= BENCH_RANGE {
+        for dy in -r ..= r {
+            for dx in -r ..= r {
+                if max(abs(dx), abs(dy)) != r do continue  // shell of this ring only
+                if s := station_at_tile(&gs.world, i32(cx+dx), i32(cy+dy)); s != .None {
+                    return s, {i32(cx + dx), i32(cy + dy)}
+                }
+            }
+        }
+    }
+    return .None, {}
+}
+
+// Per-frame station focus: the station the player could interact with right
+// now, read by the hover prompt, tile highlight and click handler.
+update_station_focus :: proc(gs: ^Game_State) {
+    if gs.player.dead {
+        gs.ui.focus_station = .None
+        return
+    }
+    gs.ui.focus_station, gs.ui.focus_tile = nearest_station(gs)
+}
+
 // All recipes whose ingredient item-set equals the offered set (order-
-// insensitive, no extras, nothing missing) and whose station is in range.
-// One offer can match several recipes — iron + plank alone could become a
-// sword, a wand or any iron armor piece — so the anvil shows every candidate
-// and the player clicks the result they want.  Counts are NOT checked here:
-// candidates you lack materials for still show (dim), recipe_craftable gates
-// the actual craft.
+// insensitive, no extras, nothing missing) and whose station matches the one
+// the window was opened at (hand recipes always match).  One offer can match
+// several recipes — iron + plank alone could become a sword, a wand or any
+// iron armor piece — so the anvil shows every candidate and the player clicks
+// the result they want.  Counts are NOT checked here: candidates you lack
+// materials for still show (dim), recipe_craftable gates the actual craft.
 offer_matches :: proc(gs: ^Game_State, buf: ^[len(recipe_table)]int) -> int {
     n_offer := 0
     for it in gs.ui.craft_offer do if it != .None do n_offer += 1
     if n_offer == 0 do return 0
-    near := stations_in_range(gs)
     n := 0
     outer: for r, i in recipe_table {
-        if !near[r.station] do continue
+        if r.station != .None && r.station != gs.ui.active_station do continue
         n_ing := 0
         for ing in r.ingredients {
             if ing.item == .None do continue
@@ -151,14 +196,14 @@ offer_matches :: proc(gs: ^Game_State, buf: ^[len(recipe_table)]int) -> int {
     return n
 }
 
-// Recipes shown in the crafting window: hand recipes plus those whose station
-// is in range.  Fills idx_buf with recipe-table indices, returns the count.
-// Draw and cursor hit-test both use this so rows always line up.
+// Recipes shown in the crafting window: hand recipes plus those of the
+// station the window was opened at (ui.active_station; .None = hand only).
+// Fills idx_buf with recipe-table indices, returns the count.  Draw and
+// cursor hit-test both use this so rows always line up.
 visible_recipes :: proc(gs: ^Game_State, idx_buf: ^[len(recipe_table)]int) -> int {
-    near := stations_in_range(gs)
     n := 0
     for r, i in recipe_table {
-        if !near[r.station] do continue
+        if r.station != .None && r.station != gs.ui.active_station do continue
         idx_buf[n] = i
         n += 1
     }

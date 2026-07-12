@@ -496,9 +496,21 @@ craft_result_at_cursor :: proc(gs: ^Game_State) -> int {
 
 // ─── Drawing ──────────────────────────────────────────────────────────────────
 
+// "[E] CRAFTING BENCH" while a station is in reach — hidden once the window
+// is open.  Reads the focus computed by update_station_focus.
+draw_station_prompt :: proc(gs: ^Game_State) {
+    if gs.ui.focus_station == .None || gs.ui.show_crafting do return
+    buf: [48]u8
+    fmt.bprintf(buf[:47], "[%v] %v", gs.bindings[.Interact], station_title[gs.ui.focus_station])
+    text := cstring(raw_data(buf[:]))
+    w := rl.MeasureText(text, 20)
+    rl.DrawText(text, (SCREEN_W - w)/2, SCREEN_H - 130, 20, NORSE_GOLD_HOT)
+}
+
 draw_ui :: proc(gs: ^Game_State) {
     draw_hud(gs)
     draw_notifications(gs)
+    draw_station_prompt(gs)
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
@@ -728,14 +740,13 @@ draw_inventory :: proc(gs: ^Game_State) {
 draw_crafting :: proc(gs: ^Game_State) {
     vis: [len(recipe_table)]int
     n := visible_recipes(gs, &vis)
-    near := stations_in_range(gs)
-    any_station := near[.Bench] || near[.Forge] || near[.Rune_Altar]
+    in_reach := player_near_station(gs, gs.ui.active_station)
 
     h := i32(CRAFT_OFFER_H) + i32(n)*CRAFT_ROW_H + 8
     rl.DrawRectangle(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_bg)
     rl.DrawRectangleLines(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_border)
-    rl.DrawText("CRAFTING", CRAFT_X, CRAFT_Y - 22, 10,
-        any_station ? rl.GREEN : text_dim)
+    rl.DrawText(station_title[gs.ui.active_station], CRAFT_X, CRAFT_Y - 22, 10,
+        in_reach ? rl.GREEN : text_dim)
 
     // Anvil: offer slots hold references — the items themselves stay in the
     // bag until a result is actually crafted.

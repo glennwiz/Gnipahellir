@@ -164,6 +164,11 @@ player_interact :: proc(gs: ^Game_State) {
             }
         }
     }
+
+    // A crafting station in reach opens its crafting window.
+    if st, _ := nearest_station(gs); st != .None {
+        eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})
+    }
 }
 
 // ─── Sky Structure Ritual ─────────────────────────────────────────────────────

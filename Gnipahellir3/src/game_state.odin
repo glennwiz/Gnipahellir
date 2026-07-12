@@ -232,6 +232,9 @@ UI_State :: struct {
     settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
     craft_offer:     [3]Item, // anvil offering slots — references, items stay in the bag
     drag_item:       Item,    // bag stack being dragged onto the anvil (.None = no drag)
+    active_station:  Station, // station the crafting window was opened at (.None = hand crafting)
+    focus_station:   Station, // nearest interactable station in range this frame (.None = none)
+    focus_tile:      [2]i32,  // its tile — anchor for the highlight and prompt
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
 }
