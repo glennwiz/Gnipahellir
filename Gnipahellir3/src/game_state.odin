@@ -315,6 +315,7 @@ Game_State :: struct {
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,
+    ambience_timer: f32,   // countdown to the next ambient-mote probe pass
     mining:      Mining_Action,
     events:      Event_Queue,
 

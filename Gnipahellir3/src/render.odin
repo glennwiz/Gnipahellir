@@ -97,6 +97,20 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     // all others default to .Solid (zero value)
 }
 
+// Stations read as magical in-world: a dark base, a breathing glow in the
+// station's color, and the same pixel-art icon the bag shows.  Zero alpha
+// (absent) = not a station.  update_ambience also reads this table to shed
+// rising sparks off station tiles.
+@(rodata)
+station_glow := #partial [Tile_Type]rl.Color{
+    .Crafting_Bench = {255, 200, 90, 255},   // hearth gold
+    .Tree_Grower    = {110, 230, 110, 255},  // living green
+    .Smelter        = {255, 120, 30, 255},   // furnace ember
+    .Sky_Altar      = {130, 200, 255, 255},  // sky blue
+    .Dvergr_Forge   = {255, 150, 60, 255},   // forge fire
+    .Rune_Altar     = {190, 120, 255, 255},  // rune purple
+}
+
 // ─── World / Terrain ──────────────────────────────────────────────────────────
 
 // Outline drawn on every solid tile (not sky/void) — a test grid.  The camera
@@ -164,6 +178,15 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
             if t == .Stone do rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, STONE_TINT)
             return
         }
+    }
+    if glow := station_glow[t]; glow.a != 0 {
+        rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, rl.Color{24, 22, 30, 255})
+        pulse := (math.sin(gs.elapsed_time*2.4 + f32(x*7 + y*13)) + 1) * 0.5
+        g := glow
+        g.a = u8(60 + pulse*90)
+        rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, g)
+        draw_item_icon(terrain_table[t].drop_item, px, py, CELL_SIZE)
+        return
     }
     switch tile_draw_style[t] {
     case .Pixel_Wood:   draw_pixel_wood(px, py)

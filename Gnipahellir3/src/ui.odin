@@ -89,7 +89,7 @@ title_runes := [11]Rune_Glyph{  // G N I P A H E L L I R
 }
 
 // One glyph, rotated about its own center, glow pass under the core stroke.
-draw_title_rune :: proc(g: Rune_Glyph, cx, cy, size, rot: f32, col: rl.Color) {
+draw_title_rune :: proc(g: Rune_Glyph, cx, cy, size, rot: f32, col: rl.Color, core: f32 = 3, glow_w: f32 = 8) {
     cr := math.cos(rot)
     sr := math.sin(rot)
     for k in 0 ..< g.n {
@@ -99,8 +99,19 @@ draw_title_rune :: proc(g: Rune_Glyph, cx, cy, size, rot: f32, col: rl.Color) {
         b  := rl.Vector2{cx + p2.x*cr - p2.y*sr, cy + p2.x*sr + p2.y*cr}
         glow := col
         glow.a = col.a / 4
-        rl.DrawLineEx(a, b, 8, glow)
-        rl.DrawLineEx(a, b, 3, col)
+        rl.DrawLineEx(a, b, glow_w, glow)
+        rl.DrawLineEx(a, b, core, col)
+    }
+}
+
+// GNIPAHELLIR as a quiet horizontal rune band, centered on cx — dressing
+// for panel headers.
+draw_rune_strip :: proc(cx, cy, size: f32, col: rl.Color) {
+    step := size * 1.8
+    x := cx - step * f32(len(title_runes) - 1) / 2
+    for g in title_runes {
+        draw_title_rune(g, x, cy, size, 0, col, 2, 4)
+        x += step
     }
 }
 
@@ -685,6 +696,7 @@ draw_inventory :: proc(gs: ^Game_State) {
     rl.DrawRectangle(INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H, NORSE_PANEL)
     rl.DrawRectangleLinesEx({INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H}, 2, NORSE_BORDER)
     rl.DrawText("INVENTORY", INV_PANEL_X + 24, INV_PANEL_Y + 16, 26, NORSE_GOLD_HOT)
+    draw_rune_strip(f32(INV_PANEL_X) + 295, f32(INV_PANEL_Y) + 30, 11, rl.Color{200, 150, 70, 110})
     rl.DrawText("[TAB] close", INV_PANEL_X + INV_PANEL_W - 106, INV_PANEL_Y + 24, 12, NORSE_GOLD)
     rl.DrawRectangle(INV_PANEL_X + 24, INV_PANEL_Y + 52, INV_PANEL_W - 48, 2, NORSE_BORDER)
 
@@ -748,6 +760,7 @@ draw_crafting :: proc(gs: ^Game_State) {
     rl.DrawRectangleLines(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_border)
     rl.DrawText(station_title[gs.ui.active_station], CRAFT_X, CRAFT_Y - 22, 10,
         in_reach ? rl.GREEN : text_dim)
+    draw_rune_strip(f32(CRAFT_X + CRAFT_W) - 100, f32(CRAFT_Y) - 17, 8, rl.Color{200, 150, 70, 90})
 
     // Anvil: offer slots hold references — the items themselves stay in the
     // bag until a result is actually crafted.

@@ -122,6 +122,7 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Craft_Complete:
             audio_play(&gs.audio, .Pickup)
+            spawn_craft_burst(gs, Item(e.payload.int_val))
 
         case .Station_Interact:
             gs.ui.active_station = Station(e.payload.int_val)

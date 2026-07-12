@@ -1814,3 +1814,18 @@ item_icons_are_well_formed :: proc(t: ^testing.T) {
         testing.expect(t, opaque > 0, "icon draws nothing")
     }
 }
+
+@(test)
+ambience_breathes_motes_into_the_air :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // ~10 s of ticks on the surface: the probe pass must find open air and
+    // shed drifting motes into the particle pool.
+    for _ in 0 ..< 600 {
+        gs.frame += 1
+        update_ambience(gs)
+        update_particles(gs)
+    }
+    testing.expect(t, gs.particles.count > 0, "no ambient motes spawned")
+}

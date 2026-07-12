@@ -70,6 +70,73 @@ spawn_blast_sparks :: proc(gs: ^Game_State, T: [2]i32) {
     }
 }
 
+// Craft success: a slow ring of sparks blooms off the crafter — gold and
+// rune-light woven with the crafted item's own color, drifting upward.
+spawn_craft_burst :: proc(gs: ^Game_State, it: Item) {
+    p := &gs.player
+    center := [2]f32{p.pos.x + PLAYER_W/2, p.pos.y + PLAYER_H/2}
+    RING :: 18
+    for i in 0 ..< RING {
+        seed  := u32(gs.frame)*17 + u32(i)*611
+        angle := f32(i) * (2 * math.PI / RING)
+        speed := 3 + jitter(seed, 1.5)
+        vel   := [2]f32{math.cos(angle) * speed, math.sin(angle) * speed - 2}
+        color := item_table[it].color
+        switch i % 3 {
+        case 1: color = rl.Color{255, 220, 80, 255}   // gold
+        case 2: color = rl.Color{225, 185, 255, 255}  // rune-light
+        }
+        spawn_particle(&gs.particles, center, vel, color,
+            0.6 + jitter(seed + 1, 0.2), f32(i % 5) * 0.03)
+    }
+}
+
+// ─── Ambience ─────────────────────────────────────────────────────────────────
+//
+//  Stray motes of magic drifting up through each level's air, and station
+//  tiles shedding the occasional rising spark in their glow color.  Random
+//  tile sampling keeps it cheap: a few probes per tick over the whole grid.
+
+AMBIENCE_INTERVAL :: 0.12
+AMBIENCE_PROBES   :: 4
+AMBIENCE_CHANCE   :: 30 // % of air probes that become a mote
+
+// Mote colors per level: surface gold, cave2 cold blue, cave3 hell embers,
+// sky aurora.
+@(rodata)
+level_mote_colors := [4][2]rl.Color{
+    LEVEL_SURFACE = {{255, 226, 130, 200}, {200, 240, 160, 170}},
+    LEVEL_CAVE2   = {{140, 170, 230, 170}, {120, 220, 210, 150}},
+    LEVEL_CAVE3   = {{255, 140, 60, 200}, {230, 70, 40, 180}},
+    LEVEL_SKY     = {{170, 240, 255, 200}, {230, 190, 255, 190}},
+}
+
+update_ambience :: proc(gs: ^Game_State) {
+    gs.ambience_timer -= gs.delta_time
+    if gs.ambience_timer > 0 do return
+    gs.ambience_timer = AMBIENCE_INTERVAL
+
+    for i in 0 ..< AMBIENCE_PROBES {
+        seed := u32(gs.frame)*31 + u32(i)*977
+        x := int(whash(seed) % GRID_W)
+        y := int(whash(seed ~ 0x9E3779B9) % GRID_H)
+        t := get_tile(&gs.world, x, y)
+        pos := [2]f32{f32(x) + 0.5 + jitter(seed + 3, 0.4), f32(y) + 0.5}
+
+        if glow := station_glow[t]; glow.a != 0 {
+            // A station breathes out a spark that rises and dies quickly.
+            spawn_particle(&gs.particles, {pos.x, f32(y) + 0.2},
+                {jitter(seed + 5, 0.5), -1.6 + jitter(seed + 7, 0.4)},
+                glow, 0.9)
+        } else if t == .Air && whash(seed + 11) % 100 < AMBIENCE_CHANCE {
+            color := level_mote_colors[gs.level_index][int(whash(seed + 13) % 2)]
+            spawn_particle(&gs.particles, pos,
+                {jitter(seed + 17, 0.3), -0.35 + jitter(seed + 19, 0.15)},
+                color, 3 + jitter(seed + 23, 1.5))
+        }
+    }
+}
+
 // Step 8 in game_update — visual only, pushes no events.
 update_particles :: proc(gs: ^Game_State) {
     dt := gs.delta_time
