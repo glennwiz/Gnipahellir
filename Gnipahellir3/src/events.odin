@@ -50,12 +50,22 @@ process_events :: proc(gs: ^Game_State) {
         case .Damage_Dealt:
             if e.target == PLAYER_ID {
                 if !gs.player.dead {
-                    gs.player.hp -= int(e.payload.int_val)
-                    audio_play(&gs.audio, .Hurt)
-                    log_action(gs, "Player takes %d damage (hp %d)", e.payload.int_val, gs.player.hp)
-                    if gs.player.hp <= 0 {
-                        gs.player.hp = 0
-                        eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+                    dmg := int(e.payload.int_val)
+                    // Armor blunts enemy blows; the world (lava, falls —
+                    // source INVALID_ENTITY) strikes past it.
+                    if e.source != PLAYER_ID && e.source != INVALID_ENTITY {
+                        dmg = max(dmg - int(player_stat(&gs.player, .Defense)), 0)
+                    }
+                    if dmg > 0 {
+                        gs.player.hp -= dmg
+                        audio_play(&gs.audio, .Hurt)
+                        log_action(gs, "Player takes %d damage (hp %d)", dmg, gs.player.hp)
+                        if gs.player.hp <= 0 {
+                            gs.player.hp = 0
+                            eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+                        }
+                    } else {
+                        log_action(gs, "Player's armor absorbs the blow")
                     }
                 }
             } else {
@@ -199,6 +209,12 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Ritual_Request:
             handle_ritual_request(gs)
+
+        case .Equip_Request:
+            player_equip(gs, int(e.payload.int_val))
+
+        case .Unequip_Request:
+            player_unequip(gs, Equip_Slot(e.payload.int_val))
 
         case .New_Game_Request:
             start_new_game(gs)

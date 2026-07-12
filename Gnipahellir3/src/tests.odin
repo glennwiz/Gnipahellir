@@ -869,8 +869,10 @@ sword_melee_kills_builders :: proc(t: ^testing.T) {
     process_events(gs)
     testing.expect_value(t, e.hp, 6)
 
-    // First swing wounds and enrages
+    // First swing wounds and enrages (sword must be equipped, not just bagged)
     inventory_insert(&gs.player.inventory, .Sword, 1)
+    player_equip(gs, 1)   // test_state put the pickaxe in slot 0
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Sword)
     gs.player.attack_timer = 0
     update_player(gs)
     process_events(gs)
@@ -910,11 +912,102 @@ sword_respects_reach :: proc(t: ^testing.T) {
     entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
 
     inventory_insert(&gs.player.inventory, .Sword, 1)
+    player_equip(gs, 1)   // test_state put the pickaxe in slot 0
     gs.input.attack     = true
     gs.input.mouse_tile = builder_tile(e)
     update_player(gs)
     process_events(gs)
     testing.expect_value(t, e.hp, 6)
+}
+
+@(test)
+equip_swaps_through_events_and_never_destroys_gear :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    p := &gs.player
+
+    // Equip via the event route — the same path input.odin pushes.
+    inventory_insert(&p.inventory, .Sword, 1)
+    eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = 1}})
+    process_events(gs)
+    testing.expect_value(t, p.equipment[.Weapon], Item.Sword)
+    testing.expect_value(t, inventory_count(&p.inventory, .Sword), 0)
+
+    // Swapping in a silver sword hands the old sword back to the bag.
+    inventory_insert(&p.inventory, .Silver_Sword, 1)
+    player_equip(gs, 1)
+    testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
+    testing.expect_value(t, inventory_count(&p.inventory, .Sword), 1)
+
+    // Bag stuffed full, source slot still stacked: the displaced weapon has
+    // nowhere to go, so the swap is refused — nothing is destroyed.
+    for &s in p.inventory.slots { s.item = .Stone_Block; s.count = MAX_STACK }
+    p.inventory.slots[1] = {.Gold_Sword, 2}
+    player_equip(gs, 1)
+    testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
+    testing.expect_value(t, p.inventory.slots[1].count, 2)
+
+    // Unequip into a full bag is likewise refused.
+    player_unequip(gs, .Weapon)
+    testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
+}
+
+@(test)
+armor_blunts_enemy_blows_but_not_the_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    inventory_insert(&gs.player.inventory, .Iron_Chestplate, 1)
+    player_equip(gs, 1)   // test_state put the pickaxe in slot 0
+    testing.expect_value(t, gs.player.equipment[.Chest], Item.Iron_Chestplate)
+    testing.expect_value(t, player_stat(&gs.player, .Defense), i32(1))
+
+    // An enemy bite for 2 lands for 1 through defense 1.
+    hp := gs.player.hp
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(0),
+        target = PLAYER_ID, payload = {int_val = 2}})
+    process_events(gs)
+    testing.expect_value(t, gs.player.hp, hp - 1)
+
+    // The world (lava, falls — source INVALID_ENTITY) strikes past armor.
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
+        target = PLAYER_ID, payload = {int_val = 2}})
+    process_events(gs)
+    testing.expect_value(t, gs.player.hp, hp - 3)
+}
+
+@(test)
+fall_damage_measures_the_drop_from_the_peak :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    p := &gs.player
+
+    // Settle onto the ground first so the fall arms on a real ledge-off.
+    for _ in 0 ..< 300 {
+        update_player(gs)
+        process_events(gs)
+        if p.grounded do break
+    }
+    testing.expect(t, p.grounded, "player should settle onto the surface")
+    hp := p.hp
+
+    // A short 3-tile hoist is under SAFE_FALL_TILES: lands clean.
+    p.pos.y -= 3
+    for _ in 0 ..< 300 {
+        update_player(gs)
+        process_events(gs)
+        if p.grounded do break
+    }
+    testing.expect_value(t, p.hp, hp)
+
+    // A 10-tile drop: 5 tiles past safe -> int(5/2)+1 = 3 damage.
+    p.pos.y -= 10
+    for _ in 0 ..< 300 {
+        update_player(gs)
+        process_events(gs)
+        if p.grounded do break
+    }
+    testing.expect_value(t, p.hp, hp - 3)
 }
 
 @(test)

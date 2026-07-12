@@ -34,6 +34,28 @@ recipe_table := [?]Recipe{
     { .Mine_Wand,        1, true, {{.Plank, 2},            {.Iron_Ore, 4},   {}} },
     { .Mine_Wand_Silver, 1, true, {{.Mine_Wand, 1},        {.Silver_Ore, 6}, {}} },
     { .Mine_Wand_Gold,   1, true, {{.Mine_Wand_Silver, 1}, {.Gold_Ore, 6},   {}} },
+    // Weapon ladder — same pattern as the wands.
+    { .Silver_Sword,   1, true,  {{.Sword, 1},        {.Silver_Ore, 6}, {}} },
+    { .Gold_Sword,     1, true,  {{.Silver_Sword, 1}, {.Gold_Ore, 6},   {}} },
+    // Armor: forge iron pieces, then upgrade each through silver into gold
+    // (right-click a piece in the bag to wear it).
+    { .Iron_Helm,       1, true, {{.Iron_Ore, 3}, {.Plank, 1}, {}} },
+    { .Iron_Chestplate, 1, true, {{.Iron_Ore, 5}, {.Plank, 2}, {}} },
+    { .Iron_Gauntlets,  1, true, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
+    { .Iron_Greaves,    1, true, {{.Iron_Ore, 4}, {.Plank, 1}, {}} },
+    { .Iron_Boots,      1, true, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
+    { .Silver_Helm,       1, true, {{.Iron_Helm, 1},       {.Silver_Ore, 4}, {}} },
+    { .Silver_Chestplate, 1, true, {{.Iron_Chestplate, 1}, {.Silver_Ore, 6}, {}} },
+    { .Silver_Gauntlets,  1, true, {{.Iron_Gauntlets, 1},  {.Silver_Ore, 3}, {}} },
+    { .Silver_Greaves,    1, true, {{.Iron_Greaves, 1},    {.Silver_Ore, 5}, {}} },
+    { .Silver_Boots,      1, true, {{.Iron_Boots, 1},      {.Silver_Ore, 3}, {}} },
+    { .Gold_Helm,       1, true, {{.Silver_Helm, 1},       {.Gold_Ore, 4}, {}} },
+    { .Gold_Chestplate, 1, true, {{.Silver_Chestplate, 1}, {.Gold_Ore, 6}, {}} },
+    { .Gold_Gauntlets,  1, true, {{.Silver_Gauntlets, 1},  {.Gold_Ore, 3}, {}} },
+    { .Gold_Greaves,    1, true, {{.Silver_Greaves, 1},    {.Gold_Ore, 5}, {}} },
+    { .Gold_Boots,      1, true, {{.Silver_Boots, 1},      {.Gold_Ore, 3}, {}} },
+    // Trinkets
+    { .Aether_Charm,   1, true,  {{.Aether_Crystal, 3}, {.Gold_Ore, 1}, {}} },
 }
 
 player_near_bench :: proc(gs: ^Game_State) -> bool {

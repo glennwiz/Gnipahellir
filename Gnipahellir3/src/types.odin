@@ -94,6 +94,41 @@ Item :: enum u8 {
     Cloud_Stone,
     Aether_Crystal,
     Runic_Sky_Ore,
+    Aether_Charm,
+    // Weapon ladder (base Sword is above)
+    Silver_Sword,
+    Gold_Sword,
+    // Armor: 5 pieces × 3 tiers, upgraded at a bench like the wands
+    Iron_Helm,       Silver_Helm,       Gold_Helm,
+    Iron_Chestplate, Silver_Chestplate, Gold_Chestplate,
+    Iron_Gauntlets,  Silver_Gauntlets,  Gold_Gauntlets,
+    Iron_Greaves,    Silver_Greaves,    Gold_Greaves,
+    Iron_Boots,      Silver_Boots,      Gold_Boots,
+}
+
+// ─── Stats & Equipment ────────────────────────────────────────────────────────
+//
+//  Table-driven: base values live in player_base_stats, per-item bonuses in
+//  item_stat_bonus (items.odin).  Only equipped gear counts — bag items are
+//  inert.  Defense blunts enemy-dealt damage only; the world (lava, falls,
+//  source == INVALID_ENTITY) ignores armor.
+
+Stat :: enum u8 {
+    Attack,    // melee damage per swing (a weapon must be equipped to swing)
+    Defense,   // subtracted from enemy-dealt damage
+    Max_HP,
+    Speed,     // horizontal move speed, tiles/s
+}
+
+Equip_Slot :: enum u8 {
+    None,      // zero value: the item is not equippable
+    Weapon,
+    Head,
+    Chest,
+    Hands,
+    Legs,
+    Feet,
+    Charm,
 }
 
 // ─── Rebindable Actions ───────────────────────────────────────────────────────
@@ -190,6 +225,8 @@ Event_Type :: enum u8 {
     // Player world interaction
     Place_Request,   // tile = target; places the selected inventory item
     Ritual_Request,  // player activated a sky altar
+    Equip_Request,   // int_val = bag slot; wear/wield that slot's item
+    Unequip_Request, // int_val = Equip_Slot; the gear returns to the bag
 
     // Menu
     New_Game_Request,   // "New Game" clicked — wipes the save and resets state
