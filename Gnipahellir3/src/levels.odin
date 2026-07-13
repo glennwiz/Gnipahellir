@@ -193,6 +193,15 @@ player_interact :: proc(gs: ^Game_State) {
         }
     }
 
+    // The Auto-Miner's base in reach: claim the haul.
+    if gs.level_index == LEVEL_DIMENSION && gs.dimension.miner.active {
+        b := gs.dimension.miner.base
+        if max(abs(b.x - i32(cx)), abs(b.y - i32(cy))) <= BENCH_RANGE {
+            miner_withdraw(gs)
+            return
+        }
+    }
+
     // A crafting station in reach opens its crafting window.
     if st, _ := nearest_station(gs); st != .None {
         eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})

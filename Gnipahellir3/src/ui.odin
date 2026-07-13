@@ -441,7 +441,7 @@ DBG_MENU_X     :: 24
 DBG_MENU_Y     :: 80
 DBG_MENU_W     :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS  :: 7   // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana
+DBG_MENU_ROWS  :: 10  // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:give miner
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -473,6 +473,13 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     rl.DrawText("Add resource stack >", DBG_MENU_X, DBG_MENU_Y + 4*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
     rl.DrawText("Full HP >", DBG_MENU_X, DBG_MENU_Y + 5*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
     rl.DrawText("Max mana >", DBG_MENU_X, DBG_MENU_Y + 6*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+
+    // Snake-miner test kit: stamp a spawner with the next click, get a miner.
+    ms_col := gs.debug.place_tile == .Dimension_Spawner ? rl.GREEN : rl.YELLOW
+    gs_col := gs.debug.place_tile == .Dimension_Spawner_Gold ? rl.GREEN : rl.YELLOW
+    rl.DrawText("Stamp Metal spawner >", DBG_MENU_X, DBG_MENU_Y + 7*DBG_MENU_ROW_H + 7, 10, ms_col)
+    rl.DrawText("Stamp Gold spawner >", DBG_MENU_X, DBG_MENU_Y + 8*DBG_MENU_ROW_H + 7, 10, gs_col)
+    rl.DrawText("Give Auto-Miner >", DBG_MENU_X, DBG_MENU_Y + 9*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
 
     if r := debug_menu_row_at_cursor(gs); r >= 0 {
         rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,

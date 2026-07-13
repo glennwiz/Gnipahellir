@@ -271,6 +271,7 @@ Debug_State :: struct {
     menu_open:  bool,
     fly:        bool,
     ultra_wand: bool,   // cheat: 13-tile mining wand, free, explosive impact
+    place_tile: Tile_Type,  // armed stamp: next world click sets this tile (.Air = off)
 }
 
 // ─── Sim ──────────────────────────────────────────────────────────────────────

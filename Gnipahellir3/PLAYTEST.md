@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, 73 tests, runs in about a second.
+Tests: `odin test src` — headless, 79 tests, runs in about a second.
 
 ## Controls
 
@@ -34,7 +34,7 @@ live in the working directory (`gnipahellir_save.dat`,
 
 | Key | Tool |
 |---|---|
-| F1 | Debug menu — click to toggle: **Fly mode** (W/S or ↑/↓ vertical, no gravity, collision stays on); **Ultra wand** (13-tile mining shots, free, impact blasts a 3×3 — needs no wand in the bag) |
+| F1 | Debug menu — click to toggle: **Fly mode** (W/S or ↑/↓ vertical, no gravity, collision stays on); **Ultra wand** (13-tile mining shots, free, impact blasts a 3×3 — needs no wand in the bag); **Stamp Metal/Gold spawner** (arms the cursor: the next world click stamps the spawner tile there, free); **Give Auto-Miner** (drops one in the bag) |
 | F3 | Debug overlay: player pos/vel, builder scan rays, hover tile |
 
 `action.log` records everything (flushed every 5 s + on quit) — after a
@@ -69,6 +69,21 @@ session. This is how the builder-freeze regression was diagnosed.
    the ring closes lava floods the floor — everything he builds is mineable.
    Kill him, grab the **Hell Key** where he fell: win screen. Won runs clear
    the save like deaths do.
+
+## The Auto-Miner (dimension automation)
+
+Craft it at the **Rune Altar** (6 Iron Bar + 2 Gold Bar + 1 Emerald), then
+place it **inside a spawned dimension** (it refuses anywhere else, one per
+expedition). A metal snake grows from the base, tunneling block by block to
+the nearest ore — ore and tunneled stone accumulate in the base's wide tray
+(thousands fit). **E** beside the base claims the haul in 99-stacks. **Q-drop
+a gem** next to the base to permanently raise its speed (emerald ×1.5 → jade
+×2 → diamond ×3 → hel gem ×5; base rate one block per 3 s ≈ 1.5–2 h to strip
+a world). While a miner works, its dimension is **anchored** — it stops
+regenerating, other spawners refuse to open, and time away is applied in a
+catch-up burst when you return. Mine the base back to release the anchor
+(unclaimed haul is lost with the world). When no ore remains the miner
+sleeps: "the dimension is played out."
 
 ## Known stubs (deliberate, don't file as bugs)
 

@@ -80,6 +80,7 @@ item_table := [Item]Item_Info{
     .Jade              = { "Jade",              {150, 210, 165, 255}, .Air },
     .Diamond           = { "Diamond",           {190, 235, 255, 255}, .Air },
     .Hel_Gem           = { "Hel Gem",           {220, 50,  80,  255}, .Air },
+    .Auto_Miner        = { "Auto-Miner",        {90,  200, 190, 255}, .Auto_Miner },
 }
 
 is_blueprint :: proc(it: Item) -> bool {

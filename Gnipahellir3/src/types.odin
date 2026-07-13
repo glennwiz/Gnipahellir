@@ -70,6 +70,9 @@ Tile_Type :: enum u8 {
     Jade_Ore,
     Diamond_Ore,
     Hel_Gem_Ore,
+    // Auto-Miner (appended: order is frozen)
+    Auto_Miner,   // the placed base; snake head grows from here
+    Miner_Body,   // the expanding metal trail the head leaves behind
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -138,6 +141,8 @@ Item :: enum u8 {
     Jade,
     Diamond,
     Hel_Gem,
+    // Auto-Miner (appended: order is frozen)
+    Auto_Miner,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

@@ -88,6 +88,7 @@ Draw_Style :: enum u8 {
     Pixel_Leaves,
     Pixel_Flower,
     Pixel_Gem,
+    Pixel_Miner_Body,
 }
 
 @(rodata)
@@ -99,6 +100,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Jade_Ore    = .Pixel_Gem,
     .Diamond_Ore = .Pixel_Gem,
     .Hel_Gem_Ore = .Pixel_Gem,
+    .Miner_Body  = .Pixel_Miner_Body,
     // all others default to .Solid (zero value)
 }
 
@@ -116,6 +118,7 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Rune_Altar     = {190, 120, 255, 255},  // rune purple
     .Dimension_Spawner      = {80, 255, 220, 255},  // dimensional teal
     .Dimension_Spawner_Gold = {255, 225, 100, 255}, // gilded shimmer
+    .Auto_Miner             = {120, 255, 210, 255}, // the snake's beating heart
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
@@ -197,10 +200,11 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         return
     }
     switch tile_draw_style[t] {
-    case .Pixel_Wood:   draw_pixel_wood(px, py)
-    case .Pixel_Leaves: draw_pixel_leaves(px, py)
-    case .Pixel_Flower: draw_pixel_flower(px, py)
-    case .Pixel_Gem:    draw_pixel_gem(px, py, t)
+    case .Pixel_Wood:       draw_pixel_wood(px, py)
+    case .Pixel_Leaves:     draw_pixel_leaves(px, py)
+    case .Pixel_Flower:     draw_pixel_flower(px, py)
+    case .Pixel_Gem:        draw_pixel_gem(px, py, t)
+    case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
     case .Solid:
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
     }
@@ -249,6 +253,39 @@ draw_pixel_wood :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+1, by, 1, CELL_SIZE, dark)
     rl.DrawRectangle(bx+5, by, 1, CELL_SIZE, light)
     rl.DrawRectangle(bx+6, by, 1, CELL_SIZE, dark)
+}
+
+// ─── Pixel Art: Miner Body ────────────────────────────────────────────────────
+//
+//  The snake's trail: segmented steel bar with rivets, alternating joint
+//  lines so a run of segments reads as linked metal.  The head segment
+//  (gs.dimension.miner.head) pulses teal — the living end of the machine.
+
+draw_pixel_miner_body :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+    dark  := rl.Color{ 52,  56,  66, 255}
+    steel := rl.Color{118, 126, 140, 255}
+    shine := rl.Color{176, 184, 198, 255}
+    rivet := rl.Color{ 84,  90, 102, 255}
+
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, dark)
+    rl.DrawRectangle(bx+1, by+2, 8, 6, steel)
+    rl.DrawRectangle(bx+1, by+2, 8, 1, shine)
+    // joint line alternates with the tile parity — segments read as links
+    if (x + y) % 2 == 0 {
+        rl.DrawRectangle(bx+4, by+1, 2, 8, rivet)
+    } else {
+        rl.DrawRectangle(bx+2, by+4, 6, 2, rivet)
+    }
+    rl.DrawRectangle(bx+2, by+3, 1, 1, shine)
+    rl.DrawRectangle(bx+7, by+6, 1, 1, rivet)
+
+    // The head glows — a breathing teal pulse on the working end.
+    m := &gs.dimension.miner
+    if m.active && m.head == {i32(x), i32(y)} {
+        pulse := (math.sin(gs.elapsed_time * 5.0) + 1) * 0.5
+        g := rl.Color{80, 255, 220, u8(90 + pulse * 130)}
+        rl.DrawRectangle(bx+2, by+3, 6, 4, g)
+    }
 }
 
 // ─── Pixel Art: Gem Ore ───────────────────────────────────────────────────────

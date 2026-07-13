@@ -423,6 +423,14 @@ assumes several dimensions running.
 > gold bars; the recipe metal is the world's riches), portal in/out, ephemeral
 > regen-from-seed. Themed spawner items stand in for step 3's Creator+Blocks for
 > now. Silo (step 1) is next.
+>
+> **Status (2026-07-13 late):** the **Auto-Miner** (`miner.odin`) shipped Path A
+> inside dimensions and took a bite out of three steps at once: its wide-u32
+> haul is a **silo-lite** (step 1's pattern, not yet a standalone machine), its
+> catch-up-on-entry is **background-yield-lite** (step 4 without off-level
+> ticking), and its anchor is the first **Dimension Lock** (§7.2.1, 1 slot).
+> Gems are its speed fuel — the first gem sink. The standalone Silo and true
+> off-level yield remain.
 
 1. **Silo machine** first — wide-count bulk storage. Without it, nothing else
    about "1000x" works. → verify: a silo accumulates >255 of an item.

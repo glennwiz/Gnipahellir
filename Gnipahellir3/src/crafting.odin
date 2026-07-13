@@ -100,6 +100,9 @@ recipe_table := [?]Recipe{
     // in — each theme's recipe mirrors its riches.
     { .Dimension_Spawner,      1, .Rune_Altar, {{.Iron_Bar, 4}, {.Cloud_Stone, 8}, {.Stone_Block, 20}} },
     { .Dimension_Spawner_Gold, 1, .Rune_Altar, {{.Gold_Bar, 4}, {.Cloud_Stone, 8}, {.Stone_Block, 20}} },
+    // The snake miner: strips a dimension on its own.  The emerald is the
+    // first gem sink — nature seeds the machine that industrializes worlds.
+    { .Auto_Miner,             1, .Rune_Altar, {{.Iron_Bar, 6}, {.Gold_Bar, 2}, {.Emerald, 1}} },
     // Runic tier: gold gear reforged with sky runes at the altar.
     { .Mine_Wand_Runic,  1, .Rune_Altar, {{.Mine_Wand_Gold, 1},  {.Runic_Sky_Ore, 6}, {}} },
     { .Runic_Sword,      1, .Rune_Altar, {{.Gold_Sword, 1},      {.Runic_Sky_Ore, 6}, {}} },

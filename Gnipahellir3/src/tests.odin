@@ -371,6 +371,14 @@ building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
     testing.expect(t, gs.progression.sky_altar_pos == {i32(ax), i32(ay)}, "gate opened at the altar")
 }
 
+// Logs the real save size so bumping SAVE_DATA_EXPECTED_SIZE is a copy-paste,
+// never a guess.  Grep the test log for "size_of(Save_Data)".
+@(test)
+save_data_size_probe :: proc(t: ^testing.T) {
+    log.infof("size_of(Save_Data) = %d (expected %d)", size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE)
+    testing.expect_value(t, size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE)
+}
+
 @(test)
 gem_ladder_generation :: proc(t: ^testing.T) {
     gs := test_state()
@@ -2273,4 +2281,163 @@ gold_spawner_opens_a_gold_rich_world :: proc(t: ^testing.T) {
     }
     testing.expect(t, gold > 400, "gold dimension must be gold-rich")
     testing.expect(t, gold > iron, "gold must dominate iron in a gold dimension")
+}
+
+// ─── Auto-Miner (miner.odin) ──────────────────────────────────────────────────
+
+// Enter a dimension and stand a miner base in the spawn chamber.
+@(private = "file")
+miner_test_setup :: proc(gs: ^Game_State) -> (base: [2]i32) {
+    dimension_test_enter(gs)
+    base = {11, 14}  // chamber floor spot, solid stone below (row 15)
+    set_tile(&gs.world, int(base.x), int(base.y), .Auto_Miner)
+    miner_on_placed(gs, base)
+    return
+}
+
+@(test)
+miner_placement_gated_to_dimensions :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A valid open spot on the surface — still refused: wrong world.
+    sx := 30
+    gs.player.pos = {f32(sx), f32(SURFACE_Y) - PLAYER_H}
+    testing.expect(t, !placement_ok(gs, .Auto_Miner, sx + 2, SURFACE_Y - 1),
+        "miner must not place outside a dimension")
+    testing.expect(t, placement_ok(gs, .Stone_Block, sx + 2, SURFACE_Y - 1),
+        "the spot itself must be valid (or this test proves nothing)")
+
+    // Inside a dimension the same call passes; a second miner is refused.
+    dimension_test_enter(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect(t, placement_ok(gs, .Auto_Miner, 11, 14),
+        "miner should place in the spawn chamber")
+    miner_on_placed(gs, {11, 14})
+    testing.expect(t, !placement_ok(gs, .Auto_Miner, 12, 14),
+        "one miner per expedition")
+}
+
+@(test)
+miner_snake_eats_ore_and_pays_stone_tax :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    miner_test_setup(gs)
+    m := &gs.dimension.miner
+
+    // Tick ~40 game-seconds: at 3 s/block the snake advances ~13 blocks.
+    for _ in 0 ..< 40 * 60 {
+        gs.elapsed_time += 1.0 / 60.0
+        update_miner(gs)
+    }
+
+    testing.expect(t, m.head != m.base, "the head must leave the base")
+    total := miner_haul_total(m)
+    testing.expect(t, total > 5, "the snake should have eaten blocks")
+
+    ore: u32 = 0
+    for h in m.haul {
+        if h.item == .Iron_Ore || h.item == .Silver_Ore || h.item == .Gold_Ore do ore += h.count
+    }
+    testing.expect(t, ore > 0, "at least one themed ore must be in the haul")
+
+    body := 0
+    for tile in gs.world.terrain do if tile == .Miner_Body do body += 1
+    testing.expect(t, body > 5, "the trail must be visible in the world")
+    testing.expect_value(t, get_tile(&gs.world, int(m.base.x), int(m.base.y)), Tile_Type.Auto_Miner)
+
+    // Projected clear time at tier 0, for tuning (grep "miner clear").
+    targets := 0
+    for tile in gs.world.terrain do if miner_is_target(gs, tile) do targets += 1
+    est := f32(targets) * miner_interval(m) / 3600.0
+    log.infof("miner clear: %d ore left, tier 0 ≈ %.1f h (tier 4 ≈ %.1f h)",
+        targets, est, est / miner_tier_mult[4])
+}
+
+@(test)
+miner_gem_feed_raises_tier :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    base := miner_test_setup(gs)
+    m := &gs.dimension.miner
+    testing.expect_value(t, miner_interval(m), MINER_BASE_INTERVAL)
+
+    // An emerald dropped beside the base is absorbed as tier 1...
+    idx := grid_idx(int(base.x) - 1, int(base.y))
+    gs.world.items[idx]       = .Emerald
+    gs.world.item_counts[idx] = 1
+    update_miner(gs)
+    testing.expect_value(t, m.tier, u8(1))
+    testing.expect_value(t, gs.world.item_counts[idx], u8(0))
+    testing.expect_value(t, miner_interval(m), MINER_BASE_INTERVAL / 1.5)
+
+    // ...and a diamond later jumps straight to tier 3.
+    gs.world.items[idx]       = .Diamond
+    gs.world.item_counts[idx] = 1
+    update_miner(gs)
+    testing.expect_value(t, m.tier, u8(3))
+}
+
+@(test)
+miner_anchors_dimension_and_catches_up :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    miner_test_setup(gs)
+    m := &gs.dimension.miner
+
+    // Mine a vein by hand, then leave through the gate.
+    vx, vy := -1, -1
+    scan: for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if get_tile(&gs.world, x, y) == .Iron_Ore { vx, vy = x, y; break scan }
+        }
+    }
+    set_tile(&gs.world, vx, vy, .Void)
+    gate := DIM_GATE_TILES
+    gs.player.pos = {f32(gate[0].x), f32(gate[0].y) + 1 - PLAYER_H}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+
+    // A DIFFERENT spawner refuses to open while the miner anchors this world.
+    ox, oy := 40, SURFACE_Y - 1
+    set_tile(&gs.world, ox, oy, .Dimension_Spawner)
+    gs.player.pos = {f32(ox - 2), f32(SURFACE_Y) - PLAYER_H}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)  // still home
+
+    // 90 game-seconds pass; re-entering the ANCHORED world keeps the mined
+    // vein (no regen) and applies the time in one catch-up burst.
+    gs.elapsed_time += 90
+    before := miner_haul_total(m)
+    gs.player.pos = {f32(20 - 2), f32(SURFACE_Y) - PLAYER_H}  // original spawner
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect_value(t, get_tile(&gs.world, vx, vy), Tile_Type.Void)  // anchored: no regen
+    testing.expect(t, miner_haul_total(m) > before + 20, "catch-up must apply the time away")
+}
+
+@(test)
+miner_withdraw_and_reclaim :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    base := miner_test_setup(gs)
+    m := &gs.dimension.miner
+
+    // A wide haul pours into the bag as 99-stacks.
+    m.haul[0] = {.Iron_Ore, 250}
+    miner_withdraw(gs)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 250)
+    testing.expect_value(t, miner_haul_total(m), u32(0))
+
+    // Mining the base back releases the anchor: the next entry regenerates.
+    handle_tile_mined(gs, Event{tile = base})
+    testing.expect(t, !m.active, "reclaiming the base must deactivate the miner")
+    gate := DIM_GATE_TILES
+    gs.player.pos = {f32(gate[0].x), f32(gate[0].y) + 1 - PLAYER_H}
+    player_interact(gs)
+    player_interact(gs)  // back in through the same spawner
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    body := 0
+    for tile in gs.world.terrain do if tile == .Miner_Body do body += 1
+    testing.expect_value(t, body, 0)  // the world collapsed to seed — trail gone
 }

@@ -281,6 +281,17 @@ update_input :: proc(gs: ^Game_State) {
         inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
         inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
 
+        // Armed stamp: the next world click sets the armed tile where it lands
+        // (the arming click itself is over the menu, which cursor_over_ui eats).
+        if gs.debug.place_tile != .Air && rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) {
+            x, y := int(inp.mouse_tile.x), int(inp.mouse_tile.y)
+            set_tile(&gs.world, x, y, gs.debug.place_tile)
+            notify(gs, "Debug: %s stamped at (%d,%d)", terrain_table[gs.debug.place_tile].name, x, y)
+            gs.debug.place_tile = .Air
+            inp.mine   = false  // the stamp click must not also chip or swing
+            inp.attack = false
+        }
+
         if gs.debug.menu_open && rl.IsMouseButtonPressed(.LEFT) {
             switch debug_menu_row_at_cursor(gs) {
             case 0: gs.debug.fly        = !gs.debug.fly
@@ -290,6 +301,17 @@ update_input :: proc(gs: ^Game_State) {
             case 4: debug_add_resources(gs)
             case 5: gs.player.hp = gs.player.hp_max
             case 6: gs.player.mana = gs.player.mana_max
+            case 7:
+                gs.debug.place_tile = .Dimension_Spawner
+                gs.debug.menu_open  = false
+                notify(gs, "Debug: click a tile to stamp the Metal spawner")
+            case 8:
+                gs.debug.place_tile = .Dimension_Spawner_Gold
+                gs.debug.menu_open  = false
+                notify(gs, "Debug: click a tile to stamp the Gold spawner")
+            case 9:
+                inventory_insert(&gs.player.inventory, .Auto_Miner, 1)
+                notify(gs, "Debug: Auto-Miner in the bag — place it inside a dimension")
             }
         }
     }

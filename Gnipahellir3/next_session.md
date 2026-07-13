@@ -1,6 +1,28 @@
-# Next Session Handover (updated 2026-07-13, evening)
+# Next Session Handover (updated 2026-07-13, late night)
 
-## Where we are (2026-07-13 session: dimensions pillar begins)
+## Newest: gem ladder + Auto-Miner (2026-07-13 late session, save v12, 79/79 tests)
+
+Two features on branch `feature/dimension-spawners` (needs push):
+
+- **Gem ladder shipped** (`gem_progression.md` step 1): Emerald/Jade/Diamond/
+  Hel Gem veins + revived Aether_Ore in the sky, ≈4/9/13+8/6 per world,
+  `Pixel_Gem` tile art, icons, debug handout. Gems roll before metals.
+- **Auto-Miner shipped** (`miner.odin`, save v12): Rune Altar craft (6 Iron
+  Bar + 2 Gold Bar + 1 Emerald — first gem sink), places ONLY in dimensions,
+  one per expedition. Snake head BFS-tunnels to nearest themed ore each tick
+  (3 s base), eats ore + stone tax into a wide-u32 haul on the base
+  (silo-lite), leaves a Miner_Body trail. E = withdraw 99-stacks; Q-drop gems
+  = permanent speed tiers (×1.5/×2/×3/×5). Placing ANCHORS the dimension (no
+  regen, other spawners blocked = first Dimension Lock); leaving + returning
+  applies catch-up; ore exhausted = "played out" sleep; mining the base
+  releases the anchor. Clear time: ~1.5–2 h tier 0, ~18 min tier 4
+  (`miner clear` log line in tests).
+- **NOT yet playtested in-game**: gem tile art, miner snake visuals (body
+  trail, head pulse, base glow), the whole miner loop by hand. Do this first.
+- New permanent `save_data_size_probe` test logs size_of(Save_Data) — bumping
+  the save is now copy-paste.
+
+## Previous session (2026-07-13 session: dimensions pillar begins)
 
 On master: the **Parallel Dimensions spawner slice** shipped
 (`draft1_machines.md` §7.6 step 2 — Glenn chose it before the Silo).

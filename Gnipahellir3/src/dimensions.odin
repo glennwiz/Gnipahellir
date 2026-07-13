@@ -54,6 +54,7 @@ Dimension_State :: struct {
     return_pos:   [2]f32,
     kind:         Dimension_Kind,
     seed:         u32,
+    miner:        Miner_State,  // an active miner anchors the dimension (miner.odin)
 }
 
 // The return gate carved into every dimension's spawn chamber.
@@ -64,12 +65,24 @@ DIM_SPAWN_POS  :: [2]f32{8, 15 - PLAYER_H}
 
 // Step through a placed spawner.  Ephemeral by design: the generated flag is
 // dropped first, so level_transition always regenerates from the seed.
+// Exception: an active Auto-Miner anchors ITS dimension — that world
+// persists, and other spawners refuse to open until it is reclaimed.
 dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) {
+    seed := whash(u32(spawner.x) * 2654435761 + u32(spawner.y) * 97)
+
+    if gs.dimension.miner.active {
+        if seed != gs.dimension.seed || kind != gs.dimension.kind {
+            notify(gs, "The Auto-Miner still gnaws at another world — reclaim it first")
+            return
+        }
+        // Re-entering the anchored world: keep the saved grid as-is.
+    } else {
+        gs.levels.generated[LEVEL_DIMENSION] = false
+        gs.dimension.kind = kind
+        gs.dimension.seed = seed
+    }
     gs.dimension.return_level = gs.level_index
     gs.dimension.return_pos   = gs.player.pos
-    gs.dimension.kind         = kind
-    gs.dimension.seed         = whash(u32(spawner.x) * 2654435761 + u32(spawner.y) * 97)
-    gs.levels.generated[LEVEL_DIMENSION] = false
 
     p := Portal{
         tiles      = {spawner, spawner},
@@ -78,6 +91,7 @@ dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) 
         gate_tier  = -1,
     }
     level_transition(gs, &p)
+    miner_catchup(gs)  // apply the time the snake worked unwatched
 }
 
 // Step back through the dimension's gate to wherever the spawner stands.

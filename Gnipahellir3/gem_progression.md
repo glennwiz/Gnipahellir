@@ -52,6 +52,9 @@ Dimension_Hazard :: struct {
 
 ## Gem sinks (why gems matter — pick some)
 
+- ~~**Auto-Miner**~~ — **SHIPPED 2026-07-13**: the recipe costs an Emerald,
+  and feeding gems to a placed miner permanently raises its speed tier
+  (emerald ×1.5 / jade ×2 / diamond ×3 / hel gem ×5). First real sink.
 - **Premium mana fuel**: draft1 §1.4's Crystal Resonator eats gems for burst
   power — ties gems into the mana pillar.
 - **Gem-tier gear** above runic, or socketed upgrades on existing gear.

@@ -312,6 +312,12 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         builder_alert(gs, owner)
     }
 
+    // Reclaiming the Auto-Miner's base releases the dimension anchor.
+    if old_tile == .Auto_Miner && gs.dimension.miner.active &&
+       gs.dimension.miner.base == e.tile {
+        miner_on_mined(gs)
+    }
+
     // Mined tiles open to air above the surface line, to void underground
     fill: Tile_Type = .Void
     if gs.level_index == LEVEL_SKY || (gs.level_index == LEVEL_SURFACE && y < SURFACE_Y) {

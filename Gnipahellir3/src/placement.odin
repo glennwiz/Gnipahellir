@@ -17,6 +17,12 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
     t := get_tile(&gs.world, x, y)                 // target must be open
     if t != .Air && t != .Void do return false
 
+    // The Auto-Miner wakes only inside a spawned dimension, one per expedition.
+    if place_tile == .Auto_Miner &&
+       (gs.level_index != LEVEL_DIMENSION || gs.dimension.miner.active) {
+        return false
+    }
+
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)     // within reach
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return false
@@ -54,6 +60,14 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
                     tpl.name, terrain_table[want].name)
             }
         }
+        // Explain the miner's two gates.
+        if place_tile == .Auto_Miner {
+            if gs.level_index != LEVEL_DIMENSION {
+                notify(gs, "The Auto-Miner only wakes inside a spawned dimension")
+            } else if gs.dimension.miner.active {
+                notify(gs, "One miner per expedition — reclaim the working one first")
+            }
+        }
         return
     }
 
@@ -66,6 +80,11 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     // A placed spawner is a door waiting to be opened.
     if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold {
         notify(gs, "The spawner hums — press [%v] beside it to cross over", gs.bindings[.Interact])
+    }
+
+    // A placed Auto-Miner wakes the snake and anchors this dimension.
+    if place_tile == .Auto_Miner {
+        miner_on_placed(gs, e.tile)
     }
 
     // Raising a Sky Altar on the surface opens the gate to the heavens above it.

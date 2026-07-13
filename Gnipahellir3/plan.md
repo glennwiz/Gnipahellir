@@ -135,6 +135,7 @@ src/
   update.odin      -- game_update: explicit update order
   crafting.odin    -- Recipe table, stations, offer matching, craft handler
   dimensions.odin  -- Spawner-opened ephemeral themed worlds (draft1_machines.md §7)
+  miner.odin       -- Auto-Miner: dimension snake, wide-count haul, gem tiers (5b2)
   sim.odin         -- Machine tick (5b): smelter ore+wood→bar tray, tree grower
   loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
   placement.odin   -- Place_Request validation + mutation
@@ -424,6 +425,8 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Jade_Ore       | X     | X        |        | Gem, cave 2                    |
 | Diamond_Ore    | X     | X        |        | Gem, cave 3                    |
 | Hel_Gem_Ore    | X     | X        |        | Gem, cave 3 boss-arena depths  |
+| Auto_Miner     | X     | X        |        | Snake-miner base; anchors its dimension |
+| Miner_Body     | X     | X        |        | The snake's metal trail (drops nothing) |
 
 ---
 
@@ -463,10 +466,11 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Gold_Bar        |           | X         | Smelted; Forge/Altar-tier gear ingredient |
 | Dimension_Spawner | X       |           | Rune Altar craft (iron bars); portal to a Metal world |
 | Dimension_Spawner_Gold | X  |           | Rune Altar craft (gold bars); portal to a Gold world  |
-| Emerald         |           | X         | Gem drop, cave 1 (gem ladder, no sinks yet)  |
-| Jade            |           | X         | Gem drop, cave 2                             |
-| Diamond         |           | X         | Gem drop, cave 3                             |
-| Hel_Gem         |           | X         | Gem drop, cave 3 arena depths                |
+| Emerald         |           | X         | Gem drop, cave 1; seeds/feeds the Auto-Miner |
+| Jade            |           | X         | Gem drop, cave 2; miner tier 2               |
+| Diamond         |           | X         | Gem drop, cave 3; miner tier 3               |
+| Hel_Gem         |           | X         | Gem drop, cave 3 arena depths; miner tier 4  |
+| Auto_Miner      | X         |           | Rune Altar craft; dimension-only snake miner |
 
 ---
 
@@ -495,6 +499,7 @@ Adding a new terrain type = one entry in this table. No other files change.
 4.  update_projectiles    -- travel, impact detection
 5.  update_mining         -- wand delayed impact; pushes Tile_Mined
 5b. update_sim            -- machine tick: smelters cast bars, growers raise trees
+5b2. update_miner         -- the dimension snake advances (dimension level only)
 5c. update_station_focus  -- nearest station for prompt/highlight (UI_State only)
 6.  process_events        -- consume Event_Queue, dispatch to handlers
     └── handle_progression_events (Blueprint_Found, Structure_Complete, Cave_Unlocked)

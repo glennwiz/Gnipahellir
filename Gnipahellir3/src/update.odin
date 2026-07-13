@@ -34,6 +34,10 @@ game_update :: proc(gs: ^Game_State) {
     //     Tree_Grew/Play_Sound, so it must precede process_events
     update_sim(gs)
 
+    // 5b2. Auto-Miner — the dimension snake advances (dimension level only);
+    //      notifies/sounds, so it must also precede process_events
+    update_miner(gs)
+
     // 5c. Station focus — nearest interactable station, for the prompt,
     //     tile highlight and click handler (writes UI_State only)
     update_station_focus(gs)
