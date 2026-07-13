@@ -1,47 +1,44 @@
-# Fable — read this first (written 2026-07-13, end of dimensions session)
+# Fable — read this first (written 2026-07-14, after the miner/endgame session)
 
-Hei! Last session with Glenn was great. Here's your running start.
+Hei! Massive session with Glenn. Here's your running start.
 
-## What we're building
+## What shipped last session (all merged + pushed to master)
 
-The **Parallel Dimensions pillar** (`draft1_machines.md` §7): craftable
-spawners open ephemeral themed mining worlds. The first slice SHIPPED this
-session and Glenn playtested placement — it works.
+- **Gem ladder** — Emerald(c1)/Jade(c2)/Diamond(c3)/Hel Gem(arena band)/
+  Aether in high sky. Sparse table veins, `Pixel_Gem` art.
+- **Auto-Miner** (`miner.odin`, save v12) — Glenn LOVES it. Snake
+  BFS-tunnels to themed ore in a dimension, wide-u32 haul on the base,
+  gem-fed speed tiers, placing it ANCHORS the dimension, catch-up on
+  re-entry, "played out" depletion. F1 menu has the test kit (stamp
+  spawners at cursor, give miner).
+- **Conway easter egg** (`life.odin`) — quarantined toy, own commit,
+  NOT game content. Ignore for planning.
+- 80/80 tests. `save_data_size_probe` test makes save bumps copy-paste.
 
-## State of the code (all on master, 72/72 tests green, save v11)
+## Next session: endgame tuning — DECIDED, pure execution
 
-- `src/dimensions.odin` — themed spawners (Metal/Gold) crafted at the Rune
-  Altar; **the recipe's metal = the world's riches** (Glenn's rule: 4 Iron
-  Bars → iron-rich world, 4 Gold Bars → gold-rich). `LEVEL_DIMENSION :: 4`,
-  ephemeral regen-from-seed, Dimension_Gate returns home.
-- Themes are pure table data: `dimension_table` holds a
-  `veins: [4]{tile, pct}` list per kind — a new world = one row, no code.
-- NOT yet playtested in-game: the Gold spawner visuals (gilded glow).
+Read `progression_review.md` (audit + locked decisions + build order §6):
+min-1 damage rule (player-only), Garm 75 HP / bite 4 / fireball 3,
+**Runic Dimension spawner @ 500 Gold Bars** (fixes the unobtainable runic
+tier AND lands Glenn's "1000 gold" endgame — one snake-stripped Gold
+dimension pays for it), rituals B/C → 6 Silver / 10 Gold Bars.
+Watch: `Ingredient.count` may be u8 (500 overflows). After that: the Silo
+(moving 500 bars through 99-stacks will hurt on purpose).
 
-## Next up (in order — details in `gem_progression.md`, design agreed)
+## Still unplaytested in-game
 
-1. **Silo machine** — bulk storage >255 (u8 ground-stack cap). Prerequisite
-   for everything "1000x". (`draft1_machines.md` §7.6 step 1)
-2. **Gem ladder** — Emerald(cave1)→Jade(cave2)→Diamond(cave3)→Hel Gem(boss
-   depths)+Sky Crystal(sky, revive unused Aether_Ore). Sparse in nature,
-   depth-gated like silver/gold. Pure table work.
-3. **Dimension Blocks before any 3rd theme** (§7.6 step 3) — one spawner
-   tile + consumable blocks carrying kind+seed; spawner-per-theme doesn't
-   scale.
-4. **Gem dimensions with hazards** — richer = nastier: lava pass (exists in
-   cave gen), new Poison_Gas tile (walkable+damaging, rides hazard_timer),
-   mobs-on-entry (BLOCKED: Undead/Fire_Sprite have no AI yet).
+Gem tile art in the caves, Gold spawner glow. Quick fly-by covers both.
 
 ## Read before coding
 
-`CLAUDE.md` (mandatory rules — tables not switches, fixed arrays, append-only
-enums for saves), then `plan.md`, then `next_session.md`. Save layout changes
-trip the size assert in `save.odin` — bump SAVE_VERSION + expected size
-together (probe via a temp test logging `size_of(Save_Data)`).
+`CLAUDE.md` (law), `next_session.md` (freshest truth), `plan.md`.
+Build `odin run src` · tests `odin test src` (cwd Gnipahellir3/).
+Save layout change = bump SAVE_VERSION + size (probe test logs it).
 
 ## About Glenn
 
-Direct, playtests quickly, likes designing by conversation — offer concrete
-options with a recommendation. He chose the fun slice (spawner) before the
-prerequisite (silo); meet that energy but keep the prerequisites visible.
-Build check: `odin run src` · tests: `odin test src`.
+Direct, decides fast, playtests immediately, designs by conversation —
+concrete options + a recommendation. Fun slice before prerequisite; keep
+prerequisites visible. His favorite shape: **cost mirrors reward**. Side
+quests stay isolated (own commit). He drives git himself sometimes —
+check `git log` before assuming. If I'm ever gone: `OPUS_HANDOVER.md`.
