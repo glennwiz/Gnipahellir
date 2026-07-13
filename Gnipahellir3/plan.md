@@ -134,6 +134,7 @@ src/
   events.odin      -- Event_Queue ops, process_events dispatcher
   update.odin      -- game_update: explicit update order
   crafting.odin    -- Recipe table, stations, offer matching, craft handler
+  dimensions.odin  -- Spawner-opened ephemeral themed worlds (draft1_machines.md §7)
   sim.odin         -- Machine tick (5b): smelter ore+wood→bar tray, tree grower
   loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
   placement.odin   -- Place_Request validation + mutation
@@ -410,12 +411,19 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Sky_Altar      | X     |          |        | Activate sky structure (workstation) |
 | Dvergr_Forge   | X     |          |        | Tier-2 crafting station (silver/gold gear) |
 | Rune_Altar     | X     |          |        | Tier-3 crafting station (runic/magic gear) |
+| Dimension_Spawner | X  |          |        | Opens a portal to an ephemeral Metal world  |
+| Dimension_Spawner_Gold | X |      |        | Gold-theme variant (recipe metal = world riches) |
+| Dimension_Gate |       |          |        | Return portal inside a dimension           |
 | Cloud          |       |          |        | Sky platform, walkable         |
 | Cloud_Ore      | X     | X        |        | Drops Cloud_Stone (sky -1)     |
 | Aether_Ore     | X     | X        |        | Drops Aether_Crystal (sky -2)  |
 | Runic_Sky_Ore  | X     | X        |        | Drops Runic_Sky_Ore item (sky -3) |
 | Wind_Current   |       |          |        | Pushes player horizontally     |
 | Void_Sky       |       |          | X      | Thin air — damages over time   |
+| Emerald_Ore    | X     | X        |        | Gem, cave 1 deep rows          |
+| Jade_Ore       | X     | X        |        | Gem, cave 2                    |
+| Diamond_Ore    | X     | X        |        | Gem, cave 3                    |
+| Hel_Gem_Ore    | X     | X        |        | Gem, cave 3 boss-arena depths  |
 
 ---
 
@@ -453,6 +461,12 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Iron_Bar        |           | X         | Smelted (2 ore → 1 bar; 1 log fires 3); builds the Forge |
 | Silver_Bar      |           | X         | Smelted; Forge-tier gear ingredient      |
 | Gold_Bar        |           | X         | Smelted; Forge/Altar-tier gear ingredient |
+| Dimension_Spawner | X       |           | Rune Altar craft (iron bars); portal to a Metal world |
+| Dimension_Spawner_Gold | X  |           | Rune Altar craft (gold bars); portal to a Gold world  |
+| Emerald         |           | X         | Gem drop, cave 1 (gem ladder, no sinks yet)  |
+| Jade            |           | X         | Gem drop, cave 2                             |
+| Diamond         |           | X         | Gem drop, cave 3                             |
+| Hel_Gem         |           | X         | Gem drop, cave 3 arena depths                |
 
 ---
 
@@ -465,9 +479,10 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Projectiles      | 32       | Wand stream + enemy fireballs  |
 | Events per frame | 512      | Ring buffer, cleared per frame |
 | Inventory slots  | 24       | Fixed per player               |
-| Crafting recipes | 37       | Static table, station-gated (Hand/Bench/Forge/Rune Altar) |
+| Crafting recipes | 39       | Static table, station-gated (Hand/Bench/Forge/Rune Altar) |
 | Audio sounds     | 128      | Loaded at startup              |
 | Levels           | 16       | 0=surface, 1-12=caves, -1to-3=sky |
+| Dimensions       | 1 slot   | LEVEL_DIMENSION=4, ephemeral, regenerated per entry |
 
 ---
 
@@ -508,9 +523,19 @@ Player :: struct {
     mana_max:     f32,
     mana_regen:   f32,     // per second
 
-    // Inventory
+    // Combat / hazard timers
+    attack_timer: f32,     // sword swing cooldown
+    hazard_timer: f32,     // accumulated tile damage (lava); 1 hp per unit
+    fall_peak_y:  f32,     // highest airborne y; fall damage measures from it
+
+    // Mining (pickaxe)
+    mine_timer:   f32,     // pick swing / wand shot cooldown
+    chip_tile:    [2]i32,  // tile the pick is currently chipping
+    chip_hits:    u8,      // chips landed on it (PICK_HITS breaks it)
+
+    // Inventory & gear
     inventory:    Inventory,
-    equipped:     Item_ID,
+    equipment:    [Equip_Slot]Item,   // equipped gear; [.None] unused
     bucket_lava:  bool,
 
     // State
@@ -525,12 +550,12 @@ Player :: struct {
     walk_anim_period: f32,
 
     // Cosmetic (randomized at init)
-    clothing_color: [4]u8,
-    hair_color:     [4]u8,
+    clothing_color: rl.Color,
+    hair_color:     rl.Color,
 }
 ```
 
-**Physics**: Gravity 18 tiles/s², terminal velocity 12 tiles/s, jump impulse -10 tiles/s, horizontal max speed 6 tiles/s.
+**Physics** (constants in `player.odin`): Gravity 28 tiles/s², terminal velocity 25 tiles/s, jump impulse -13 tiles/s, horizontal max speed 8 tiles/s.
 
 ---
 
@@ -570,9 +595,9 @@ origin cell so the Hell Key can never be lost). New enemy loot = new rows.
 ### Sky World (ascend, index < 0)
 
 > **v1.0 implementation note:** the shipped build uses a flat index space —
-> 0 = surface, 1–2 = deep caves, 3 = low sky (`LEVEL_*` constants in
-> `levels.odin`). The negative-index multi-tier sky below is the post-launch
-> design.
+> 0 = surface, 1–2 = deep caves, 3 = low sky, 4 = ephemeral dimension
+> (`LEVEL_*` constants in `levels.odin`). The negative-index multi-tier sky
+> below is the post-launch design.
 
 | Level | Name            | Hazards          | Materials           | Builds              | Unlocks    |
 |-------|-----------------|------------------|---------------------|---------------------|------------|

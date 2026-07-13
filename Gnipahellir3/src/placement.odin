@@ -63,6 +63,11 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     gs.world.sim_data[grid_idx(x, y)] = {}  // a fresh machine starts cold, tray empty
     eq_push(&gs.events, Event{type = .Tile_Placed, source = PLAYER_ID, tile = e.tile})
 
+    // A placed spawner is a door waiting to be opened.
+    if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold {
+        notify(gs, "The spawner hums — press [%v] beside it to cross over", gs.bindings[.Interact])
+    }
+
     // Raising a Sky Altar on the surface opens the gate to the heavens above it.
     if place_tile == .Sky_Altar && gs.level_index == LEVEL_SURFACE {
         gs.progression.sky_altar_pos = {i32(x), i32(y)}

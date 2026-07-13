@@ -372,6 +372,56 @@ building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
 }
 
 @(test)
+gem_ladder_generation :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    count_tile :: proc(w: ^World_Grid, tt: Tile_Type) -> (n: int) {
+        for i in 0 ..< GRID_W * GRID_H do if w.terrain[i] == tt do n += 1
+        return
+    }
+
+    // Cave 1 (surface grid): a handful of emeralds in the deep rows, no more
+    emeralds := count_tile(&gs.world, .Emerald_Ore)
+    testing.expect(t, emeralds > 0, "cave 1 should hide emeralds")
+    testing.expect(t, emeralds < 40, "emeralds should stay sparse")
+
+    w2 := &gs.levels.worlds[LEVEL_CAVE2]
+    gen_cave_level(w2, 1)
+    testing.expect(t, count_tile(w2, .Jade_Ore) > 0, "cave 2 should hide jade")
+    testing.expect_value(t, count_tile(w2, .Diamond_Ore), 0)  // diamonds are cave-3 only
+    testing.expect_value(t, count_tile(w2, .Hel_Gem_Ore), 0)  // hel gems are cave-3 only
+
+    w3 := &gs.levels.worlds[LEVEL_CAVE3]
+    gen_cave_level(w3, 2)
+    testing.expect(t, count_tile(w3, .Diamond_Ore) > 0, "cave 3 should hide diamonds")
+    testing.expect(t, count_tile(w3, .Hel_Gem_Ore) > 0, "hel gems near the boss arena")
+    testing.expect_value(t, count_tile(w3, .Jade_Ore), 0)  // jade is cave-2 only
+
+    // Hel gems stay in the arena band
+    for y in 0 ..< ARENA_Y0 - 10 {
+        for x in 0 ..< GRID_W {
+            testing.expect(t, get_tile(w3, x, y) != .Hel_Gem_Ore, "hel gem above the arena band")
+        }
+    }
+
+    ws := &gs.levels.worlds[LEVEL_SKY]
+    gen_sky_level(ws)
+    testing.expect(t, count_tile(ws, .Aether_Ore) > 0, "sky should hold aether pockets")
+
+    log.infof("gem gen: %d emerald (c1), %d jade (c2), %d diamond + %d hel gem (c3), %d aether (sky)",
+        emeralds, count_tile(w2, .Jade_Ore), count_tile(w3, .Diamond_Ore),
+        count_tile(w3, .Hel_Gem_Ore), count_tile(ws, .Aether_Ore))
+
+    // Every gem tile drops its gem item (table wiring)
+    testing.expect_value(t, terrain_table[.Emerald_Ore].drop_item, Item.Emerald)
+    testing.expect_value(t, terrain_table[.Jade_Ore].drop_item, Item.Jade)
+    testing.expect_value(t, terrain_table[.Diamond_Ore].drop_item, Item.Diamond)
+    testing.expect_value(t, terrain_table[.Hel_Gem_Ore].drop_item, Item.Hel_Gem)
+    testing.expect_value(t, terrain_table[.Aether_Ore].drop_item, Item.Aether_Crystal)
+}
+
+@(test)
 cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -2121,4 +2171,106 @@ smelter_feed_requires_reach :: proc(t: ^testing.T) {
     testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "feed must fail out of reach")
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 4)
     testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 0)
+}
+
+// ─── Parallel dimensions (dimensions.odin) ────────────────────────────────────
+
+// Stand the player next to a placed spawner on the surface, away from any
+// static portal, and interact.
+@(private = "file")
+dimension_test_enter :: proc(gs: ^Game_State) -> (sx, sy: int) {
+    sx, sy = 20, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Dimension_Spawner)
+    gs.player.pos = {f32(sx - 2), f32(SURFACE_Y) - PLAYER_H}
+    player_interact(gs)
+    return
+}
+
+@(test)
+dimension_spawner_opens_a_metal_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    dimension_test_enter(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect_value(t, gs.player.pos, DIM_SPAWN_POS)
+
+    // The return gate stands in the spawn chamber.
+    gate := DIM_GATE_TILES
+    testing.expect_value(t, get_tile(&gs.world, int(gate[0].x), int(gate[0].y)), Tile_Type.Dimension_Gate)
+    testing.expect_value(t, get_tile(&gs.world, int(gate[1].x), int(gate[1].y)), Tile_Type.Dimension_Gate)
+
+    // A Metal dimension is rich in ore — the point of crafting one.
+    iron := 0
+    for tile in gs.world.terrain do if tile == .Iron_Ore do iron += 1
+    testing.expect(t, iron > 500, "metal dimension must be iron-rich")
+}
+
+@(test)
+dimension_gate_returns_the_player_home :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    home_pos := [2]f32{18, f32(SURFACE_Y) - PLAYER_H}
+    sx, _ := dimension_test_enter(gs)
+    _ = sx
+
+    // Stand in the gate and interact: back on the surface where we left.
+    gate := DIM_GATE_TILES
+    gs.player.pos = {f32(gate[0].x), f32(gate[0].y) + 1 - PLAYER_H}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+    testing.expect_value(t, gs.player.pos, home_pos)
+}
+
+@(test)
+dimension_is_ephemeral_and_seed_stable :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    dimension_test_enter(gs)
+
+    // Find an ore vein and mine it away (direct write — the sim is not under test).
+    vx, vy := -1, -1
+    scan: for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if get_tile(&gs.world, x, y) == .Iron_Ore { vx, vy = x, y; break scan }
+        }
+    }
+    testing.expect(t, vx >= 0, "no iron vein found")
+    set_tile(&gs.world, vx, vy, .Void)
+
+    // Leave and re-enter through the same spawner: the world regenerates from
+    // the same seed, so the mined vein is whole again.
+    gate := DIM_GATE_TILES
+    gs.player.pos = {f32(gate[0].x), f32(gate[0].y) + 1 - PLAYER_H}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect_value(t, get_tile(&gs.world, vx, vy), Tile_Type.Iron_Ore)
+}
+
+@(test)
+gold_spawner_opens_a_gold_rich_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A gold spawner: the world beyond is rich in what the recipe cost.
+    sx, sy := 20, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Dimension_Spawner_Gold)
+    gs.player.pos = {f32(sx - 2), f32(SURFACE_Y) - PLAYER_H}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect_value(t, gs.dimension.kind, Dimension_Kind.Gold)
+
+    gold, iron := 0, 0
+    for tile in gs.world.terrain {
+        #partial switch tile {
+        case .Gold_Ore: gold += 1
+        case .Iron_Ore: iron += 1
+        }
+    }
+    testing.expect(t, gold > 400, "gold dimension must be gold-rich")
+    testing.expect(t, gold > iron, "gold must dominate iron in a gold dimension")
 }

@@ -543,6 +543,13 @@ item_icons := [Item]Item_Icon{
 	.Iron_Bar         = {BAR_GRID, PAL_IRON},
 	.Silver_Bar       = {BAR_GRID, PAL_SILVER},
 	.Gold_Bar         = {BAR_GRID, PAL_GOLD},
+	.Dimension_Spawner      = {CRYSTAL_GRID, {{}, {}, {200, 255, 245, 255}, {70, 225, 195, 255}, {40, 160, 140, 255}}},
+	.Dimension_Spawner_Gold = {CRYSTAL_GRID, {{}, {}, {255, 232, 130, 255}, {235, 195, 60, 255}, {178, 138, 28, 255}}},
+	// Gem ladder — one crystal per depth layer, the palette carries the tier
+	.Emerald          = {CRYSTAL_GRID, {{}, {}, {185, 255, 210, 255}, {60, 220, 130, 255}, {28, 150, 82, 255}}},
+	.Jade             = {CRYSTAL_GRID, {{}, {}, {225, 248, 230, 255}, {150, 210, 165, 255}, {92, 152, 108, 255}}},
+	.Diamond          = {CRYSTAL_GRID, {{}, {}, {240, 252, 255, 255}, {175, 225, 250, 255}, {105, 160, 205, 255}}},
+	.Hel_Gem          = {CRYSTAL_GRID, {{}, {}, {255, 145, 150, 255}, {220, 50, 80, 255}, {135, 18, 48, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

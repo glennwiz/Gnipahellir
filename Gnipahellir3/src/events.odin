@@ -169,7 +169,9 @@ process_events :: proc(gs: ^Game_State) {
         case .Level_Enter:
             // transition already performed by level_transition
             lvl := int(e.payload.int_val)
-            if lvl >= 0 && lvl < NUM_LEVELS {
+            if lvl == LEVEL_DIMENSION {
+                notify(gs, "— %s —", dimension_table[gs.dimension.kind].name)
+            } else if lvl >= 0 && lvl < NUM_LEVELS {
                 notify(gs, "— %s —", level_names[lvl])
             }
             garm_maybe_awaken(gs)

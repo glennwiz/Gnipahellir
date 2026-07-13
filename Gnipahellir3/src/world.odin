@@ -43,6 +43,13 @@ terrain_table := [Tile_Type]Terrain_Behavior{
     .Flower         = { "Flower",        {.Walkable},                                                 rl.Color{255, 220,  50, 255}, 1,   0,   .None          },
     .Dvergr_Forge   = { "Dvergr Forge",  {.Solid, .Placeable, .Mineable},                             rl.Color{105, 105, 125, 255}, 0,   0,   .Dvergr_Forge  },
     .Rune_Altar     = { "Rune Altar",    {.Solid, .Placeable, .Mineable},                             rl.Color{150, 90,  220, 255}, 0,   0,   .Rune_Altar    },
+    .Dimension_Spawner = { "Metal Dimension Spawner", {.Solid, .Placeable, .Mineable},                rl.Color{40,  200, 180, 255}, 0,   0,   .Dimension_Spawner },
+    .Dimension_Gate    = { "Dimension Gate",    {.Walkable},                                          rl.Color{30,  140, 130, 255}, 1,   0,   .None              },
+    .Dimension_Spawner_Gold = { "Gold Dimension Spawner", {.Solid, .Placeable, .Mineable},            rl.Color{235, 195, 60,  255}, 0,   0,   .Dimension_Spawner_Gold },
+    .Emerald_Ore    = { "Emerald Ore",   {.Solid, .Mineable},                                        rl.Color{50,  205, 120, 255}, 0,   0,   .Emerald       },
+    .Jade_Ore       = { "Jade Ore",      {.Solid, .Mineable},                                        rl.Color{150, 210, 165, 255}, 0,   0,   .Jade          },
+    .Diamond_Ore    = { "Diamond Ore",   {.Solid, .Mineable},                                        rl.Color{190, 235, 255, 255}, 0,   0,   .Diamond       },
+    .Hel_Gem_Ore    = { "Hel Gem Ore",   {.Solid, .Mineable},                                        rl.Color{200, 30,  70,  255}, 0,   0,   .Hel_Gem       },
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────
@@ -282,8 +289,13 @@ gen_cave_1 :: proc(w: ^World_Grid) {
         for x in CAVE_LEFT ..< CAVE_RIGHT {
             if get_tile(w, x, y) != .Stone do continue
             h     := whash(u32(x) * 2654435761 + u32(y) * 1013904223)
+            gh    := whash(h)  // fresh bits for the gem roll — per-mille, not per-cent
             depth := y - CAVE_TOP
             switch {
+            // Gems first: sparse enough that they steal almost nothing from
+            // the metals, and a metal roll must never mask one.
+            case depth > 30 && gh % 1000 < 5:
+                set_tile(w, x, y, .Emerald_Ore)
             case (h % 100) < 6:
                 set_tile(w, x, y, .Iron_Ore)
             case depth > 20 && (h >> 8) % 100 < 3:

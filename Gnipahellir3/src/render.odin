@@ -87,13 +87,18 @@ Draw_Style :: enum u8 {
     Pixel_Wood,
     Pixel_Leaves,
     Pixel_Flower,
+    Pixel_Gem,
 }
 
 @(rodata)
 tile_draw_style := #partial [Tile_Type]Draw_Style{
-    .Wood   = .Pixel_Wood,
-    .Leaves = .Pixel_Leaves,
-    .Flower = .Pixel_Flower,
+    .Wood        = .Pixel_Wood,
+    .Leaves      = .Pixel_Leaves,
+    .Flower      = .Pixel_Flower,
+    .Emerald_Ore = .Pixel_Gem,
+    .Jade_Ore    = .Pixel_Gem,
+    .Diamond_Ore = .Pixel_Gem,
+    .Hel_Gem_Ore = .Pixel_Gem,
     // all others default to .Solid (zero value)
 }
 
@@ -109,6 +114,8 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Sky_Altar      = {130, 200, 255, 255},  // sky blue
     .Dvergr_Forge   = {255, 150, 60, 255},   // forge fire
     .Rune_Altar     = {190, 120, 255, 255},  // rune purple
+    .Dimension_Spawner      = {80, 255, 220, 255},  // dimensional teal
+    .Dimension_Spawner_Gold = {255, 225, 100, 255}, // gilded shimmer
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
@@ -193,6 +200,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Wood:   draw_pixel_wood(px, py)
     case .Pixel_Leaves: draw_pixel_leaves(px, py)
     case .Pixel_Flower: draw_pixel_flower(px, py)
+    case .Pixel_Gem:    draw_pixel_gem(px, py, t)
     case .Solid:
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
     }
@@ -241,6 +249,34 @@ draw_pixel_wood :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+1, by, 1, CELL_SIZE, dark)
     rl.DrawRectangle(bx+5, by, 1, CELL_SIZE, light)
     rl.DrawRectangle(bx+6, by, 1, CELL_SIZE, dark)
+}
+
+// ─── Pixel Art: Gem Ore ───────────────────────────────────────────────────────
+//
+//  A crystal cluster embedded in cave rock.  One proc serves every gem tile:
+//  the gem's accent comes from terrain_table[t].color, so a new gem is still
+//  just a table row (tile_draw_style entry + terrain color).
+//  Stone base matches the STONE_TINT wash so the rock reads as cave wall.
+
+draw_pixel_gem :: proc(bx, by: i32, t: Tile_Type) {
+    stone := rl.Color{110, 110, 118, 255}
+    shade := rl.Color{ 84,  84,  92, 255}
+    gem   := terrain_table[t].color
+    gdark := rl.Color{gem.r / 2, gem.g / 2, gem.b / 2, 255}
+
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, stone)
+    // rock grain in the corners so it reads as wall, not a floating chip
+    rl.DrawRectangle(bx+1, by+7, 2, 2, shade)
+    rl.DrawRectangle(bx+7, by+1, 2, 2, shade)
+    rl.DrawRectangle(bx+8, by+8, 1, 1, shade)
+    // the embedded crystal cluster: a rough diamond with a dark facet
+    rl.DrawRectangle(bx+4, by+2, 2, 6, gem)
+    rl.DrawRectangle(bx+2, by+4, 6, 2, gem)
+    rl.DrawRectangle(bx+3, by+3, 4, 4, gem)
+    rl.DrawRectangle(bx+5, by+5, 2, 2, gdark)
+    rl.DrawRectangle(bx+3, by+6, 1, 1, gdark)
+    // sparkle
+    rl.DrawRectangle(bx+4, by+3, 1, 1, rl.WHITE)
 }
 
 // ─── Pixel Art: Leaves ────────────────────────────────────────────────────────

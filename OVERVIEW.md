@@ -25,7 +25,7 @@ Quick reference for all project documentation. **Last updated: 2026-07-13**
 ### Current Session & Next Steps
 | File | Purpose | Status |
 |------|---------|--------|
-| `Gnipahellir3/next_session.md` | Last session's handover (2026-07-12) | **Active** — start here for work queue |
+| `Gnipahellir3/next_session.md` | Last session's handover (2026-07-13) | **Active** — start here for work queue |
 | `Gnipahellir3/score.md` | Vertical slice review (2026-07-13) | **Active** — current state assessment |
 
 ### Design & Architecture
@@ -34,7 +34,8 @@ Quick reference for all project documentation. **Last updated: 2026-07-13**
 | **`Gnipahellir3/plan.md`** | Game design: core loop, progression, all systems | **Active** — canonical design doc |
 | **`Gnipahellir3/CLAUDE.md`** | Mandatory architecture rules & patterns | **Active** — non-negotiable |
 | `architecture_findings.md` | Machine dependency chain design + build plan | **Active** — foundation for mana/machine systems |
-| `draft1_machines.md` | Mana economy brainstorm (7 paths, dimension spawner idea) | **Reference** — detailed design for § Phase 5 onwards |
+| `draft1_machines.md` | Mana economy brainstorm (7 paths, dimension spawner idea) | **Reference** — §7 spawner slice shipped 2026-07-13 |
+| `Gnipahellir3/gem_progression.md` | Gem ladder + gem dimensions + hazards design | **Active** — next-session build plan |
 | `suggestion.md` | Pre-Phase 4 architecture review | **ARCHIVE** — most findings implemented; kept as resolved-issues record |
 
 ### AI & Gameplay Systems
