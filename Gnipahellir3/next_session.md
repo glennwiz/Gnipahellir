@@ -1,4 +1,14 @@
-# Next Session Handover (updated 2026-07-13, late night)
+# Next Session Handover (updated 2026-07-14)
+
+## TOP PRIORITY: endgame progression tuning — decided, ready to build
+
+Full audit in `progression_review.md` (read it first). Glenn locked all
+four decisions 2026-07-14: min-1 damage rule (player-only), Garm 75 HP /
+bite 4 / fireball 3, **Runic Dimension spawner at 500 Gold Bars** (the
+"1000 gold" endgame — one snake-stripped Gold dimension pays for it, and
+it's the missing Runic_Sky_Ore source: the runic tier is currently
+UNOBTAINABLE), rituals B/C to 6 Silver / 10 Gold Bars. Build order §6 of
+the review — tables and constants only. Then the Silo.
 
 ## Newest: gem ladder + Auto-Miner (2026-07-13 late session, save v12, 79/79 tests)
 
