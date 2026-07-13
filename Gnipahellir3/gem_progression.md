@@ -59,7 +59,13 @@ Dimension_Hazard :: struct {
 
 ## Build order (proposal)
 
-1. Natural gem veins in cave gen + items/tiles/icons (pure table work).
+1. ~~Natural gem veins in cave gen + items/tiles/icons~~ — **SHIPPED 2026-07-13**:
+   Emerald (cave 1 deep rows), Jade (cave 2), Diamond (cave 3), Hel Gem
+   (arena band), Aether_Ore revived on the two high sky bands. Sparse per
+   level (≈4/9/13+8/6), gems roll before metals so they can't be masked, new
+   `Pixel_Gem` draw style (crystal-in-rock, color from terrain_table).
+   `gem_ladder_generation` test pins counts + drops. No save bump needed
+   (append-only enums).
 2. `Poison_Gas` tile + hazard struct in `Dimension_Theme`; lava pass in
    `gen_dimension`.
 3. **Dimension Blocks (§7.6 step 3) before the 3rd theme** — spawner-per-theme

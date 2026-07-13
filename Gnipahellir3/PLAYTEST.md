@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, 72 tests, runs in about a second.
+Tests: `odin test src` — headless, 73 tests, runs in about a second.
 
 ## Controls
 

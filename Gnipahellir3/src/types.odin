@@ -65,6 +65,11 @@ Tile_Type :: enum u8 {
     Dimension_Spawner,
     Dimension_Gate,
     Dimension_Spawner_Gold,
+    // Gem ladder — one gem per depth layer (appended: order is frozen)
+    Emerald_Ore,
+    Jade_Ore,
+    Diamond_Ore,
+    Hel_Gem_Ore,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -128,6 +133,11 @@ Item :: enum u8 {
     // Parallel dimensions (appended: order is frozen)
     Dimension_Spawner,
     Dimension_Spawner_Gold,
+    // Gem ladder (appended: order is frozen)
+    Emerald,
+    Jade,
+    Diamond,
+    Hel_Gem,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

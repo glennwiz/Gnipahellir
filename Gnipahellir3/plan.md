@@ -420,6 +420,10 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Runic_Sky_Ore  | X     | X        |        | Drops Runic_Sky_Ore item (sky -3) |
 | Wind_Current   |       |          |        | Pushes player horizontally     |
 | Void_Sky       |       |          | X      | Thin air — damages over time   |
+| Emerald_Ore    | X     | X        |        | Gem, cave 1 deep rows          |
+| Jade_Ore       | X     | X        |        | Gem, cave 2                    |
+| Diamond_Ore    | X     | X        |        | Gem, cave 3                    |
+| Hel_Gem_Ore    | X     | X        |        | Gem, cave 3 boss-arena depths  |
 
 ---
 
@@ -459,6 +463,10 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Gold_Bar        |           | X         | Smelted; Forge/Altar-tier gear ingredient |
 | Dimension_Spawner | X       |           | Rune Altar craft (iron bars); portal to a Metal world |
 | Dimension_Spawner_Gold | X  |           | Rune Altar craft (gold bars); portal to a Gold world  |
+| Emerald         |           | X         | Gem drop, cave 1 (gem ladder, no sinks yet)  |
+| Jade            |           | X         | Gem drop, cave 2                             |
+| Diamond         |           | X         | Gem drop, cave 3                             |
+| Hel_Gem         |           | X         | Gem drop, cave 3 arena depths                |
 
 ---
 

@@ -425,8 +425,19 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int) {
         for x in 1 ..< GRID_W - 1 {
             if get_tile(w, x, y) != .Stone do continue
             h     := whash(u32(x) * 2654435761 + u32(y) * 1013904223 + u32(depth_tier) * 97)
+            gh    := whash(h)  // fresh bits for the gem roll — per-mille, not per-cent
             depth := y - CAVE_LVL_TOP
             switch {
+            // Gems first (sparse, must never be masked by a metal roll).
+            // One gem per layer: Jade in cave 2, Diamond in cave 3, and
+            // Hel Gems only in the hellish band around the boss arena —
+            // the arena carve wipes any inside the room itself.
+            case depth_tier == 2 && y > ARENA_Y0 - 10 && (gh >> 10) % 1000 < 4:
+                set_tile(w, x, y, .Hel_Gem_Ore)
+            case depth_tier == 1 && depth > 60 && gh % 1000 < 3:
+                set_tile(w, x, y, .Jade_Ore)
+            case depth_tier == 2 && depth > 60 && gh % 1000 < 3:
+                set_tile(w, x, y, .Diamond_Ore)
             case (h % 100) < u32(4 + 2*depth_tier):
                 set_tile(w, x, y, .Iron_Ore)
             case depth > 15 && (h >> 8) % 100 < u32(2 + 2*depth_tier):
@@ -528,6 +539,16 @@ gen_sky_level :: proc(w: ^World_Grid) {
                         }
                     }
                 }
+                // Aether crystal pocket — the two highest bands only, rarer
+                // than cloud ore, sits at the platform's left edge so both
+                // pockets can share a platform.
+                if band < 2 && (h >> 24) % 100 < 25 {
+                    for dx in 1 ..< 3 {
+                        if get_tile(w, x0+dx, row) == .Cloud {
+                            set_tile(w, x0+dx, row, .Aether_Ore)
+                        }
+                    }
+                }
             }
         }
     }
@@ -575,7 +596,7 @@ debug_add_all_structures :: proc(gs: ^Game_State) {
 }
 
 debug_add_resources :: proc(gs: ^Game_State) {
-    resources := [?]Item{.Wood_Log, .Stone_Block, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore, .Iron_Bar, .Silver_Bar, .Gold_Bar, .Cloud_Stone, .Aether_Crystal, .Runic_Sky_Ore}
+    resources := [?]Item{.Wood_Log, .Stone_Block, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore, .Iron_Bar, .Silver_Bar, .Gold_Bar, .Cloud_Stone, .Aether_Crystal, .Runic_Sky_Ore, .Emerald, .Jade, .Diamond, .Hel_Gem}
     for r in resources {
         for &slot in gs.player.inventory.slots {
             if slot.item == .None {

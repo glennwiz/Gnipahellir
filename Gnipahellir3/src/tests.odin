@@ -372,6 +372,56 @@ building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
 }
 
 @(test)
+gem_ladder_generation :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    count_tile :: proc(w: ^World_Grid, tt: Tile_Type) -> (n: int) {
+        for i in 0 ..< GRID_W * GRID_H do if w.terrain[i] == tt do n += 1
+        return
+    }
+
+    // Cave 1 (surface grid): a handful of emeralds in the deep rows, no more
+    emeralds := count_tile(&gs.world, .Emerald_Ore)
+    testing.expect(t, emeralds > 0, "cave 1 should hide emeralds")
+    testing.expect(t, emeralds < 40, "emeralds should stay sparse")
+
+    w2 := &gs.levels.worlds[LEVEL_CAVE2]
+    gen_cave_level(w2, 1)
+    testing.expect(t, count_tile(w2, .Jade_Ore) > 0, "cave 2 should hide jade")
+    testing.expect_value(t, count_tile(w2, .Diamond_Ore), 0)  // diamonds are cave-3 only
+    testing.expect_value(t, count_tile(w2, .Hel_Gem_Ore), 0)  // hel gems are cave-3 only
+
+    w3 := &gs.levels.worlds[LEVEL_CAVE3]
+    gen_cave_level(w3, 2)
+    testing.expect(t, count_tile(w3, .Diamond_Ore) > 0, "cave 3 should hide diamonds")
+    testing.expect(t, count_tile(w3, .Hel_Gem_Ore) > 0, "hel gems near the boss arena")
+    testing.expect_value(t, count_tile(w3, .Jade_Ore), 0)  // jade is cave-2 only
+
+    // Hel gems stay in the arena band
+    for y in 0 ..< ARENA_Y0 - 10 {
+        for x in 0 ..< GRID_W {
+            testing.expect(t, get_tile(w3, x, y) != .Hel_Gem_Ore, "hel gem above the arena band")
+        }
+    }
+
+    ws := &gs.levels.worlds[LEVEL_SKY]
+    gen_sky_level(ws)
+    testing.expect(t, count_tile(ws, .Aether_Ore) > 0, "sky should hold aether pockets")
+
+    log.infof("gem gen: %d emerald (c1), %d jade (c2), %d diamond + %d hel gem (c3), %d aether (sky)",
+        emeralds, count_tile(w2, .Jade_Ore), count_tile(w3, .Diamond_Ore),
+        count_tile(w3, .Hel_Gem_Ore), count_tile(ws, .Aether_Ore))
+
+    // Every gem tile drops its gem item (table wiring)
+    testing.expect_value(t, terrain_table[.Emerald_Ore].drop_item, Item.Emerald)
+    testing.expect_value(t, terrain_table[.Jade_Ore].drop_item, Item.Jade)
+    testing.expect_value(t, terrain_table[.Diamond_Ore].drop_item, Item.Diamond)
+    testing.expect_value(t, terrain_table[.Hel_Gem_Ore].drop_item, Item.Hel_Gem)
+    testing.expect_value(t, terrain_table[.Aether_Ore].drop_item, Item.Aether_Crystal)
+}
+
+@(test)
 cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

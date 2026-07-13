@@ -27,11 +27,13 @@ row (Tile_Type + Item enums are save-safe appends; item_icons is a full array
 so the compiler forces the icon entry; ORE_GRID/CRYSTAL_GRID + palette = one
 line). Decisions to make with Glenn before building:
 
-1. **Design agreed (see `gem_progression.md`)**: gems are their own
-   depth-progression ladder (Emerald→Jade→Diamond→Hel Gem, Sky Crystal above),
-   sparse in nature, industrialized via late-game gem dimensions whose recipes
-   cost the gem itself. Gem dimensions carry hazards (lava, poison gas tile,
-   mobs on entry) — richer = nastier.
+1. **Gem ladder step 1 SHIPPED (2026-07-13 evening, 73/73 tests)**: natural
+   veins live — Emerald (cave 1), Jade (cave 2), Diamond (cave 3), Hel Gem
+   (arena band), Aether_Ore revived in the high sky. Sparse (≈4/9/13+8/6 per
+   world), `Pixel_Gem` tile art, icons, debug handout. **Not yet playtested
+   in-game** (Pixel_Gem look + icon check). No gem sinks yet — next per
+   `gem_progression.md`: gem dimensions (needs Dimension Blocks first) and
+   sinks (resonator/gear/boss craft). Hazards design unchanged.
 2. **Spawner-per-theme stops scaling** past ~4 themes (each needs tile + item
    + recipe + icon + glow row). At that point implement §7.6 step 3:
    **Dimension Creator + Dimension Block** items — ONE spawner tile, block
