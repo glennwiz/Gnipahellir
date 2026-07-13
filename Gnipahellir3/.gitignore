@@ -9,3 +9,6 @@ bin/
 
 # Claude memory (local only)
 .claude/
+
+# Odin linux build output
+src.bin

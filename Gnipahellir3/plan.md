@@ -134,6 +134,7 @@ src/
   events.odin      -- Event_Queue ops, process_events dispatcher
   update.odin      -- game_update: explicit update order
   crafting.odin    -- Recipe table, stations, offer matching, craft handler
+  sim.odin         -- Machine tick (5b): smelter ore→bar, tree grower
   loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
   placement.odin   -- Place_Request validation + mutation
   items.odin       -- Item table, inventory ops
@@ -146,9 +147,9 @@ src/
   tests.odin       -- Headless system tests (odin test src)
 ```
 
-Planned but not yet split out: `sim.odin` (lava spread, tree growth),
-`projectile.odin`, `particles.odin`; progression + interaction logic currently
-lives in `levels.odin` and splits out when it grows (Phase 5).
+Planned but not yet split out: `projectile.odin` (lava spread also still
+unimplemented); progression + interaction logic currently lives in
+`levels.odin` and splits out when it grows (Phase 5).
 
 ---
 
@@ -449,6 +450,9 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Cloud_Stone     |           | X         | Sky -1 ore drop, structure ingredient   |
 | Aether_Crystal  |           | X         | Sky -2 ore drop, structure ingredient   |
 | Runic_Sky_Ore   |           | X         | Sky -3 ore drop, structure ingredient   |
+| Iron_Bar        |           | X         | Smelted (2 ore → 1 bar); builds the Forge |
+| Silver_Bar      |           | X         | Smelted; Forge-tier gear ingredient      |
+| Gold_Bar        |           | X         | Smelted; Forge/Altar-tier gear ingredient |
 
 ---
 
@@ -470,16 +474,19 @@ Adding a new terrain type = one entry in this table. No other files change.
 ## Update Order (game_update)
 
 ```
-1. update_input          -- poll hardware → intents into Event_Queue
-2. update_player         -- physics, movement, mana regen
-3. update_enemies        -- AI state machines, movement, attacks
-4. update_projectiles    -- travel, impact detection
-5. update_sim            -- lava spread, tree growth, decay timers
-6. process_events        -- consume Event_Queue, dispatch to handlers
-   └── handle_progression_events (Blueprint_Found, Structure_Complete, Cave_Unlocked)
-7. update_particles      -- lifetime, position, fade
-8. update_audio          -- process sound events, stream music
-9. clear_event_queue     -- end of frame cleanup
+1.  update_input          -- poll hardware → intents into Event_Queue
+2.  update_player         -- physics, movement, mana regen, pickup, drop
+3.  update_enemies        -- AI state machines, movement, attacks
+4.  update_projectiles    -- travel, impact detection
+5.  update_mining         -- wand delayed impact; pushes Tile_Mined
+5b. update_sim            -- machine tick: smelters cast bars, growers raise trees
+5c. update_station_focus  -- nearest station for prompt/highlight (UI_State only)
+6.  process_events        -- consume Event_Queue, dispatch to handlers
+    └── handle_progression_events (Blueprint_Found, Structure_Complete, Cave_Unlocked)
+7.  update_notifications  -- age/expire the popup stack
+8.  update_ambience       -- drifting motes, station sparks (visual only)
+9.  update_particles      -- lifetime, position, fade
+10. update_audio          -- reads state, streams music
 ```
 
 New systems are inserted at the correct position. Order is never implicit.
