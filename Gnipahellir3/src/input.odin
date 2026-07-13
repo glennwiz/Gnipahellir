@@ -312,6 +312,15 @@ update_input :: proc(gs: ^Game_State) {
             case 9:
                 inventory_insert(&gs.player.inventory, .Auto_Miner, 1)
                 notify(gs, "Debug: Auto-Miner in the bag — place it inside a dimension")
+            case 10:
+                gs.debug.life = !gs.debug.life
+                if gs.debug.life {
+                    gs.debug.life_timer = 0
+                    gs.debug.life_gen   = 0
+                    notify(gs, "The world stirs — Conway wakes")
+                } else {
+                    notify(gs, "The world settles after %d generations", gs.debug.life_gen)
+                }
             }
         }
     }

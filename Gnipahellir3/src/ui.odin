@@ -441,7 +441,7 @@ DBG_MENU_X     :: 24
 DBG_MENU_Y     :: 80
 DBG_MENU_W     :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS  :: 10  // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:give miner
+DBG_MENU_ROWS  :: 11  // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:give miner; 10:game of life
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -480,6 +480,10 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     rl.DrawText("Stamp Metal spawner >", DBG_MENU_X, DBG_MENU_Y + 7*DBG_MENU_ROW_H + 7, 10, ms_col)
     rl.DrawText("Stamp Gold spawner >", DBG_MENU_X, DBG_MENU_Y + 8*DBG_MENU_ROW_H + 7, 10, gs_col)
     rl.DrawText("Give Auto-Miner >", DBG_MENU_X, DBG_MENU_Y + 9*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+
+    life_col := gs.debug.life ? rl.GREEN : text_dim
+    rl.DrawText(gs.debug.life ? cstring("Game of Life: ON ?!") : cstring("Game of Life: OFF"),
+        DBG_MENU_X, DBG_MENU_Y + 10*DBG_MENU_ROW_H + 7, 10, life_col)
 
     if r := debug_menu_row_at_cursor(gs); r >= 0 {
         rl.DrawRectangleLines(DBG_MENU_X - 2, DBG_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,

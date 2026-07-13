@@ -38,6 +38,11 @@ game_update :: proc(gs: ^Game_State) {
     //      notifies/sounds, so it must also precede process_events
     update_miner(gs)
 
+    when GAME_DEBUG {
+        // 5b3. Easter egg — Conway's Game of Life eats the world (F1 menu)
+        update_life(gs)
+    }
+
     // 5c. Station focus — nearest interactable station, for the prompt,
     //     tile highlight and click handler (writes UI_State only)
     update_station_focus(gs)

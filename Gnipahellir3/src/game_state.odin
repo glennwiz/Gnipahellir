@@ -272,6 +272,9 @@ Debug_State :: struct {
     fly:        bool,
     ultra_wand: bool,   // cheat: 13-tile mining wand, free, explosive impact
     place_tile: Tile_Type,  // armed stamp: next world click sets this tile (.Air = off)
+    life:       bool,   // easter egg: Conway's Game of Life eats the world (life.odin)
+    life_timer: f32,
+    life_gen:   int,
 }
 
 // ─── Sim ──────────────────────────────────────────────────────────────────────

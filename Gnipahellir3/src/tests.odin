@@ -2283,6 +2283,43 @@ gold_spawner_opens_a_gold_rich_world :: proc(t: ^testing.T) {
     testing.expect(t, gold > iron, "gold must dominate iron in a gold dimension")
 }
 
+// ─── Easter egg: Game of Life (life.odin) ─────────────────────────────────────
+
+@(test)
+conway_blinker_oscillates :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A clean void arena deep in the rock, far from the player's sanctuary.
+    cx, cy := 100, 80
+    for y in cy-4 ..= cy+4 {
+        for x in cx-4 ..= cx+4 do set_tile(&gs.world, x, y, .Void)
+    }
+    // A horizontal blinker...
+    set_tile(&gs.world, cx-1, cy, .Stone)
+    set_tile(&gs.world, cx,   cy, .Stone)
+    set_tile(&gs.world, cx+1, cy, .Stone)
+
+    gs.debug.life = true
+    gs.debug.life_timer = LIFE_TICK  // force a generation on this call
+    update_life(gs)
+
+    // ...stands vertical one generation later.  B3/S23, as Conway intended.
+    testing.expect_value(t, get_tile(&gs.world, cx, cy-1), Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, cx, cy),   Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, cx, cy+1), Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, cx-1, cy), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, cx+1, cy), Tile_Type.Void)
+    testing.expect_value(t, gs.debug.life_gen, 1)
+
+    // Off means off: no further evolution.
+    gs.debug.life = false
+    gs.debug.life_timer = LIFE_TICK
+    update_life(gs)
+    testing.expect_value(t, get_tile(&gs.world, cx, cy-1), Tile_Type.Stone)
+    testing.expect_value(t, gs.debug.life_gen, 1)
+}
+
 // ─── Auto-Miner (miner.odin) ──────────────────────────────────────────────────
 
 // Enter a dimension and stand a miner base in the spawn chamber.

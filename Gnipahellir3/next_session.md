@@ -21,6 +21,8 @@ Two features on branch `feature/dimension-spawners` (needs push):
   trail, head pulse, base glow), the whole miner loop by hand. Do this first.
 - New permanent `save_data_size_probe` test logs size_of(Save_Data) — bumping
   the save is now copy-paste.
+- Side quest, NOT game content: `life.odin` — Conway easter egg on the F1
+  menu (debug-only toy, isolated, own commit; ignore for all game planning).
 
 ## Previous session (2026-07-13 session: dimensions pillar begins)
 

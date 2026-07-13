@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, 79 tests, runs in about a second.
+Tests: `odin test src` — headless, 80 tests, runs in about a second.
 
 ## Controls
 
@@ -34,7 +34,7 @@ live in the working directory (`gnipahellir_save.dat`,
 
 | Key | Tool |
 |---|---|
-| F1 | Debug menu — click to toggle: **Fly mode** (W/S or ↑/↓ vertical, no gravity, collision stays on); **Ultra wand** (13-tile mining shots, free, impact blasts a 3×3 — needs no wand in the bag); **Stamp Metal/Gold spawner** (arms the cursor: the next world click stamps the spawner tile there, free); **Give Auto-Miner** (drops one in the bag) |
+| F1 | Debug menu — click to toggle: **Fly mode** (W/S or ↑/↓ vertical, no gravity, collision stays on); **Ultra wand** (13-tile mining shots, free, impact blasts a 3×3 — needs no wand in the bag); **Stamp Metal/Gold spawner** (arms the cursor: the next world click stamps the spawner tile there, free); **Give Auto-Miner** (drops one in the bag); **Game of Life** (easter egg toy, `life.odin` — not part of the game; it WILL eat the level, fly first) |
 | F3 | Debug overlay: player pos/vel, builder scan rays, hover tile |
 
 `action.log` records everything (flushed every 5 s + on quit) — after a
