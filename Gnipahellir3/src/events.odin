@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete:
+        case .Tile_Placed, .Item_Pickup, .Item_Dropped, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete:
             gs.save_dirty = true
         }
 
@@ -115,7 +115,7 @@ process_events :: proc(gs: ^Game_State) {
             }
 
         case .Item_Dropped:
-            // drop-to-world (Q key) not implemented yet
+            handle_item_dropped(gs, e)
 
         case .Craft_Request:
             handle_craft_request(gs, e)
@@ -300,4 +300,27 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
             gs.world.item_counts[idx] = 1
         }
     }
+}
+
+// Q key: the selected stack lands two tiles ahead of the player — outside
+// the pickup sweep, so it isn't collected right back the same frame.
+handle_item_dropped :: proc(gs: ^Game_State, e: Event) {
+    if gs.player.dead do return
+    p    := &gs.player
+    slot := int(e.payload.int_val)
+    if slot < 0 || slot >= MAX_INVENTORY do return
+    s := &p.inventory.slots[slot]
+    if s.item == .None || s.count <= 0 do return
+
+    tile := [2]i32{
+        clamp(i32(p.pos.x + PLAYER_W*0.5) + i32(p.facing)*2, 0, GRID_W - 1),
+        clamp(i32(p.pos.y + PLAYER_H - 0.001), 0, GRID_H - 1),  // foot row
+    }
+    item  := s.item
+    count := int(s.count)
+    s.item  = .None
+    s.count = 0
+    spawn_ground_item(&gs.world, tile, item, count)
+    audio_play(&gs.audio, .Place)
+    log_action(gs, "Player drops %v x%d at (%d,%d)", item, count, tile.x, tile.y)
 }
