@@ -92,12 +92,20 @@ process_events :: proc(gs: ^Game_State) {
         case .Tile_Placed:
             // tile already set before event was pushed
             audio_play(&gs.audio, .Place)
+            // Machines teach themselves on placement.
+            #partial switch get_tile(&gs.world, int(e.tile.x), int(e.tile.y)) {
+            case .Smelter:
+                notify(gs, "Drop ore beside the smelter (Q) — it casts bars")
+            case .Tree_Grower:
+                notify(gs, "The grower raises a tree when open sky is above")
+            }
 
         case .Lava_Spread:
             // sim system not implemented yet (Phase 4+)
 
         case .Tree_Grew:
-            // sim system not implemented yet (Phase 4+)
+            audio_play(&gs.audio, .Place, audio_tile_gain(gs, e.tile))
+            spawn_grow_burst(gs, e.tile)
 
         case .Item_Pickup:
             audio_play(&gs.audio, .Pickup)

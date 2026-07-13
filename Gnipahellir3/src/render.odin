@@ -186,6 +186,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         g.a = u8(60 + pulse*90)
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, g)
         draw_item_icon(terrain_table[t].drop_item, px, py, CELL_SIZE)
+        draw_machine_progress(gs, t, x, y)
         return
     }
     switch tile_draw_style[t] {
@@ -194,6 +195,31 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Flower: draw_pixel_flower(px, py)
     case .Solid:
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
+    }
+}
+
+// Working machines show it (read-only: sim_data progress → overlay).  A
+// smelting furnace burns hotter and fills an ember bar; a grower's sapling
+// climbs out of the planter as the growth timer fills.
+draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
+    px := i32(x * CELL_SIZE)
+    py := i32(y * CELL_SIZE)
+    #partial switch t {
+    case .Smelter:
+        p := gs.world.sim_data[grid_idx(x, y)].growth_timer / SMELT_TIME
+        if p <= 0 do return
+        flick := (math.sin(gs.elapsed_time*13 + f32(x)) + 1) * 0.5
+        rl.DrawRectangle(px + 2, py + 3, 6, 4, rl.Color{255, 150, 40, u8(80 + p*100 + flick*60)})
+        rl.DrawRectangle(px, py - 2, i32(f32(CELL_SIZE) * clamp(p, 0, 1)), 2, rl.Color{255, 200, 80, 230})
+    case .Tree_Grower:
+        p := gs.world.sim_data[grid_idx(x, y)].growth_timer / TREE_GROW_TIME
+        if p <= 0 do return
+        h := i32(1 + clamp(p, 0, 1)*6)
+        rl.DrawRectangle(px + CELL_SIZE/2 - 1, py - h, 2, h, rl.Color{70, 190, 60, 255})
+        if p > 0.5 {
+            rl.DrawRectangle(px + CELL_SIZE/2 - 3, py - h, 2, 2, rl.Color{110, 230, 110, 255})
+            rl.DrawRectangle(px + CELL_SIZE/2 + 1, py - h + 1, 2, 2, rl.Color{110, 230, 110, 255})
+        }
     }
 }
 

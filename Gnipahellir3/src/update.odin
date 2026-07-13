@@ -30,8 +30,9 @@ game_update :: proc(gs: ^Game_State) {
     // 5. Wand mining (delayed impact) — pushes Tile_Mined, must precede events
     update_mining(gs)
 
-    // 5b. Sim  (stub)
-    // update_sim(gs)
+    // 5b. Sim — placed machines (smelter, tree grower) tick; pushes
+    //     Tree_Grew/Play_Sound, so it must precede process_events
+    update_sim(gs)
 
     // 5c. Station focus — nearest interactable station, for the prompt,
     //     tile highlight and click handler (writes UI_State only)
