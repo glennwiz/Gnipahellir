@@ -61,6 +61,10 @@ Tile_Type :: enum u8 {
     // Crafting stations (appended: terrain is saved as u8, order is frozen)
     Dvergr_Forge,
     Rune_Altar,
+    // Parallel dimensions (appended: order is frozen)
+    Dimension_Spawner,
+    Dimension_Gate,
+    Dimension_Spawner_Gold,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -121,6 +125,9 @@ Item :: enum u8 {
     Iron_Bar,
     Silver_Bar,
     Gold_Bar,
+    // Parallel dimensions (appended: order is frozen)
+    Dimension_Spawner,
+    Dimension_Spawner_Gold,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

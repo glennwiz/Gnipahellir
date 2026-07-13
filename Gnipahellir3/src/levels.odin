@@ -10,14 +10,15 @@ import "core:fmt"
 //  World gen is deterministic, so portal coordinates are compile-time
 //  constants; portal chambers are carved explicitly during generation.
 
-LEVEL_SURFACE :: 0
-LEVEL_CAVE2   :: 1
-LEVEL_CAVE3   :: 2
-LEVEL_SKY     :: 3
-NUM_LEVELS    :: 4
+LEVEL_SURFACE   :: 0
+LEVEL_CAVE2     :: 1
+LEVEL_CAVE3     :: 2
+LEVEL_SKY       :: 3
+LEVEL_DIMENSION :: 4   // ephemeral spawner world; regenerated per entry (dimensions.odin)
+NUM_LEVELS      :: 5
 
 @(rodata)
-level_names := [NUM_LEVELS]string{"Surface", "Deep Cave", "Gnipahellir", "Low Sky"}
+level_names := [NUM_LEVELS]string{"Surface", "Deep Cave", "Gnipahellir", "Low Sky", "Dimension"}
 
 Level_Store :: struct {
     worlds:    [NUM_LEVELS]World_Grid,
@@ -115,6 +116,8 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
             spawn_builder(gs, GRID_W / 2)
         case LEVEL_SKY:
             gen_sky_level(&gs.world)
+        case LEVEL_DIMENSION:
+            gen_dimension(&gs.world, gs.dimension.kind, gs.dimension.seed)
         }
         ls.generated[dest] = true
     }
@@ -149,10 +152,17 @@ player_interact :: proc(gs: ^Game_State) {
         return
     }
 
-    // A Sky_Altar tile near the player: in the sky it runs the ritual; on the
-    // surface it's the gate the player raised — step through to the heavens.
     cx := int(gs.player.pos.x + PLAYER_W*0.5)
     cy := int(gs.player.pos.y + PLAYER_H*0.5)
+
+    // Standing in a dimension's return gate: step back home.
+    if gs.level_index == LEVEL_DIMENSION && get_tile(&gs.world, cx, cy) == .Dimension_Gate {
+        dimension_exit(gs)
+        return
+    }
+
+    // A Sky_Altar tile near the player: in the sky it runs the ritual; on the
+    // surface it's the gate the player raised — step through to the heavens.
     for dy in -BENCH_RANGE ..= BENCH_RANGE {
         for dx in -BENCH_RANGE ..= BENCH_RANGE {
             if get_tile(&gs.world, cx+dx, cy+dy) == .Sky_Altar {
@@ -163,6 +173,22 @@ player_interact :: proc(gs: ^Game_State) {
                     eq_push(&gs.events, Event{type = .Ritual_Request})
                 }
                 return
+            }
+        }
+    }
+
+    // A Dimension Spawner in reach: step into its world.  Spawners are inert
+    // inside a dimension — no worlds within worlds.
+    if gs.level_index != LEVEL_DIMENSION {
+        for dy in -BENCH_RANGE ..= BENCH_RANGE {
+            for dx in -BENCH_RANGE ..= BENCH_RANGE {
+                t := get_tile(&gs.world, cx+dx, cy+dy)
+                for kind in Dimension_Kind {
+                    if dimension_spawner_tile[kind] == t {
+                        dimension_enter(gs, {i32(cx + dx), i32(cy + dy)}, kind)
+                        return
+                    }
+                }
             }
         }
     }
@@ -535,7 +561,7 @@ carve_level0_portals :: proc(w: ^World_Grid) {
 }
 
 debug_add_all_structures :: proc(gs: ^Game_State) {
-    structures := [?]Item{.Crafting_Bench, .Tree_Grower, .Smelter, .Dvergr_Forge, .Rune_Altar, .Sky_Altar}
+    structures := [?]Item{.Crafting_Bench, .Tree_Grower, .Smelter, .Dvergr_Forge, .Rune_Altar, .Sky_Altar, .Dimension_Spawner, .Dimension_Spawner_Gold}
     for s in structures {
         for &slot in gs.player.inventory.slots {
             if slot.item == .None {

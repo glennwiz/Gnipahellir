@@ -12,13 +12,13 @@ import "core:os"
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
-SAVE_VERSION :: i32(10)  // v10: Sim_Tile_Data smelter tray; v9: Player.equipment + fall_peak_y
+SAVE_VERSION :: i32(11)  // v11: LEVEL_DIMENSION slot + Dimension_State; v10: Sim_Tile_Data smelter tray
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 2_206_384
+SAVE_DATA_EXPECTED_SIZE :: 2_647_576
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {
@@ -30,6 +30,7 @@ Save_Data :: struct {
     enemies:      Enemy_Store,   // builder goals/dens/carry ride along — Enemy is flat
     sim:          Sim_State,
     progression:  Progression_State,
+    dimension:    Dimension_State,
     elapsed_time: f32,
     frame:        u64,
 }
@@ -46,6 +47,7 @@ save_game :: proc(gs: ^Game_State) -> bool {
     sd.enemies      = gs.enemies
     sd.sim          = gs.sim
     sd.progression  = gs.progression
+    sd.dimension    = gs.dimension
     sd.elapsed_time = gs.elapsed_time
     sd.frame        = gs.frame
 
@@ -72,6 +74,7 @@ load_game :: proc(gs: ^Game_State) -> bool {
     gs.enemies      = sd.enemies
     gs.sim          = sd.sim
     gs.progression  = sd.progression
+    gs.dimension    = sd.dimension
     gs.elapsed_time = sd.elapsed_time
     gs.frame        = sd.frame
 

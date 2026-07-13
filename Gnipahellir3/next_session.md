@@ -1,6 +1,47 @@
-# Next Session Handover (updated 2026-07-13)
+# Next Session Handover (updated 2026-07-13, evening)
 
-## Where we are
+## Where we are (2026-07-13 session: dimensions pillar begins)
+
+On master: the **Parallel Dimensions spawner slice** shipped
+(`draft1_machines.md` §7.6 step 2 — Glenn chose it before the Silo).
+`src/dimensions.odin`, 72/72 tests green, save bumped to **v11**
+(old saves reject to a fresh run):
+
+- **Themed spawners** crafted at the Rune Altar; the recipe's metal is the
+  world's riches (Glenn's design call): Metal Spawner = 4 Iron Bars → iron
+  14%; Gold Spawner = 4 Gold Bars → gold 12%. Both + 8 Cloud Stone +
+  20 Stone Block.
+- **Ephemeral worlds**: `LEVEL_DIMENSION :: 4` in Level_Store; regenerates
+  from seed (whash of spawner tile) every entry; Dimension_Gate returns you
+  to the spawner. Interact scan mirrors the Sky Altar pattern.
+- **Hardened for gem expansion**: `Dimension_Theme` now holds a
+  `veins: [MAX_THEME_VEINS]Dimension_Vein` list ({tile, pct}) — gen loops it,
+  no per-ore fields or switch arms. A new themed world is pure table data.
+- Placement/mining, debug menu handout, station glow, crystal icons, plan.md
+  synced. **Metal spawner placement playtested; Gold not yet seen in-game.**
+
+## Next session: gem expansion plan (emeralds, diamonds, jade, sky crystals, hell gems)
+
+Architecture verdict: ready. Per new gem, everything is an append-only table
+row (Tile_Type + Item enums are save-safe appends; item_icons is a full array
+so the compiler forces the icon entry; ORE_GRID/CRYSTAL_GRID + palette = one
+line). Decisions to make with Glenn before building:
+
+1. **Design agreed (see `gem_progression.md`)**: gems are their own
+   depth-progression ladder (Emerald→Jade→Diamond→Hel Gem, Sky Crystal above),
+   sparse in nature, industrialized via late-game gem dimensions whose recipes
+   cost the gem itself. Gem dimensions carry hazards (lava, poison gas tile,
+   mobs on entry) — richer = nastier.
+2. **Spawner-per-theme stops scaling** past ~4 themes (each needs tile + item
+   + recipe + icon + glow row). At that point implement §7.6 step 3:
+   **Dimension Creator + Dimension Block** items — ONE spawner tile, block
+   consumable carries kind+seed. Recommended before adding a 3rd theme.
+3. **What gems are FOR** — recipes that want them (runic+ tier gear? machine
+   parts? boss summon?). Without sinks they're decoration.
+4. **Silo still first** for any bulk economy (§7.6 step 1): item_counts is u8
+   (255 cap), inventory ~2,400 total. Unchanged prerequisite.
+
+## Previous session (machines-alive, merged)
 
 Branch `feature/machines-alive` (off master, not yet merged/pushed): the
 "shine" pass began with the biggest gap from `score.md` (8.5/10 review) —
@@ -32,8 +73,8 @@ but the look (glow, sprout, bursts) hasn't been seen in-game.
   are unobtainable/unusable.
 - **Enemy variety**: Undead/Fire_Sprite are empty enum branches; caves 2–3
   need distinct threats.
-- **Doc drift**: plan.md physics constants (28/−13/8 in code) + Player
-  struct sketch; PLAYTEST.md badly stale (says no pause menu, ~20 tests).
+- ~~**Doc drift**~~ — FIXED 2026-07-13: plan.md physics + Player struct
+  synced to code; PLAYTEST.md test count (72) and placement reach (8) fixed.
 - **Visual polish backlog**: craft result flying to inventory, character
   creation screen (death screen hardcodes colors), crafting GUI auto-close
   decision, chest loot, recipe list scrolling.

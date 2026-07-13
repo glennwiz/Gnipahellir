@@ -43,6 +43,9 @@ terrain_table := [Tile_Type]Terrain_Behavior{
     .Flower         = { "Flower",        {.Walkable},                                                 rl.Color{255, 220,  50, 255}, 1,   0,   .None          },
     .Dvergr_Forge   = { "Dvergr Forge",  {.Solid, .Placeable, .Mineable},                             rl.Color{105, 105, 125, 255}, 0,   0,   .Dvergr_Forge  },
     .Rune_Altar     = { "Rune Altar",    {.Solid, .Placeable, .Mineable},                             rl.Color{150, 90,  220, 255}, 0,   0,   .Rune_Altar    },
+    .Dimension_Spawner = { "Metal Dimension Spawner", {.Solid, .Placeable, .Mineable},                rl.Color{40,  200, 180, 255}, 0,   0,   .Dimension_Spawner },
+    .Dimension_Gate    = { "Dimension Gate",    {.Walkable},                                          rl.Color{30,  140, 130, 255}, 1,   0,   .None              },
+    .Dimension_Spawner_Gold = { "Gold Dimension Spawner", {.Solid, .Placeable, .Mineable},            rl.Color{235, 195, 60,  255}, 0,   0,   .Dimension_Spawner_Gold },
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────

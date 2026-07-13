@@ -74,6 +74,8 @@ item_table := [Item]Item_Info{
     .Iron_Bar          = { "Iron Bar",          {172, 172, 188, 255}, .Air },
     .Silver_Bar        = { "Silver Bar",        {222, 222, 240, 255}, .Air },
     .Gold_Bar          = { "Gold Bar",          {245, 205, 70,  255}, .Air },
+    .Dimension_Spawner      = { "Metal Dimension Spawner", {40,  200, 180, 255}, .Dimension_Spawner },
+    .Dimension_Spawner_Gold = { "Gold Dimension Spawner",  {235, 195, 60,  255}, .Dimension_Spawner_Gold },
 }
 
 is_blueprint :: proc(it: Item) -> bool {

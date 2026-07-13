@@ -543,6 +543,8 @@ item_icons := [Item]Item_Icon{
 	.Iron_Bar         = {BAR_GRID, PAL_IRON},
 	.Silver_Bar       = {BAR_GRID, PAL_SILVER},
 	.Gold_Bar         = {BAR_GRID, PAL_GOLD},
+	.Dimension_Spawner      = {CRYSTAL_GRID, {{}, {}, {200, 255, 245, 255}, {70, 225, 195, 255}, {40, 160, 140, 255}}},
+	.Dimension_Spawner_Gold = {CRYSTAL_GRID, {{}, {}, {255, 232, 130, 255}, {235, 195, 60, 255}, {178, 138, 28, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

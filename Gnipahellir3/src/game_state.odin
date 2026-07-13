@@ -338,6 +338,7 @@ Game_State :: struct {
     audio:       Audio_State,
     assets:      Assets,
     progression: Progression_State,
+    dimension:   Dimension_State,
     stats:       Persistent_Stats,
 
     elapsed_time: f32,

@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, 64 tests, runs in about a second.
+Tests: `odin test src` — headless, 72 tests, runs in about a second.
 
 ## Controls
 
@@ -11,7 +11,7 @@ Tests: `odin test src` — headless, 64 tests, runs in about a second.
 | W / ↑ / Space | Jump |
 | Left-click (hold) | Mine: the **Pickaxe** works the tile in the cursor's rough *direction* — no aiming at tiles; point roughly and hold. Forward carves head+feet height (a walkable tunnel), point down/up to dig those ways. 3 chips per tile, free. A crafted **Mine Wand** keeps precise cursor aim at range 2/4/8 (5 mana per shot) |
 | Left-click on enemy | Weapon swing (needs a weapon **equipped**; 2-tile reach, damage = Attack stat, 0.35 s cooldown) |
-| Right-click | Place selected item (5-tile reach, needs solid neighbour). In the open inventory: right-click a bag item to **equip** it (weapon/armor/charm boxes above the bag), right-click an equip box to take it off |
+| Right-click | Place selected item (8-tile reach, needs solid neighbour). In the open inventory: right-click a bag item to **equip** it (weapon/armor/charm boxes above the bag), right-click an equip box to take it off |
 | TAB | Inventory (click slot or keys 1–8 to select) |
 | C | Crafting window (rows green = affordable; click to craft) |
 | E | Interact: portal travel / sky-altar ritual / open a station or smelter window in reach |

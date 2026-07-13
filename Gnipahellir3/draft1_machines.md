@@ -418,6 +418,12 @@ assumes several dimensions running.
 
 ### 7.6 Build order (after the §6 MVP proves out)
 
+> **Status (2026-07-13):** step 2 shipped first (spawner slice, `dimensions.odin`):
+> craftable themed spawners (Rune Altar tier — Metal costs iron bars, Gold costs
+> gold bars; the recipe metal is the world's riches), portal in/out, ephemeral
+> regen-from-seed. Themed spawner items stand in for step 3's Creator+Blocks for
+> now. Silo (step 1) is next.
+
 1. **Silo machine** first — wide-count bulk storage. Without it, nothing else
    about "1000x" works. → verify: a silo accumulates >255 of an item.
 2. **Dimension theme table** + one hardcoded **Metal Dimension** you can enter via

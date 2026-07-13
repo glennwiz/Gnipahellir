@@ -109,6 +109,8 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Sky_Altar      = {130, 200, 255, 255},  // sky blue
     .Dvergr_Forge   = {255, 150, 60, 255},   // forge fire
     .Rune_Altar     = {190, 120, 255, 255},  // rune purple
+    .Dimension_Spawner      = {80, 255, 220, 255},  // dimensional teal
+    .Dimension_Spawner_Gold = {255, 225, 100, 255}, // gilded shimmer
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
