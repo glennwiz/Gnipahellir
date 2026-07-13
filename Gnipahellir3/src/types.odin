@@ -118,6 +118,10 @@ Item :: enum u8 {
     Runic_Gauntlets,
     Runic_Greaves,
     Runic_Boots,
+    // Smelted bars (appended: items are saved as u8, order is frozen)
+    Iron_Bar,
+    Silver_Bar,
+    Gold_Bar,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

@@ -71,6 +71,9 @@ item_table := [Item]Item_Info{
     .Runic_Gauntlets   = { "Runic Gauntlets",   {210, 130, 255, 255}, .Air },
     .Runic_Greaves     = { "Runic Greaves",     {210, 130, 255, 255}, .Air },
     .Runic_Boots       = { "Runic Boots",       {210, 130, 255, 255}, .Air },
+    .Iron_Bar          = { "Iron Bar",          {172, 172, 188, 255}, .Air },
+    .Silver_Bar        = { "Silver Bar",        {222, 222, 240, 255}, .Air },
+    .Gold_Bar          = { "Gold Bar",          {245, 205, 70,  255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
