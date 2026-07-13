@@ -91,6 +91,28 @@ spawn_craft_burst :: proc(gs: ^Game_State, it: Item) {
     }
 }
 
+// Smelter output: a spray of embers and a curl of smoke off the furnace mouth.
+spawn_smelt_burst :: proc(gs: ^Game_State, T: [2]i32) {
+    center := [2]f32{f32(T.x) + 0.5, f32(T.y) + 0.3}
+    for i in 0 ..< 8 {
+        seed := u32(gs.frame)*23 + u32(i)*733
+        vel  := [2]f32{jitter(seed, 2.5), -2.5 + jitter(seed + 1, 1)}
+        color := rl.Color{255, 160, 40, 255} if i % 2 == 0 else rl.Color{120, 110, 100, 200}
+        spawn_particle(&gs.particles, center, vel, color, 0.5 + jitter(seed + 3, 0.15))
+    }
+}
+
+// A grown tree shakes loose a drift of leaves around the new crown.
+spawn_grow_burst :: proc(gs: ^Game_State, T: [2]i32) {
+    for i in 0 ..< 10 {
+        seed := u32(gs.frame)*19 + u32(i)*457
+        pos  := [2]f32{f32(T.x) + 0.5 + jitter(seed, 1.5), f32(T.y) - 3 + jitter(seed + 1, 1.5)}
+        vel  := [2]f32{jitter(seed + 3, 0.8), 0.6 + jitter(seed + 5, 0.4)}
+        color := rl.Color{112, 208, 88, 220} if i % 2 == 0 else rl.Color{58, 158, 48, 220}
+        spawn_particle(&gs.particles, pos, vel, color, 0.9 + jitter(seed + 7, 0.3))
+    }
+}
+
 // ─── Ambience ─────────────────────────────────────────────────────────────────
 //
 //  Stray motes of magic drifting up through each level's air, and station

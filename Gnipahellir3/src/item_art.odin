@@ -458,6 +458,22 @@ RUNE_ALTAR_GRID :: Icon_Grid{
 	"............",
 }
 
+// Cast ingot: trapezoid slab, lit top edge — tier palettes color the metal.
+BAR_GRID :: Icon_Grid{
+	"............",
+	"............",
+	"............",
+	"...LLLLLL...",
+	"..LBBBBBBD..",
+	".LBBBBBBBBD.",
+	".BBBBBBBBBD.",
+	".DDDDDDDDDD.",
+	"............",
+	"............",
+	"............",
+	"............",
+}
+
 // ─── Per-item icon table (grid + palette) ─────────────────────────────────────
 
 Item_Icon :: struct {
@@ -524,6 +540,9 @@ item_icons := [Item]Item_Icon{
 	.Runic_Gauntlets  = {GAUNTLETS_GRID, PAL_RUNIC},
 	.Runic_Greaves    = {GREAVES_GRID, PAL_RUNIC},
 	.Runic_Boots      = {BOOTS_GRID, PAL_RUNIC},
+	.Iron_Bar         = {BAR_GRID, PAL_IRON},
+	.Silver_Bar       = {BAR_GRID, PAL_SILVER},
+	.Gold_Bar         = {BAR_GRID, PAL_GOLD},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

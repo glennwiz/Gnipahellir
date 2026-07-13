@@ -110,6 +110,14 @@ update_player :: proc(gs: ^Game_State) {
     // ── Interact: portals, sky altar ──────────────────────────────
     if inp.interact do player_interact(gs)
 
+    // ── Drop: toss the selected stack ahead (handler does the move) ─
+    if inp.drop_item && p.inventory.selected >= 0 {
+        eq_push(&gs.events, Event{
+            type    = .Item_Dropped,
+            payload = {int_val = i32(p.inventory.selected)},
+        })
+    }
+
     // ── Mana regen ────────────────────────────────────────────────
     p.mana = min(p.mana + p.mana_regen * dt, p.mana_max)
 

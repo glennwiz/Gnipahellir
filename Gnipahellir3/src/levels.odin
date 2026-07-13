@@ -476,7 +476,7 @@ debug_add_all_structures :: proc(gs: ^Game_State) {
 }
 
 debug_add_resources :: proc(gs: ^Game_State) {
-    resources := [?]Item{.Wood_Log, .Stone_Block, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore, .Cloud_Stone, .Aether_Crystal, .Runic_Sky_Ore}
+    resources := [?]Item{.Wood_Log, .Stone_Block, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore, .Iron_Bar, .Silver_Bar, .Gold_Bar, .Cloud_Stone, .Aether_Crystal, .Runic_Sky_Ore}
     for r in resources {
         for &slot in gs.player.inventory.slots {
             if slot.item == .None {

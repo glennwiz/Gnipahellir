@@ -574,8 +574,8 @@ wand_crafting_ladder :: proc(t: ^testing.T) {
     inv := &gs.player.inventory
     inventory_insert(inv, .Plank, 2)
     inventory_insert(inv, .Iron_Ore, 4)
-    inventory_insert(inv, .Silver_Ore, 6)
-    inventory_insert(inv, .Gold_Ore, 6)
+    inventory_insert(inv, .Silver_Bar, 3)
+    inventory_insert(inv, .Gold_Bar, 3)
 
     craft :: proc(gs: ^Game_State, result: Item) {
         for r, i in recipe_table {
@@ -603,8 +603,8 @@ wand_crafting_ladder :: proc(t: ^testing.T) {
     craft(gs, .Mine_Wand_Gold)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand_Gold), 1)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 0)
-    testing.expect_value(t, inventory_count(inv, .Silver_Ore), 0)
-    testing.expect_value(t, inventory_count(inv, .Gold_Ore), 0)
+    testing.expect_value(t, inventory_count(inv, .Silver_Bar), 0)
+    testing.expect_value(t, inventory_count(inv, .Gold_Bar), 0)
 }
 
 @(test)
@@ -631,15 +631,15 @@ station_ladder :: proc(t: ^testing.T) {
         testing.expect_value(t, recipe_table[vis[row]].station, Station.None)
     }
 
-    // The forge is smithed at a bench
+    // The forge is smithed at a bench, from smelted iron
     set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
     inventory_insert(inv, .Stone_Block, 10)
-    inventory_insert(inv, .Iron_Ore, 5)
+    inventory_insert(inv, .Iron_Bar, 3)
     craft(gs, .Dvergr_Forge)
     testing.expect_value(t, inventory_count(inv, .Dvergr_Forge), 1)
 
     // The altar is forge work: refused until a forge is placed
-    inventory_insert(inv, .Gold_Ore, 5)
+    inventory_insert(inv, .Gold_Bar, 3)
     inventory_insert(inv, .Cloud_Stone, 6)
     inventory_insert(inv, .Aether_Crystal, 3)
     craft(gs, .Rune_Altar)
@@ -1828,4 +1828,87 @@ ambience_breathes_motes_into_the_air :: proc(t: ^testing.T) {
         update_particles(gs)
     }
     testing.expect(t, gs.particles.count > 0, "no ambient motes spawned")
+}
+
+// ─── Machine sim (smelter, tree grower) ──────────────────────────────────────
+
+@(test)
+smelter_casts_bars_from_ground_ore :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A smelter on the surface with 4 iron ore Q-dropped beside it.
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    in_idx := grid_idx(sx - 1, sy)
+    gs.world.items[in_idx]       = .Iron_Ore
+    gs.world.item_counts[in_idx] = 4
+
+    // Two smelt cycles: 4 ore → 2 bars (2 ore each).
+    frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
+    for _ in 0 ..< frames {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+
+    testing.expect_value(t, gs.world.items[in_idx], Item.None)  // ore fully eaten
+    bars := 0
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        idx := grid_idx(sx + dx, sy + dy)
+        if gs.world.items[idx] == .Iron_Bar do bars += int(gs.world.item_counts[idx])
+    }
+    testing.expect_value(t, bars, 2)
+
+    // The fire dies without ore: progress stays zero.
+    update_sim(gs)
+    testing.expect_value(t, gs.world.sim_data[grid_idx(sx, sy)].growth_timer, f32(0))
+}
+
+@(test)
+tree_grower_raises_trees_over_time :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gx, gy := GRID_W/2 + 5, SURFACE_Y - 1
+    set_tile(&gs.world, gx, gy, .Tree_Grower)
+    for h in 1 ..= TREE_MAX_H do set_tile(&gs.world, gx, gy - h, .Air)
+
+    frames := int(TREE_GROW_TIME / gs.delta_time) + 4
+    for _ in 0 ..< frames {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, get_tile(&gs.world, gx, gy - 1), Tile_Type.Wood)
+
+    // A standing trunk pauses the grower until it is harvested.
+    update_sim(gs)
+    testing.expect_value(t, gs.world.sim_data[grid_idx(gx, gy)].growth_timer, f32(0))
+}
+
+@(test)
+q_drop_lands_ahead_of_the_pickup_sweep :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    inventory_insert(&gs.player.inventory, .Iron_Ore, 5)
+    slot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
+    gs.player.facing = 1
+
+    handle_item_dropped(gs, Event{payload = {int_val = i32(slot)}})
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
+
+    // The stack lies ahead of the player — the pickup sweep must not reclaim it.
+    player_pickup(gs)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
+
+    tx := int(gs.player.pos.x + PLAYER_W*0.5) + 2
+    ty := int(gs.player.pos.y + PLAYER_H - 0.001)
+    found := 0
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        if !in_bounds(tx + dx, ty + dy) do continue
+        idx := grid_idx(tx + dx, ty + dy)
+        if gs.world.items[idx] == .Iron_Ore do found += int(gs.world.item_counts[idx])
+    }
+    testing.expect_value(t, found, 5)
 }

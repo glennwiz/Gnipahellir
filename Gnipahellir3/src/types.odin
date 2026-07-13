@@ -16,7 +16,6 @@ MAX_PARTICLES   :: 256
 MAX_PROJECTILES :: 32
 MAX_EVENTS      :: 512
 MAX_INVENTORY   :: 24
-MAX_RECIPES     :: 16
 MAX_AUDIO       :: 128
 MAX_LEVELS      :: 16
 MAX_PROGRESSION_TIERS :: 3
@@ -118,6 +117,10 @@ Item :: enum u8 {
     Runic_Gauntlets,
     Runic_Greaves,
     Runic_Boots,
+    // Smelted bars (appended: items are saved as u8, order is frozen)
+    Iron_Bar,
+    Silver_Bar,
+    Gold_Bar,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
