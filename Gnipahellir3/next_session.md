@@ -39,6 +39,10 @@ but the look (glow, sprout, bursts) hasn't been seen in-game.
   decision, chest loot, recipe list scrolling.
 - Later (design docs ready): mana machines + power pool
   (`architecture_findings.md` §4, `draft1_machines.md`).
+- **Builder reach upgrade** (Glenn, 2026-07-13 playtest): base placement
+  reach is now 8 (`PLAYER_REACH`, placement.odin). Idea: a craftable
+  upgrade that extends it further and lets you paint tiles by holding the
+  mouse — mirror the wand pattern (`best_wand` extends PICK_RANGE).
 
 ## Reminders
 

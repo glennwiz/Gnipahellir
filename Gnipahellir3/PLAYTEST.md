@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, ~20 tests, runs in well under a second.
+Tests: `odin test src` — headless, 64 tests, runs in about a second.
 
 ## Controls
 
@@ -14,14 +14,21 @@ Tests: `odin test src` — headless, ~20 tests, runs in well under a second.
 | Right-click | Place selected item (5-tile reach, needs solid neighbour). In the open inventory: right-click a bag item to **equip** it (weapon/armor/charm boxes above the bag), right-click an equip box to take it off |
 | TAB | Inventory (click slot or keys 1–8 to select) |
 | C | Crafting window (rows green = affordable; click to craft) |
-| E | Interact: portal travel / sky-altar ritual |
+| E | Interact: portal travel / sky-altar ritual / open a station or smelter window in reach |
+| ESC | Close **all** open windows; when none are open, pause menu (Resume / Settings / New Game / Save and Quit) |
 | F11 | Borderless fullscreen |
-| Q | Drop item — **wired but unimplemented** |
+| Q | Drop the selected stack two tiles ahead (how you ground-feed a smelter) |
 
-No pause menu yet — close the window; it saves on quit and continues on
-launch. Death clears the save (roguelike). Save/log files live in the
-working directory (`gnipahellir_save.dat`, `gnipahellir_stats.dat`,
-`action.log`).
+Windows (inventory, crafting, smelter, blueprint) are **draggable** — grab
+the header band and move them anywhere. Clicking a smelter (or pressing E
+beside one) opens its furnace window: a 3×3 mirror of the tiles around the
+fire with a progress bar. Drag ore **and wood** from the bag onto the window
+to lay stacks beside the furnace — one log's embers fire **three** bars
+(2 ore per bar) and the bars land in the **tray**, never on the ground. Click
+the tray (or drag it onto the bag) to take the bars; mining the furnace
+spills a loaded tray. Death clears the save (roguelike). Save/log files
+live in the working directory (`gnipahellir_save.dat`,
+`gnipahellir_stats.dat`, `action.log`).
 
 ## Debug tools (debug builds only)
 
@@ -65,6 +72,4 @@ session. This is how the builder-freeze regression was diagnosed.
 
 ## Known stubs (deliberate, don't file as bugs)
 
-- Smelter and Tree_Grower place but don't function (sim system stubbed;
-  smelting deferred at Phase 4 kickoff — ores are used raw)
-- Iron_Bucket can't scoop lava; Q-drop does nothing
+- Iron_Bucket can't scoop lava; potions exist but are unobtainable/unusable

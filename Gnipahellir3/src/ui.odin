@@ -17,13 +17,11 @@ SLOT_PX  :: 44
 // equip slots on the left and the bag grid to its right.
 INV_PANEL_W :: 24 + 100 + 16 + INV_COLS*SLOT_PX + 24
 INV_PANEL_H :: 450
-INV_PANEL_X :: (UI_W - INV_PANEL_W) / 2 - 40
+INV_PANEL_X :: (UI_W - INV_PANEL_W) / 2 - 40    // default position (draggable)
 INV_PANEL_Y :: (UI_H - INV_PANEL_H) / 2
-INV_X       :: INV_PANEL_X + 140                // bag grid origin
-INV_Y       :: INV_PANEL_Y + 70
 
 // Crafting: tall list right of the inventory popup, taking the remaining width.
-CRAFT_X     :: INV_PANEL_X + INV_PANEL_W + 8
+CRAFT_X     :: INV_PANEL_X + INV_PANEL_W + 8    // default content origin (draggable)
 CRAFT_Y     :: 160
 CRAFT_W     :: UI_W - CRAFT_X - 6
 CRAFT_ROW_H :: 20   // hand + one station's rows (max ~17) + anvil header must fit UI_H
@@ -31,8 +29,6 @@ CRAFT_OFFER_H  :: 132   // anvil header: offer slots + candidate results
 CRAFT_SLOT_GAP :: 6
 
 // Equipment boxes — the paperdoll column (weapon, armor head→feet, charm).
-EQUIP_X    :: INV_PANEL_X + 24
-EQUIP_Y    :: INV_PANEL_Y + 70
 EQUIP_STEP :: 50
 
 @(rodata)
@@ -44,8 +40,93 @@ equip_slot_labels := [7]cstring{"WPN", "HEAD", "CHEST", "HANDS", "LEGS", "FEET",
 // Blueprint overlay — centered panel.
 BP_W :: 540
 BP_H :: 360
-BP_X :: (UI_W - BP_W) / 2
+BP_X :: (UI_W - BP_W) / 2    // default position (draggable)
 BP_Y :: (UI_H - BP_H) / 2
+
+// Smelter window — the furnace fire, the ground cells beside it, the tray.
+SMELT_W :: 250
+SMELT_H :: 360
+SMELT_X :: 140               // default position (draggable)
+SMELT_Y :: 180
+
+// ─── Floating Windows (draggable) ─────────────────────────────────────────────
+//
+//  Each floating window's top-left lives in UI_State.win_pos (defaults below);
+//  grabbing the top WINDOW_HEADER_H band drags it.  Full-screen modals (menu,
+//  settings, title, death) are not windows and stay fixed.
+
+UI_Window :: enum u8 {
+    Inventory,
+    Crafting,
+    Smelter,
+    Blueprint,
+}
+
+WINDOW_HEADER_H :: 40
+
+@(rodata)
+default_window_pos := [UI_Window][2]i32{
+    .Inventory = {INV_PANEL_X, INV_PANEL_Y},
+    .Crafting  = {CRAFT_X - 6, CRAFT_Y - 28},
+    .Smelter   = {SMELT_X, SMELT_Y},
+    .Blueprint = {BP_X, BP_Y},
+}
+
+// draw_ui stacks windows in enum order; drag hit-testing walks this top-down.
+@(rodata)
+window_top_down := [4]UI_Window{.Blueprint, .Smelter, .Crafting, .Inventory}
+
+// Outer bounds of a floating window at its current position, and whether it
+// is open.  Crafting's height tracks its recipe list.
+window_rect :: proc(gs: ^Game_State, w: UI_Window) -> (x, y, ww, wh: i32, open: bool) {
+    p := gs.ui.win_pos[w]
+    switch w {
+    case .Inventory:
+        return p.x, p.y, INV_PANEL_W, INV_PANEL_H, gs.ui.show_inventory
+    case .Crafting:
+        vis: [len(recipe_table)]int
+        n := visible_recipes(gs, &vis)
+        return p.x, p.y, CRAFT_W + 12, 42 + CRAFT_OFFER_H + i32(n)*CRAFT_ROW_H, gs.ui.show_crafting
+    case .Smelter:
+        return p.x, p.y, SMELT_W, SMELT_H, gs.ui.show_smelter
+    case .Blueprint:
+        return p.x, p.y, BP_W, BP_H, gs.ui.show_blueprint
+    }
+    return
+}
+
+// True when the cursor is inside an open window's bounds.
+cursor_in_window :: proc(gs: ^Game_State, w: UI_Window) -> bool {
+    x, y, ww, wh, open := window_rect(gs, w)
+    if !open do return false
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    return mx >= x && mx < x + ww && my >= y && my < y + wh
+}
+
+// Runtime content origins, derived from the window position.
+inv_bag_origin :: proc(gs: ^Game_State) -> (x, y: i32) {
+    p := gs.ui.win_pos[.Inventory]
+    return p.x + 140, p.y + 70
+}
+
+equip_origin :: proc(gs: ^Game_State) -> (x, y: i32) {
+    p := gs.ui.win_pos[.Inventory]
+    return p.x + 24, p.y + 70
+}
+
+// Content origin of the crafting window (win_pos is the panel corner; the
+// title band above the content is 28px).
+craft_origin :: proc(gs: ^Game_State) -> (x, y: i32) {
+    p := gs.ui.win_pos[.Crafting]
+    return p.x + 6, p.y + 28
+}
+
+// The smelter tray slot (cast bars wait here) — shared by draw and hit-test.
+smelter_tray_rect :: proc(gs: ^Game_State) -> (x, y: i32) {
+    p := gs.ui.win_pos[.Smelter]
+    return p.x + 24, p.y + 272
+}
 
 panel_bg     :: rl.Color{15, 15, 25, 230}
 panel_border :: rl.Color{90, 90, 120, 255}
@@ -410,23 +491,8 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
             return true
         }
     }
-    if gs.ui.show_inventory &&
-       mx >= INV_PANEL_X && mx < INV_PANEL_X + INV_PANEL_W &&
-       my >= INV_PANEL_Y && my < INV_PANEL_Y + INV_PANEL_H {
-        return true
-    }
-    if gs.ui.show_crafting {
-        vis: [len(recipe_table)]int
-        n := visible_recipes(gs, &vis)
-        if mx >= CRAFT_X && mx < CRAFT_X + CRAFT_W &&
-           my >= CRAFT_Y && my < CRAFT_Y + CRAFT_OFFER_H + i32(n)*CRAFT_ROW_H + 8 {
-            return true
-        }
-    }
-    if gs.ui.show_blueprint &&
-       mx >= BP_X && mx < BP_X + BP_W &&
-       my >= BP_Y && my < BP_Y + BP_H {
-        return true
+    for w in UI_Window {
+        if cursor_in_window(gs, w) do return true
     }
     if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings {
         return true  // full-screen modals — everything behind them is blocked
@@ -436,11 +502,12 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 
 // Equip box under the cursor, or .None (the boxes stack vertically).
 equip_slot_at_cursor :: proc(gs: ^Game_State) -> Equip_Slot {
+    ex, ey := equip_origin(gs)
     mx := i32(gs.input.mouse_screen.x)
     my := i32(gs.input.mouse_screen.y)
-    if mx < EQUIP_X || mx >= EQUIP_X + SLOT_PX do return .None
+    if mx < ex || mx >= ex + SLOT_PX do return .None
     for s, i in equip_slot_order {
-        y := i32(EQUIP_Y + i*EQUIP_STEP)
+        y := ey + i32(i*EQUIP_STEP)
         if my >= y && my < y + SLOT_PX do return s
     }
     return .None
@@ -448,22 +515,24 @@ equip_slot_at_cursor :: proc(gs: ^Game_State) -> Equip_Slot {
 
 // Inventory slot under the cursor, or -1.
 slot_at_cursor :: proc(gs: ^Game_State) -> int {
+    bx, by := inv_bag_origin(gs)
     mx := i32(gs.input.mouse_screen.x)
     my := i32(gs.input.mouse_screen.y)
-    if mx < INV_X || my < INV_Y do return -1
-    c := int((mx - INV_X) / SLOT_PX)
-    r := int((my - INV_Y) / SLOT_PX)
+    if mx < bx || my < by do return -1
+    c := int((mx - bx) / SLOT_PX)
+    r := int((my - by) / SLOT_PX)
     if c < 0 || c >= INV_COLS || r < 0 || r >= INV_ROWS do return -1
     return r*INV_COLS + c
 }
 
 // Recipe-table index of the crafting row under the cursor, or -1.
 recipe_at_cursor :: proc(gs: ^Game_State) -> int {
+    cx, cy := craft_origin(gs)
     mx := i32(gs.input.mouse_screen.x)
     my := i32(gs.input.mouse_screen.y)
-    if mx < CRAFT_X || mx >= CRAFT_X + CRAFT_W do return -1
-    if my < CRAFT_Y + CRAFT_OFFER_H do return -1   // anvil header, not the list
-    row := int((my - CRAFT_Y - CRAFT_OFFER_H - 4) / CRAFT_ROW_H)
+    if mx < cx || mx >= cx + CRAFT_W do return -1
+    if my < cy + CRAFT_OFFER_H do return -1   // anvil header, not the list
+    row := int((my - cy - CRAFT_OFFER_H - 4) / CRAFT_ROW_H)
     vis: [len(recipe_table)]int
     n := visible_recipes(gs, &vis)
     if row < 0 || row >= n do return -1
@@ -471,13 +540,15 @@ recipe_at_cursor :: proc(gs: ^Game_State) -> int {
 }
 
 // Anvil offer slot i (0..2) top-left corner.
-craft_offer_rect :: proc(i: int) -> (x, y: i32) {
-    return i32(CRAFT_X + 4 + i*(SLOT_PX + CRAFT_SLOT_GAP)), i32(CRAFT_Y + 14)
+craft_offer_rect :: proc(gs: ^Game_State, i: int) -> (x, y: i32) {
+    cx, cy := craft_origin(gs)
+    return cx + 4 + i32(i)*(SLOT_PX + CRAFT_SLOT_GAP), cy + 14
 }
 
 // Candidate result slot j top-left corner.
-craft_result_rect :: proc(j: int) -> (x, y: i32) {
-    return i32(CRAFT_X + 4 + j*(SLOT_PX + CRAFT_SLOT_GAP)), i32(CRAFT_Y + 80)
+craft_result_rect :: proc(gs: ^Game_State, j: int) -> (x, y: i32) {
+    cx, cy := craft_origin(gs)
+    return cx + 4 + i32(j)*(SLOT_PX + CRAFT_SLOT_GAP), cy + 80
 }
 
 // Anvil offer slot under the cursor, or -1.
@@ -486,7 +557,7 @@ craft_offer_at_cursor :: proc(gs: ^Game_State) -> int {
     mx := i32(gs.input.mouse_screen.x)
     my := i32(gs.input.mouse_screen.y)
     for i in 0 ..< len(gs.ui.craft_offer) {
-        x, y := craft_offer_rect(i)
+        x, y := craft_offer_rect(gs, i)
         if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return i
     }
     return -1
@@ -500,7 +571,7 @@ craft_result_at_cursor :: proc(gs: ^Game_State) -> int {
     matches: [len(recipe_table)]int
     m := offer_matches(gs, &matches)
     for j in 0 ..< m {
-        x, y := craft_result_rect(j)
+        x, y := craft_result_rect(gs, j)
         if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return matches[j]
     }
     return -1
@@ -521,10 +592,12 @@ draw_station_prompt :: proc(gs: ^Game_State) {
 
 draw_ui :: proc(gs: ^Game_State) {
     draw_hud(gs)
+    draw_objective(gs)
     draw_notifications(gs)
     draw_station_prompt(gs)
     if gs.ui.show_inventory do draw_inventory(gs)
     if gs.ui.show_crafting  do draw_crafting(gs)
+    if gs.ui.show_smelter   do draw_smelter(gs)
     if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
     if gs.ui.drag_item != .None {
         mx := i32(gs.input.mouse_screen.x)
@@ -622,6 +695,20 @@ draw_win_screen :: proc(gs: ^Game_State) {
     center_text("The hound guards the gate no more.", 580, 20, rl.Color{160, 160, 170, 255})
 }
 
+// The current objective — one dim line, top-center, always on so a new
+// player knows the next step of the loop (text from current_objective).
+draw_objective :: proc(gs: ^Game_State) {
+    if gs.player.dead || gs.game_won || gs.ui.show_title do return
+    buf: [128]u8
+    s := current_objective(gs, buf[:127])
+    if len(s) == 0 do return
+    text := cstring(raw_data(buf[:]))
+    tw   := rl.MeasureText(text, 18)
+    x    := (i32(UI_W) - tw) / 2
+    rl.DrawText(text, x + 1, 41, 18, rl.Color{0, 0, 0, 160})
+    rl.DrawText(text, x, 40, 18, rl.Color{210, 185, 140, 220})
+}
+
 // Timed popups, stacked top-center, fading out over the last NOTIFY_FADE s.
 draw_notifications :: proc(gs: ^Game_State) {
     NOTIFY_FONT :: 20
@@ -691,20 +778,24 @@ draw_hud :: proc(gs: ^Game_State) {
 
 draw_inventory :: proc(gs: ^Game_State) {
     inv := &gs.player.inventory
+    px  := gs.ui.win_pos[.Inventory].x
+    py  := gs.ui.win_pos[.Inventory].y
+    ex, ey := equip_origin(gs)
+    bx, by := inv_bag_origin(gs)
 
-    // Centered Norse panel: header, equipment row, bag grid, footer.
-    rl.DrawRectangle(INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H, NORSE_PANEL)
-    rl.DrawRectangleLinesEx({INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H}, 2, NORSE_BORDER)
-    rl.DrawText("INVENTORY", INV_PANEL_X + 24, INV_PANEL_Y + 16, 26, NORSE_GOLD_HOT)
-    draw_rune_strip(f32(INV_PANEL_X) + 295, f32(INV_PANEL_Y) + 30, 11, rl.Color{200, 150, 70, 110})
-    rl.DrawText("[TAB] close", INV_PANEL_X + INV_PANEL_W - 106, INV_PANEL_Y + 24, 12, NORSE_GOLD)
-    rl.DrawRectangle(INV_PANEL_X + 24, INV_PANEL_Y + 52, INV_PANEL_W - 48, 2, NORSE_BORDER)
+    // Norse panel: header (drag to move), equipment row, bag grid, footer.
+    rl.DrawRectangle(px, py, INV_PANEL_W, INV_PANEL_H, NORSE_PANEL)
+    rl.DrawRectangleLinesEx({f32(px), f32(py), INV_PANEL_W, INV_PANEL_H}, 2, NORSE_BORDER)
+    rl.DrawText("INVENTORY", px + 24, py + 16, 26, NORSE_GOLD_HOT)
+    draw_rune_strip(f32(px) + 295, f32(py) + 30, 11, rl.Color{200, 150, 70, 110})
+    rl.DrawText("[TAB] close", px + INV_PANEL_W - 106, py + 24, 12, NORSE_GOLD)
+    rl.DrawRectangle(px + 24, py + 52, INV_PANEL_W - 48, 2, NORSE_BORDER)
 
     // Equipment paperdoll: right-click a bag item to equip, a box to doff.
-    rl.DrawText("GEAR", EQUIP_X, EQUIP_Y - 16, 12, NORSE_GOLD)
+    rl.DrawText("GEAR", ex, ey - 16, 12, NORSE_GOLD)
     for s, i in equip_slot_order {
-        x := i32(EQUIP_X)
-        y := i32(EQUIP_Y + i*EQUIP_STEP)
+        x := ex
+        y := ey + i32(i*EQUIP_STEP)
         hovered := equip_slot_at_cursor(gs) == s
         rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, NORSE_ROW)
         rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX}, hovered ? 2 : 1,
@@ -719,8 +810,8 @@ draw_inventory :: proc(gs: ^Game_State) {
     for i in 0 ..< MAX_INVENTORY {
         c := i32(i % INV_COLS)
         r := i32(i / INV_COLS)
-        x := i32(INV_X) + c*SLOT_PX
-        y := i32(INV_Y) + r*SLOT_PX
+        x := bx + c*SLOT_PX
+        y := by + r*SLOT_PX
         rl.DrawRectangle(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, NORSE_ROW)
         rl.DrawRectangleLines(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, rl.Color{70, 56, 38, 255})
 
@@ -737,15 +828,15 @@ draw_inventory :: proc(gs: ^Game_State) {
     }
 
     // Footer: name of whatever is under the cursor (bag item or worn gear).
-    footer_y := i32(INV_PANEL_Y + INV_PANEL_H - 28)
+    footer_y := py + INV_PANEL_H - 28
     if hov := slot_at_cursor(gs); hov >= 0 {
         s := inv.slots[hov]
         if s.item != .None && s.count > 0 {
-            rl.DrawText(cstring(raw_data(item_table[s.item].name)), INV_X, footer_y, 12, NORSE_GOLD_HOT)
+            rl.DrawText(cstring(raw_data(item_table[s.item].name)), bx, footer_y, 12, NORSE_GOLD_HOT)
         }
     } else if es := equip_slot_at_cursor(gs); es != .None {
         if it := gs.player.equipment[es]; it != .None {
-            rl.DrawText(cstring(raw_data(item_table[it].name)), INV_X, footer_y, 12, NORSE_GOLD_HOT)
+            rl.DrawText(cstring(raw_data(item_table[it].name)), bx, footer_y, 12, NORSE_GOLD_HOT)
         }
     }
 }
@@ -755,20 +846,21 @@ draw_crafting :: proc(gs: ^Game_State) {
     n := visible_recipes(gs, &vis)
     in_reach := player_near_station(gs, gs.ui.active_station)
 
-    h := i32(CRAFT_OFFER_H) + i32(n)*CRAFT_ROW_H + 8
-    rl.DrawRectangle(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_bg)
-    rl.DrawRectangleLines(CRAFT_X - 6, CRAFT_Y - 6, CRAFT_W + 12, h + 12, panel_border)
-    rl.DrawText(station_title[gs.ui.active_station], CRAFT_X, CRAFT_Y - 22, 10,
+    wx, wy, ww, wh, _ := window_rect(gs, .Crafting)
+    cx, cy := craft_origin(gs)
+    rl.DrawRectangle(wx, wy, ww, wh, panel_bg)
+    rl.DrawRectangleLines(wx, wy, ww, wh, panel_border)
+    rl.DrawText(station_title[gs.ui.active_station], cx, wy + 8, 10,
         in_reach ? rl.GREEN : text_dim)
-    draw_rune_strip(f32(CRAFT_X + CRAFT_W) - 100, f32(CRAFT_Y) - 17, 8, rl.Color{200, 150, 70, 90})
+    draw_rune_strip(f32(cx + CRAFT_W) - 100, f32(wy) + 13, 8, rl.Color{200, 150, 70, 90})
 
     // Anvil: offer slots hold references — the items themselves stay in the
     // bag until a result is actually crafted.
     rl.DrawText("LAY ON THE ANVIL  (drag from bag, click to take back)",
-        CRAFT_X + 4, CRAFT_Y + 2, 10, text_dim)
+        cx + 4, cy + 2, 10, text_dim)
     hov_offer := craft_offer_at_cursor(gs)
     for it, i in gs.ui.craft_offer {
-        x, y := craft_offer_rect(i)
+        x, y := craft_offer_rect(gs, i)
         rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, slot_bg)
         rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX},
             hov_offer == i ? 2 : 1, hov_offer == i ? NORSE_GOLD_HOT : panel_border)
@@ -782,24 +874,24 @@ draw_crafting :: proc(gs: ^Game_State) {
 
     // Candidate results: everything the offered set could become here.
     // Green = craftable now, dim = matching shape but missing amounts.
-    rl.DrawText("TAKES SHAPE", CRAFT_X + 4, CRAFT_Y + 66, 10, text_dim)
+    rl.DrawText("TAKES SHAPE", cx + 4, cy + 66, 10, text_dim)
     matches: [len(recipe_table)]int
     m := offer_matches(gs, &matches)
     hov_result := craft_result_at_cursor(gs)
     if hov_result >= 0 {
         rl.DrawText(cstring(raw_data(item_table[recipe_table[hov_result].result].name)),
-            CRAFT_X + 90, CRAFT_Y + 66, 10, NORSE_GOLD_HOT)
+            cx + 90, cy + 66, 10, NORSE_GOLD_HOT)
     }
     if m == 0 {
         offered := false
         for it in gs.ui.craft_offer do if it != .None do offered = true
         rl.DrawText(offered ? "these materials shape nothing here" :
             "lay materials to see what they may become",
-            CRAFT_X + 4, CRAFT_Y + 94, 10, text_dim)
+            cx + 4, cy + 94, 10, text_dim)
     }
     for j in 0 ..< m {
         r := &recipe_table[matches[j]]
-        x, y := craft_result_rect(j)
+        x, y := craft_result_rect(gs, j)
         ok := recipe_craftable(gs, r)
         rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, slot_bg)
         border := panel_border
@@ -814,10 +906,10 @@ draw_crafting :: proc(gs: ^Game_State) {
     }
 
     // Recipe hints: click a row to load its materials onto the anvil.
-    rl.DrawRectangle(CRAFT_X - 2, CRAFT_Y + CRAFT_OFFER_H - 6, CRAFT_W + 4, 1, panel_border)
+    rl.DrawRectangle(cx - 2, cy + CRAFT_OFFER_H - 6, CRAFT_W + 4, 1, panel_border)
     for row in 0 ..< n {
         r := &recipe_table[vis[row]]
-        y := i32(CRAFT_Y) + CRAFT_OFFER_H + 4 + i32(row)*CRAFT_ROW_H
+        y := cy + CRAFT_OFFER_H + 4 + i32(row)*CRAFT_ROW_H
 
         row_buf: [128]u8
         pos := 0
@@ -834,14 +926,129 @@ draw_crafting :: proc(gs: ^Game_State) {
         }
 
         col := recipe_craftable(gs, r) ? rl.GREEN : text_dim
-        rl.DrawText(cstring(raw_data(row_buf[:])), CRAFT_X + 4, y + 5, 10, col)
+        rl.DrawText(cstring(raw_data(row_buf[:])), cx + 4, y + 5, 10, col)
+    }
+}
+
+// ─── Smelter Window ───────────────────────────────────────────────────────────
+//
+//  A 3×3 mirror of the tiles around the furnace: the center burns, the ring
+//  shows the ground stacks lying beside it — the same ones tick_smelter eats.
+//  Dragging ore from the bag anywhere onto this window lays it by the fire.
+
+draw_smelter :: proc(gs: ^Game_State) {
+    px   := gs.ui.win_pos[.Smelter].x
+    py   := gs.ui.win_pos[.Smelter].y
+    tile := gs.ui.smelter_tile
+    w    := &gs.world
+
+    pcx := i32(gs.player.pos.x + PLAYER_W*0.5)
+    pcy := i32(gs.player.pos.y + PLAYER_H*0.5)
+    in_reach := max(abs(tile.x - pcx), abs(tile.y - pcy)) <= BENCH_RANGE
+
+    rl.DrawRectangle(px, py, SMELT_W, SMELT_H, NORSE_PANEL)
+    rl.DrawRectangleLinesEx({f32(px), f32(py), SMELT_W, SMELT_H}, 2, NORSE_BORDER)
+    rl.DrawText("SMELTER", px + 24, py + 12, 20, in_reach ? NORSE_GOLD_HOT : text_dim)
+    rl.DrawText("[ESC] close", px + SMELT_W - 96, py + 16, 12, NORSE_GOLD)
+    rl.DrawRectangle(px + 24, py + 38, SMELT_W - 48, 2, NORSE_BORDER)
+
+    sd      := &w.sim_data[grid_idx(int(tile.x), int(tile.y))]
+    heat    := clamp(sd.growth_timer / SMELT_TIME, 0, 1)
+    burning := heat > 0
+
+    // What lies beside the fire — drives the status line.
+    has_ore, has_wood := false, false
+    for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+        if dx == 0 && dy == 0 do continue
+        nx, ny := int(tile.x) + dx, int(tile.y) + dy
+        if !in_bounds(nx, ny) do continue
+        it := w.items[grid_idx(nx, ny)]
+        if w.item_counts[grid_idx(nx, ny)] == 0 do continue
+        if it == SMELT_FUEL do has_wood = true
+        for r in smelt_table do if it == r.ore { has_ore = true; break }
+    }
+
+    CELL :: SLOT_PX + 6
+    x0 := px + (SMELT_W - (3*CELL - 6)) / 2
+    y0 := py + 56
+    for dy in i32(-1) ..= 1 {
+        for dx in i32(-1) ..= 1 {
+            x := x0 + (dx + 1)*CELL
+            y := y0 + (dy + 1)*CELL
+            if dx == 0 && dy == 0 {
+                // the fire itself, glowing with smelting progress
+                rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, rl.Color{30, 18, 14, 255})
+                if burning {
+                    glow := rl.Color{255, u8(120 + 100*heat), 50, u8(60 + 180*heat)}
+                    rl.DrawCircleGradient(x + SLOT_PX/2, y + SLOT_PX/2, 16 + 8*heat, glow, rl.Color{})
+                } else {
+                    rl.DrawCircleGradient(x + SLOT_PX/2, y + SLOT_PX/2, 10, rl.Color{120, 60, 30, 90}, rl.Color{})
+                }
+                rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX}, 2,
+                    burning ? NORSE_GOLD_HOT : NORSE_BORDER)
+                continue
+            }
+            nx, ny := int(tile.x + dx), int(tile.y + dy)
+            if !in_bounds(nx, ny) || .Solid in terrain_table[w.terrain[grid_idx(nx, ny)]].flags {
+                // walled off — no stack can lie here
+                rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, rl.Color{18, 14, 12, 255})
+                rl.DrawRectangleLines(x, y, SLOT_PX, SLOT_PX, rl.Color{50, 42, 32, 255})
+                continue
+            }
+            idx := grid_idx(nx, ny)
+            rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, NORSE_ROW)
+            rl.DrawRectangleLines(x, y, SLOT_PX, SLOT_PX, NORSE_BORDER)
+            if it := w.items[idx]; it != .None && w.item_counts[idx] > 0 {
+                draw_item_icon(it, x + 10, y + 8, 24)
+                cnt_buf: [8]u8
+                fmt.bprintf(cnt_buf[:7], "%d", w.item_counts[idx])
+                rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
+            }
+        }
+    }
+
+    // Smelting progress toward the next bar
+    bar_y := y0 + 3*CELL + 8
+    rl.DrawRectangle(px + 24, bar_y, SMELT_W - 48, 10, NORSE_ROW)
+    rl.DrawRectangle(px + 24, bar_y, i32(f32(SMELT_W - 48)*heat), 10, NORSE_GOLD)
+    rl.DrawRectangleLines(px + 24, bar_y, SMELT_W - 48, 10, NORSE_BORDER)
+
+    status := cstring("cold — lay ore beside the fire")
+    switch {
+    case burning:
+        status = "the fire eats the ore"
+    case has_ore && !has_wood && sd.fuel_charge == 0:
+        status = "cold — the fire needs wood"
+    case has_ore:
+        status = "the tray blocks the cast — take the bars"
+    }
+    rl.DrawText(status, px + 24, bar_y + 18, 10, burning ? NORSE_GOLD_HOT : text_dim)
+
+    // The tray: cast bars wait here — click it, or drag it onto the bag.
+    tx, ty := smelter_tray_rect(gs)
+    rl.DrawText("TRAY", tx, ty - 14, 10, NORSE_GOLD)
+    rl.DrawRectangle(tx, ty, SLOT_PX, SLOT_PX, slot_bg)
+    rl.DrawRectangleLinesEx({f32(tx), f32(ty), SLOT_PX, SLOT_PX},
+        sd.store_count > 0 ? 2 : 1, sd.store_count > 0 ? rl.GREEN : NORSE_BORDER)
+    if sd.store_count > 0 {
+        draw_item_icon(sd.store_item, tx + 10, ty + 8, 24)
+        cnt_buf: [8]u8
+        fmt.bprintf(cnt_buf[:7], "%d", sd.store_count)
+        rl.DrawText(cstring(raw_data(cnt_buf[:])), tx + 6, ty + SLOT_PX - 14, 10, rl.WHITE)
+        rl.DrawText("click or drag to the bag", tx + SLOT_PX + 10, ty + 17, 10, text_dim)
+    }
+
+    rl.DrawText("drag ore and wood from the bag onto this window", px + 24, py + SMELT_H - 22, 10, text_dim)
+    if !in_reach {
+        rl.DrawText("(too far)", px + SMELT_W - 70, py + SMELT_H - 22, 10, text_dim)
     }
 }
 
 // The interactive blueprint overlay (B, or click a blueprint in the bag):
 // what to gather, the build template for the altar, and the path to the cave.
 draw_blueprint :: proc(gs: ^Game_State) {
-    x, y := i32(BP_X), i32(BP_Y)
+    x := gs.ui.win_pos[.Blueprint].x
+    y := gs.ui.win_pos[.Blueprint].y
     rl.DrawRectangle(x, y, BP_W, BP_H, panel_bg)
     rl.DrawRectangleLines(x, y, BP_W, BP_H, panel_border)
 

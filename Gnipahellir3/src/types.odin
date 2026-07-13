@@ -213,6 +213,9 @@ Event_Type :: enum u8 {
     Craft_Request,
     Craft_Complete,
     Station_Interact,
+    Smelter_Interact, // tile = the clicked furnace; opens its window
+    Smelter_Feed,     // tile = furnace, int_val = bag slot; lays the stack beside it
+    Smelter_Collect,  // tile = furnace; empties its tray into the bag
 
     // Projectiles
     Projectile_Fired,

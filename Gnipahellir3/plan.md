@@ -134,7 +134,7 @@ src/
   events.odin      -- Event_Queue ops, process_events dispatcher
   update.odin      -- game_update: explicit update order
   crafting.odin    -- Recipe table, stations, offer matching, craft handler
-  sim.odin         -- Machine tick (5b): smelter ore→bar, tree grower
+  sim.odin         -- Machine tick (5b): smelter ore+wood→bar tray, tree grower
   loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
   placement.odin   -- Place_Request validation + mutation
   items.odin       -- Item table, inventory ops
@@ -450,7 +450,7 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Cloud_Stone     |           | X         | Sky -1 ore drop, structure ingredient   |
 | Aether_Crystal  |           | X         | Sky -2 ore drop, structure ingredient   |
 | Runic_Sky_Ore   |           | X         | Sky -3 ore drop, structure ingredient   |
-| Iron_Bar        |           | X         | Smelted (2 ore → 1 bar); builds the Forge |
+| Iron_Bar        |           | X         | Smelted (2 ore → 1 bar; 1 log fires 3); builds the Forge |
 | Silver_Bar      |           | X         | Smelted; Forge-tier gear ingredient      |
 | Gold_Bar        |           | X         | Smelted; Forge/Altar-tier gear ingredient |
 
