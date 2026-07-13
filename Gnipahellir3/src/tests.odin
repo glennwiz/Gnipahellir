@@ -574,8 +574,8 @@ wand_crafting_ladder :: proc(t: ^testing.T) {
     inv := &gs.player.inventory
     inventory_insert(inv, .Plank, 2)
     inventory_insert(inv, .Iron_Ore, 4)
-    inventory_insert(inv, .Silver_Ore, 6)
-    inventory_insert(inv, .Gold_Ore, 6)
+    inventory_insert(inv, .Silver_Bar, 3)
+    inventory_insert(inv, .Gold_Bar, 3)
 
     craft :: proc(gs: ^Game_State, result: Item) {
         for r, i in recipe_table {
@@ -603,8 +603,8 @@ wand_crafting_ladder :: proc(t: ^testing.T) {
     craft(gs, .Mine_Wand_Gold)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand_Gold), 1)
     testing.expect_value(t, inventory_count(inv, .Mine_Wand_Silver), 0)
-    testing.expect_value(t, inventory_count(inv, .Silver_Ore), 0)
-    testing.expect_value(t, inventory_count(inv, .Gold_Ore), 0)
+    testing.expect_value(t, inventory_count(inv, .Silver_Bar), 0)
+    testing.expect_value(t, inventory_count(inv, .Gold_Bar), 0)
 }
 
 @(test)
@@ -631,15 +631,15 @@ station_ladder :: proc(t: ^testing.T) {
         testing.expect_value(t, recipe_table[vis[row]].station, Station.None)
     }
 
-    // The forge is smithed at a bench
+    // The forge is smithed at a bench, from smelted iron
     set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
     inventory_insert(inv, .Stone_Block, 10)
-    inventory_insert(inv, .Iron_Ore, 5)
+    inventory_insert(inv, .Iron_Bar, 3)
     craft(gs, .Dvergr_Forge)
     testing.expect_value(t, inventory_count(inv, .Dvergr_Forge), 1)
 
     // The altar is forge work: refused until a forge is placed
-    inventory_insert(inv, .Gold_Ore, 5)
+    inventory_insert(inv, .Gold_Bar, 3)
     inventory_insert(inv, .Cloud_Stone, 6)
     inventory_insert(inv, .Aether_Crystal, 3)
     craft(gs, .Rune_Altar)

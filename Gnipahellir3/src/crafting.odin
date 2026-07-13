@@ -64,17 +64,19 @@ recipe_table := [?]Recipe{
     { .Iron_Bucket,    1, .Bench, {{.Iron_Ore, 3},    {},               {}} },
     { .Sky_Altar,      1, .Bench, {{.Stone_Block, 6}, {.Plank, 4},      {}} },
     { .Sword,          1, .Bench, {{.Iron_Ore, 2},    {.Plank, 1},      {}} },
-    // The station ladder: forge is smithed at the bench, the altar raised at
-    // the forge — and its cloud stone means reaching the sky first.
-    { .Dvergr_Forge,   1, .Bench, {{.Stone_Block, 10}, {.Iron_Ore, 5},   {}} },
-    { .Rune_Altar,     1, .Forge, {{.Gold_Ore, 4},     {.Cloud_Stone, 6}, {}} },
+    // The station ladder: forge is smithed at the bench from smelted iron,
+    // the altar raised at the forge — its cloud stone means reaching the sky
+    // first.  Forge-tier and up runs on bars: the smelter casts them from
+    // ore stacks dropped beside it (2 ore = 1 bar).
+    { .Dvergr_Forge,   1, .Bench, {{.Stone_Block, 10}, {.Iron_Bar, 3},    {}} },
+    { .Rune_Altar,     1, .Forge, {{.Gold_Bar, 2},     {.Cloud_Stone, 6}, {}} },
     // The miner's ladder: each wand tier consumes the one before it.
     { .Mine_Wand,        1, .Bench, {{.Plank, 2},            {.Iron_Ore, 4},   {}} },
-    { .Mine_Wand_Silver, 1, .Forge, {{.Mine_Wand, 1},        {.Silver_Ore, 6}, {}} },
-    { .Mine_Wand_Gold,   1, .Forge, {{.Mine_Wand_Silver, 1}, {.Gold_Ore, 6},   {}} },
+    { .Mine_Wand_Silver, 1, .Forge, {{.Mine_Wand, 1},        {.Silver_Bar, 3}, {}} },
+    { .Mine_Wand_Gold,   1, .Forge, {{.Mine_Wand_Silver, 1}, {.Gold_Bar, 3},   {}} },
     // Weapon ladder — same pattern as the wands.
-    { .Silver_Sword,   1, .Forge, {{.Sword, 1},        {.Silver_Ore, 6}, {}} },
-    { .Gold_Sword,     1, .Forge, {{.Silver_Sword, 1}, {.Gold_Ore, 6},   {}} },
+    { .Silver_Sword,   1, .Forge, {{.Sword, 1},        {.Silver_Bar, 3}, {}} },
+    { .Gold_Sword,     1, .Forge, {{.Silver_Sword, 1}, {.Gold_Bar, 3},   {}} },
     // Armor: forge iron pieces, then upgrade each through silver into gold
     // (right-click a piece in the bag to wear it).
     { .Iron_Helm,       1, .Bench, {{.Iron_Ore, 3}, {.Plank, 1}, {}} },
@@ -82,18 +84,18 @@ recipe_table := [?]Recipe{
     { .Iron_Gauntlets,  1, .Bench, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
     { .Iron_Greaves,    1, .Bench, {{.Iron_Ore, 4}, {.Plank, 1}, {}} },
     { .Iron_Boots,      1, .Bench, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
-    { .Silver_Helm,       1, .Forge, {{.Iron_Helm, 1},       {.Silver_Ore, 4}, {}} },
-    { .Silver_Chestplate, 1, .Forge, {{.Iron_Chestplate, 1}, {.Silver_Ore, 6}, {}} },
-    { .Silver_Gauntlets,  1, .Forge, {{.Iron_Gauntlets, 1},  {.Silver_Ore, 3}, {}} },
-    { .Silver_Greaves,    1, .Forge, {{.Iron_Greaves, 1},    {.Silver_Ore, 5}, {}} },
-    { .Silver_Boots,      1, .Forge, {{.Iron_Boots, 1},      {.Silver_Ore, 3}, {}} },
-    { .Gold_Helm,       1, .Forge, {{.Silver_Helm, 1},       {.Gold_Ore, 4}, {}} },
-    { .Gold_Chestplate, 1, .Forge, {{.Silver_Chestplate, 1}, {.Gold_Ore, 6}, {}} },
-    { .Gold_Gauntlets,  1, .Forge, {{.Silver_Gauntlets, 1},  {.Gold_Ore, 3}, {}} },
-    { .Gold_Greaves,    1, .Forge, {{.Silver_Greaves, 1},    {.Gold_Ore, 5}, {}} },
-    { .Gold_Boots,      1, .Forge, {{.Silver_Boots, 1},      {.Gold_Ore, 3}, {}} },
+    { .Silver_Helm,       1, .Forge, {{.Iron_Helm, 1},       {.Silver_Bar, 2}, {}} },
+    { .Silver_Chestplate, 1, .Forge, {{.Iron_Chestplate, 1}, {.Silver_Bar, 3}, {}} },
+    { .Silver_Gauntlets,  1, .Forge, {{.Iron_Gauntlets, 1},  {.Silver_Bar, 2}, {}} },
+    { .Silver_Greaves,    1, .Forge, {{.Iron_Greaves, 1},    {.Silver_Bar, 3}, {}} },
+    { .Silver_Boots,      1, .Forge, {{.Iron_Boots, 1},      {.Silver_Bar, 2}, {}} },
+    { .Gold_Helm,       1, .Forge, {{.Silver_Helm, 1},       {.Gold_Bar, 2}, {}} },
+    { .Gold_Chestplate, 1, .Forge, {{.Silver_Chestplate, 1}, {.Gold_Bar, 3}, {}} },
+    { .Gold_Gauntlets,  1, .Forge, {{.Silver_Gauntlets, 1},  {.Gold_Bar, 2}, {}} },
+    { .Gold_Greaves,    1, .Forge, {{.Silver_Greaves, 1},    {.Gold_Bar, 3}, {}} },
+    { .Gold_Boots,      1, .Forge, {{.Silver_Boots, 1},      {.Gold_Bar, 2}, {}} },
     // Trinkets
-    { .Aether_Charm,   1, .Rune_Altar, {{.Aether_Crystal, 3}, {.Gold_Ore, 1}, {}} },
+    { .Aether_Charm,   1, .Rune_Altar, {{.Aether_Crystal, 3}, {.Gold_Bar, 1}, {}} },
     // Runic tier: gold gear reforged with sky runes at the altar.
     { .Mine_Wand_Runic,  1, .Rune_Altar, {{.Mine_Wand_Gold, 1},  {.Runic_Sky_Ore, 6}, {}} },
     { .Runic_Sword,      1, .Rune_Altar, {{.Gold_Sword, 1},      {.Runic_Sky_Ore, 6}, {}} },
