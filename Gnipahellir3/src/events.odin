@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Item_Dropped, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete:
+        case .Tile_Placed, .Item_Pickup, .Item_Dropped, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect:
             gs.save_dirty = true
         }
 
@@ -138,6 +138,18 @@ process_events :: proc(gs: ^Game_State) {
             gs.ui.show_inventory = true  // the anvil drags from the bag
             log_action(gs, "Player opens %v station", gs.ui.active_station)
 
+        case .Smelter_Interact:
+            gs.ui.show_smelter   = true
+            gs.ui.smelter_tile   = e.tile
+            gs.ui.show_inventory = true  // the furnace feeds from the bag
+            log_action(gs, "Player opens smelter at (%d,%d)", e.tile.x, e.tile.y)
+
+        case .Smelter_Feed:
+            smelter_feed(gs, e.tile, int(e.payload.int_val))
+
+        case .Smelter_Collect:
+            smelter_collect(gs, e.tile)
+
         case .Projectile_Fired:
             // damage/impact handled in update_projectiles
             audio_play(&gs.audio, .Fireball, audio_tile_gain(gs, e.tile))
@@ -166,7 +178,16 @@ process_events :: proc(gs: ^Game_State) {
             // informational; no handler yet
 
         case .Level_Locked:
-            notify(gs, "Sealed by runic magic — a sky structure must be built")
+            tier := int(e.payload.int_val)
+            switch {
+            case gs.progression.sky_altar_pos == {0, 0}:
+                notify(gs, "Sealed by runes — raise a Sky Altar on the Surface first")
+            case tier >= 0 && tier < MAX_PROGRESSION_TIERS && !gs.progression.blueprint_found[tier]:
+                notify(gs, "Sealed by runes — find %s %s",
+                    item_table[tier_blueprints[tier]].name, blueprint_places[tier])
+            case:
+                notify(gs, "Sealed by runes — the sky ritual will break the seal")
+            }
 
         case .Player_Died:
             gs.player.dead = true
@@ -308,6 +329,14 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
             gs.world.item_counts[idx] = 1
         }
     }
+
+    // A mined smelter spills its tray — cast bars are never lost.  Timers
+    // and tray die with the tile so a future machine here starts fresh.
+    sd := &gs.world.sim_data[idx]
+    if old_tile == .Smelter && sd.store_count > 0 {
+        spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))
+    }
+    sd^ = {}
 }
 
 // Q key: the selected stack lands two tiles ahead of the player — outside

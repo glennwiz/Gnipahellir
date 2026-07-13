@@ -897,6 +897,62 @@ notifications_explain_ritual_state :: proc(t: ^testing.T) {
 }
 
 @(test)
+objective_line_walks_the_loop :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    buf: [128]u8
+
+    // Fresh run: raise the sky gate first (Blueprint A doesn't exist yet)
+    s := current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Sky Altar"), "fresh run points at raising the sky altar")
+
+    // Gate up: hunt the deep blueprint
+    gs.progression.sky_altar_pos = {90, 90}
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Blueprint A"), "next step is finding Blueprint A")
+
+    // Blueprint found: show the tier-0 ritual cost
+    gs.progression.blueprint_found[0] = true
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Cloud Stone"), "ritual cost names the sky material")
+
+    // Structure A raised: hunt Blueprint B
+    gs.progression.sky_structure_complete[0] = true
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Blueprint B"), "tier 1 points at Blueprint B")
+
+    // All rituals done: face the boss
+    gs.progression.blueprint_found        = {true, true, true}
+    gs.progression.sky_structure_complete = {true, true, true}
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "GARM"), "endgame points at the boss")
+}
+
+@(test)
+deep_blueprint_waits_for_the_altar :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := grid_idx(141, 94)
+    testing.expect(t, gs.world.items[idx] == .None, "Blueprint A must not exist at world gen")
+
+    spawn_deep_blueprint(gs)
+    testing.expect(t, gs.world.items[idx] == .Blueprint_A, "altar raise reveals Blueprint A in the chamber")
+    testing.expect_value(t, gs.world.item_counts[idx], 1)
+
+    // Idempotent: a second raise doesn't stack another copy
+    spawn_deep_blueprint(gs)
+    testing.expect_value(t, gs.world.item_counts[idx], 1)
+
+    // Already found: never respawns
+    gs.world.items[idx]       = .None
+    gs.world.item_counts[idx] = 0
+    gs.progression.blueprint_found[0] = true
+    spawn_deep_blueprint(gs)
+    testing.expect(t, gs.world.items[idx] == .None, "found blueprint must not respawn")
+}
+
+@(test)
 builders_do_not_freeze :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -1837,31 +1893,107 @@ smelter_casts_bars_from_ground_ore :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // A smelter on the surface with 4 iron ore Q-dropped beside it.
+    // A smelter on the surface with 4 iron ore and 1 wood laid beside it.
     sx, sy := GRID_W/2, SURFACE_Y - 1
     set_tile(&gs.world, sx, sy, .Smelter)
     in_idx := grid_idx(sx - 1, sy)
     gs.world.items[in_idx]       = .Iron_Ore
     gs.world.item_counts[in_idx] = 4
+    fuel_idx := grid_idx(sx + 1, sy)
+    gs.world.items[fuel_idx]       = .Wood_Log
+    gs.world.item_counts[fuel_idx] = 1
 
-    // Two smelt cycles: 4 ore → 2 bars (2 ore each).
+    // Two smelt cycles: 4 ore → 2 bars; one log covers both (BARS_PER_LOG=3).
     frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
     for _ in 0 ..< frames {
         update_sim(gs)
         eq_clear(&gs.events)
     }
 
-    testing.expect_value(t, gs.world.items[in_idx], Item.None)  // ore fully eaten
-    bars := 0
+    testing.expect_value(t, gs.world.items[in_idx], Item.None)    // ore fully eaten
+    testing.expect_value(t, gs.world.items[fuel_idx], Item.None)  // the log went in the fire
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, sd.store_item, Item.Iron_Bar)
+    testing.expect_value(t, int(sd.store_count), 2)
+    testing.expect_value(t, int(sd.fuel_charge), BARS_PER_LOG - 2)  // embers left for one more
+
+    // The leftover embers fire a third bar with no wood beside the fire.
+    gs.world.items[in_idx]       = .Iron_Ore
+    gs.world.item_counts[in_idx] = 2
+    frames = int(SMELT_TIME / gs.delta_time) + 4
+    for _ in 0 ..< frames {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, int(sd.store_count), 3)
+    testing.expect_value(t, int(sd.fuel_charge), 0)
+
+    // Nothing lands on the ground — the bars wait in the tray.
+    ground := 0
     for dy in -2 ..= 2 do for dx in -2 ..= 2 {
         idx := grid_idx(sx + dx, sy + dy)
-        if gs.world.items[idx] == .Iron_Bar do bars += int(gs.world.item_counts[idx])
+        if gs.world.items[idx] == .Iron_Bar do ground += int(gs.world.item_counts[idx])
     }
-    testing.expect_value(t, bars, 2)
+    testing.expect_value(t, ground, 0)
 
     // The fire dies without ore: progress stays zero.
     update_sim(gs)
-    testing.expect_value(t, gs.world.sim_data[grid_idx(sx, sy)].growth_timer, f32(0))
+    testing.expect_value(t, sd.growth_timer, f32(0))
+}
+
+@(test)
+smelter_stalls_without_wood :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Ore beside the fire but nothing to burn: no progress, no bars.
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    in_idx := grid_idx(sx - 1, sy)
+    gs.world.items[in_idx]       = .Iron_Ore
+    gs.world.item_counts[in_idx] = 4
+
+    frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
+    for _ in 0 ..< frames {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, sd.growth_timer, f32(0))
+    testing.expect_value(t, int(sd.store_count), 0)
+    testing.expect_value(t, int(gs.world.item_counts[in_idx]), 4)  // ore untouched
+}
+
+@(test)
+smelter_tray_collects_to_bag_and_spills_on_mine :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    gs.player.pos = {f32(sx - 2), f32(sy - 1)}  // within BENCH_RANGE
+
+    // Three bars wait in the tray: collecting moves them all into the bag.
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.store_item  = .Iron_Bar
+    sd.store_count = 3
+    testing.expect(t, smelter_collect(gs, {i32(sx), i32(sy)}), "collect rejected")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Bar), 3)
+    testing.expect_value(t, int(sd.store_count), 0)
+    testing.expect_value(t, sd.store_item, Item.None)
+
+    // Mining the furnace spills a loaded tray to the ground — never lost.
+    sd.store_item  = .Gold_Bar
+    sd.store_count = 2
+    handle_tile_mined(gs, Event{tile = {i32(sx), i32(sy)}})
+    testing.expect_value(t, int(sd.store_count), 0)  // tray died with the tile
+    spilled := 0
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        idx := grid_idx(sx + dx, sy + dy)
+        if gs.world.items[idx] == .Gold_Bar do spilled += int(gs.world.item_counts[idx])
+    }
+    testing.expect_value(t, spilled, 2)
 }
 
 @(test)
@@ -1911,4 +2043,82 @@ q_drop_lands_ahead_of_the_pickup_sweep :: proc(t: ^testing.T) {
         if gs.world.items[idx] == .Iron_Ore do found += int(gs.world.item_counts[idx])
     }
     testing.expect_value(t, found, 5)
+}
+
+// Ore lying beside a smelter, counted over its 8 neighbor cells.
+count_ore_beside :: proc(gs: ^Game_State, sx, sy: int, item: Item) -> int {
+    n := 0
+    for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+        if dx == 0 && dy == 0 do continue
+        idx := grid_idx(sx + dx, sy + dy)
+        if gs.world.items[idx] == item do n += int(gs.world.item_counts[idx])
+    }
+    return n
+}
+
+@(test)
+smelter_feed_lays_bag_ore_beside_furnace :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    gs.player.pos = {f32(sx - 2), f32(sy - 1)}  // within BENCH_RANGE
+
+    inventory_insert(&gs.player.inventory, .Iron_Ore, 5)
+    slot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
+
+    ok := smelter_feed(gs, {i32(sx), i32(sy)}, slot)
+    testing.expect(t, ok, "feed rejected")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
+    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 5)
+
+    // A second feed stacks onto the same cell rather than scattering.
+    inventory_insert(&gs.player.inventory, .Iron_Ore, 3)
+    for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
+    testing.expect(t, smelter_feed(gs, {i32(sx), i32(sy)}, slot), "second feed rejected")
+    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 8)
+
+    // Wood is fuel — the furnace takes it the same way.
+    inventory_insert(&gs.player.inventory, .Wood_Log, 2)
+    for s, i in gs.player.inventory.slots do if s.item == .Wood_Log { slot = i; break }
+    testing.expect(t, smelter_feed(gs, {i32(sx), i32(sy)}, slot), "wood feed rejected")
+    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Wood_Log), 2)
+}
+
+@(test)
+smelter_feed_rejects_non_ore :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    gs.player.pos = {f32(sx - 2), f32(sy - 1)}
+
+    inventory_insert(&gs.player.inventory, .Plank, 3)
+    slot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Plank { slot = i; break }
+
+    testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "plank must not feed the fire")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Plank), 3)
+    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Plank), 0)
+}
+
+@(test)
+smelter_feed_requires_reach :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    gs.player.pos = {f32(sx - 20), f32(sy - 1)}  // far outside BENCH_RANGE
+
+    inventory_insert(&gs.player.inventory, .Iron_Ore, 4)
+    slot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
+
+    testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "feed must fail out of reach")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 4)
+    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 0)
 }

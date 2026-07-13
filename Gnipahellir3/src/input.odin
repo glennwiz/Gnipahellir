@@ -90,17 +90,58 @@ update_input :: proc(gs: ^Game_State) {
     inp.interact   = rl.IsKeyPressed(bind[.Interact])
     inp.drop_item  = rl.IsKeyPressed(bind[.Drop_Item])
 
-    // Clicking a station tile in reach opens its crafting window instead of
-    // striking it (the press is eaten so it doesn't also mine/attack).
-    if rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None {
-        if st := station_at_tile(&gs.world, inp.mouse_tile.x, inp.mouse_tile.y); st != .None {
-            px := i32(gs.player.pos.x + PLAYER_W*0.5)
-            py := i32(gs.player.pos.y + PLAYER_H*0.5)
-            if max(abs(inp.mouse_tile.x - px), abs(inp.mouse_tile.y - py)) <= BENCH_RANGE {
-                eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})
+    // The smelter window follows its furnace: if that tile stops being a
+    // smelter (mined out), the window closes.
+    if gs.ui.show_smelter &&
+       get_tile(&gs.world, int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y)) != .Smelter {
+        gs.ui.show_smelter = false
+    }
+
+    // Grabbing a floating window's header drags it; the press is eaten so it
+    // doesn't also hit slots or the world.  Topmost window under the cursor
+    // wins — a press on a covered window's header is blocked by the one above.
+    if rl.IsMouseButtonPressed(.LEFT) && gs.ui.win_drag < 0 && gs.ui.drag_item == .None {
+        mx := i32(inp.mouse_screen.x)
+        my := i32(inp.mouse_screen.y)
+        for w in window_top_down {
+            x, y, ww, wh, open := window_rect(gs, w)
+            if !open || mx < x || mx >= x + ww || my < y || my >= y + wh do continue
+            if my < y + WINDOW_HEADER_H {
+                gs.ui.win_drag     = int(w)
+                gs.ui.win_drag_off = {mx - gs.ui.win_pos[w].x, my - gs.ui.win_pos[w].y}
                 inp.mine   = false
                 inp.attack = false
             }
+            break  // the cursor is over this window — lower ones are covered
+        }
+    }
+    if gs.ui.win_drag >= 0 {
+        if rl.IsMouseButtonDown(.LEFT) {
+            w := UI_Window(gs.ui.win_drag)
+            _, _, ww, _, _ := window_rect(gs, w)
+            gs.ui.win_pos[w] = {
+                clamp(i32(inp.mouse_screen.x) - gs.ui.win_drag_off.x, 80 - ww, UI_W - 80),
+                clamp(i32(inp.mouse_screen.y) - gs.ui.win_drag_off.y, 0, UI_H - WINDOW_HEADER_H),
+            }
+        } else {
+            gs.ui.win_drag = -1
+        }
+    }
+
+    // Clicking a station or smelter tile in reach opens its window instead of
+    // striking it (the press is eaten so it doesn't also mine/attack).
+    if rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None {
+        px := i32(gs.player.pos.x + PLAYER_W*0.5)
+        py := i32(gs.player.pos.y + PLAYER_H*0.5)
+        in_reach := max(abs(inp.mouse_tile.x - px), abs(inp.mouse_tile.y - py)) <= BENCH_RANGE
+        if st := station_at_tile(&gs.world, inp.mouse_tile.x, inp.mouse_tile.y); st != .None && in_reach {
+            eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})
+            inp.mine   = false
+            inp.attack = false
+        } else if in_reach && get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y)) == .Smelter {
+            eq_push(&gs.events, Event{type = .Smelter_Interact, tile = inp.mouse_tile})
+            inp.mine   = false
+            inp.attack = false
         }
     }
 
@@ -128,15 +169,21 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        if gs.ui.show_crafting {
-            gs.ui.show_crafting = false  // close the crafting window first
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter {
+            // First ESC sweeps every window closed; the next one opens the menu.
+            gs.ui.show_inventory = false
+            gs.ui.show_crafting  = false
+            gs.ui.show_blueprint = false
+            gs.ui.show_smelter   = false
+            gs.ui.drag_item      = .None
+            gs.ui.drag_tray      = false
         } else {
             gs.ui.show_menu = true
         }
     }
 
-    // Clicks on open UI panels
-    if rl.IsMouseButtonPressed(.LEFT) {
+    // Clicks on open UI panels (skipped while a window is being dragged)
+    if rl.IsMouseButtonPressed(.LEFT) && gs.ui.win_drag < 0 {
         if gs.ui.show_inventory {
             if slot := slot_at_cursor(gs); slot >= 0 {
                 if gs.player.inventory.selected == slot {
@@ -147,10 +194,27 @@ update_input :: proc(gs: ^Game_State) {
                 if is_blueprint(gs.player.inventory.slots[slot].item) {
                     gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
                 }
-                // Grabbing a bag stack starts an anvil drag while crafting is open
-                if gs.ui.show_crafting {
+                // Grabbing a bag stack starts a drag while the anvil or the
+                // furnace can take it
+                if gs.ui.show_crafting || gs.ui.show_smelter {
                     s := gs.player.inventory.slots[slot]
-                    if s.item != .None && s.count > 0 do gs.ui.drag_item = s.item
+                    if s.item != .None && s.count > 0 {
+                        gs.ui.drag_item = s.item
+                        gs.ui.drag_slot = slot
+                    }
+                }
+            }
+        }
+        // Grabbing the smelter tray starts a drag of the cast bars.
+        if gs.ui.show_smelter && gs.ui.drag_item == .None {
+            tx, ty := smelter_tray_rect(gs)
+            mx := i32(inp.mouse_screen.x)
+            my := i32(inp.mouse_screen.y)
+            if mx >= tx && mx < tx + SLOT_PX && my >= ty && my < ty + SLOT_PX {
+                sd := gs.world.sim_data[grid_idx(int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))]
+                if sd.store_count > 0 {
+                    gs.ui.drag_item = sd.store_item
+                    gs.ui.drag_tray = true
                 }
             }
         }
@@ -170,11 +234,26 @@ update_input :: proc(gs: ^Game_State) {
 
     // Dropping a dragged stack onto an anvil slot offers it (a reference —
     // the items stay in the bag).  Anything already offered is not doubled.
+    // Dropping onto the smelter window feeds the furnace instead — that one
+    // really moves the stack out of the bag onto a cell beside the fire.
     if rl.IsMouseButtonReleased(.LEFT) && gs.ui.drag_item != .None {
-        if off := craft_offer_at_cursor(gs); off >= 0 {
+        if gs.ui.drag_tray {
+            // Dropping the tray on the bag — or a click-in-place on the tray
+            // itself — empties it into the inventory.
+            if cursor_in_window(gs, .Inventory) || cursor_in_window(gs, .Smelter) {
+                eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
+            }
+            gs.ui.drag_tray = false
+        } else if off := craft_offer_at_cursor(gs); off >= 0 {
             already := false
             for it in gs.ui.craft_offer do if it == gs.ui.drag_item do already = true
             if !already do gs.ui.craft_offer[off] = gs.ui.drag_item
+        } else if cursor_in_window(gs, .Smelter) {
+            eq_push(&gs.events, Event{
+                type    = .Smelter_Feed,
+                tile    = gs.ui.smelter_tile,
+                payload = {int_val = i32(gs.ui.drag_slot)},
+            })
         }
         gs.ui.drag_item = .None
     }

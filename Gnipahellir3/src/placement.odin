@@ -5,7 +5,7 @@ package game
 //  Right-click places the selected inventory item as a tile.  Input pushes
 //  Place_Request with the target tile; the handler validates and mutates.
 
-PLAYER_REACH :: 5  // tiles, chebyshev from player center; shared by placing and mining
+PLAYER_REACH :: 8  // tiles, chebyshev from player center; placement only (mining uses PICK_RANGE/wands)
 
 // Would placing `item` at tile (x,y) succeed?  Pure — no notify, no mutation —
 // so the placement handler and the cursor ghost preview agree exactly.
@@ -60,6 +60,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     slot.count -= 1
     if slot.count == 0 do slot.item = .None
     set_tile(&gs.world, x, y, place_tile)
+    gs.world.sim_data[grid_idx(x, y)] = {}  // a fresh machine starts cold, tray empty
     eq_push(&gs.events, Event{type = .Tile_Placed, source = PLAYER_ID, tile = e.tile})
 
     // Raising a Sky Altar on the surface opens the gate to the heavens above it.
@@ -67,6 +68,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         gs.progression.sky_altar_pos = {i32(x), i32(y)}
         audio_play(&gs.audio, .Fanfare)
         notify(gs, "The Sky Altar rises — a portal opens to the heavens!")
+        spawn_deep_blueprint(gs)
     }
 }
 

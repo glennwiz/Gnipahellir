@@ -8,6 +8,9 @@ import "core:time"
 Sim_Tile_Data :: struct {
     growth_timer: f32,
     spread_timer: f32,
+    store_item:   Item, // smelter output tray — cast bars wait here, not on the ground
+    store_count:  u8,
+    fuel_charge:  u8,   // bars the last-eaten log can still fire (BARS_PER_LOG per log)
 }
 
 World_Grid :: struct {
@@ -224,6 +227,7 @@ UI_State :: struct {
     show_inventory:  bool,
     show_crafting:   bool,
     show_blueprint:  bool,
+    show_smelter:    bool,   // furnace window; smelter_tile says which furnace
     show_debug:      bool,
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
     show_title:      bool,   // boot title screen; any key dismisses it into the menu
@@ -231,7 +235,13 @@ UI_State :: struct {
     settings_capture: int,   // action index awaiting a new key, -1 = none
     settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
     craft_offer:     [3]Item, // anvil offering slots — references, items stay in the bag
-    drag_item:       Item,    // bag stack being dragged onto the anvil (.None = no drag)
+    drag_item:       Item,    // bag stack being dragged onto the anvil/smelter (.None = no drag)
+    drag_slot:       int,     // bag slot the drag started from (smelter feed takes from it)
+    drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
+    win_pos:         [UI_Window][2]i32, // top-left of each floating window (draggable)
+    win_drag:        int,     // window being dragged by its header, -1 = none
+    win_drag_off:    [2]i32,  // cursor offset inside the window at grab
+    smelter_tile:    [2]i32,  // furnace the smelter window is looking at
     active_station:  Station, // station the crafting window was opened at (.None = hand crafting)
     focus_station:   Station, // nearest interactable station in range this frame (.None = none)
     focus_tile:      [2]i32,  // its tile — anchor for the highlight and prompt
@@ -378,6 +388,8 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.bindings = bindings[.Move_Left] == .KEY_NULL ? default_bindings : bindings
     gs.ui.settings_capture = -1
     gs.ui.settings_drag    = -1
+    gs.ui.win_drag         = -1
+    gs.ui.win_pos          = default_window_pos
 
     gs.player.hp          = 10
     gs.player.hp_max      = 10

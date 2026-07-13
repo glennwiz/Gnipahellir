@@ -1,5 +1,7 @@
 package game
 
+import "core:fmt"
+
 // ─── Levels ───────────────────────────────────────────────────────────────────
 //
 //  Level 0: surface + cave 1 in one grid (world_init).  Level 1: cave 2.
@@ -168,6 +170,20 @@ player_interact :: proc(gs: ^Game_State) {
     // A crafting station in reach opens its crafting window.
     if st, _ := nearest_station(gs); st != .None {
         eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})
+        return
+    }
+
+    // Otherwise a smelter in reach opens the furnace window.
+    for dy in -BENCH_RANGE ..= BENCH_RANGE {
+        for dx in -BENCH_RANGE ..= BENCH_RANGE {
+            if get_tile(&gs.world, cx+dx, cy+dy) == .Smelter {
+                eq_push(&gs.events, Event{
+                    type = .Smelter_Interact,
+                    tile = {i32(cx + dx), i32(cy + dy)},
+                })
+                return
+            }
+        }
     }
 }
 
@@ -201,6 +217,64 @@ blueprint_unlocks_name :: proc(tier: int) -> string {
     case 1:  return level_names[LEVEL_CAVE3]
     case:    return "the final depths"
     }
+}
+
+// Each tier's blueprint item and where it rests — for the locked-gate toast
+// and the HUD objective line.
+@(rodata)
+tier_blueprints := [MAX_PROGRESSION_TIERS]Item{.Blueprint_A, .Blueprint_B, .Blueprint_C}
+
+@(rodata)
+blueprint_places := [MAX_PROGRESSION_TIERS]string{
+    "deep beneath the Surface",
+    "in the Deep Cave",
+    "in Gnipahellir",
+}
+
+// Raising the Sky Altar reveals Blueprint A in the sealed portal chamber
+// (carved by carve_level0_portals) — one goal at a time for new players.
+// Idempotent: no respawn once found or while it already lies there.
+spawn_deep_blueprint :: proc(gs: ^Game_State) {
+    if gs.progression.blueprint_found[0] do return
+    idx := grid_idx(141, 94)
+    if gs.world.items[idx] != .None do return
+    gs.world.items[idx]       = .Blueprint_A
+    gs.world.item_counts[idx] = 1
+    notify(gs, "Something stirs deep below — seek the sealed chamber")
+}
+
+// The HUD objective line: the first incomplete step of the progression loop,
+// so a new player always knows the next move.  Pure read; formats into the
+// caller's buffer.  Empty = nothing to show (game won).
+current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
+    if gs.game_won do return ""
+    p := &gs.progression
+    if p.final_boss_defeated {
+        return fmt.bprintf(buf, "GARM is slain — claim the Hell Key")
+    }
+
+    tier := -1
+    for t in 0 ..< MAX_PROGRESSION_TIERS {
+        if !p.sky_structure_complete[t] {
+            tier = t
+            break
+        }
+    }
+    if tier < 0 {
+        return fmt.bprintf(buf, "All rituals done — face GARM in %s", level_names[LEVEL_CAVE3])
+    }
+    if p.sky_altar_pos == {0, 0} {
+        return fmt.bprintf(buf, "Raise a Sky Altar on the Surface to open the way above")
+    }
+    if !p.blueprint_found[tier] {
+        return fmt.bprintf(buf, "Find %s %s",
+            item_table[tier_blueprints[tier]].name, blueprint_places[tier])
+    }
+    c := structure_costs[tier]
+    return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s — [%v] at the altar in the %s",
+        c[0].count, item_table[c[0].item].name,
+        c[1].count, item_table[c[1].item].name,
+        gs.bindings[.Interact], level_names[LEVEL_SKY])
 }
 
 handle_ritual_request :: proc(gs: ^Game_State) {
@@ -447,10 +521,9 @@ carve_level0_portals :: proc(w: ^World_Grid) {
     set_tile(w, 143, 94, .Cave_Entrance)
     set_tile(w, 144, 94, .Cave_Entrance)
 
-    // Blueprint A rests in the same chamber
-    idx := grid_idx(141, 94)
-    w.items[idx]       = .Blueprint_A
-    w.item_counts[idx] = 1
+    // Blueprint A is NOT placed here — it appears in this chamber only once
+    // the Sky Altar stands (spawn_deep_blueprint), so new players face one
+    // blueprint at a time.
 
     // Sky Blueprint rests on the grass near spawn — it reveals the Sky Altar
     // that, once built, opens the gate to the heavens.
