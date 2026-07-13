@@ -26,6 +26,7 @@ Quick reference for all project documentation. **Last updated: 2026-07-13**
 | File | Purpose | Status |
 |------|---------|--------|
 | `Gnipahellir3/next_session.md` | Last session's handover (2026-07-13) | **Active** — start here for work queue |
+| `Gnipahellir3/OPUS_HANDOVER.md` | Timeless letter to successor models: how to work with Glenn, the architecture religion, the game's soul | **Durable** — read if you're not Fable |
 | `Gnipahellir3/score.md` | Vertical slice review (2026-07-13) | **Active** — current state assessment |
 
 ### Design & Architecture
