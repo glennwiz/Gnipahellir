@@ -112,14 +112,16 @@ miner_is_target :: proc(gs: ^Game_State, t: Tile_Type) -> bool {
 }
 
 // Snake movement medium: it tunnels stone, crosses open voids, eats ore.
-miner_passable :: proc(gs: ^Game_State, t: Tile_Type) -> bool {
+// `through_self` is the boxed-in fallback: the snake may re-enter its own
+// body trail when virgin rock alone no longer reaches any ore.
+miner_passable :: proc(gs: ^Game_State, t: Tile_Type, through_self: bool) -> bool {
+    if through_self && t == .Miner_Body do return true
     return t == .Stone || t == .Void || miner_is_target(gs, t)
 }
 
-// One block of progress: BFS from the head to the nearest themed ore through
-// stone/void, advance one tile along that path, eat what we enter, leave a
-// body segment behind.  Returns false when no ore is reachable.
-miner_step :: proc(gs: ^Game_State, w: ^World_Grid, m: ^Miner_State) -> bool {
+// BFS from the head to the nearest themed ore; returns the grid index of the
+// FIRST step along that path, or -1 when no ore is reachable.
+miner_find_step :: proc(gs: ^Game_State, w: ^World_Grid, m: ^Miner_State, through_self: bool) -> int {
     // BFS over the grid.  Fixed buffers, no allocation (CLAUDE.md).
     prev:    [GRID_W * GRID_H]i32
     visited: [GRID_W * GRID_H]bool
@@ -145,17 +147,28 @@ miner_step :: proc(gs: ^Game_State, w: ^World_Grid, m: ^Miner_State) -> bool {
             if nx < 1 || nx >= GRID_W-1 || ny < 1 || ny >= GRID_H-1 do continue
             n := grid_idx(nx, ny)
             if visited[n] do continue
-            if !miner_passable(gs, w.terrain[n]) do continue
+            if !miner_passable(gs, w.terrain[n], through_self) do continue
             visited[n] = true
             prev[n] = i32(cur)
             queue[q_tail] = i32(n); q_tail += 1
         }
     }
-    if goal < 0 do return false  // played out
+    if goal < 0 do return -1
 
     // Walk back from the goal to find the FIRST step away from the head.
     step := goal
     for prev[step] != i32(start) do step = int(prev[step])
+    return step
+}
+
+// One block of progress: advance one tile toward the nearest themed ore, eat
+// what we enter, leave a body segment behind.  Prefers virgin rock; a snake
+// boxed in by its own trail gnaws back through it.  Returns false when no
+// ore is reachable either way.
+miner_step :: proc(gs: ^Game_State, w: ^World_Grid, m: ^Miner_State) -> bool {
+    step := miner_find_step(gs, w, m, false)
+    if step < 0 do step = miner_find_step(gs, w, m, true)
+    if step < 0 do return false  // played out
 
     // Eat the tile we enter.
     t := w.terrain[step]

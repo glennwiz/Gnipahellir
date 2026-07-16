@@ -2605,6 +2605,40 @@ miner_snake_eats_ore_and_pays_stone_tax :: proc(t: ^testing.T) {
 }
 
 @(test)
+miner_boxed_in_gnaws_through_its_own_trail :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    base := miner_test_setup(gs)
+    m := &gs.dimension.miner
+
+    // Rebuild the world as one sealed T-pocket.  The snake eats right to the
+    // dead-end ore; the branch ore above is then reachable ONLY back through
+    // its own body trail — the boxed-in case that used to put it to sleep.
+    //
+    //        . I .           I ore   S stone   base at (11,14)
+    //        . S .
+    //   base S O .           O dead-end ore, everything else sealed
+    for &tile in gs.world.terrain do tile = .Grass
+    set_tile(&gs.world, int(base.x), int(base.y), .Auto_Miner)
+    set_tile(&gs.world, 12, 14, .Stone)
+    set_tile(&gs.world, 13, 14, .Iron_Ore)   // eaten first (dead end)
+    set_tile(&gs.world, 12, 13, .Stone)
+    set_tile(&gs.world, 12, 12, .Iron_Ore)   // only reachable through the trail
+
+    // ~8 steps is plenty for both ores at 3 s each.
+    for _ in 0 ..< 30 * 60 {
+        gs.elapsed_time += 1.0 / 60.0
+        update_miner(gs)
+    }
+
+    iron: u32 = 0
+    for h in m.haul do if h.item == .Iron_Ore do iron += h.count
+    testing.expect_value(t, iron, u32(2))
+    testing.expect_value(t, get_tile(&gs.world, 12, 12), Tile_Type.Miner_Body)
+    testing.expect(t, m.asleep, "with every ore eaten the miner sleeps for real")
+}
+
+@(test)
 miner_gem_feed_raises_tier :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
