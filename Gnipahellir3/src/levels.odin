@@ -122,9 +122,21 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
         ls.generated[dest] = true
     }
 
+    dest_pos := portal.dest_pos
+    // The way home from the sky is wherever the altar that raised the gate
+    // stands — the table's left-edge dest is only the no-altar fallback.
+    if gs.level_index == LEVEL_SKY && dest == LEVEL_SURFACE &&
+       gs.progression.sky_altar_pos != {0, 0} {
+        ap := gs.progression.sky_altar_pos
+        dest_pos = {f32(ap.x), f32(ap.y) - PLAYER_H}
+    }
+
     gs.level_index = dest
-    gs.player.pos  = portal.dest_pos
+    gs.player.pos  = dest_pos
     gs.player.vel  = {}
+    // Entering mid-jump must not carry the old level's fall peak: the
+    // drop would be measured across worlds and land as phantom damage.
+    gs.player.fall_peak_y = dest_pos.y
     eq_push(&gs.events, Event{type = .Level_Enter, payload = {int_val = i32(dest)}})
     log_action(gs, "Player enters level %d (%s)", dest, level_names[dest])
 }
@@ -613,6 +625,40 @@ debug_add_all_structures :: proc(gs: ^Game_State) {
         }
     }
     notify(gs, "Debug: added all structures to inventory")
+}
+
+// F2 altar kit: raise a tier's full sky structure — foundation and capstone —
+// with the capstone at (ax, ay), skipping the build grind.
+debug_stamp_altar_template :: proc(gs: ^Game_State, tier: int, ax, ay: int) {
+    tpl := &structure_templates[tier]
+    acol, arow := structure_template_anchor(tpl)
+    for line, r in tpl.rows {
+        for glyph, c in line {
+            tile, kind := structure_template_cell(glyph)
+            wx := ax + (c - acol)
+            wy := ay + (r - arow)
+            if !in_bounds(wx, wy) do continue
+            switch kind {
+            case .Support:  set_tile(&gs.world, wx, wy, tile)
+            case .Capstone: set_tile(&gs.world, wx, wy, .Sky_Altar)
+            case .Empty:
+            }
+        }
+    }
+    notify(gs, "Debug: %s raised — the ritual answers in the sky", tpl.name)
+}
+
+// F2 altar kit: complete the next ritual free of charge.  The real
+// Structure_Complete path runs (cave unlock, fanfare, Garm's wakening).
+debug_complete_next_ritual :: proc(gs: ^Game_State) {
+    for t in 0 ..< MAX_PROGRESSION_TIERS {
+        if gs.progression.sky_structure_complete[t] do continue
+        gs.progression.blueprint_found[t] = true
+        eq_push(&gs.events, Event{type = .Structure_Complete, payload = {int_val = i32(t)}})
+        log_action(gs, "Debug: ritual tier %d completed", t)
+        return
+    }
+    notify(gs, "Debug: all rituals already complete")
 }
 
 debug_add_resources :: proc(gs: ^Game_State) {

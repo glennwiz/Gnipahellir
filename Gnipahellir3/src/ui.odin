@@ -491,6 +491,49 @@ draw_debug_menu :: proc(gs: ^Game_State) {
     }
 }
 
+// ─── Altar Debug Menu (F2, debug builds only) ─────────────────────────────────
+
+ALT_MENU_X    :: DBG_MENU_X + DBG_MENU_W + 36
+ALT_MENU_Y    :: DBG_MENU_Y
+ALT_MENU_W    :: 200
+ALT_MENU_ROWS :: 7  // 0/1: stamp sky/rune altar; 2-4: raise tier structure; 5: blueprints; 6: complete ritual
+
+// Menu row under the cursor, or -1.
+altar_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    if mx < ALT_MENU_X || mx >= ALT_MENU_X + ALT_MENU_W do return -1
+    r := int((my - ALT_MENU_Y) / DBG_MENU_ROW_H)
+    if my < ALT_MENU_Y || r >= ALT_MENU_ROWS do return -1
+    return r
+}
+
+draw_altar_menu :: proc(gs: ^Game_State) {
+    h := i32(ALT_MENU_ROWS * DBG_MENU_ROW_H)
+    rl.DrawRectangle(ALT_MENU_X - 6, ALT_MENU_Y - 26, ALT_MENU_W + 12, h + 34, panel_bg)
+    rl.DrawRectangleLines(ALT_MENU_X - 6, ALT_MENU_Y - 26, ALT_MENU_W + 12, h + 34, panel_border)
+    rl.DrawText("ALTARS (F2)", ALT_MENU_X, ALT_MENU_Y - 20, 10, rl.YELLOW)
+
+    sa_col := gs.debug.place_tile == .Sky_Altar ? rl.GREEN : rl.YELLOW
+    ra_col := gs.debug.place_tile == .Rune_Altar ? rl.GREEN : rl.YELLOW
+    rl.DrawText("Stamp Sky Altar (gate) >", ALT_MENU_X, ALT_MENU_Y + 7, 10, sa_col)
+    rl.DrawText("Stamp Rune Altar >", ALT_MENU_X, ALT_MENU_Y + DBG_MENU_ROW_H + 7, 10, ra_col)
+
+    tier_rows := [3]cstring{"Raise Stone Altar >", "Raise Silver-Gold Altar >", "Raise Golden Altar >"}
+    for label, i in tier_rows {
+        col := gs.debug.place_tier == i + 1 ? rl.GREEN : rl.YELLOW
+        rl.DrawText(label, ALT_MENU_X, ALT_MENU_Y + i32(2+i)*DBG_MENU_ROW_H + 7, 10, col)
+    }
+
+    rl.DrawText("Find all blueprints >", ALT_MENU_X, ALT_MENU_Y + 5*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+    rl.DrawText("Complete next ritual >", ALT_MENU_X, ALT_MENU_Y + 6*DBG_MENU_ROW_H + 7, 10, rl.YELLOW)
+
+    if r := altar_menu_row_at_cursor(gs); r >= 0 {
+        rl.DrawRectangleLines(ALT_MENU_X - 2, ALT_MENU_Y + i32(r)*DBG_MENU_ROW_H + 1,
+            ALT_MENU_W + 4, DBG_MENU_ROW_H - 2, rl.YELLOW)
+    }
+}
+
 // True when the cursor is over an open UI panel (blocks mining/placing).
 cursor_over_ui :: proc(gs: ^Game_State) -> bool {
     mx := i32(gs.input.mouse_screen.x)
@@ -499,6 +542,11 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
         if gs.debug.menu_open &&
            mx >= DBG_MENU_X - 6 && mx < DBG_MENU_X + DBG_MENU_W + 6 &&
            my >= DBG_MENU_Y - 26 && my < DBG_MENU_Y + DBG_MENU_ROWS*DBG_MENU_ROW_H + 8 {
+            return true
+        }
+        if gs.debug.altar_menu &&
+           mx >= ALT_MENU_X - 6 && mx < ALT_MENU_X + ALT_MENU_W + 6 &&
+           my >= ALT_MENU_Y - 26 && my < ALT_MENU_Y + ALT_MENU_ROWS*DBG_MENU_ROW_H + 8 {
             return true
         }
     }
@@ -620,7 +668,8 @@ draw_ui :: proc(gs: ^Game_State) {
     if gs.game_won do draw_win_screen(gs)
     if gs.player.dead do draw_death_screen(gs)
     when GAME_DEBUG {
-        if gs.debug.menu_open do draw_debug_menu(gs)
+        if gs.debug.menu_open  do draw_debug_menu(gs)
+        if gs.debug.altar_menu do draw_altar_menu(gs)
     }
     if gs.ui.show_menu     do draw_menu(gs)      // modal overlays — always drawn last, on top
     if gs.ui.show_settings do draw_settings(gs)

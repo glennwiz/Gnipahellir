@@ -265,6 +265,30 @@ ritual_consumes_and_unlocks :: proc(t: ^testing.T) {
 }
 
 @(test)
+debug_altar_kit_stamps_and_completes_rituals :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Raise tier B's structure with the capstone at (60, 40): every support
+    // must be present and the ritual proc must accept it as a real altar.
+    debug_stamp_altar_template(gs, 1, 60, 40)
+    testing.expect_value(t, get_tile(&gs.world, 60, 40), Tile_Type.Sky_Altar)
+    ok, _ := structure_template_satisfied(&gs.world, &structure_templates[1], 60, 40)
+    testing.expect(t, ok, "stamped template should satisfy its own foundation check")
+
+    // Free completion runs the real Structure_Complete path, in tier order.
+    debug_complete_next_ritual(gs)
+    process_events(gs)
+    testing.expect(t, gs.progression.sky_structure_complete[0], "tier A completed first")
+    testing.expect(t, gs.progression.cave_unlocked[0], "cave 2 unlocked")
+
+    debug_complete_next_ritual(gs)
+    process_events(gs)
+    testing.expect(t, gs.progression.sky_structure_complete[1], "tier B completed next")
+    testing.expect(t, gs.progression.cave_unlocked[1], "cave 3 unlocked")
+}
+
+@(test)
 ritual_gated_to_sky_level :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -348,6 +372,65 @@ sky_fall_returns_to_surface :: proc(t: ^testing.T) {
     gs.player.pos = {50, 90}  // below the cloud line
     update_player(gs)
     testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+}
+
+@(test)
+airborne_portal_entry_lands_without_phantom_fall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    p := &gs.player
+
+    // Settle onto the surface, then hop so the fall peak arms up on the
+    // surface level — the state a player is in jumping into a portal.
+    for _ in 0 ..< 300 {
+        update_player(gs)
+        process_events(gs)
+        if p.grounded do break
+    }
+    testing.expect(t, p.grounded, "player should settle onto the surface")
+    hp := p.hp
+
+    p.pos.y -= 2
+    update_player(gs)
+    process_events(gs)
+    testing.expect(t, !p.grounded, "player should be airborne entering the portal")
+
+    // Take the sky gate mid-air, then land on the entrance cloud.
+    gs.progression.sky_altar_pos = {40, 52}
+    sky := sky_gate_portal(gs)
+    level_transition(gs, &sky)
+    testing.expect_value(t, gs.level_index, LEVEL_SKY)
+    for _ in 0 ..< 300 {
+        update_player(gs)
+        process_events(gs)
+        if p.grounded do break
+    }
+    testing.expect(t, p.grounded, "player should land on the sky entrance")
+    testing.expect_value(t, p.hp, hp)
+}
+
+@(test)
+sky_return_lands_at_the_altar :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Gate raised at {40, 52}: stepping back down must land on the altar,
+    // not the table's left-edge fallback.
+    gs.progression.sky_altar_pos = {40, 52}
+    sky := sky_gate_portal(gs)
+    level_transition(gs, &sky)
+    testing.expect_value(t, gs.level_index, LEVEL_SKY)
+
+    level_transition(gs, &level_portals[LEVEL_SKY][0])
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+    testing.expect_value(t, gs.player.pos, [2]f32{40, 52 - PLAYER_H})
+
+    // Falling through the clouds takes the same road home.
+    level_transition(gs, &sky)
+    gs.player.pos = {50, 90}  // below the cloud line
+    update_player(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+    testing.expect_value(t, gs.player.pos.x, f32(40))
 }
 
 @(test)

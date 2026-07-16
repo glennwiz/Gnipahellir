@@ -272,6 +272,8 @@ Debug_State :: struct {
     fly:        bool,
     ultra_wand: bool,   // cheat: 13-tile mining wand, free, explosive impact
     place_tile: Tile_Type,  // armed stamp: next world click sets this tile (.Air = off)
+    altar_menu: bool,   // F2: altar/ritual debug menu
+    place_tier: int,    // armed altar stamp: next click raises this tier's sky structure (0 = off, else tier+1)
     life:       bool,   // easter egg: Conway's Game of Life eats the world (life.odin)
     life_timer: f32,
     life_gen:   int,

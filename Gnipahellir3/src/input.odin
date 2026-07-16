@@ -278,6 +278,9 @@ update_input :: proc(gs: ^Game_State) {
         if rl.IsKeyPressed(.F1) {
             gs.debug.menu_open = !gs.debug.menu_open
         }
+        if rl.IsKeyPressed(.F2) {
+            gs.debug.altar_menu = !gs.debug.altar_menu
+        }
         inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
         inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
 
@@ -287,8 +290,24 @@ update_input :: proc(gs: ^Game_State) {
             x, y := int(inp.mouse_tile.x), int(inp.mouse_tile.y)
             set_tile(&gs.world, x, y, gs.debug.place_tile)
             notify(gs, "Debug: %s stamped at (%d,%d)", terrain_table[gs.debug.place_tile].name, x, y)
+            // A surface Sky Altar stamp raises the gate, as real placement would.
+            if gs.debug.place_tile == .Sky_Altar && gs.level_index == LEVEL_SURFACE {
+                gs.progression.sky_altar_pos = {i32(x), i32(y)}
+                notify(gs, "The Sky Altar rises — a portal opens to the heavens!")
+                spawn_deep_blueprint(gs)
+            }
             gs.debug.place_tile = .Air
             inp.mine   = false  // the stamp click must not also chip or swing
+            inp.attack = false
+        }
+
+        // Armed altar stamp (F2 menu): the next world click raises the tier's
+        // full sky structure — foundation and capstone — at the clicked tile.
+        if gs.debug.place_tier > 0 && rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) {
+            x, y := int(inp.mouse_tile.x), int(inp.mouse_tile.y)
+            debug_stamp_altar_template(gs, gs.debug.place_tier - 1, x, y)
+            gs.debug.place_tier = 0
+            inp.mine   = false
             inp.attack = false
         }
 
@@ -321,6 +340,28 @@ update_input :: proc(gs: ^Game_State) {
                 } else {
                     notify(gs, "The world settles after %d generations", gs.debug.life_gen)
                 }
+            }
+        }
+
+        if gs.debug.altar_menu && rl.IsMouseButtonPressed(.LEFT) {
+            switch r := altar_menu_row_at_cursor(gs); r {
+            case 0:
+                gs.debug.place_tile = .Sky_Altar
+                gs.debug.altar_menu = false
+                notify(gs, "Debug: click a tile to stamp the Sky Altar")
+            case 1:
+                gs.debug.place_tile = .Rune_Altar
+                gs.debug.altar_menu = false
+                notify(gs, "Debug: click a tile to stamp the Rune Altar")
+            case 2, 3, 4:
+                gs.debug.place_tier = r - 1  // tier + 1
+                gs.debug.altar_menu = false
+                notify(gs, "Debug: click a tile to raise the %s", structure_templates[r-2].name)
+            case 5:
+                for t in 0 ..< MAX_PROGRESSION_TIERS do gs.progression.blueprint_found[t] = true
+                notify(gs, "Debug: all blueprints found")
+            case 6:
+                debug_complete_next_ritual(gs)
             }
         }
     }
