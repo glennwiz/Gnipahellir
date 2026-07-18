@@ -134,7 +134,7 @@ boundaries — these are call-discipline rules, checked by review:
 - `switch` sprawl for terrain/item/enemy behavior — use tables.
 - TODOs in committed code — implement or file an issue.
 
-### Key Constants (do not change without updating plan.md)
+### Key Constants (do not change without updating gnipa_project/plan.md)
 
 ```
 GRID_W          :: 192
@@ -148,4 +148,4 @@ MAX_EVENTS      :: 512
 
 ### Game Context
 
-See `plan.md` for full game description, progression system, level structure, terrain/item tables, and architectural data layout. Read it before adding any new system.
+See `gnipa_project/plan.md` for full game description, progression system, level structure, terrain/item tables, and architectural data layout. Read it before adding any new system.
