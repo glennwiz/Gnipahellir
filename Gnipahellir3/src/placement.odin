@@ -78,7 +78,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     eq_push(&gs.events, Event{type = .Tile_Placed, source = PLAYER_ID, tile = e.tile})
 
     // A placed spawner is a door waiting to be opened.
-    if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold {
+    if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold || place_tile == .Dimension_Spawner_Runic {
         notify(gs, "The spawner hums — press [%v] beside it to cross over", gs.bindings[.Interact])
     }
 

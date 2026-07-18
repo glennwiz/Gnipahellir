@@ -545,6 +545,7 @@ item_icons := [Item]Item_Icon{
 	.Gold_Bar         = {BAR_GRID, PAL_GOLD},
 	.Dimension_Spawner      = {CRYSTAL_GRID, {{}, {}, {200, 255, 245, 255}, {70, 225, 195, 255}, {40, 160, 140, 255}}},
 	.Dimension_Spawner_Gold = {CRYSTAL_GRID, {{}, {}, {255, 232, 130, 255}, {235, 195, 60, 255}, {178, 138, 28, 255}}},
+	.Dimension_Spawner_Runic = {CRYSTAL_GRID, {{}, {}, {235, 185, 255, 255}, {200, 120, 255, 255}, {130, 66, 178, 255}}},
 	// Gem ladder — one crystal per depth layer, the palette carries the tier
 	// Machine box in dimensional teal — the snake miner's base
 	.Auto_Miner       = {SMELTER_GRID, {{90, 96, 108, 255}, {56, 60, 70, 255}, {}, {80, 255, 220, 255}, {170, 255, 240, 255}}},

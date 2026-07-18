@@ -73,6 +73,8 @@ Tile_Type :: enum u8 {
     // Auto-Miner (appended: order is frozen)
     Auto_Miner,   // the placed base; snake head grows from here
     Miner_Body,   // the expanding metal trail the head leaves behind
+    // Runic dimension (appended: order is frozen)
+    Dimension_Spawner_Runic,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -143,6 +145,8 @@ Item :: enum u8 {
     Hel_Gem,
     // Auto-Miner (appended: order is frozen)
     Auto_Miner,
+    // Runic dimension (appended: order is frozen)
+    Dimension_Spawner_Runic,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ package game
 Dimension_Kind :: enum u8 {
     Metal,
     Gold,
+    Runic,
 }
 
 // Theme → generation parameters.  New dimension type = new table row (plus a
@@ -38,6 +39,7 @@ Dimension_Theme :: struct {
 dimension_table := [Dimension_Kind]Dimension_Theme{
     .Metal = { "Metal Dimension", {{.Iron_Ore, 14}, {.Silver_Ore, 6}, {.Gold_Ore, 3}, {}} },
     .Gold  = { "Gold Dimension",  {{.Gold_Ore, 12}, {.Iron_Ore, 4},  {.Silver_Ore, 3}, {}} },
+    .Runic = { "Runic Dimension", {{.Runic_Sky_Ore, 8}, {.Gold_Ore, 4}, {.Silver_Ore, 3}, {}} },
 }
 
 // Which placed tile opens which theme — the station_tile pattern.
@@ -45,6 +47,7 @@ dimension_table := [Dimension_Kind]Dimension_Theme{
 dimension_spawner_tile := [Dimension_Kind]Tile_Type{
     .Metal = .Dimension_Spawner,
     .Gold  = .Dimension_Spawner_Gold,
+    .Runic = .Dimension_Spawner_Runic,
 }
 
 // Where the player came from — restored on exit.  Saved with the run so a

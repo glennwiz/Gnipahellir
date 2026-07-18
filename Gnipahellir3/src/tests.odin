@@ -2330,6 +2330,37 @@ gold_spawner_opens_a_gold_rich_world :: proc(t: ^testing.T) {
     testing.expect(t, gold > iron, "gold must dominate iron in a gold dimension")
 }
 
+@(test)
+runic_spawner_opens_the_runic_tier :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // The runic world holds the only non-debug Runic_Sky_Ore in the game.
+    sx, sy := 20, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Dimension_Spawner_Runic)
+    gs.player.pos = {f32(sx - 2), f32(SURFACE_Y) - PLAYER_H}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect_value(t, gs.dimension.kind, Dimension_Kind.Runic)
+
+    runic := 0
+    for tile in gs.world.terrain do if tile == .Runic_Sky_Ore do runic += 1
+    // A full runic gear set costs 33 ore; one world must fund it many times.
+    testing.expect(t, runic > 100, "runic dimension must be rich in Runic Sky Ore")
+
+    // The spawner itself is the endgame sink: 500 Gold Bars + 20 Cloud
+    // Stone at the Rune Altar, and not a bar less.
+    found := false
+    for r in recipe_table {
+        if r.result != .Dimension_Spawner_Runic do continue
+        found = true
+        testing.expect_value(t, r.station, Station.Rune_Altar)
+        testing.expect_value(t, r.ingredients[0], Ingredient{.Gold_Bar, 500})
+        testing.expect_value(t, r.ingredients[1], Ingredient{.Cloud_Stone, 20})
+    }
+    testing.expect(t, found, "the runic spawner needs a recipe")
+}
+
 // ─── Easter egg: Game of Life (life.odin) ─────────────────────────────────────
 
 @(test)

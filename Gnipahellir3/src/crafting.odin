@@ -100,6 +100,9 @@ recipe_table := [?]Recipe{
     // in — each theme's recipe mirrors its riches.
     { .Dimension_Spawner,      1, .Rune_Altar, {{.Iron_Bar, 4}, {.Cloud_Stone, 8}, {.Stone_Block, 20}} },
     { .Dimension_Spawner_Gold, 1, .Rune_Altar, {{.Gold_Bar, 4}, {.Cloud_Stone, 8}, {.Stone_Block, 20}} },
+    // The endgame sink: 500 bars is roughly a strip-mined Gold world — one
+    // whole dimension traded for the door to the runic tier.
+    { .Dimension_Spawner_Runic, 1, .Rune_Altar, {{.Gold_Bar, 500}, {.Cloud_Stone, 20}, {}} },
     // The snake miner: strips a dimension on its own.  The emerald is the
     // first gem sink — nature seeds the machine that industrializes worlds.
     { .Auto_Miner,             1, .Rune_Altar, {{.Iron_Bar, 6}, {.Gold_Bar, 2}, {.Emerald, 1}} },
