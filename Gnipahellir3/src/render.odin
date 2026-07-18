@@ -89,6 +89,7 @@ Draw_Style :: enum u8 {
     Pixel_Flower,
     Pixel_Gem,
     Pixel_Miner_Body,
+    Pixel_Cloud,
 }
 
 @(rodata)
@@ -101,6 +102,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Diamond_Ore = .Pixel_Gem,
     .Hel_Gem_Ore = .Pixel_Gem,
     .Miner_Body  = .Pixel_Miner_Body,
+    .Cloud       = .Pixel_Cloud,
     // all others default to .Solid (zero value)
 }
 
@@ -176,6 +178,32 @@ draw_world :: proc(gs: ^Game_State) {
             }
         }
     }
+    // Cloud puffs go over everything tile-drawn so their round bulges merge
+    // across cells instead of being clipped by neighboring Air rects.
+    if gs.level_index == LEVEL_SKY do draw_cloud_layer(gs)
+}
+
+// Clouds breathe and sway: each tile is a cluster of overlapping circles
+// whose radius and center ride slow per-tile sine waves.  Contiguous cloud
+// tiles merge into one billowy bank; single tiles read as small puffs.
+draw_cloud_layer :: proc(gs: ^Game_State) {
+    w := &gs.world
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if w.terrain[grid_idx(x, y)] != .Cloud do continue
+            h := whash(u32(x) * 374761393) ~ whash(u32(y) * 668265263)
+            breathe := math.sin(gs.elapsed_time*0.9 + f32(h % 628)*0.01)
+            sway    := math.sin(gs.elapsed_time*0.5 + f32(h % 314)*0.02)
+            cx := f32(x*CELL_SIZE) + CELL_SIZE*0.5 + sway*1.5
+            cy := f32(y*CELL_SIZE) + CELL_SIZE*0.5
+            r  := f32(CELL_SIZE) * (0.60 + 0.05*breathe)
+            body := rl.Color{242, 246, 255, 240}
+            rl.DrawCircleV({cx, cy + 1.5}, r, {205, 215, 240, 225})       // under-shade
+            rl.DrawCircleV({cx - 1.5, cy - 1}, r*0.90, body)
+            rl.DrawCircleV({cx + 2, cy - 0.5}, r*0.75, body)
+            rl.DrawCircleV({cx - r*0.3, cy - r*0.4}, r*0.45, {255, 255, 255, 210})
+        }
+    }
 }
 
 draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
@@ -205,6 +233,11 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Flower:     draw_pixel_flower(px, py)
     case .Pixel_Gem:        draw_pixel_gem(px, py, t)
     case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
+    case .Pixel_Cloud:
+        // Sky backdrop only — the puffs paint in draw_cloud_layer, a
+        // second pass, so their bulges can spill over neighbor cells
+        // without being clipped by later-drawn tiles.
+        rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[.Air].color)
     case .Solid:
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
     }

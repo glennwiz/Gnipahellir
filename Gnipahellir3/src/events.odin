@@ -306,6 +306,11 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     idx := grid_idx(x, y)
     old_tile := gs.world.terrain[idx]
     drop := terrain_table[old_tile].drop_item
+    // Chance drops roll a per-tile hash — deterministic per run, so the
+    // yield can't be re-rolled by save-scumming.
+    if pct := terrain_table[old_tile].drop_pct; pct > 0 {
+        if whash(u32(idx)*2246822519 + 101) % 100 >= u32(pct) do drop = .None
+    }
 
     // Mining into a den's structure is a break-in: the owner hunts.
     // (Only the player pushes Tile_Mined — builders emit Builder_Mined.)

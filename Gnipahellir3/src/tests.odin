@@ -430,6 +430,42 @@ gem_ladder_generation :: proc(t: ^testing.T) {
 }
 
 @(test)
+plain_clouds_chance_drop_cloud_stone :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    count_tile :: proc(w: ^World_Grid, tt: Tile_Type) -> (n: int) {
+        for i in 0 ..< GRID_W * GRID_H do if w.terrain[i] == tt do n += 1
+        return
+    }
+
+    gen_sky_level(&gs.world)
+    gs.level_index = LEVEL_SKY
+
+    // The guaranteed vein supply survives the puffy gen: the win path's
+    // 40 Cloud Stone (+6 Rune Altar) stays covered by ore alone.
+    testing.expect_value(t, count_tile(&gs.world, .Cloud_Ore), 42)
+
+    // Strip-mine every plain cloud: the per-tile hash makes the harvest
+    // deterministic, and it must clear the remaining crafting demand
+    // (spawners + the runic recipe) without flooding the economy.
+    total, drops: int
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if get_tile(&gs.world, x, y) != .Cloud do continue
+            total += 1
+            eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(x), i32(y)}})
+            process_events(gs)
+            eq_clear(&gs.events)
+            if gs.world.items[grid_idx(x, y)] == .Cloud_Stone do drops += 1
+        }
+    }
+    testing.expect(t, drops >= 50, "plain clouds must yield a real Cloud Stone stream")
+    testing.expect(t, drops < total/2, "the chance drop must stay a chance, not a flood")
+    log.infof("cloud harvest: %d stone from %d plain cloud tiles (+42 guaranteed veins)", drops, total)
+}
+
+@(test)
 cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

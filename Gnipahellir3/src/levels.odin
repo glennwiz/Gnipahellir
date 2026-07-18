@@ -536,8 +536,17 @@ gen_sky_level :: proc(w: ^World_Grid) {
             if h % 100 < 70 {
                 x0  := seg * 24 + int(h % 10)
                 len := 8 + int((h >> 8) % 8)
-                for x in x0 ..< min(x0 + len, GRID_W - 2) {
-                    set_tile(w, x, row, .Cloud)
+                x1  := min(x0 + len, GRID_W - 2)
+                // Puffy body: the top row stays flat and walkable, the
+                // underside bulges 1–3 tiles deep — deepest mid-platform,
+                // tapering toward the edges, hash-jittered so no two
+                // clouds share a silhouette.
+                for x in x0 ..< x1 {
+                    edge  := min(x - x0, x1 - 1 - x)
+                    depth := 1
+                    if edge >= 1 do depth = 2
+                    if edge >= 3 && whash(u32(x)*2654435761 + u32(row)*97) % 100 < 55 do depth = 3
+                    for d in 0 ..< depth do set_tile(w, x, row + d, .Cloud)
                 }
                 // Cloud ore pocket on ~half the platforms
                 if (h >> 16) % 100 < 50 {
@@ -562,8 +571,10 @@ gen_sky_level :: proc(w: ^World_Grid) {
         }
     }
 
-    // Base platform with the return portal
+    // Base platform with the return portal — puffy underside like the bands
     for x in 88 ..= 104 do set_tile(w, x, 80, .Cloud)
+    for x in 89 ..= 103 do set_tile(w, x, 81, .Cloud)
+    for x in 91 ..= 101 do set_tile(w, x, 82, .Cloud)
     set_tile(w, 95, 79, .Sky_Entrance)
     set_tile(w, 96, 79, .Sky_Entrance)
 }
