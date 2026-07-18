@@ -71,6 +71,11 @@ Builder_State :: struct {
     replan_timer: f32,
     stuck_timer:  f32,          // seconds without path progress (watchdog)
     stuck_count:  int,
+    last_place:   [2]i32,       // last bridge-placed tile (place-loop detection)
+    place_reps:   u8,           // times last_place was placed in a row
+    escaping:     bool,         // pillar escape: tunnel straight up out of a stuck spot
+    escape_timer: f32,
+    escape_from:  i32,          // tile y where the escape began (min-rise check)
 }
 
 // Boss phases escalate with lost hp; order matters (a phase never regresses).

@@ -1190,14 +1190,14 @@ bridging_spends_pocket_blocks :: proc(t: ^testing.T) {
 
     // Empty pocket: no block appears, path is dropped for a replan
     e.builder.pocket = 0
-    builder_exec_action(e, &e.nav, gs)
+    builder_exec_action(e, idx, &e.nav, gs)
     testing.expect_value(t, get_tile(&gs.world, int(gap.x), int(gap.y)+1), Tile_Type.Void)
     testing.expect_value(t, e.nav.path.len, 0)
 
     // One pocket block: the bridge is placed and the pocket is spent
     e.nav.path = {tiles = {0 = gap}, len = 1, cursor = 0}
     e.builder.pocket = 1
-    builder_exec_action(e, &e.nav, gs)
+    builder_exec_action(e, idx, &e.nav, gs)
     testing.expect_value(t, get_tile(&gs.world, int(gap.x), int(gap.y)+1), Tile_Type.Stone)
     testing.expect_value(t, e.builder.pocket, u8(0))
 }
@@ -1811,6 +1811,113 @@ garm_death_drops_key_and_wins_the_game :: proc(t: ^testing.T) {
     gs.input.move_right = true
     update_player(gs)
     testing.expect(t, gs.player.pos == pos_before, "no more moves after the win")
+}
+
+@(test)
+own_den_is_never_a_cage :: proc(t: ^testing.T) {
+    // den_protected guards a built den's placed blocks from every other
+    // builder — and from its owner too while the owner is outside (commutes
+    // use the door).  But an owner standing INSIDE may always chew out:
+    // a den it can't leave is a coffin (stuck-inside bounce loop, playtest
+    // 2026-07-16).
+    gs := test_state()
+    defer free(gs)
+    gs.enemies = {}
+    spawn_builder(gs, 30)   // slot 0 — the owner
+    spawn_builder(gs, 60)   // slot 1 — a neighbor
+    e := &gs.enemies.data[0]
+    e.builder.anchor    = {30, 88}
+    e.builder.den_built = true
+    e.builder.build     = .Shelter
+    set_tile(&gs.world, 30, 85, .Wood)   // the den roof slab ({0,-3})
+
+    e.pos = {30.1, 87}   // standing inside the den interior
+    testing.expect(t, den_protected(gs, 30, 85), "den roof is protected from the world")
+    testing.expect(t, den_protected(gs, 30, 85, 1), "and from other builders")
+    testing.expect(t, !den_protected(gs, 30, 85, 0), "but never from an owner boxed inside")
+
+    e.pos = {60, 87}     // owner off at work: the den is sacred again
+    testing.expect(t, den_protected(gs, 30, 85, 0), "an owner outside uses the door like everyone")
+}
+
+@(test)
+builder_pillar_escape_climbs_out :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Bury a builder in a stone pocket with an open cavern high above, and
+    // trip the escape: it must mine the ceiling, hop, place blocks underfoot,
+    // and surface in the cavern at least ESCAPE_MIN_RISE above the start.
+    for &tile in gs.world.terrain do tile = .Stone
+    for y in 87 ..= 89 do set_tile(&gs.world, 30, y, .Air)   // the pocket
+    for y in 78 ..= 82 {                                     // the cavern
+        for x in 26 ..= 34 do set_tile(&gs.world, x, y, .Air)
+    }
+
+    gs.enemies = {}
+    gs.player.pos = {150, 20}   // far away: no hunt interference
+    spawn_builder(gs, 30)
+    testing.expect_value(t, gs.enemies.count, 1)
+    e := &gs.enemies.data[0]
+    start_y := builder_tile(e).y
+    e.builder.escaping    = true
+    e.builder.escape_from = start_y
+
+    for _ in 0 ..< 60 * 60 {   // one simulated minute ≫ the escape cap
+        update_enemies(gs)
+        eq_clear(&gs.events)
+        if !e.builder.escaping do break
+    }
+    rise := start_y - builder_tile(e).y
+    log.infof("pillar escape: rose %d tiles", rise)
+    testing.expect(t, !e.builder.escaping, "the escape must hand back to normal pathing")
+    testing.expect(t, rise >= ESCAPE_MIN_RISE, "the builder must gain real height before replanning")
+}
+
+@(test)
+builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // The real generated surface world with its two cave-1 builders.  Watch
+    // for the livelock signature from the playtest logs: one tile alternately
+    // carved and placed in RAPID succession (~8 s apart, 54 cycles at the map
+    // edge).  Slow flips are commute churn (mine through a door tile on the
+    // way out, rebuild it coming home) — wasteful but making progress.
+    touched:   [GRID_W * GRID_H]u8    // 1 = last event mined, 2 = last placed
+    last_flip: [GRID_W * GRID_H]int   // frame of the last reversal
+    rapid_run: [GRID_W * GRID_H]u16   // consecutive reversals < RAPID frames apart
+    RAPID :: 20 * 60                  // reversals under 20 s apart = looping
+
+    worst := u16(0)
+    worst_idx := 0
+    SOAK_MINUTES :: 15
+    for frame in 0 ..< SOAK_MINUTES * 3600 {
+        update_enemies(gs)
+        for k in 0 ..< gs.events.size {
+            ev := gs.events.events[(gs.events.head + k) % MAX_EVENTS]
+            #partial switch ev.type {
+            case .Builder_Mined, .Builder_Placed:
+                idx  := grid_idx(int(ev.tile.x), int(ev.tile.y))
+                mark := u8(1) if ev.type == .Builder_Mined else u8(2)
+                if touched[idx] != 0 && touched[idx] != mark {
+                    rapid_run[idx] = rapid_run[idx] + 1 if frame - last_flip[idx] < RAPID else 0
+                    last_flip[idx] = frame
+                    if rapid_run[idx] > worst { worst = rapid_run[idx]; worst_idx = idx }
+                }
+                touched[idx] = mark
+            }
+        }
+        eq_clear(&gs.events)
+    }
+
+    // The trip clock bounds a doomed objective to ~60 s of churn and the
+    // avoid list stops retries, so one cursed spot can rack up ~20 rapid
+    // reversals before it is abandoned — but never the unbounded 146+ the
+    // livelock produced.
+    log.infof("builder soak: worst rapid reversal run = %d at (%d,%d)",
+        worst, worst_idx % GRID_W, worst_idx / GRID_W)
+    testing.expect(t, worst < 32, "rapid carve/place cycling beyond one trip budget means a builder is looping again")
 }
 
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────

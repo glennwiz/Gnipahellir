@@ -26,6 +26,16 @@ AVOID_RADIUS    :: i32(4)     // given-up targets blacklist their whole cluster 
 JOB_COOLDOWN    :: f32(2.0)   // pause between objectives
 SITE_SPACING    :: 20         // min x-distance between two builders' dens
 
+// The pillar escape (Glenn's call, playtest 2026-07-16): a builder that
+// keeps re-placing the same bridge block is fighting an unreachable jump
+// (head-bump under a ledge) — the stuck watchdog can't see it because
+// mine/place actions register as progress.  Escape hatch: tunnel straight
+// UP — mine the ceiling, jump, place a block underfoot mid-air — until the
+// column overhead is open and we've gained real height, then replan.
+PLACE_REPS_LOOP :: 3          // same tile bridge-placed this often = the loop
+ESCAPE_MIN_RISE :: i32(4)     // climb at least this far before replanning
+ESCAPE_MAX_TIME :: f32(15.0)  // hard cap — never pillar forever
+
 // Path move costs.  Walking is cheapest so builders prefer open routes and
 // only tunnel or bridge when it genuinely pays off.
 COST_WALK  :: f32(1)
@@ -239,7 +249,13 @@ den_owner_index :: proc(gs: ^Game_State, T: [2]i32) -> int {
 // builders tunnel through their own (or each other's) den walls and then loop
 // forever repairing them.  Only the structure itself is protected; natural
 // rock around a den stays diggable or nearby targets become unreachable.
-den_protected :: proc(gs: ^Game_State, x, y: int) -> bool {
+// `owner` (enemy slot, -1 = none): a builder standing INSIDE its own den may
+// chew through its own walls — a den it can't leave is a coffin (the bounce
+// loop from playtest 2026-07-16), and the encase loop repairs the hole on the
+// next haul.  Only from inside: outside, the world is natural diggable rock
+// (never a cage), and an outside exemption turns every commute into a
+// break-in/repair treadmill that eats all the hauled ore.
+den_protected :: proc(gs: ^Game_State, x, y: int, owner: int = -1) -> bool {
     if !in_bounds(x, y) { return false }
 
     // Only placed materials (den wood, shell minerals) are protected.  Natural
@@ -253,7 +269,13 @@ den_protected :: proc(gs: ^Game_State, x, y: int) -> bool {
         if !gs.enemies.active[i] { continue }
         o := &gs.enemies.data[i]
         if o.kind != .Builder || !o.builder.den_built { continue }
-        if den_structure_slot(&o.builder, T) { return true }
+        if !den_structure_slot(&o.builder, T) { continue }
+        if i == owner {
+            // Same interior box as the trespass check (den + door corridor).
+            rel := builder_tile(o) - o.builder.anchor
+            if rel.x >= -1 && rel.x <= 2 && rel.y >= -2 && rel.y <= 0 { continue }
+        }
+        return true
     }
     return false
 }
@@ -282,7 +304,7 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 //  If the found path exceeds MAX_NAV_PATH, the prefix nearest the start is
 //  kept — the builder walks it and replans from there.
 
-astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path) -> bool {
+astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1) -> bool {
     w := &gs.world
     out^ = {}
 
@@ -377,7 +399,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         nt := 0
 
         // Dig through the floor (only when landing one tile down).
-        if is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_protected(gs, x, y+1) {
+        if is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_protected(gs, x, y+1, owner) {
             push_trans(&trans, &nt, i32(x), i32(y+1), COST_MINE)
         }
 
@@ -438,7 +460,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             }
 
             // Tunnel into a mineable wall (needs a floor under the mined tile).
-            if is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_protected(gs, nx, y) {
+            if is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_protected(gs, nx, y, owner) {
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
             }
 
@@ -454,7 +476,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 climbable := true
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
-                    if is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y) {
+                    if is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y, owner) {
                         mines += 1
                     } else {
                         climbable = false
@@ -466,12 +488,21 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                     cost := COST_MINE*f32(mines) + 1
                     // Alternating climbs (1-wide shafts) are self-contradicting:
                     // one tile must be both carved (headroom) and left solid
-                    // (support).  Prefer straight staircases.
+                    // (support).  Prefer straight staircases.  Directly after
+                    // a rise the flip is impossible, not merely costly: the
+                    // rise carved (or required open) the very tile this climb
+                    // needs solid as support.  Planning it anyway is the
+                    // carve/place ping-pong livelock seen on map-edge walls.
+                    flip_after_rise := false
                     if cur.parent >= 0 {
                         pdx := cur.pos.x - nodes[cur.parent].pos.x
+                        pdy := cur.pos.y - nodes[cur.parent].pos.y
+                        flip_after_rise = pdy == -1 && pdx != 0 && int(pdx) != d
                         if pdx != 0 && int(pdx) != d { cost += COST_MINE * 2 }
                     }
-                    push_trans(&trans, &nt, i32(nx), i32(y-1), cost)
+                    if !flip_after_rise {
+                        push_trans(&trans, &nt, i32(nx), i32(y-1), cost)
+                    }
                 }
             }
 
@@ -672,7 +703,7 @@ spawn_level_1_enemies :: proc(gs: ^Game_State) {
 //  a mine or bridge action, execute it (rate-limited by mine_timer) and return
 //  true so the caller suppresses horizontal movement while working.
 
-builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (busy: bool) {
+builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State) -> (busy: bool) {
     // Cooling down after a recent action — stand still.
     if nav.mine_timer > 0 {
         e.vel.x = 0
@@ -696,7 +727,7 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
             cx := int(c.x)
             cy := int(c.y)
             if is_solid(&gs.world, cx, cy) && is_builder_mineable(&gs.world, cx, cy) &&
-               !den_protected(gs, cx, cy) {
+               !den_protected(gs, cx, cy, id) {
                 smash_tile(gs, cx, cy)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
                 log_action(gs, "Builder clears climb tile (%d,%d)", cx, cy)
@@ -709,7 +740,7 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
     }
 
     // Mine: waypoint tile is solid and mineable (dens are off-limits).
-    if is_builder_mineable(&gs.world, tx, ty) && !den_protected(gs, tx, ty) {
+    if is_builder_mineable(&gs.world, tx, ty) && !den_protected(gs, tx, ty, id) {
         smash_tile(gs, tx, ty)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
         log_action(gs, "Builder mines (%d,%d)", tx, ty)
@@ -738,10 +769,83 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
         log_action(gs, "Builder places at (%d,%d)", tx, ty+1)
         nav.mine_timer = MINE_TIME
         e.vel.x = 0
+
+        // Place-loop detection: re-placing the SAME bridge block means the
+        // plan keeps dying at the same jump (mines in between don't clear
+        // the count — the loop interleaves carves with the re-place).
+        pt := [2]i32{i32(tx), i32(ty + 1)}
+        if pt == e.builder.last_place {
+            e.builder.place_reps += 1
+            if e.builder.place_reps >= PLACE_REPS_LOOP {
+                e.builder.place_reps  = 0
+                e.builder.escaping    = true
+                e.builder.escape_timer = 0
+                e.builder.escape_from  = builder_tile(e).y
+                nav.path = {}
+                log_action(gs, "Builder loops at (%d,%d) — pillars up and out", tx, ty+1)
+            }
+        } else {
+            e.builder.last_place = pt
+            e.builder.place_reps = 1
+        }
         return true
     }
 
     return false
+}
+
+// The pillar escape: mine the ceiling, jump, place a block underfoot while
+// airborne; repeat.  Runs instead of the goal until the column overhead is
+// open AND we stand ESCAPE_MIN_RISE above where the loop bit (so the replan
+// starts from a genuinely new vantage), or the hard time cap ends it.
+builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
+    b   := &e.builder
+    nav := &e.nav
+    e.vel.x = 0
+    bt := builder_tile(e)
+    x  := int(bt.x)
+    y  := int(bt.y)
+
+    b.escape_timer += dt
+    head_clear := !is_solid(&gs.world, x, y-1) && !is_solid(&gs.world, x, y-2)
+    risen      := b.escape_from - bt.y >= ESCAPE_MIN_RISE
+    if (head_clear && risen) || b.escape_timer >= ESCAPE_MAX_TIME {
+        b.escaping = false
+        nav.path   = {}
+        log_action(gs, "Builder#%d escape ends %d up — replanning", id, b.escape_from - bt.y)
+        return
+    }
+
+    // Airborne at the top of the hop: slot a block in underfoot.  A rescue
+    // move doesn't stall on an empty pocket — it spends what it has (the
+    // ceiling mined on the way up refills it) and conjures the rest; the
+    // time cap bounds the free stone to a handful.
+    if !e.grounded {
+        if e.vel.y >= 0 && !is_solid(&gs.world, x, y+1) && in_bounds(x, y+1) &&
+           e.pos.y + BUILDER_H <= f32(y+1) {
+            if b.pocket > 0 do b.pocket -= 1
+            set_tile(&gs.world, x, y+1, .Stone)
+            eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(x), i32(y+1)}})
+        }
+        return
+    }
+
+    if nav.mine_timer > 0 { return }   // update_builder ticks it down
+    // Ceiling in the way: eat it.  Otherwise hop.
+    if is_solid(&gs.world, x, y-1) {
+        if is_builder_mineable(&gs.world, x, y-1) && !den_protected(gs, x, y-1, id) {
+            smash_tile(gs, x, y-1)
+            eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y-1)}})
+            b.pocket = min(b.pocket + 1, POCKET_MAX)
+            nav.mine_timer = MINE_TIME
+        } else {
+            // Unmineable roof — the pillar can't continue; replan from here.
+            b.escaping = false
+            nav.path   = {}
+        }
+        return
+    }
+    e.vel.y = BUILDER_JUMP
 }
 
 // ─── Shared Helpers ───────────────────────────────────────────────────────────
@@ -941,7 +1045,7 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         b.replan_timer = REPLAN_MIN
         size := enemy_body_size(e.kind)
         from := [2]i32{i32(e.pos.x + size.x*0.5), i32(e.pos.y + size.y - 0.01)}
-        if !astar_dig(gs, from, T, stop, int(b.pocket), &nav.path) {
+        if !astar_dig(gs, from, T, stop, int(b.pocket), &nav.path, id) {
             builder_strike(e, id, gs, "no path")
             return false
         }
@@ -950,7 +1054,7 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
     // Watchdog measures PATH progress (waypoint reached or a mine/place
     // action), not raw movement — jump-bouncing in place must count as stuck.
     prev_cursor := nav.path.cursor
-    acted := builder_exec_action(e, nav, gs)
+    acted := builder_exec_action(e, id, nav, gs)
     if !acted {
         enemy_follow_path(e, nav, &gs.world)
     }
@@ -1326,6 +1430,13 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     e.nav.mine_timer -= dt
     b.replan_timer   -= dt
     b.attack_timer   -= dt
+
+    // Pillar escape overrides everything: a stuck builder digs itself out
+    // first, then resumes whatever it was doing with a fresh path.
+    if b.escaping {
+        builder_escape_pillar(e, id, gs, dt)
+        return
+    }
 
     // Trespass: the player standing inside the den enrages its owner, no
     // line of sight needed (interior box: template carve + door corridor).

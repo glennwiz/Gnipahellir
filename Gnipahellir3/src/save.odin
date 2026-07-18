@@ -13,13 +13,13 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(12)  // v12: Miner_State in Dimension_State; v11: LEVEL_DIMENSION slot + Dimension_State
+SAVE_VERSION :: i32(13)  // v13: Builder_State pillar escape; v12: Miner_State in Dimension_State
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 2_647_656
+SAVE_DATA_EXPECTED_SIZE :: 2_656_872
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {
