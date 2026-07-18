@@ -20,21 +20,21 @@ import "core:math"
 
 GARM_W  :: f32(1.6)
 GARM_H  :: f32(1.8)
-GARM_HP :: 30
+GARM_HP :: 75
 
 GARM_SPEED       :: f32(5.5)  // slower than the player (8) — fireballs punish kiting
-GARM_BITE_DAMAGE :: 2
+GARM_BITE_DAMAGE :: 4
 GARM_BITE_TIME   :: f32(1.0)
 GARM_BITE_REACH  :: i32(2)    // chebyshev tiles, same as the player's sword
 
-GARM_FIREBALL_DAMAGE :: 2
+GARM_FIREBALL_DAMAGE :: 3
 GARM_FIREBALL_SPEED  :: f32(12)
 GARM_FIREBALL_TIME   :: f32(2.5)
 GARM_FIREBALL_RANGE  :: f32(12)
 
 // Phase thresholds and channel rates.
-GARM_PHASE2_HP       :: 20         // column starts
-GARM_PHASE3_HP       :: 10         // ring starts
+GARM_PHASE2_HP       :: 50         // column starts (2/3 of GARM_HP)
+GARM_PHASE3_HP       :: 25         // ring starts (1/3 of GARM_HP)
 GARM_COLUMN_INTERVAL :: f32(0.4)
 GARM_RING_INTERVAL   :: f32(0.15)
 GARM_FLOOD_INTERVAL  :: f32(0.3)

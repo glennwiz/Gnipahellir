@@ -124,13 +124,14 @@ AMBIENCE_PROBES   :: 4
 AMBIENCE_CHANCE   :: 30 // % of air probes that become a mote
 
 // Mote colors per level: surface gold, cave2 cold blue, cave3 hell embers,
-// sky aurora.
+// sky aurora, dimension pale shimmer.
 @(rodata)
-level_mote_colors := [4][2]rl.Color{
-    LEVEL_SURFACE = {{255, 226, 130, 200}, {200, 240, 160, 170}},
-    LEVEL_CAVE2   = {{140, 170, 230, 170}, {120, 220, 210, 150}},
-    LEVEL_CAVE3   = {{255, 140, 60, 200}, {230, 70, 40, 180}},
-    LEVEL_SKY     = {{170, 240, 255, 200}, {230, 190, 255, 190}},
+level_mote_colors := [NUM_LEVELS][2]rl.Color{
+    LEVEL_SURFACE   = {{255, 226, 130, 200}, {200, 240, 160, 170}},
+    LEVEL_CAVE2     = {{140, 170, 230, 170}, {120, 220, 210, 150}},
+    LEVEL_CAVE3     = {{255, 140, 60, 200}, {230, 70, 40, 180}},
+    LEVEL_SKY       = {{170, 240, 255, 200}, {230, 190, 255, 190}},
+    LEVEL_DIMENSION = {{200, 200, 225, 180}, {255, 215, 140, 160}},
 }
 
 update_ambience :: proc(gs: ^Game_State) {

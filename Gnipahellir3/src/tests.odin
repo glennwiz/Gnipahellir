@@ -1280,11 +1280,17 @@ armor_blunts_enemy_blows_but_not_the_world :: proc(t: ^testing.T) {
     process_events(gs)
     testing.expect_value(t, gs.player.hp, hp - 1)
 
+    // Armor never blunts below 1: a bite for 1 through defense 1 still chips.
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(0),
+        target = PLAYER_ID, payload = {int_val = 1}})
+    process_events(gs)
+    testing.expect_value(t, gs.player.hp, hp - 2)
+
     // The world (lava, falls — source INVALID_ENTITY) strikes past armor.
     eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
         target = PLAYER_ID, payload = {int_val = 2}})
     process_events(gs)
-    testing.expect_value(t, gs.player.hp, hp - 3)
+    testing.expect_value(t, gs.player.hp, hp - 4)
 }
 
 @(test)
@@ -1428,7 +1434,7 @@ garm_spawns_only_behind_boss_gate :: proc(t: ^testing.T) {
     // Structure C completes while inside cave 3: Garm awakens
     gs.progression.blueprint_found[2] = true
     inventory_insert(&gs.player.inventory, .Cloud_Stone, 20)
-    inventory_insert(&gs.player.inventory, .Gold_Ore, 10)
+    inventory_insert(&gs.player.inventory, .Gold_Bar, 10)
     gs.level_index = LEVEL_SKY  // ritual gating
     handle_ritual_request(gs)
     gs.level_index = LEVEL_CAVE3
@@ -1560,7 +1566,8 @@ garm_fight_soak :: proc(t: ^testing.T) {
     g := &gs.enemies.data[gi]
 
     // Deterministic bot: hop to a fresh arena spot every 6 s; the sword
-    // lands 2 damage every 4 s, so the whole fight runs ~60 s.
+    // lands 2 damage every 4 s, so the whole fight runs
+    // ceil(GARM_HP / SWORD_DAMAGE) * 4 s ≈ 152 s.
     place_bot :: proc(gs: ^Game_State, cycle: int) {
         h  := whash(u32(cycle) * 2654435761 + 17)
         x  := ARENA_X0 + 2 + int(h % u32(ARENA_X1 - ARENA_X0 - 3))
@@ -1574,7 +1581,7 @@ garm_fight_soak :: proc(t: ^testing.T) {
     last_pos:   [2]f32
     still_secs: int
 
-    MAX_FRAMES :: 4 * 60 * 60   // 4-minute cap; the fight should end well before
+    MAX_FRAMES :: 4 * 60 * 60   // 4-minute cap; hand-math says death at ~152 s
 
     frame_done := 0
     for frame in 0 ..< MAX_FRAMES {
@@ -1627,6 +1634,10 @@ garm_fight_soak :: proc(t: ^testing.T) {
     }
 
     testing.expect(t, !gs.enemies.active[gi], "the fight must end in Garm's death")
+    // Hand-math floor: one sword hit per 240 frames, so death can come no
+    // earlier than the hit that empties GARM_HP.
+    testing.expectf(t, frame_done >= 240 * (GARM_HP / SWORD_DAMAGE),
+        "fight ended impossibly early (frame %d)", frame_done)
     testing.expect(t, closed_in, "Garm should reach biting range at least once")
     testing.expect(t, player_hits >= 1, "Garm should land at least one hit")
     testing.expectf(t, fireballs >= 5, "Garm should throw fireballs (got %d)", fireballs)

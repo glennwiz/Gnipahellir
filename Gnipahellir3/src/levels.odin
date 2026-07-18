@@ -230,8 +230,8 @@ player_interact :: proc(gs: ^Game_State) {
 @(rodata)
 structure_costs := [MAX_PROGRESSION_TIERS][2]Ingredient{
     { {.Cloud_Stone, 8},  {.Plank, 4}      },   // A → unlocks cave 2
-    { {.Cloud_Stone, 12}, {.Silver_Ore, 6} },   // B → unlocks cave 3
-    { {.Cloud_Stone, 20}, {.Gold_Ore, 10}  },   // final → boss gate (Phase 5)
+    { {.Cloud_Stone, 12}, {.Silver_Bar, 6} },   // B → unlocks cave 3
+    { {.Cloud_Stone, 20}, {.Gold_Bar, 10}  },   // final → boss gate (Phase 5)
 }
 
 // The tier the blueprint overlay speaks to: the first blueprint found whose

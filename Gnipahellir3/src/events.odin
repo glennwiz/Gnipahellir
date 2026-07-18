@@ -51,10 +51,11 @@ process_events :: proc(gs: ^Game_State) {
             if e.target == PLAYER_ID {
                 if !gs.player.dead {
                     dmg := int(e.payload.int_val)
-                    // Armor blunts enemy blows; the world (lava, falls —
+                    // Armor blunts enemy blows but never below 1 — no gear
+                    // set makes an enemy harmless; the world (lava, falls —
                     // source INVALID_ENTITY) strikes past it.
                     if e.source != PLAYER_ID && e.source != INVALID_ENTITY {
-                        dmg = max(dmg - int(player_stat(&gs.player, .Defense)), 0)
+                        dmg = max(dmg - int(player_stat(&gs.player, .Defense)), 1)
                     }
                     if dmg > 0 {
                         gs.player.hp -= dmg
