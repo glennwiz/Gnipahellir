@@ -245,7 +245,7 @@ garm_smash :: proc(e: ^Enemy, gs: ^Game_State) -> bool {
         cy := check[i].y
         if is_solid(&gs.world, cx, cy) && is_builder_mineable(&gs.world, cx, cy) &&
            !den_protected(gs, cx, cy) {
-            set_tile(&gs.world, cx, cy, .Void)
+            smash_tile(gs, cx, cy)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(cx), i32(cy)}})
             log_action(gs, "GARM smashes (%d,%d)", cx, cy)
             e.nav.mine_timer = MINE_TIME

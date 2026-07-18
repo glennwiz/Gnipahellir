@@ -2361,6 +2361,58 @@ runic_spawner_opens_the_runic_tier :: proc(t: ^testing.T) {
     testing.expect(t, found, "the runic spawner needs a recipe")
 }
 
+@(test)
+smashed_machines_drop_their_item :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    has_drop_near :: proc(gs: ^Game_State, x, y: int, it: Item) -> bool {
+        for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+            idx := grid_idx(x + dx, y + dy)
+            if gs.world.items[idx] == it && gs.world.item_counts[idx] > 0 do return true
+        }
+        return false
+    }
+
+    // A builder/Garm demolishing a station knocks it loose — the machine
+    // item lands on the ground instead of vanishing.
+    x, y := 40, SURFACE_Y - 1
+    set_tile(&gs.world, x, y, .Rune_Altar)
+    smash_tile(gs, x, y)
+    testing.expect_value(t, get_tile(&gs.world, x, y), Tile_Type.Void)
+    testing.expect(t, has_drop_near(gs, x, y, .Rune_Altar), "a smashed station must drop its item")
+
+    // Plain terrain smashes stay silent — demolition mints no free blocks.
+    x2 := 60
+    set_tile(&gs.world, x2, y, .Stone)
+    smash_tile(gs, x2, y)
+    testing.expect(t, !has_drop_near(gs, x2, y, .Stone_Block), "smashed rock must not drop blocks")
+}
+
+@(test)
+mining_any_same_kind_spawner_releases_the_anchor :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A miner anchors a Gold world whose original spawner tile is lost.
+    gs.dimension.miner.active = true
+    gs.dimension.kind = .Gold
+    gs.dimension.seed = 12345
+
+    // Mining a DIFFERENT spawner of the wrong kind changes nothing...
+    x, y := 30, SURFACE_Y - 1
+    set_tile(&gs.world, x, y, .Dimension_Spawner)
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(x), i32(y)}})
+    process_events(gs)
+    testing.expect(t, gs.dimension.miner.active, "a foreign-kind spawner must not touch the anchor")
+
+    // ...but reclaiming ANY spawner of the anchored kind frees it.
+    set_tile(&gs.world, x, y, .Dimension_Spawner_Gold)
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(x), i32(y)}})
+    process_events(gs)
+    testing.expect(t, !gs.dimension.miner.active, "a same-kind spawner reclaim must release the anchor")
+}
+
 // ─── Easter egg: Game of Life (life.odin) ─────────────────────────────────────
 
 @(test)

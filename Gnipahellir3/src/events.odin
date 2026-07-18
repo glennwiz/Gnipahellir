@@ -324,6 +324,14 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         miner_on_mined(gs)
     }
 
+    // Release valve: while a miner anchors a world, reclaiming ANY spawner
+    // of that kind also releases the anchor — losing the original spawner
+    // tile can no longer lock every dimension gate in the game.
+    if gs.dimension.miner.active && gs.level_index != LEVEL_DIMENSION &&
+       old_tile == dimension_spawner_tile[gs.dimension.kind] {
+        miner_on_mined(gs)
+    }
+
     // Mined tiles open to air above the surface line, to void underground
     fill: Tile_Type = .Void
     if gs.level_index == LEVEL_SKY || (gs.level_index == LEVEL_SURFACE && y < SURFACE_Y) {

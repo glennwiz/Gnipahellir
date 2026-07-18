@@ -143,6 +143,19 @@ is_builder_mineable :: proc(w: ^World_Grid, x, y: int) -> bool {
     return .Mineable in terrain_table[w.terrain[grid_idx(x, y)]].flags
 }
 
+// Enemy demolition of a tile.  A player machine (any .Placeable tile) is
+// knocked loose, not deleted: it drops its item so the loss is visible and
+// recoverable instead of a silent hole in the base.
+smash_tile :: proc(gs: ^Game_State, x, y: int) {
+    old := get_tile(&gs.world, x, y)
+    set_tile(&gs.world, x, y, .Void)
+    if .Placeable in terrain_table[old].flags {
+        if drop := terrain_table[old].drop_item; drop != .None {
+            spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
+        }
+    }
+}
+
 is_mineral :: proc(t: Tile_Type) -> bool {
     #partial switch t {
     case .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore:
@@ -684,7 +697,7 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
             cy := int(c.y)
             if is_solid(&gs.world, cx, cy) && is_builder_mineable(&gs.world, cx, cy) &&
                !den_protected(gs, cx, cy) {
-                set_tile(&gs.world, cx, cy, .Void)
+                smash_tile(gs, cx, cy)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
                 log_action(gs, "Builder clears climb tile (%d,%d)", cx, cy)
                 e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
@@ -697,7 +710,7 @@ builder_exec_action :: proc(e: ^Enemy, nav: ^Enemy_Nav, gs: ^Game_State) -> (bus
 
     // Mine: waypoint tile is solid and mineable (dens are off-limits).
     if is_builder_mineable(&gs.world, tx, ty) && !den_protected(gs, tx, ty) {
-        set_tile(&gs.world, tx, ty, .Void)
+        smash_tile(gs, tx, ty)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
         log_action(gs, "Builder mines (%d,%d)", tx, ty)
         e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
