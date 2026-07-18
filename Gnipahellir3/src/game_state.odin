@@ -352,6 +352,7 @@ Game_State :: struct {
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
+    save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
 
 

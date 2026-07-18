@@ -61,9 +61,14 @@ main :: proc() {
         gs.delta_time = rl.GetFrameTime()
         game_update(gs)
 
-        // Autosave after a meaningful player action (place/pickup/mine/craft).
-        if gs.save_dirty {
-            gs.save_dirty = false
+        // Autosave after a meaningful player action (place/pickup/mine/craft),
+        // debounced: the multi-MB serialize + blocking write fires at most
+        // once per SAVE_DEBOUNCE seconds, not on every mined tile's frame.
+        // save_on_quit still covers the tail on shutdown.
+        gs.save_cooldown -= gs.delta_time
+        if gs.save_dirty && gs.save_cooldown <= 0 {
+            gs.save_dirty    = false
+            gs.save_cooldown = SAVE_DEBOUNCE
             if !gs.player.dead && !gs.game_won do save_game(gs)
         }
 

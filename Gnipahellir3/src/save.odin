@@ -12,6 +12,7 @@ import "core:os"
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
+SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
 SAVE_VERSION :: i32(12)  // v12: Miner_State in Dimension_State; v11: LEVEL_DIMENSION slot + Dimension_State
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
