@@ -17,7 +17,7 @@ ATLAS_COLS :: 8
 // Gray wash painted over stone tiles so the whole cave reads gray and the atlas
 // texture only shines faintly through.  The alpha (4th component) is the knob:
 // 0 = pure texture, 255 = flat gray.
-STONE_TINT :: rl.Color{110, 110, 118, 210}
+STONE_TINT :: rl.Color{110, 110, 118, 120}
 
 Tile_Sprite :: enum u8 {
 	// row 0 + row 1 start: 10 stone variants
