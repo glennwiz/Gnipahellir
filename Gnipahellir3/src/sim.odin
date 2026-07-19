@@ -33,6 +33,7 @@ smelt_table := [?]Smelt_Rule{
 tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Smelter     = tick_smelter,
     .Tree_Grower = tick_grower,
+    .Silo        = tick_silo,
 }
 
 update_sim :: proc(gs: ^Game_State) {
@@ -80,7 +81,14 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
         }
     }
 
-    tray_ok := sd.store_count == 0 ||
+    // A silo next door is an out-chute: bars cast straight into its wide
+    // slots, skipping the 99-cap tray — smelter + silo + ore pile runs
+    // hands-off.
+    out_silo := silo_adjacent(gs, x, y)
+    if out_silo != nil && !silo_has_room_for(out_silo, rule.bar) do out_silo = nil
+
+    tray_ok := out_silo != nil ||
+               sd.store_count == 0 ||
                (sd.store_item == rule.bar && int(sd.store_count) < MAX_STACK)
     has_fuel := sd.fuel_charge > 0 || fuel_idx >= 0
     if in_idx < 0 || !has_fuel || !tray_ok {
@@ -101,8 +109,12 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
         sd.fuel_charge = BARS_PER_LOG
     }
     sd.fuel_charge -= 1
-    sd.store_item  = rule.bar
-    sd.store_count += 1
+    if out_silo != nil {
+        silo_add(out_silo, rule.bar, 1)
+    } else {
+        sd.store_item  = rule.bar
+        sd.store_count += 1
+    }
     spawn_smelt_burst(gs, {i32(x), i32(y)})
     eq_push(&gs.events, Event{
         type    = .Play_Sound,

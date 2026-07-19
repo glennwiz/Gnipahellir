@@ -54,6 +54,7 @@ terrain_table := [Tile_Type]Terrain_Behavior{
     .Auto_Miner     = { "Auto-Miner",    {.Solid, .Placeable, .Mineable},                             rl.Color{90,  200, 190, 255}, 0,   0,   .Auto_Miner    , 0 },
     .Miner_Body     = { "Miner Body",    {.Solid, .Mineable},                                        rl.Color{120, 128, 140, 255}, 0,   0,   .None          , 0 },
     .Dimension_Spawner_Runic = { "Runic Dimension Spawner", {.Solid, .Placeable, .Mineable},         rl.Color{200, 120, 255, 255}, 0,   0,   .Dimension_Spawner_Runic , 0 },
+    .Silo           = { "Silo",          {.Solid, .Placeable, .Mineable},                             rl.Color{140, 150, 165, 255}, 0,   0,   .Silo          , 0 },
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────

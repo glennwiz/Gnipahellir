@@ -214,6 +214,18 @@ player_interact :: proc(gs: ^Game_State) {
         }
     }
 
+    // A Silo in reach: pour the hoard into the bag.
+    for dy in -BENCH_RANGE ..= BENCH_RANGE {
+        for dx in -BENCH_RANGE ..= BENCH_RANGE {
+            if get_tile(&gs.world, cx+dx, cy+dy) == .Silo {
+                if s := silo_at(gs, gs.level_index, {i32(cx + dx), i32(cy + dy)}); s != nil {
+                    silo_withdraw(gs, s)
+                    return
+                }
+            }
+        }
+    }
+
     // A crafting station in reach opens its crafting window.
     if st, _ := nearest_station(gs); st != .None {
         eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})

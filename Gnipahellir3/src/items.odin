@@ -82,6 +82,7 @@ item_table := [Item]Item_Info{
     .Hel_Gem           = { "Hel Gem",           {220, 50,  80,  255}, .Air },
     .Auto_Miner        = { "Auto-Miner",        {90,  200, 190, 255}, .Auto_Miner },
     .Dimension_Spawner_Runic = { "Runic Dimension Spawner", {200, 120, 255, 255}, .Dimension_Spawner_Runic },
+    .Silo              = { "Silo",              {170, 180, 200, 255}, .Silo },
 }
 
 is_blueprint :: proc(it: Item) -> bool {

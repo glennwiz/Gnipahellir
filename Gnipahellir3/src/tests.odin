@@ -2832,3 +2832,124 @@ miner_withdraw_and_reclaim :: proc(t: ^testing.T) {
     for tile in gs.world.terrain do if tile == .Miner_Body do body += 1
     testing.expect_value(t, body, 0)  // the world collapsed to seed — trail gone
 }
+
+// ─── Silo (silo.odin) ─────────────────────────────────────────────────────────
+
+// Stand a registered silo in the surface air row, solid grass below.
+@(private = "file")
+silo_test_place :: proc(gs: ^Game_State) -> (tile: [2]i32) {
+    tile = {i32(GRID_W/2 + 2), i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(tile.x), int(tile.y), .Silo)
+    silo_on_placed(gs, tile)
+    return
+}
+
+@(test)
+silo_accumulates_past_the_u8_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    tile := silo_test_place(gs)
+    feed := grid_idx(int(tile.x) - 1, int(tile.y))
+
+    // Three 99-stacks Q-dropped beside it vanish into wide slots: 297 > 255,
+    // past anything a u8 ground stack or tray could hold (§7.6 step 1).
+    for _ in 0 ..< 3 {
+        gs.world.items[feed]       = .Iron_Ore
+        gs.world.item_counts[feed] = 99
+        update_sim(gs)
+        eq_clear(&gs.events)
+        testing.expect_value(t, gs.world.items[feed], Item.None)  // vacuumed
+    }
+    s := silo_at(gs, gs.level_index, tile)
+    testing.expect(t, s != nil, "silo record registered on placement")
+    testing.expect_value(t, silo_total(s), u32(297))
+}
+
+@(test)
+silo_withdraw_pours_99_stacks :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    tile := silo_test_place(gs)
+    s := silo_at(gs, gs.level_index, tile)
+    s.slots[0] = {.Iron_Bar, 300}
+
+    silo_withdraw(gs, s)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Bar), 300)
+    testing.expect_value(t, silo_total(s), u32(0))
+}
+
+@(test)
+silo_too_heavy_to_break_until_empty :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    tile := silo_test_place(gs)
+    s := silo_at(gs, gs.level_index, tile)
+    s.slots[0] = {.Gold_Bar, 500}
+
+    // Neither the pick nor an enemy smash moves a loaded silo.
+    handle_tile_mined(gs, Event{tile = tile})
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Silo)
+    smash_tile(gs, int(tile.x), int(tile.y))
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Silo)
+    testing.expect_value(t, silo_total(s), u32(500))
+
+    // Emptied, it lifts like any machine: tile drops its item, record frees.
+    s.slots[0] = {}
+    handle_tile_mined(gs, Event{tile = tile})
+    testing.expect(t, get_tile(&gs.world, int(tile.x), int(tile.y)) != .Silo, "empty silo mines away")
+    testing.expect_value(t, gs.world.items[grid_idx(int(tile.x), int(tile.y))], Item.Silo)
+    testing.expect(t, silo_at(gs, gs.level_index, tile) == nil, "record freed for reuse")
+}
+
+@(test)
+smelter_casts_into_adjacent_silo :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Smelter with a silo out-chute on its right; ore and wood laid on the
+    // far side, out of the silo's vacuum reach.
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    tile := [2]i32{i32(sx + 1), i32(sy)}
+    set_tile(&gs.world, sx + 1, sy, .Silo)
+    silo_on_placed(gs, tile)
+    in_idx := grid_idx(sx - 1, sy)
+    gs.world.items[in_idx]       = .Iron_Ore
+    gs.world.item_counts[in_idx] = 4
+    fuel_idx := grid_idx(sx - 1, sy - 1)
+    gs.world.items[fuel_idx]       = .Wood_Log
+    gs.world.item_counts[fuel_idx] = 1
+
+    // Two smelt cycles: 4 ore → 2 bars, straight past the tray.
+    frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
+    for _ in 0 ..< frames {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, int(sd.store_count), 0)  // the tray stays empty
+    s := silo_at(gs, gs.level_index, tile)
+    testing.expect(t, s != nil, "silo record registered")
+    testing.expect_value(t, s.slots[0].item, Item.Iron_Bar)
+    testing.expect_value(t, s.slots[0].count, u32(2))
+}
+
+@(test)
+silo_placement_gates :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // On the surface a silo places fine — until the record book is full.
+    x, y := GRID_W/2 + 2, SURFACE_Y - 1
+    gs.player.pos = {f32(x - 2), f32(SURFACE_Y) - PLAYER_H}
+    testing.expect(t, placement_ok(gs, .Silo, x, y), "surface placement should pass")
+    for &s in gs.sim.silos do s.active = true
+    testing.expect(t, !placement_ok(gs, .Silo, x, y), "full record book refuses")
+    for &s in gs.sim.silos do s.active = false
+
+    // Never in a dimension — the record would outlive the ephemeral world.
+    dimension_test_enter(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
+    testing.expect(t, !placement_ok(gs, .Silo, 11, 14), "no silos in ephemeral worlds")
+}

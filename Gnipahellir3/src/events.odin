@@ -305,6 +305,19 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
 
     idx := grid_idx(x, y)
     old_tile := gs.world.terrain[idx]
+
+    // A loaded silo is too heavy to lift — nothing is ever lost from one.
+    if old_tile == .Silo {
+        if s := silo_at(gs, gs.level_index, e.tile); s != nil {
+            if silo_total(s) > 0 {
+                notify(gs, "The silo is too heavy to break — empty it first ([%v] beside it)",
+                    gs.bindings[.Interact])
+                return
+            }
+        }
+        silo_on_mined(gs, e.tile)
+    }
+
     drop := terrain_table[old_tile].drop_item
     // Chance drops roll a per-tile hash — deterministic per run, so the
     // yield can't be re-rolled by save-scumming.

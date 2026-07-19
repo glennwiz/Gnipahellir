@@ -23,6 +23,13 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
         return false
     }
 
+    // Silos stand on lasting ground only (a dimension collapses under them),
+    // and the record book holds MAX_SILOS.
+    if place_tile == .Silo &&
+       (gs.level_index == LEVEL_DIMENSION || !silo_slot_free(gs)) {
+        return false
+    }
+
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)     // within reach
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return false
@@ -68,6 +75,14 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
                 notify(gs, "One miner per expedition — reclaim the working one first")
             }
         }
+        // Explain the silo's two gates.
+        if place_tile == .Silo {
+            if gs.level_index == LEVEL_DIMENSION {
+                notify(gs, "The silo needs lasting ground — this world will collapse")
+            } else if !silo_slot_free(gs) {
+                notify(gs, "Every silo is spoken for — reclaim one first")
+            }
+        }
         return
     }
 
@@ -85,6 +100,11 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     // A placed Auto-Miner wakes the snake and anchors this dimension.
     if place_tile == .Auto_Miner {
         miner_on_placed(gs, e.tile)
+    }
+
+    // A placed Silo opens its record book entry.
+    if place_tile == .Silo {
+        silo_on_placed(gs, e.tile)
     }
 
     // Raising a Sky Altar on the surface opens the gate to the heavens above it.

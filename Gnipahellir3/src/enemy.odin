@@ -158,6 +158,13 @@ is_builder_mineable :: proc(w: ^World_Grid, x, y: int) -> bool {
 // recoverable instead of a silent hole in the base.
 smash_tile :: proc(gs: ^Game_State, x, y: int) {
     old := get_tile(&gs.world, x, y)
+    // A loaded silo shrugs off demolition — the hoard is never smashed away.
+    if old == .Silo {
+        if s := silo_at(gs, gs.level_index, {i32(x), i32(y)}); s != nil {
+            if silo_total(s) > 0 do return
+            s^ = {}
+        }
+    }
     set_tile(&gs.world, x, y, .Void)
     if .Placeable in terrain_table[old].flags {
         if drop := terrain_table[old].drop_item; drop != .None {

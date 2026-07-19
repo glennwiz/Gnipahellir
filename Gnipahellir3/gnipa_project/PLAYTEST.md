@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, 80 tests, runs in about a second.
+Tests: `odin test src` — headless, 96 tests, runs in about a second.
 
 ## Controls
 
@@ -14,7 +14,7 @@ Tests: `odin test src` — headless, 80 tests, runs in about a second.
 | Right-click | Place selected item (8-tile reach, needs solid neighbour). In the open inventory: right-click a bag item to **equip** it (weapon/armor/charm boxes above the bag), right-click an equip box to take it off |
 | TAB | Inventory (click slot or keys 1–8 to select) |
 | C | Crafting window (rows green = affordable; click to craft) |
-| E | Interact: portal travel / sky-altar ritual / open a station or smelter window in reach |
+| E | Interact: portal travel / sky-altar ritual / empty a silo / open a station or smelter window in reach |
 | ESC | Close **all** open windows; when none are open, pause menu (Resume / Settings / New Game / Save and Quit) |
 | F11 | Borderless fullscreen |
 | Q | Drop the selected stack two tiles ahead (how you ground-feed a smelter) |
@@ -26,7 +26,13 @@ fire with a progress bar. Drag ore **and wood** from the bag onto the window
 to lay stacks beside the furnace — one log's embers fire **three** bars
 (2 ore per bar) and the bars land in the **tray**, never on the ground. Click
 the tray (or drag it onto the bag) to take the bars; mining the furnace
-spills a loaded tray. Death clears the save (roguelike). Save/log files
+spills a loaded tray. The **Silo** (Forge: 20 Stone Block + 4 Iron Bar) is
+bulk storage that counts past 99: Q-drop stacks beside it and it vacuums
+them into wide slots; E beside it pours everything back out as 99-stacks.
+A smelter standing NEXT to a silo casts bars straight into it, skipping
+the tray — silo one side, ore+wood pile on the other, and bar production
+runs hands-off. A loaded silo is too heavy to mine (or for enemies to
+smash) — empty it first. Death clears the save (roguelike). Save/log files
 live in the working directory (`gnipahellir_save.dat`,
 `gnipahellir_stats.dat`, `action.log`).
 

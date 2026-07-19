@@ -122,6 +122,7 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Dimension_Spawner_Gold = {255, 225, 100, 255}, // gilded shimmer
     .Dimension_Spawner_Runic = {210, 140, 255, 255}, // runic violet
     .Auto_Miner             = {120, 255, 210, 255}, // the snake's beating heart
+    .Silo                   = {200, 210, 225, 255}, // cold iron sheen
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────

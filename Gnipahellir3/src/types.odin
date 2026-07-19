@@ -75,6 +75,8 @@ Tile_Type :: enum u8 {
     Miner_Body,   // the expanding metal trail the head leaves behind
     // Runic dimension (appended: order is frozen)
     Dimension_Spawner_Runic,
+    // Silo (appended: order is frozen)
+    Silo,         // wide-count bulk storage — counts past the u8 world (silo.odin)
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -147,6 +149,8 @@ Item :: enum u8 {
     Auto_Miner,
     // Runic dimension (appended: order is frozen)
     Dimension_Spawner_Runic,
+    // Silo (appended: order is frozen)
+    Silo,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

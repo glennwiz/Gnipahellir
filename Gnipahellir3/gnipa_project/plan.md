@@ -137,6 +137,7 @@ src/
   dimensions.odin  -- Spawner-opened ephemeral themed worlds (draft1_machines.md §7)
   miner.odin       -- Auto-Miner: dimension snake, wide-count haul, gem tiers (5b2)
   sim.odin         -- Machine tick (5b): smelter ore+wood→bar tray, tree grower
+  silo.odin        -- Silo: wide-count bulk storage, smelter out-chute (ticks in 5b)
   loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
   placement.odin   -- Place_Request validation + mutation
   items.odin       -- Item table, inventory ops

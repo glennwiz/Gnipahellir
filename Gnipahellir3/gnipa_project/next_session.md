@@ -36,11 +36,19 @@ soft against force-quit), A3 (debug-menu input discipline), and the
 ⚪ INFO list. G5 fixed by 5eba0f6 — verify in the playtest, then mark it
 in flagg.md.
 
-## After that: the Silo (draft1_machines.md §7.6 step 1)
+## SHIPPED 2026-07-19: the Silo (draft1_machines.md §7.6 step 1)
 
-First bulk storage. Moving 500 bars through u8/99-stacks is meant to hurt
-— Glenn will feel it on schedule. Design shape in `draft1_machines.md`;
-also note flagg G8: one smelter casts 500 bars in ~25 min + ~167 logs.
+`silo.odin`, save v14, 96 tests. Forge recipe (20 Stone Block + 4 Iron
+Bar). Wide u32 slots (8 kinds × unbounded), records in `Sim_State.silos`
+([16], saved). Vacuums ground stacks from its 8 neighbors (Q-drop to
+feed); E pours back as 99-stacks; **a smelter beside a silo casts bars
+straight in, skipping the 99-cap tray** — smelter + silo + ore pile runs
+hands-off (the flagg G8 relief). A loaded silo refuses player mining AND
+enemy smashes ("too heavy — empty it first"); placement refused in
+dimensions (record would outlive the world) and past 16 silos. NOT yet
+playtested in-game — add it to the fly-by. Next per §7.6: background
+yield (step 4) wants Dimension Blocks (step 3) first; big crafts
+consuming straight from silos is the other half of the bulk promise.
 
 ## Doc cleanup (2026-07-19)
 

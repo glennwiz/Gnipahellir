@@ -289,6 +289,7 @@ Debug_State :: struct {
 Sim_State :: struct {
     lava_tick_timer: f32,
     tree_tick_timer: f32,
+    silos:           [MAX_SILOS]Silo_State,  // wide-count bulk stores (silo.odin)
 }
 
 // ─── Audio ────────────────────────────────────────────────────────────────────

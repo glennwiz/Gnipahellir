@@ -96,6 +96,10 @@ recipe_table := [?]Recipe{
     { .Gold_Boots,      1, .Forge, {{.Silver_Boots, 1},      {.Gold_Bar, 2}, {}} },
     // Trinkets
     { .Aether_Charm,   1, .Rune_Altar, {{.Aether_Crystal, 3}, {.Gold_Bar, 1}, {}} },
+    // Bulk storage: the first machine that counts past 99 (draft1 §7.6 step 1).
+    // Q-drop stacks beside it to feed it; a smelter next door casts bars
+    // straight in.
+    { .Silo,           1, .Forge, {{.Stone_Block, 20}, {.Iron_Bar, 4}, {}} },
     // Parallel dimensions: the metal you pay is the metal the world is rich
     // in — each theme's recipe mirrors its riches.
     { .Dimension_Spawner,      1, .Rune_Altar, {{.Iron_Bar, 4}, {.Cloud_Stone, 8}, {.Stone_Block, 20}} },
