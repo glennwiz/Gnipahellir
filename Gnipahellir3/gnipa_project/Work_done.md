@@ -157,7 +157,7 @@ Glenn took 11 days in Pula (south of Croatia) and brought his laptop. He worked 
 
 ## Locked Decisions (Glenn + Fable, July 14)
 
-Read `progression_review.md` §5 for full audit and justification. All decisions locked; build order in §6.
+Full audit and justification in `progression_review.md` §5 (deleted 2026-07-19 after all decisions shipped — see git history).
 
 ### Decision 1: Min-1 Damage Rule (events.odin:57)
 
@@ -248,7 +248,6 @@ Quick fly-by covers all.
 
 - `plan.md` — ship roadmap, phases 0–5 done
 - `CLAUDE.md` — architecture law (call-discipline, entity-map, new-system checklist)
-- `progression_review.md` — full audit of gate/gear/tool/economy math
 - `next_session.md` — freshest truth before a session
 - `PLAYTEST.md` — controls, debug tools (F1 fly)
 

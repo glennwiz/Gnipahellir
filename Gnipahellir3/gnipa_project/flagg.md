@@ -12,8 +12,9 @@ Severity: 🔴 CRITICAL (breaks a run or crashes) · 🟡 WARN (real risk, act s
 > dmg, Garm 75/4/3 with phases 50/25 + soak hand-math, rituals B/C cost bars),
 > G1 (any same-kind spawner reclaim releases the anchor), G2 (`smash_tile` drops
 > machine items), A1 (mote table sized [NUM_LEVELS]), A2 (autosave debounced 5 s),
-> and G3/G8 by way of Decisions 1–3.
-> ⏳ STILL OPEN: G4, G5, G6, G7 (accepted v1), G9, A3, and the ⚪ INFO section.
+> and G3/G8 by way of Decisions 1–3. G5 fixed later same day (5eba0f6: boxed-in
+> miner gnaws through its own trail).
+> ⏳ STILL OPEN: G4, G6, G7 (accepted v1), G9, A3, and the ⚪ INFO section.
 
 ---
 

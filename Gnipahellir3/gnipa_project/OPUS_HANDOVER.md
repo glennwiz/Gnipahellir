@@ -11,7 +11,7 @@ Trust it over your assumptions, and over this file.
 
 1. `CLAUDE.md` — the architecture law. Non-negotiable, every change.
 2. `next_session.md` — what happened last, what's queued. The freshest truth.
-3. `plan.md` — the design bible. `OVERVIEW.md` (repo root) indexes the rest.
+3. `plan.md` — the design bible. The rest of `gnipa_project/` fills in detail.
 4. `PLAYTEST.md` — controls, build/test commands, how to verify by hand.
 
 If you're running in Claude Code, check the memory directory
