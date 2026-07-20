@@ -2797,14 +2797,46 @@ miner_anchors_dimension_and_catches_up :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.level_index, LEVEL_SURFACE)  // still home
 
     // 90 game-seconds pass; re-entering the ANCHORED world keeps the mined
-    // vein (no regen) and applies the time in one catch-up burst.
+    // vein (no regen) and queues the time as backlog, drained by update
+    // frames (MINER_STEPS_PER_FRAME per frame — flagg G6).
     gs.elapsed_time += 90
     before := miner_haul_total(m)
     gs.player.pos = {f32(20 - 2), f32(SURFACE_Y) - PLAYER_H}  // original spawner
     player_interact(gs)
     testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
     testing.expect_value(t, get_tile(&gs.world, vx, vy), Tile_Type.Void)  // anchored: no regen
+    for _ in 0 ..< 3 {
+        update_miner(gs)
+        eq_clear(&gs.events)
+    }
     testing.expect(t, miner_haul_total(m) > before + 20, "catch-up must apply the time away")
+}
+
+@(test)
+miner_catchup_is_amortized :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    miner_test_setup(gs)
+    m := &gs.dimension.miner
+
+    // An hour of owed work queues over a thousand steps, but one frame
+    // drains at most MINER_STEPS_PER_FRAME BFS steps — re-entry never
+    // stalls (flagg G6).
+    gs.elapsed_time += 3600
+    miner_catchup(gs)
+    before := miner_haul_total(m)
+    update_miner(gs)
+    eq_clear(&gs.events)
+    first := miner_haul_total(m) - before
+    testing.expect(t, first > 0, "the backlog must start draining")
+    testing.expect(t, int(first) <= MINER_STEPS_PER_FRAME, "one frame must not drain the whole backlog")
+
+    // The fast-forward keeps rolling frame after frame.
+    for _ in 0 ..< 5 {
+        update_miner(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, miner_haul_total(m) > before + first, "backlog keeps draining across frames")
 }
 
 @(test)

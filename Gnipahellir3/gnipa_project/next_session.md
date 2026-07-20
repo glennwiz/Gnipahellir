@@ -30,11 +30,11 @@ None of the above has been felt in-game yet:
 
 ## Open from flagg.md (tick off there as they close)
 
-G4 (structure templates B/C skippable), G6 (miner catch-up hitch on
-dimension entry), G7 (infinite ore regen — accepted v1), G9 (permadeath
-soft against force-quit), A3 (debug-menu input discipline), and the
-⚪ INFO list. G5 fixed by 5eba0f6 — verify in the playtest, then mark it
-in flagg.md.
+G4 (structure templates B/C skippable), G7 (infinite ore regen — accepted
+v1), G9 (permadeath soft against force-quit), A3 (debug-menu input
+discipline), and the ⚪ INFO list. G5 fixed by 5eba0f6, G6 fixed
+2026-07-19 (catch-up amortized: owed time pours into mine_timer, drains
+32 steps/frame as a visible fast-forward) — verify both in the playtest.
 
 ## SHIPPED 2026-07-19: the Silo (draft1_machines.md §7.6 step 1)
 

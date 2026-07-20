@@ -14,7 +14,11 @@ Severity: 🔴 CRITICAL (breaks a run or crashes) · 🟡 WARN (real risk, act s
 > machine items), A1 (mote table sized [NUM_LEVELS]), A2 (autosave debounced 5 s),
 > and G3/G8 by way of Decisions 1–3. G5 fixed later same day (5eba0f6: boxed-in
 > miner gnaws through its own trail).
-> ⏳ STILL OPEN: G4, G6, G7 (accepted v1), G9, A3, and the ⚪ INFO section.
+> **2026-07-19:** the Silo shipped (911dec4 — G8's bulk store is real: smelter
+> casts straight into it). G6 fixed: catch-up pours owed time into mine_timer,
+> drained at MINER_STEPS_PER_FRAME (32) per frame — re-entry fast-forwards
+> instead of stalling.
+> ⏳ STILL OPEN: G4, G7 (accepted v1), G9, A3, and the ⚪ INFO section.
 
 ---
 

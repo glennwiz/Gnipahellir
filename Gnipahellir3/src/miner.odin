@@ -13,10 +13,13 @@ package game
 //  releases the anchor and the world collapses on next entry (§7.2.3).
 //
 //  While the player is elsewhere the snake sleeps; on re-entering the
-//  dimension the elapsed game time is applied in one catch-up burst.
+//  dimension the owed game time pours into the tick timer and drains at a
+//  capped rate per frame — the snake visibly blitzes through its backlog
+//  instead of stalling the frame (flagg G6).
 
 MINER_BASE_INTERVAL :: f32(3.0)  // seconds per block at tier 0
 MINER_HAUL_SLOTS    :: 6
+MINER_STEPS_PER_FRAME :: 32      // max BFS steps drained per frame — caps the re-entry hitch
 
 // Feeding a gem sets the tier permanently (higher gem = faster snake).
 @(rodata)
@@ -61,8 +64,10 @@ update_miner :: proc(gs: ^Game_State) {
     if m.asleep do return
 
     m.mine_timer += gs.delta_time
-    for m.mine_timer >= miner_interval(m) {
+    steps := 0
+    for m.mine_timer >= miner_interval(m) && steps < MINER_STEPS_PER_FRAME {
         m.mine_timer -= miner_interval(m)
+        steps += 1
         if !miner_step(gs, &gs.world, m) {
             miner_fall_asleep(gs, m)
             return
@@ -70,28 +75,22 @@ update_miner :: proc(gs: ^Game_State) {
     }
 }
 
-// Re-entering the dimension: apply the game time that passed while the snake
-// worked unwatched.  One burst, capped by depletion.
+// Re-entering the dimension: the game time that passed while the snake
+// worked unwatched pours into the tick timer, and update_miner drains it
+// MINER_STEPS_PER_FRAME at a time — hours away never stall a frame, the
+// backlog plays out as a visible fast-forward.
 miner_catchup :: proc(gs: ^Game_State) {
     m := &gs.dimension.miner
     if !m.active || m.asleep do return
 
-    steps := int((gs.elapsed_time - m.last_time) / miner_interval(m))
+    owed := gs.elapsed_time - m.last_time
     m.last_time = gs.elapsed_time
+    steps := int(owed / miner_interval(m))
     if steps <= 0 do return
 
-    mined := 0
-    for _ in 0 ..< steps {
-        if !miner_step(gs, &gs.world, m) {
-            miner_fall_asleep(gs, m)
-            break
-        }
-        mined += 1
-    }
-    if mined > 0 {
-        notify(gs, "The miner gnawed %d blocks while you were away", mined)
-        log_action(gs, "Miner catch-up: %d steps applied", mined)
-    }
+    m.mine_timer += owed
+    notify(gs, "The miner kept gnawing — %d blocks of backlog to chew through", steps)
+    log_action(gs, "Miner catch-up: %d steps queued", steps)
 }
 
 miner_fall_asleep :: proc(gs: ^Game_State, m: ^Miner_State) {
