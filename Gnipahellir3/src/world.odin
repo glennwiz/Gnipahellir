@@ -676,11 +676,16 @@ world_init :: proc(w: ^World_Grid) {
 		}
 	}
 
-	// Starter pickaxe resting on the grass, a few steps east of the player's
-	// spawn (GRID_W/2 - 8) — the first thing to grab before any mining.
-	pick_x := GRID_W / 2 - 4
-	set_tile(w, pick_x, SURFACE_Y - 1, .Air) // clear any decoration on the spot
-	pick_idx := grid_idx(pick_x, SURFACE_Y - 1)
+	// Starter pickaxe waits at the bottom of the entrance shaft — the player
+	// must drop in (and take the first fall) to reach it before any mining.
+	pick_y := CAVE_TOP + 7                    // landing-chamber floor row
+	for x in ent_x ..= ent_x + 1 {            // clear the full 2-wide drop
+		for y in SURFACE_Y ..= pick_y {
+			set_tile(w, x, y, .Void)
+		}
+		set_tile(w, x, pick_y + 1, .Stone)    // floor to land on / rest the pick
+	}
+	pick_idx := grid_idx(ent_x, pick_y)
 	w.items[pick_idx] = .Pickaxe
 	w.item_counts[pick_idx] = 1
 

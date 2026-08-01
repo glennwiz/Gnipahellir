@@ -22,7 +22,7 @@ test_state :: proc() -> ^Game_State {
 }
 
 @(test)
-starter_pickaxe_waits_on_the_grass :: proc(t: ^testing.T) {
+starter_pickaxe_waits_at_the_shaft_bottom :: proc(t: ^testing.T) {
     gs := new(Game_State)
     defer free(gs)
     game_state_init(gs)  // production init — not test_state's pickaxe handout
@@ -30,12 +30,16 @@ starter_pickaxe_waits_on_the_grass :: proc(t: ^testing.T) {
     // The player wakes empty-handed.
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Pickaxe), 0)
 
-    // A pickaxe rests on the grass east of spawn.
-    idx := grid_idx(GRID_W/2 - 4, SURFACE_Y - 1)
+    // A pickaxe rests on the floor at the bottom of the entrance shaft, so the
+    // player must drop in (and take the first fall) to reach it.
+    pick_x := GRID_W / 2
+    pick_y := CAVE_TOP + 7
+    idx := grid_idx(pick_x, pick_y)
     testing.expect_value(t, gs.world.items[idx], Item.Pickaxe)
+    testing.expect_value(t, get_tile(&gs.world, pick_x, pick_y + 1), Tile_Type.Stone)
 
-    // Walking onto it collects it and clears the tile.
-    gs.player.pos = {f32(GRID_W/2 - 4), f32(SURFACE_Y) - PLAYER_H}
+    // Landing on it collects it and clears the tile.
+    gs.player.pos = {f32(pick_x), f32(pick_y + 1) - PLAYER_H}
     player_pickup(gs)
     testing.expect(t, inventory_count(&gs.player.inventory, .Pickaxe) >= 1, "pickaxe not collected")
     testing.expect_value(t, gs.world.items[idx], Item.None)
