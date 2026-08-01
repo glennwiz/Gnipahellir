@@ -353,6 +353,10 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     set_tile(&gs.world, x, y, fill)
     audio_play(&gs.audio, .Mine)
 
+    // Cutting this tile may leave a tree (or a wood/leaf build) hanging — drop
+    // whatever just lost its last link to the ground.
+    gravity_check_removed(gs, x, y)
+
     if drop != .None {
         // One drop stack per cell: stack onto a matching drop, claim an empty
         // cell, but never clobber a different item already lying there.

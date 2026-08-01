@@ -65,7 +65,7 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	},
 	.Wood                    = {
 		"Wood",
-		{.Solid, .Mineable, .Flammable},
+		{.Solid, .Mineable, .Flammable, .Falls},
 		rl.Color{139, 90, 43, 255},
 		0,
 		0,
@@ -74,7 +74,7 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	},
 	.Leaves                  = {
 		"Leaves",
-		{.Walkable, .Flammable, .Mineable},
+		{.Walkable, .Flammable, .Mineable, .Falls},
 		rl.Color{0, 180, 0, 200},
 		1,
 		0,

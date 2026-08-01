@@ -14,6 +14,7 @@ CELL_SIZE       :: 10
 MAX_ENEMIES     :: 64
 MAX_PARTICLES   :: 256
 MAX_PROJECTILES :: 32
+MAX_FALLING     :: 256   // structural blocks in mid-fall at once (gravity.odin)
 MAX_EVENTS      :: 512
 MAX_INVENTORY   :: 24
 MAX_AUDIO       :: 128
@@ -205,9 +206,10 @@ Terrain_Flag :: enum u8 {
     Mineable,
     Placeable,
     Animated,
+    Falls,      // obeys structural gravity — drops when cut loose (gravity.odin)
 }
 
-Terrain_Flags :: bit_set[Terrain_Flag; u8]
+Terrain_Flags :: bit_set[Terrain_Flag; u16]
 
 // ─── Tile Flags (per-cell runtime state) ──────────────────────────────────────
 

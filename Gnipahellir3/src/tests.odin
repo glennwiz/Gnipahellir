@@ -2985,3 +2985,86 @@ silo_placement_gates :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
     testing.expect(t, !placement_ok(gs, .Silo, 11, 14), "no silos in ephemeral worlds")
 }
+
+// ─── Structural gravity (gravity.odin) ────────────────────────────────────────
+
+@(private = "file")
+gravity_count_active :: proc(gs: ^Game_State) -> int {
+    n := 0
+    for b in gs.gravity.blocks do if b.active do n += 1
+    return n
+}
+
+// Carve an air pocket and stand a three-block trunk on a grass floor.  Returns
+// the trunk column; ground is at gy, trunk at gy-1, gy-2, gy-3.
+@(private = "file")
+gravity_plant_tree :: proc(gs: ^Game_State, x, gy: int) {
+    for yy in gy - 6 ..= gy do for xx in x - 2 ..= x + 2 do set_tile(&gs.world, xx, yy, .Air)
+    set_tile(&gs.world, x, gy, .Grass)          // anchor
+    set_tile(&gs.world, x, gy - 1, .Wood)       // trunk
+    set_tile(&gs.world, x, gy - 2, .Wood)
+    set_tile(&gs.world, x, gy - 3, .Wood)
+}
+
+@(test)
+gravity_tree_falls_when_base_cut :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    x, gy := 100, 70
+    gravity_plant_tree(gs, x, gy)
+
+    // Cut the base trunk: the two blocks above lose their only path to ground.
+    set_tile(&gs.world, x, gy - 1, .Void)
+    gravity_check_removed(gs, x, gy - 1)
+
+    // They leave the grid and enter the falling pool immediately.
+    testing.expect_value(t, get_tile(&gs.world, x, gy - 2), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, x, gy - 3), Tile_Type.Void)
+    testing.expect_value(t, gravity_count_active(gs), 2)
+
+    // Let them settle: each lands as a collectible drop, none re-settle as solid.
+    for _ in 0 ..< 400 do update_gravity(gs)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(&gs.world, x, gy - 1), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, x, gy - 2), Tile_Type.Void)
+    // Two trunk blocks fell → two Wood Logs piled on the grass, waiting to be grabbed.
+    idx := grid_idx(x, gy - 1)
+    testing.expect_value(t, gs.world.items[idx], Item.Wood_Log)
+    testing.expect_value(t, int(gs.world.item_counts[idx]), 2)
+}
+
+@(test)
+gravity_natural_terrain_never_falls :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Mining natural stone must never spawn a falling block — the whole point of
+    // the structural-only scope is that caves don't collapse.
+    x, y := 100, 90
+    set_tile(&gs.world, x, y, .Stone)
+    set_tile(&gs.world, x, y - 1, .Stone)
+    set_tile(&gs.world, x, y, .Void)
+    gravity_check_removed(gs, x, y)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(&gs.world, x, y - 1), Tile_Type.Stone)
+}
+
+@(test)
+gravity_grounded_remainder_holds :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    x, gy := 100, 70
+    gravity_plant_tree(gs, x, gy)
+
+    // Cut the TOP block: the lower trunk is still rooted to the grass, so nothing
+    // should fall.
+    set_tile(&gs.world, x, gy - 3, .Void)
+    gravity_check_removed(gs, x, gy - 3)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(&gs.world, x, gy - 1), Tile_Type.Wood)
+    testing.expect_value(t, get_tile(&gs.world, x, gy - 2), Tile_Type.Wood)
+}
+
+

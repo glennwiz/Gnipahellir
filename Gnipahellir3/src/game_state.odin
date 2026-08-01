@@ -199,6 +199,23 @@ Particle_Store :: struct {
     count: int,
 }
 
+// ─── Falling Blocks (structural gravity) ──────────────────────────────────────
+//
+//  A tile cut loose from its anchor (gravity.odin) leaves the terrain grid and
+//  rides this pool down until it lands.  Transient: not part of Save_Data, so a
+//  save caught mid-fall drops the airborne blocks (a rare, cosmetic loss).
+
+Falling_Block :: struct {
+    tile:   Tile_Type,
+    x:      i32,   // column (never changes — blocks fall straight down)
+    y:      f32,   // tile-space top; fractional while sliding
+    active: bool,
+}
+
+Gravity_State :: struct {
+    blocks: [MAX_FALLING]Falling_Block,
+}
+
 // ─── Event Queue ──────────────────────────────────────────────────────────────
 
 Event_Queue :: struct {
@@ -338,6 +355,7 @@ Game_State :: struct {
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,
+    gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     ambience_timer: f32,   // countdown to the next ambient-mote probe pass
     mining:      Mining_Action,
     events:      Event_Queue,

@@ -53,6 +53,10 @@ game_update :: proc(gs: ^Game_State) {
     process_events(gs)
     eq_clear(&gs.events)
 
+    // 6b. Gravity — slides blocks detached this frame (by Tile_Mined handling
+    //     above) down until they land.  Mutates the grid, pushes no events.
+    update_gravity(gs)
+
     // 7. Notifications — ages/expires the popup stack (pushes no events)
     update_notifications(gs)
 

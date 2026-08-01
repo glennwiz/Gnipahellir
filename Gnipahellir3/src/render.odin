@@ -18,6 +18,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     world_cam.zoom  *= SS_SCALE
     rl.BeginMode2D(world_cam)
     draw_world(gs)
+    draw_falling_blocks(gs)
     draw_mining_cracks(gs)
     draw_portals(gs)
     draw_placement_ghost(gs)
@@ -204,6 +205,21 @@ draw_cloud_layer :: proc(gs: ^Game_State) {
             rl.DrawCircleV({cx - 1.5, cy - 1}, r*0.90, body)
             rl.DrawCircleV({cx + 2, cy - 0.5}, r*0.75, body)
             rl.DrawCircleV({cx - r*0.3, cy - r*0.4}, r*0.45, {255, 255, 255, 210})
+        }
+    }
+}
+
+// Blocks cut loose from their anchor, mid-slide toward the ground (gravity.odin).
+// Read-only: the pool is advanced in update_gravity, never here.
+draw_falling_blocks :: proc(gs: ^Game_State) {
+    for b in gs.gravity.blocks {
+        if !b.active do continue
+        bx := b.x * CELL_SIZE
+        by := i32(b.y * CELL_SIZE)
+        #partial switch b.tile {
+        case .Wood:   draw_pixel_wood(bx, by)
+        case .Leaves: draw_pixel_leaves(bx, by)
+        case:         rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[b.tile].color)
         }
     }
 }
