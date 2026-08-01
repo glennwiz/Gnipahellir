@@ -75,8 +75,17 @@ pick_targets :: proc(p: ^Player, mouse_world: [2]f32, out: ^[2][2]i32) -> int {
         out[0] = {col + dir.x, bot + 1}
         return 1
     case:
-        out[0] = {col + dir.x, top}
-        out[1] = {col + dir.x, bot}
+        // A horizontal swing works both body tiles (head + feet) to carve a
+        // walkable tunnel, but mines the one the cursor is nearer FIRST — the
+        // player's vertical center splits the two, so dy's sign picks it.  This
+        // is why hovering the lower block mines the lower block, not the top.
+        if dy > 0 {
+            out[0] = {col + dir.x, bot}
+            out[1] = {col + dir.x, top}
+        } else {
+            out[0] = {col + dir.x, top}
+            out[1] = {col + dir.x, bot}
+        }
         return 2
     }
 }
