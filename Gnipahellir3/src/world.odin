@@ -676,10 +676,6 @@ world_init :: proc(w: ^World_Grid) {
 		}
 	}
 
-	// Cave entrance: a hole in the grass the player can fall into
-	set_tile(w, ent_x, SURFACE_Y, .Cave_Entrance)
-	set_tile(w, ent_x + 1, SURFACE_Y, .Cave_Entrance)
-
 	// Starter pickaxe resting on the grass, a few steps east of the player's
 	// spawn (GRID_W/2 - 8) — the first thing to grab before any mining.
 	pick_x := GRID_W / 2 - 4
