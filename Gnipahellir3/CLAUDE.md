@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+> **READ FIRST: `context.md` (repo root) is the source of truth.** Start every
+> session by reading it — it holds the current code state, what's queued, and
+> how to work here. **Update it at the end of every session** so the next one
+> starts warm. When it disagrees with older docs, trust it, then reconcile.
+
 Behavioral guidelines for this project. These rules are mandatory and apply to every code change.
 
 Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.

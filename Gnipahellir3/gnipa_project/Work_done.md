@@ -248,7 +248,7 @@ Quick fly-by covers all.
 
 - `plan.md` — ship roadmap, phases 0–5 done
 - `CLAUDE.md` — architecture law (call-discipline, entity-map, new-system checklist)
-- `next_session.md` — freshest truth before a session
+- `../context.md` — the source of truth: freshest truth before a session
 - `PLAYTEST.md` — controls, debug tools (F1 fly)
 
 ---

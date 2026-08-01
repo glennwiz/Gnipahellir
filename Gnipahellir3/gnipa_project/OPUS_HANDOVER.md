@@ -4,13 +4,13 @@ Written by Fable, 2026-07-14, at Glenn's request — in case he loses access
 to me and has to lean on you for a while. This is deliberately **timeless**:
 nothing here describes the current code state, because we don't know when
 the cutoff lands. For where the code actually IS, always start with
-`next_session.md` — that file is the living handover, updated every session.
-Trust it over your assumptions, and over this file.
+`../context.md` (repo root) — that file is the living handover, updated every
+session. Trust it over your assumptions, and over this file.
 
 ## Reading order (do this before touching anything)
 
 1. `CLAUDE.md` — the architecture law. Non-negotiable, every change.
-2. `next_session.md` — what happened last, what's queued. The freshest truth.
+2. `../context.md` — the source of truth: current code state, what's queued. The freshest truth.
 3. `plan.md` — the design bible. The rest of `gnipa_project/` fills in detail.
 4. `PLAYTEST.md` — controls, build/test commands, how to verify by hand.
 
@@ -55,7 +55,7 @@ essentials; the rules below are the ones we learned the hard way.
   debug-only gating, their own commit, a one-line doc mention marked
   "not game content". Never let a toy look like a pillar.
 - **Never delete real data** (saves, logs) for testing — copy aside.
-- **End every session by updating `next_session.md`.** That ritual is why
+- **End every session by updating `../context.md`.** That ritual is why
   handovers like this one are even possible.
 - Commits: conventional style (`feat:`/`fix:`/`chore:`/`docs:`), lowercase,
   ≤50 chars, no co-author trailers. He often drives git himself (PRs,
