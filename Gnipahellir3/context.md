@@ -8,7 +8,7 @@ disagrees with older docs, trust this file — then reconcile.
 - **Last updated:** 2026-08-01
 - **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 105 green (`odin test src`)
 - **Save version:** 14 (`gnipahellir_save.dat` ≈ 2,658,280 bytes; `Dirt` item/tile + `.Placed` cell flag added, size unchanged — all append-only)
-- **Recent HEAD:** 858d7ad (shaft-mouth flagged), a8632c1 (starter pickaxe), a693b85 (pickaxe hover-target fix) — **note: this session's shaft-fade / Dirt / collect-mote / placed-gravity work is UNCOMMITTED (Glenn drives git)**
+- **Recent HEAD:** a6da044 (dirt blocks + collect motes + placed gravity — this session's arc), 858d7ad (shaft-mouth flagged), a8632c1 (starter pickaxe). Committed on master, **not yet pushed** (Glenn drives git).
 
 ---
 
