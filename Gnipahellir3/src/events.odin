@@ -325,6 +325,12 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         if whash(u32(idx)*2246822519 + 101) % 100 >= u32(pct) do drop = .None
     }
 
+    // The loose stratum the cave mouth cuts through pays a clod of dirt on top
+    // of the tile's normal drop — a small starter reward for digging right
+    // beside the descent shaft (the tiles draw_shaft_mouth scuffs brown).  The
+    // rock drops to the ground as usual; the dirt is banked directly (below).
+    shaft_earth := gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, x, y)
+
     // Mining into a den's structure is a break-in: the owner hunts.
     // (Only the player pushes Tile_Mined — builders emit Builder_Mined.)
     if owner := den_owner_index(gs, e.tile); owner >= 0 {
@@ -351,6 +357,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         fill = .Air
     }
     set_tile(&gs.world, x, y, fill)
+    gs.world.tile_flags[idx] -= {.Placed}   // the placed block is gone from this cell
     audio_play(&gs.audio, .Mine)
 
     // Cutting this tile may leave a tree (or a wood/leaf build) hanging — drop
@@ -366,6 +373,16 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         } else if existing == .None || gs.world.item_counts[idx] == 0 {
             gs.world.items[idx]       = drop
             gs.world.item_counts[idx] = 1
+        }
+    }
+
+    // The dirt half of the payout flies straight into the bag with a collect
+    // mote; a full bag falls back to a ground drop so nothing is silently lost.
+    if shaft_earth {
+        if inventory_insert(&gs.player.inventory, .Dirt, 1) {
+            spawn_collect_mote(gs, e.tile, .Dirt)
+        } else {
+            spawn_ground_item(&gs.world, e.tile, .Dirt, 1)
         }
     }
 

@@ -29,7 +29,10 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	},
 	.Stone                   = {
 		"Stone",
-		{.Solid, .Mineable},
+		// Natural cave stone never moves; but a PLACED stone block obeys gravity
+		// and re-stacks sand-style — .Falls_Placed gates it on the cell's .Placed
+		// bit so only player-built stone falls.
+		{.Solid, .Mineable, .Falls_Placed, .Settles},
 		rl.Color{128, 128, 128, 255},
 		0,
 		0,
@@ -351,6 +354,18 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Silo,
 		0,
 	},
+	.Dirt                    = {
+		"Dirt",
+		// A building block (like Stone/Grass, not a machine) that obeys gravity:
+		// always player-placed, so .Falls is safe, and .Settles makes it stack
+		// as tiles when it lands (sand-style) rather than crumble to drops.
+		{.Solid, .Mineable, .Falls, .Settles},
+		rl.Color{120, 84, 50, 255},
+		0,
+		0,
+		.Dirt,                 // mines back into the Dirt item
+		0,
+	},
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────
@@ -449,6 +464,27 @@ place_tree :: proc(w: ^World_Grid, x, surface_y, height: int) {
 
 SURFACE_Y :: 54
 CAVE_TOP :: SURFACE_Y + 6 // solid stone cap between surface and cave
+SHAFT_APRON_REACH :: 4 // tiles of scuffed earth each side of the descent shaft;
+// shared by render (the brown apron) and mining (the rock+dirt yield) so the
+// loot lines up exactly with the dressed lip.
+
+// True for a ground tile in the surface cap band that sits within
+// SHAFT_APRON_REACH tiles of a descent-shaft Void column, with only solid
+// ground between it and the shaft — the exact tiles draw_shaft_mouth scuffs
+// brown.  Reads terrain only.
+in_shaft_apron :: proc(w: ^World_Grid, x, y: int) -> bool {
+	if y < SURFACE_Y || y >= CAVE_TOP do return false
+	for dir in ([]int{-1, 1}) {
+		for step in 1 ..= SHAFT_APRON_REACH {
+			nx := x + dir * step
+			if nx < 0 || nx >= GRID_W do break
+			t := w.terrain[grid_idx(nx, y)]
+			if t == .Void do return true
+			if t == .Air do break
+		}
+	}
+	return false
+}
 CAVE_BOT :: GRID_H - 2 // two-row stone floor at world bottom
 CAVE_LEFT :: 1
 CAVE_RIGHT :: GRID_W - 1
@@ -676,9 +712,11 @@ world_init :: proc(w: ^World_Grid) {
 		}
 	}
 
-	// Starter pickaxe waits at the bottom of the entrance shaft — the player
-	// must drop in (and take the first fall) to reach it before any mining.
-	pick_y := CAVE_TOP + 7                    // landing-chamber floor row
+	// Starter pickaxe waits ~7 tiles down the entrance shaft — the player drops
+	// in (a small fall, minor damage) to reach it, and the surface stays a
+	// short mine/climb back up.  It rests on a stone ledge; the cave lies below,
+	// so first blood is chipping through this floor with the pick you just got.
+	pick_y := SURFACE_Y + 7                   // ledge row, ~7-tile drop from grass
 	for x in ent_x ..= ent_x + 1 {            // clear the full 2-wide drop
 		for y in SURFACE_Y ..= pick_y {
 			set_tile(w, x, y, .Void)

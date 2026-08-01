@@ -22,7 +22,7 @@ test_state :: proc() -> ^Game_State {
 }
 
 @(test)
-starter_pickaxe_waits_at_the_shaft_bottom :: proc(t: ^testing.T) {
+starter_pickaxe_waits_on_the_shaft_ledge :: proc(t: ^testing.T) {
     gs := new(Game_State)
     defer free(gs)
     game_state_init(gs)  // production init — not test_state's pickaxe handout
@@ -30,10 +30,10 @@ starter_pickaxe_waits_at_the_shaft_bottom :: proc(t: ^testing.T) {
     // The player wakes empty-handed.
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Pickaxe), 0)
 
-    // A pickaxe rests on the floor at the bottom of the entrance shaft, so the
-    // player must drop in (and take the first fall) to reach it.
+    // A pickaxe rests on a stone ledge ~7 tiles down the entrance shaft, so the
+    // player drops in (a small fall) to reach it and the surface stays close.
     pick_x := GRID_W / 2
-    pick_y := CAVE_TOP + 7
+    pick_y := SURFACE_Y + 7
     idx := grid_idx(pick_x, pick_y)
     testing.expect_value(t, gs.world.items[idx], Item.Pickaxe)
     testing.expect_value(t, get_tile(&gs.world, pick_x, pick_y + 1), Tile_Type.Stone)
@@ -43,6 +43,85 @@ starter_pickaxe_waits_at_the_shaft_bottom :: proc(t: ^testing.T) {
     player_pickup(gs)
     testing.expect(t, inventory_count(&gs.player.inventory, .Pickaxe) >= 1, "pickaxe not collected")
     testing.expect_value(t, gs.world.items[idx], Item.None)
+}
+
+@(test)
+mining_the_shaft_apron_yields_rock_and_dirt :: proc(t: ^testing.T) {
+    // Digging the loose stratum the cave mouth cuts through drops the rock on
+    // the ground the normal way AND banks a clod of dirt straight into the bag
+    // (with a collect mote).  The same dig anywhere else on the cap band gives
+    // only the ground rock.  The reward zone is exactly the brown-scuffed apron.
+    drop_near :: proc(gs: ^Game_State, x, y: int, it: Item) -> bool {
+        for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+            if !in_bounds(x + dx, y + dy) do continue
+            idx := grid_idx(x + dx, y + dy)
+            if gs.world.items[idx] == it && gs.world.item_counts[idx] > 0 do return true
+        }
+        return false
+    }
+
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs)             // production world — the real shaft
+    gs.level_index = LEVEL_SURFACE
+    inv := &gs.player.inventory
+
+    ent_x := GRID_W / 2
+
+    // A stone tile one step off the shaft is inside the apron: rock on the
+    // ground, dirt in the bag, and a collect mote in flight.
+    ax, ay := ent_x - 1, SURFACE_Y + 1
+    testing.expect(t, in_shaft_apron(&gs.world, ax, ay), "tile beside the shaft is aproned")
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(ax), i32(ay)}})
+    process_events(gs)
+    testing.expect(t, drop_near(gs, ax, ay, .Stone_Block), "apron rock drops on the ground")
+    testing.expect_value(t, inventory_count(inv, .Dirt), 1)
+    testing.expect(t, !drop_near(gs, ax, ay, .Dirt), "apron dirt banks to the bag, not the ground")
+    testing.expect(t, gs.particles.count > 0, "banked dirt spawns a collect mote")
+
+    // A stone tile far along the same band is normal ground — a rock drops on
+    // the tile, no dirt, and the bag gains nothing.
+    fx, fy := 10, SURFACE_Y + 1
+    testing.expect(t, !in_shaft_apron(&gs.world, fx, fy), "far tile is outside the apron")
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(fx), i32(fy)}})
+    process_events(gs)
+    testing.expect(t, drop_near(gs, fx, fy, .Stone_Block), "normal stone still drops a rock on the ground")
+    testing.expect(t, !drop_near(gs, fx, fy, .Dirt), "normal stone must not drop dirt")
+    testing.expect_value(t, inventory_count(inv, .Dirt), 1)  // unchanged by the far dig
+}
+
+@(test)
+shaft_mouth_is_dressable :: proc(t: ^testing.T) {
+    // draw_shaft_mouth dresses the descent shaft by reading terrain alone: a
+    // Void column that opens to Air above and is walled by ground on both sides
+    // through the surface cap.  Guard those assumptions so a gen change that
+    // reshapes the mouth trips here instead of silently un-dressing it.
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs)  // production world — the real shaft
+    w := &gs.world
+
+    ent_x := GRID_W / 2
+    // The mouth opens to sky.
+    testing.expect_value(t, get_tile(w, ent_x, SURFACE_Y - 1), Tile_Type.Air)
+    // Void column walled by solid ground down the whole cap band.
+    for y in SURFACE_Y ..< CAVE_TOP {
+        testing.expect_value(t, get_tile(w, ent_x, y), Tile_Type.Void)
+        testing.expect_value(t, get_tile(w, ent_x + 1, y), Tile_Type.Void)
+        lw := get_tile(w, ent_x - 1, y)
+        rw := get_tile(w, ent_x + 2, y)
+        testing.expect(t, lw != .Void && lw != .Air, "left wall must be ground to dress")
+        testing.expect(t, rw != .Void && rw != .Air, "right wall must be ground to dress")
+    }
+    // And no stray surface Void elsewhere on the cap rows — the pass must find
+    // only the shaft, nothing spurious in the grass.
+    for y in SURFACE_Y ..< CAVE_TOP {
+        for x in 0 ..< GRID_W {
+            if get_tile(w, x, y) == .Void {
+                testing.expect(t, x == ent_x || x == ent_x + 1, "only the shaft is Void in the cap band")
+            }
+        }
+    }
 }
 
 @(test)
@@ -116,6 +195,35 @@ each_tier_raises_a_distinct_altar :: proc(t: ^testing.T) {
     // Silver and gold ore are placeable blocks (that's what the altars are built from).
     testing.expect_value(t, item_table[.Silver_Ore].place_tile, Tile_Type.Silver_Ore)
     testing.expect_value(t, item_table[.Gold_Ore].place_tile,   Tile_Type.Gold_Ore)
+}
+
+@(test)
+dirt_places_and_mines_back :: proc(t: ^testing.T) {
+    // The dirt clod is a building block: place it as a Dirt tile, mine it back
+    // into a clod.  A full round trip so the item↔tile pairing can't drift.
+    gs := test_state()
+    defer free(gs)
+
+    testing.expect_value(t, item_table[.Dirt].place_tile, Tile_Type.Dirt)
+
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Dirt, 1)
+    for &s, i in inv.slots do if s.item == .Dirt { inv.selected = i; break }
+
+    // Stand in open surface air with solid ground one tile below the target.
+    gs.player.pos = {20, 40}
+    tx, ty := 22, 40
+    set_tile(&gs.world, tx, ty + 1, .Stone)
+    testing.expect(t, placement_ok(gs, .Dirt, tx, ty), "dirt should place in open air beside ground")
+
+    eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(tx), i32(ty)}})
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, tx, ty), Tile_Type.Dirt)
+    testing.expect_value(t, inventory_count(inv, .Dirt), 0)   // the clod was consumed
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(tx), i32(ty)}})
+    process_events(gs)
+    testing.expect_value(t, gs.world.items[grid_idx(tx, ty)], Item.Dirt)   // mines back to a clod
 }
 
 @(test)
@@ -3036,6 +3144,71 @@ gravity_tree_falls_when_base_cut :: proc(t: ^testing.T) {
     idx := grid_idx(x, gy - 1)
     testing.expect_value(t, gs.world.items[idx], Item.Wood_Log)
     testing.expect_value(t, int(gs.world.item_counts[idx]), 2)
+}
+
+@(test)
+gravity_dirt_resettles_as_a_tile :: proc(t: ^testing.T) {
+    // Placed dirt is sand-style: cut its anchor and the floating block falls,
+    // then lands as a Dirt TILE again (not a crumbled drop like a felled tree).
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+    x := 100
+
+    for yy in 68 ..= 76 do for xx in x - 1 ..= x + 2 do set_tile(w, xx, yy, .Air)
+    set_tile(w, x + 1, 75, .Stone)     // floor to land on
+    set_tile(w, x, 70, .Stone)         // natural anchor (non-faller)
+    set_tile(w, x + 1, 70, .Dirt)      // cantilevered off the anchor, air below
+
+    // While the anchor stands, the dirt is supported — nothing falls.
+    gravity_check_removed(gs, x + 1, 71)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(w, x + 1, 70), Tile_Type.Dirt)
+
+    // Cut the anchor: the dirt loses its only path to ground and detaches.
+    set_tile(w, x, 70, .Void)
+    gravity_check_removed(gs, x, 70)
+    testing.expect_value(t, get_tile(w, x + 1, 70), Tile_Type.Void)  // left the grid
+    testing.expect_value(t, gravity_count_active(gs), 1)
+
+    // It settles onto the floor as a Dirt tile — a solid block, not a drop.
+    for _ in 0 ..< 400 do update_gravity(gs)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(w, x + 1, 74), Tile_Type.Dirt)          // rests on the floor
+    testing.expect_value(t, gs.world.items[grid_idx(x + 1, 74)], Item.None)  // no crumbled clod
+}
+
+@(test)
+gravity_placed_stone_falls_natural_stays :: proc(t: ^testing.T) {
+    // Placed stone obeys gravity (sand-style, like dirt); the identical natural
+    // cave stone never moves.  The .Placed cell bit is the only difference.
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+    x := 100
+
+    for yy in 68 ..= 76 do for xx in x - 1 ..= x + 2 do set_tile(w, xx, yy, .Air)
+    set_tile(w, x + 1, 75, .Stone)                    // floor to land on
+    set_tile(w, x, 70, .Stone)                        // natural anchor (not placed)
+    set_tile(w, x + 1, 70, .Stone)                    // a stone block...
+    w.tile_flags[grid_idx(x + 1, 70)] += {.Placed}    // ...the player placed
+
+    // Same tile type, opposite gravity — decided per cell by .Placed.
+    testing.expect(t, is_faller(w, x + 1, 70), "placed stone is a faller")
+    testing.expect(t, !is_faller(w, x, 70), "natural stone is not")
+
+    // Cut the anchor: the placed block detaches, falls, and re-settles as a
+    // Stone tile — still .Placed, so it stays sand, and it left no crumb drop.
+    set_tile(w, x, 70, .Void)
+    gravity_check_removed(gs, x, 70)
+    testing.expect_value(t, gravity_count_active(gs), 1)
+    testing.expect_value(t, get_tile(w, x + 1, 70), Tile_Type.Void)  // lifted out
+
+    for _ in 0 ..< 400 do update_gravity(gs)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(w, x + 1, 74), Tile_Type.Stone)
+    testing.expect(t, .Placed in w.tile_flags[grid_idx(x + 1, 74)], "settled stone stays placed")
+    testing.expect_value(t, gs.world.items[grid_idx(x + 1, 74)], Item.None)
 }
 
 @(test)

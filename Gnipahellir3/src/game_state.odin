@@ -192,6 +192,10 @@ Particle :: struct {
     lifetime: f32,
     age:      f32,
     active:   bool,
+    // Collect motes home toward `target`, accelerating in and dying on arrival
+    // — the "flew into your inventory" read.  Off = straight ballistic drift.
+    homing:   bool,
+    target:   [2]f32,
 }
 
 Particle_Store :: struct {

@@ -83,6 +83,7 @@ item_table := [Item]Item_Info{
     .Auto_Miner        = { "Auto-Miner",        {90,  200, 190, 255}, .Auto_Miner },
     .Dimension_Spawner_Runic = { "Runic Dimension Spawner", {200, 120, 255, 255}, .Dimension_Spawner_Runic },
     .Silo              = { "Silo",              {170, 180, 200, 255}, .Silo },
+    .Dirt              = { "Dirt",              {110, 78,  46,  255}, .Dirt },
 }
 
 is_blueprint :: proc(it: Item) -> bool {

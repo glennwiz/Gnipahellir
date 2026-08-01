@@ -181,9 +181,75 @@ draw_world :: proc(gs: ^Game_State) {
             }
         }
     }
+    // The surface descent shaft breaks the grass line as a raw Void slot —
+    // dress its lip into a proper cave mouth (surface level only).
+    if gs.level_index == LEVEL_SURFACE do draw_shaft_mouth(gs)
     // Cloud puffs go over everything tile-drawn so their round bulges merge
     // across cells instead of being clipped by neighboring Air rects.
     if gs.level_index == LEVEL_SKY do draw_cloud_layer(gs)
+}
+
+// ─── Surface descent shaft: the cave mouth ────────────────────────────────────
+//
+// The entrance shaft (world.odin §5) punches a raw 2-wide .Void column through
+// the grass line down to the cave.  Left bare it reads as a flat black slot cut
+// into the green — no depth, no edge.  This render-only pass gives it a mouth:
+// earthen throat walls that darken into the dark, a cut-soil lip where the grass
+// is sheared open, a lit grass rim, and an apron of scuffed earth that spreads
+// onto the neighboring blocks and diminishes the further you are from the shaft
+// on the X axis.  It keys off the terrain itself — Void bordered by ground in
+// the surface-cap band — so it dresses any surface shaft, not a hardcoded
+// column.  Reads state, never mutates.
+draw_shaft_mouth :: proc(gs: ^Game_State) {
+    w := &gs.world
+    WALL_PX   :: i32(3)
+    REACH     :: SHAFT_APRON_REACH              // brown scuff hugs the lip; blocks
+                                               // past this read as normal grass.
+                                               // Shared with mining's rock+dirt yield.
+    APRON_A   :: f32(90)                        // apron alpha at the shaft edge
+    grass_rim := rl.Color{78, 190, 78, 255}    // grass edge lit by open sky
+    soil      := rl.Color{96, 66, 38, 0}        // scuffed topsoil (alpha per tile)
+    span := f32(CAVE_TOP - SURFACE_Y)
+    for y in SURFACE_Y ..< CAVE_TOP {
+        for x in 0 ..< GRID_W {
+            if w.terrain[grid_idx(x, y)] != .Void do continue
+            px := i32(x * CELL_SIZE)
+            py := i32(y * CELL_SIZE)
+            // Throat wall darkens with depth: fresh topsoil at the rim sinking
+            // toward near-black as it drops into the cave.
+            d := clamp(f32(y - SURFACE_Y) / span, 0, 1)
+            wall := rl.Color{u8(104 - 76*d), u8(72 - 52*d), u8(40 - 28*d), 255}
+            top_mouth := y == SURFACE_Y && get_tile(w, x, y - 1) == .Air
+            for dir in ([]int{-1, 1}) {
+                nx := x + dir
+                if nx < 0 || nx >= GRID_W do continue
+                nt := w.terrain[grid_idx(nx, y)]
+                if nt == .Void || nt == .Air do continue   // shaft, not a wall
+                // Apron first (behind): scuffed earth onto the blocks, alpha
+                // falling off tile-by-tile with X distance from the shaft.
+                for k in 0 ..< REACH {
+                    gx := x + dir*(k+1)
+                    if gx < 0 || gx >= GRID_W do break
+                    gt := w.terrain[grid_idx(gx, y)]
+                    if gt == .Void || gt == .Air do break
+                    s := soil
+                    // Ease-out (squared) so the scuff hugs the lip and reads as
+                    // gone well before REACH — a linear falloff stays half-lit at
+                    // the midpoint and looks flat across the whole span.
+                    t := 1 - f32(k)/f32(REACH)
+                    s.a = u8(APRON_A * t * t)
+                    rl.DrawRectangle(i32(gx*CELL_SIZE), py, CELL_SIZE, CELL_SIZE, s)
+                }
+                // Then the crisp mouth on top: throat wall on the void edge, a
+                // cut-soil edge on the walling block, a grass rim at the lip.
+                wall_x := dir < 0 ? px : px + CELL_SIZE - WALL_PX
+                edge_x := dir < 0 ? px - WALL_PX : px + CELL_SIZE
+                rl.DrawRectangle(wall_x, py, WALL_PX, CELL_SIZE, wall)
+                rl.DrawRectangle(edge_x, py, WALL_PX, CELL_SIZE, wall)
+                if top_mouth do rl.DrawRectangle(edge_x, py, WALL_PX, 2, grass_rim)
+            }
+        }
+    }
 }
 
 // Clouds breathe and sway: each tile is a cluster of overlapping circles

@@ -22,12 +22,18 @@ FALL_SPEED  :: f32(3)         // tiles/sec — a gentle settle.  Tune here.
                               // Must stay < 1/DT_CAP (20) so a block never skips a row.
 
 // A faller obeys gravity; an anchor holds fallers up.  Both are decided here so
-// the GRAVITY_ALL flip is one edit.
-is_faller_type :: proc(t: Tile_Type) -> bool {
+// the GRAVITY_ALL flip is one edit.  Cell-aware, because .Falls_Placed tiles
+// (placed stone/grass) fall only where the .Placed bit is set — the same tile
+// type is inert natural terrain everywhere else.
+is_faller :: proc(w: ^World_Grid, x, y: int) -> bool {
+    if !in_bounds(x, y) do return false
+    idx := grid_idx(x, y)
     when GRAVITY_ALL {
-        return .Mineable in terrain_table[t].flags
+        return .Mineable in terrain_table[w.terrain[idx]].flags
     } else {
-        return .Falls in terrain_table[t].flags
+        f := terrain_table[w.terrain[idx]].flags
+        if .Falls in f do return true
+        return .Falls_Placed in f && .Placed in w.tile_flags[idx]
     }
 }
 
@@ -37,7 +43,7 @@ is_anchor_cell :: proc(w: ^World_Grid, x, y: int) -> bool {
     if !in_bounds(x, y) do return true
     t := w.terrain[grid_idx(x, y)]
     if .Solid not_in terrain_table[t].flags do return false
-    return !is_faller_type(t)
+    return !is_faller(w, x, y)
 }
 
 // A falling block rests on any occupied cell — solid ground, a settled block,
@@ -68,6 +74,7 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
         if b.active do continue
         b = Falling_Block{tile = t, x = x, y = f32(y), active = true}
         set_tile(&gs.world, int(x), int(y), gravity_open_tile(gs, int(y)))
+        gs.world.tile_flags[grid_idx(int(x), int(y))] -= {.Placed}  // the block left this cell
         return
     }
 }
@@ -87,7 +94,7 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
     w := &gs.world
     if !in_bounds(sx, sy) do return
     if visited[grid_idx(sx, sy)] do return
-    if !is_faller_type(get_tile(w, sx, sy)) do return
+    if !is_faller(w, sx, sy) do return
 
     dirs := [4][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}}
 
@@ -113,7 +120,7 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
             if !in_bounds(nx, ny) do continue
             ni := grid_idx(nx, ny)
             if visited[ni] do continue
-            if !is_faller_type(get_tile(w, nx, ny)) do continue
+            if !is_faller(w, nx, ny) do continue
             visited[ni] = true
             if n >= MAX_FALLING { overflow = true; continue }
             comp[n] = {i32(nx), i32(ny)}; n += 1
@@ -147,8 +154,16 @@ update_gravity :: proc(gs: ^Game_State) {
 
         ny := b.y + FALL_SPEED * dt
         if ny >= rest {
-            if drop := terrain_table[b.tile].drop_item; drop != .None {
-                spawn_ground_item(w, {b.x, i32(r - 1)}, drop, 1)
+            if .Settles in terrain_table[b.tile].flags {
+                // Sand-style: the block becomes a tile again where it lands.  r
+                // is recomputed each frame off the live grid, and stacked fallers
+                // keep their row separation as they drop, so a lower block always
+                // settles before the one above reaches it — the tiles stack.  Re-
+                // mark .Placed so the settled block is still a faller (stays sand).
+                set_tile(w, int(b.x), r - 1, b.tile)
+                w.tile_flags[grid_idx(int(b.x), r - 1)] += {.Placed}
+            } else if drop := terrain_table[b.tile].drop_item; drop != .None {
+                spawn_ground_item(w, {b.x, i32(r - 1)}, drop, 1)   // crumbles to a pile
             }
             b.active = false
         } else {

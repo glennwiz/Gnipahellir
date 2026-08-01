@@ -10,15 +10,34 @@ import "core:math"
 //  waits invisibly, which is what turns a wand burst into a stream.
 //  Deterministic jitter comes from whash, not the raylib RNG.
 
-spawn_particle :: proc(ps: ^Particle_Store, pos, vel: [2]f32, color: rl.Color, lifetime: f32, delay: f32 = 0) {
+spawn_particle :: proc(ps: ^Particle_Store, pos, vel: [2]f32, color: rl.Color, lifetime: f32, delay: f32 = 0, homing := false, target: [2]f32 = {}) {
     for i in 0 ..< MAX_PARTICLES {
         p := &ps.data[i]
         if p.active { continue }
-        p^ = {pos = pos, vel = vel, color = color, lifetime = lifetime, age = -delay, active = true}
+        p^ = {pos = pos, vel = vel, color = color, lifetime = lifetime, age = -delay, active = true, homing = homing, target = target}
         ps.count += 1
         return
     }
     // Store full: the spark is lost, nobody mourns it.
+}
+
+// Pull (tiles/s²) a collect mote feels toward its target, and its safety-cap
+// lifetime — it normally dies early, on arrival at the bag.
+COLLECT_PULL     :: f32(70)
+COLLECT_LIFETIME :: f32(0.7)
+
+// An item banked straight into the bag: a mote in the item's color pops up off
+// the tile, then curves and accelerates into the player — reads as "flew into
+// your inventory."  Vertical slice: it homes to the player body; retarget to
+// the hotbar corner once collect motes get a screen-space pass.
+spawn_collect_mote :: proc(gs: ^Game_State, from_tile: [2]i32, it: Item) {
+    p := &gs.player
+    start  := [2]f32{f32(from_tile.x) + 0.5, f32(from_tile.y) + 0.5}
+    target := [2]f32{p.pos.x + PLAYER_W*0.5, p.pos.y + PLAYER_H*0.5}
+    seed   := u32(gs.frame)*29 + 131
+    vel    := [2]f32{jitter(seed, 1.0), -3 + jitter(seed + 1, 0.6)}  // little upward pop first
+    spawn_particle(&gs.particles, start, vel, item_table[it].color, COLLECT_LIFETIME,
+        homing = true, target = target)
 }
 
 // Signed jitter in [-scale, +scale] from a deterministic hash.
@@ -173,6 +192,16 @@ update_particles :: proc(gs: ^Game_State) {
             continue
         }
         if p.age >= 0 {
+            if p.homing {
+                to   := p.target - p.pos
+                dist := math.sqrt(to.x*to.x + to.y*to.y)
+                if dist < 0.4 {   // reached the bag — pop out of existence
+                    p.active = false
+                    gs.particles.count = max(0, gs.particles.count - 1)
+                    continue
+                }
+                p.vel += (to / dist) * COLLECT_PULL * dt   // accelerate inward
+            }
             p.pos += p.vel * dt
         }
     }

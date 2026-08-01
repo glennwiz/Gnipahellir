@@ -90,6 +90,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     if slot.count == 0 do slot.item = .None
     set_tile(&gs.world, x, y, place_tile)
     gs.world.sim_data[grid_idx(x, y)] = {}  // a fresh machine starts cold, tray empty
+    gs.world.tile_flags[grid_idx(x, y)] += {.Placed}  // player-built: gravity-eligible
     eq_push(&gs.events, Event{type = .Tile_Placed, source = PLAYER_ID, tile = e.tile})
 
     // A placed spawner is a door waiting to be opened.

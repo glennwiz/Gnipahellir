@@ -6,9 +6,9 @@ the game is, where the code stands right now, and what's queued next. When it
 disagrees with older docs, trust this file — then reconcile.
 
 - **Last updated:** 2026-08-01
-- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 100 green (`odin test src`)
-- **Save version:** 14 (`gnipahellir_save.dat` ≈ 2,658,280 bytes)
-- **Recent HEAD:** a693b85 (pickaxe hover-target fix), 82481b8 (structural gravity), 4368902 (hold-to-place)
+- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 105 green (`odin test src`)
+- **Save version:** 14 (`gnipahellir_save.dat` ≈ 2,658,280 bytes; `Dirt` item/tile + `.Placed` cell flag added, size unchanged — all append-only)
+- **Recent HEAD:** 858d7ad (shaft-mouth flagged), a8632c1 (starter pickaxe), a693b85 (pickaxe hover-target fix) — **note: this session's shaft-fade / Dirt / collect-mote / placed-gravity work is UNCOMMITTED (Glenn drives git)**
 
 ---
 
@@ -90,7 +90,9 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 - **Machines / sim:** Smelter (2 ore→1 bar, 1 log fires 3, bars land in tray), Tree Grower. **Silo** — wide u32 bulk storage counting past 99; vacuums neighbor Q-drops, E pours 99-stacks; a smelter beside a silo casts bars straight in (skips the 99 tray). Loaded silo refuses mining + smash.
 - **Dimensions + Auto-Miner:** spawner opens ephemeral themed worlds (Metal/Gold/Runic). Auto-Miner = snake tunneling to nearest ore, wide-count haul, gem-fed speed tiers (emerald×1.5→jade×2→diamond×3→hel×5). Anchors its dimension while working; catch-up on re-entry amortized (G6 fixed — no stall).
 - **Runic tier obtainable:** Runic Dimension Spawner (500 Gold Bars + 20 Cloud Stone at Rune Altar). Cloud Stone softlock fixed (plain clouds 20% hash-drop stone; puffy animated sky).
-- **Structural gravity (newest slice, `gravity.odin`):** `.Falls` terrain flag (Wood, Leaves). A flagged block stays up only while a 4-connected chain links it to an anchor (any solid non-faller tile, or the map edge). Cut the last link → the hanging piece detaches and slides at `FALL_SPEED` 3 tiles/s, landing as **collectible drops** (a felled tree crumbles into logs + leaves). Detach fires from the `Tile_Mined` handler; motion is step 6b; `draw_falling_blocks` read-only. `Gravity_State` pool [256], NOT saved.
+- **Structural gravity (`gravity.odin`), now cell-aware:** faller test is `is_faller(w,x,y)` — unconditional `.Falls` types (Wood, Leaves, **Dirt**) OR a `.Falls_Placed` type on a `.Placed` cell (**placed Stone**). A faller stays up only while a 4-connected chain links it to an anchor (any solid non-faller, or the map edge). Cut the last link → the hanging piece detaches and slides at `FALL_SPEED` 3 tiles/s. **Landing: `.Settles` types (Dirt, placed Stone) re-stack as TILES sand-style** (re-marking `.Placed` so stacks keep falling); everything else crumbles to **drops** (felled tree → logs+leaves). Stacking is order-safe (`r` recomputed each frame off the live grid). Detach fires from `Tile_Mined`; motion is step 6b; `draw_falling_blocks` read-only. `Gravity_State` pool [256], NOT saved.
+- **Placed-block tracking:** `Tile_Flag.Placed` set on every player placement (`placement.odin`), cleared on mine (`handle_tile_mined`) and when lifted into the fall pool, re-marked on settle. Lives in `World_Grid.tile_flags` → **saved wholesale** (persists). This is what lets placed Stone fall while identical natural cave Stone stays inert.
+- **Shaft-mouth + starter-earth reward (`render.odin` / `events.odin`):** `draw_shaft_mouth` apron fade is squared falloff over `SHAFT_APRON_REACH` (=4) so the brown scuff hugs the lip. Shared const + `in_shaft_apron(w,x,y)` (world.odin) mark exactly the scuffed tiles; **mining a tile in that apron drops the rock on the ground AND banks a `Dirt` clod straight to the bag** with a **collect mote** (`spawn_collect_mote`, particles.odin — homes to the player; `Particle` gained `homing`/`target`). `Dirt` is a placeable building block (item+tile, mines back, obeys gravity).
 - **Hold-to-place:** right-click held paints a run of blocks, one per tile (`Input_State.place_last` dedupes the sweep).
 
 ### Controls (quick ref — full in PLAYTEST.md)
@@ -102,16 +104,18 @@ Q drop stack 2 tiles ahead · ESC close windows / pause · F1 debug menu · F3 d
 
 ## 5. What's queued (open work)
 
-### Gravity follow-ups (this session's owed list, priority-ish)
-1. **Place-anywhere ANCHOR block** — Glenn's stated endgame: a placeable tile that anchors structures in mid-air. Hook already named: `is_anchor_cell`. This is the "later" block he flagged.
-2. **Placed stone/grass falling** — needs per-cell "was-placed" tracking (those tile types are shared with natural terrain, so a flag alone can't tell them apart). Extend the existing per-cell `Tile_Flags` bitset (add `.Placed`). Pairs with the anchor block.
-3. **Enemy/Garm smashes don't trigger falls** — only player `Tile_Mined` does (deliberate slice scope). One call in `smash_tile` adds it if wanted.
+### Gravity follow-ups (priority-ish)
+1. **Place-anywhere ANCHOR block** — Glenn's stated endgame: a placeable tile that anchors structures in mid-air. Hook `is_anchor_cell` now cell-aware and live; `.Placed` tracking exists — so this is newly within easy reach.
+2. **Placed GRASS falling** — placed **Stone** now falls sand-style (via `.Falls_Placed` + `.Placed` cell bit + `.Settles`); **Grass is the only leftover** — deliberately left surgical. Trivial add: `.Falls_Placed, .Settles` on the `Grass` terrain row. *(Placed-stone/grass falling was the old §5.2 — now mostly closed.)*
+3. **Enemy/Garm smashes don't trigger falls** — only player `Tile_Mined` does (deliberate slice scope; placed Stone/Dirt follow the same rule). One call in `smash_tile` adds it if wanted.
 4. **`GRAVITY_ALL` const** — flips to full cave-in physics (all mineable tiles fall, anchored only to map edges). Wired but **UNPLAYTESTED**.
 5. **Save-during-fall** drops airborne blocks (pool not in `Save_Data`) — rare, cosmetic; harden only if it bites.
 6. **`blueprints.md`** — blueprints A/B/C are pixel-identical; owed original art + particles (recipes already differ).
 
 ### Visual polish owed (for the concurrent Sonnet "how things look" session)
-- **Entrance shaft mouth** — removing the old `Cave_Entrance` cap (master cbd2cc2) exposed the level-0 descent as a raw 2-wide `.Void` slot in the surface grass (center `x=96`, `y=54–67`), then the starter pickaxe moved to its floor (a8632c1). This is the **first place `.Void` renders above ground against the sky** — any Void styling is now surface-visible here. Owed: dress the pit lip (a bit of stone edge / a proper cave-mouth read). The `.Cave_Entrance` tile type is now **dead** (enum kept for save compat, but placed nowhere) — don't spend art on its `{60,0,80}` purple.
+- **Entrance shaft mouth — playtested & tuned.** `draw_shaft_mouth` (render.odin, render-only) dresses the descent lip: throat walls rim→dark, cut-soil edges, lit grass rim, and a brown scuff apron that now hugs the lip (squared falloff over `SHAFT_APRON_REACH`=4). Generic (keys off terrain in the `SURFACE_Y..CAVE_TOP` cap band), guarded by `shaft_mouth_is_dressable`. The `.Cave_Entrance` tile type stays **dead** (enum kept for save compat) — don't spend art on its `{60,0,80}` purple.
+- **Dirt tile art is a flat brown square** (solid-color fallback; no atlas sprite, no `draw_pixel_dirt`). Functional but plain — a small polish job: add a `Draw_Style.Pixel_Dirt` + `draw_pixel_dirt` proc, mirroring wood/leaves.
+- **Collect motes home to the player, not the hotbar.** Particles are world-space (drawn under the camera); the inventory HUD is a separate screen-space pass. Retargeting the mote to the actual hotbar slot needs a screen-space collect layer — the real follow-up if the "into the bag" read should point at the UI.
 
 ### TOP PRIORITY: a big hand playtest is owed
 None of the retune/Silo/gravity work has been *felt* in-game yet:

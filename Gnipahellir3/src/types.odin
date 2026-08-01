@@ -78,6 +78,8 @@ Tile_Type :: enum u8 {
     Dimension_Spawner_Runic,
     // Silo (appended: order is frozen)
     Silo,         // wide-count bulk storage — counts past the u8 world (silo.odin)
+    // Placeable loose earth (appended: terrain is saved as u8, order is frozen)
+    Dirt,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -152,6 +154,8 @@ Item :: enum u8 {
     Dimension_Spawner_Runic,
     // Silo (appended: order is frozen)
     Silo,
+    // Loose earth from the shaft-mouth stratum (appended: order is frozen)
+    Dirt,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -206,7 +210,12 @@ Terrain_Flag :: enum u8 {
     Mineable,
     Placeable,
     Animated,
-    Falls,      // obeys structural gravity — drops when cut loose (gravity.odin)
+    Falls,       // obeys structural gravity unconditionally — drops when cut
+                 // loose (gravity.odin): trees, placed wood/leaves, dirt
+    Falls_Placed,// falls the same way, but ONLY when the cell is player-placed
+                 // (Tile_Flag.Placed) — natural terrain of this type never caves
+    Settles,     // a faller that re-settles as a TILE on landing (sand-style),
+                 // instead of crumbling into item drops like a felled tree
 }
 
 Terrain_Flags :: bit_set[Terrain_Flag; u16]
@@ -218,6 +227,8 @@ Tile_Flag :: enum u8 {
     Poison,
     Corrupted,
     Lit,
+    Placed,   // a player-placed block: distinguishes placed stone/grass from the
+              // identical natural terrain so only placed ones obey gravity
 }
 
 Tile_Flags :: bit_set[Tile_Flag; u8]

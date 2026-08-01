@@ -163,6 +163,22 @@ GRASS_TURF_GRID :: Icon_Grid{
 	"............",
 }
 
+// A loose clod of earth (B) with dark clumps (D) and lit crumbs (L).
+DIRT_GRID :: Icon_Grid{
+	"............",
+	"............",
+	"..BBBBBBBB..",
+	".BBLBBBDBBB.",
+	".BBBBBBBBBB.",
+	".BDBBLBBBBB.",
+	".BBBBBBBDBB.",
+	".BBLBBBBBBB.",
+	".BBBBBDBBLB.",
+	".DBBBBBBBBD.",
+	".DDDDDDDDDD.",
+	"............",
+}
+
 // Two boards, grain (D) and nails (A).
 PLANK_GRID :: Icon_Grid{
 	"............",
@@ -555,6 +571,8 @@ item_icons := [Item]Item_Icon{
 	.Hel_Gem          = {CRYSTAL_GRID, {{}, {}, {255, 145, 150, 255}, {220, 50, 80, 255}, {135, 18, 48, 255}}},
 	// Machine box in iron gray — the bulk store that counts past 99
 	.Silo             = {SMELTER_GRID, {{120, 128, 142, 255}, {70, 76, 88, 255}, {}, {200, 210, 225, 255}, {240, 246, 255, 255}}},
+	// Clod of loose earth dug from the shaft-mouth stratum
+	.Dirt             = {DIRT_GRID, {{110, 78, 46, 255}, {78, 52, 30, 255}, {146, 108, 70, 255}, {}, {}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────
