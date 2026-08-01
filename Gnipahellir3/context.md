@@ -110,6 +110,9 @@ Q drop stack 2 tiles ahead · ESC close windows / pause · F1 debug menu · F3 d
 5. **Save-during-fall** drops airborne blocks (pool not in `Save_Data`) — rare, cosmetic; harden only if it bites.
 6. **`blueprints.md`** — blueprints A/B/C are pixel-identical; owed original art + particles (recipes already differ).
 
+### Visual polish owed (for the concurrent Sonnet "how things look" session)
+- **Entrance shaft mouth** — removing the old `Cave_Entrance` cap (master cbd2cc2) exposed the level-0 descent as a raw 2-wide `.Void` slot in the surface grass (center `x=96`, `y=54–67`), then the starter pickaxe moved to its floor (a8632c1). This is the **first place `.Void` renders above ground against the sky** — any Void styling is now surface-visible here. Owed: dress the pit lip (a bit of stone edge / a proper cave-mouth read). The `.Cave_Entrance` tile type is now **dead** (enum kept for save compat, but placed nowhere) — don't spend art on its `{60,0,80}` purple.
+
 ### TOP PRIORITY: a big hand playtest is owed
 None of the retune/Silo/gravity work has been *felt* in-game yet:
 - Garm at 75/4/3 with min-1 chip — losable at Gold set, comfortable win at Runic?
