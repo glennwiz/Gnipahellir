@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 
 Portal_Effect :: struct {
     active   : bool,

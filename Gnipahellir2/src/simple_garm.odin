@@ -2,7 +2,7 @@
 package gnipahellir
 
 import "core:math"
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 import "core:fmt"
 
 // Simple GARM states - no complex state machine

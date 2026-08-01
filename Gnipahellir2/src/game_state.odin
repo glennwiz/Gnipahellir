@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 import "core:os"
 import "core:fmt"
 import "core:mem"

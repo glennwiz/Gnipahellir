@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 // NOTE: Desired vsync enable (FLAG_VSYNC_HINT) isn't exposed in current binding.
 // We'll rely on SetTargetFPS and driver vsync. Once binding exposes flag, call:
 // rl.SetConfigFlags(rl.ConfigFlags.VSYNC_HINT) BEFORE InitWindow.

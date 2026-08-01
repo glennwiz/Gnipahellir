@@ -1,6 +1,6 @@
 package gnipahellir
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 
 // Processes non-render interactions: pickups, debug placement commits, and
 // world drops/placements that should occur outside the render pass.
