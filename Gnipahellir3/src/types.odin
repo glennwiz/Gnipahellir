@@ -80,6 +80,9 @@ Tile_Type :: enum u8 {
     Silo,         // wide-count bulk storage — counts past the u8 world (silo.odin)
     // Placeable loose earth (appended: terrain is saved as u8, order is frozen)
     Dirt,
+    // 2-tall wooden door — one tile type, open/closed via Tile_Flag.Open
+    // (appended: terrain is saved as u8, order is frozen)
+    Door,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -156,6 +159,8 @@ Item :: enum u8 {
     Silo,
     // Loose earth from the shaft-mouth stratum (appended: order is frozen)
     Dirt,
+    // Craftable 2-tall wooden door (appended: order is frozen)
+    Door,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

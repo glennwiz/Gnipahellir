@@ -91,6 +91,7 @@ Draw_Style :: enum u8 {
     Pixel_Gem,
     Pixel_Miner_Body,
     Pixel_Cloud,
+    Pixel_Door,
 }
 
 @(rodata)
@@ -104,6 +105,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Hel_Gem_Ore = .Pixel_Gem,
     .Miner_Body  = .Pixel_Miner_Body,
     .Cloud       = .Pixel_Cloud,
+    .Door        = .Pixel_Door,
     // all others default to .Solid (zero value)
 }
 
@@ -317,6 +319,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Flower:     draw_pixel_flower(px, py)
     case .Pixel_Gem:        draw_pixel_gem(px, py, t)
     case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
+    case .Pixel_Door:       draw_pixel_door(gs, px, py, x, y)
     case .Pixel_Cloud:
         // Sky backdrop only — the puffs paint in draw_cloud_layer, a
         // second pass, so their bulges can spill over neighbor cells
@@ -370,6 +373,31 @@ draw_pixel_wood :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+1, by, 1, CELL_SIZE, dark)
     rl.DrawRectangle(bx+5, by, 1, CELL_SIZE, light)
     rl.DrawRectangle(bx+6, by, 1, CELL_SIZE, dark)
+}
+
+// ─── Pixel Art: Door ──────────────────────────────────────────────────────────
+//
+//  A plank leaf fills the cell with dark jambs down both sides, a top-rail
+//  highlight and a plank seam; the lower half (a door tile sits above it) wears
+//  the iron knob.  Always drawn shut — the door has no open state; the player
+//  simply phases through it (physics.odin).
+
+draw_pixel_door :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+    wood  := rl.Color{150, 100, 55, 255}
+    dark  := rl.Color{ 92,  60, 32, 255}
+    light := rl.Color{182, 130, 78, 255}
+    iron  := rl.Color{ 60,  60, 68, 255}
+
+    bottom := is_door(&gs.world, x, y - 1)   // a door above → this is the lower half
+
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, wood)
+    rl.DrawRectangle(bx, by, 1, CELL_SIZE, dark)
+    rl.DrawRectangle(bx+CELL_SIZE-1, by, 1, CELL_SIZE, dark)
+    rl.DrawRectangle(bx+1, by, CELL_SIZE-2, 1, light)
+    rl.DrawRectangle(bx+3, by, 1, CELL_SIZE, dark)   // plank seam
+    if bottom {
+        rl.DrawRectangle(bx+CELL_SIZE-4, by+CELL_SIZE/2-1, 2, 2, iron)  // knob
+    }
 }
 
 // ─── Pixel Art: Miner Body ────────────────────────────────────────────────────

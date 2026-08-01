@@ -354,6 +354,17 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Silo,
 		0,
 	},
+	.Door                    = {
+		"Door",
+		// Statically solid + mineable; a cell flagged .Open is passable (that
+		// override lives in door_open / is_solid / gravity).  Mines to a Door.
+		{.Solid, .Mineable},
+		rl.Color{150, 100, 55, 255},
+		0,
+		0,
+		.Door,
+		0,
+	},
 	.Dirt                    = {
 		"Dirt",
 		// A building block (like Stone/Grass, not a machine) that obeys gravity:

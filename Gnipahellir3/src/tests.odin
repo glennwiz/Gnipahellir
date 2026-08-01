@@ -198,6 +198,82 @@ each_tier_raises_a_distinct_altar :: proc(t: ^testing.T) {
 }
 
 @(test)
+door_crafts_places_anchors_and_mines :: proc(t: ^testing.T) {
+    // Full life of a door: craft it at the bench from planks, place the 2-tall
+    // pair, confirm it's solid rock that anchors a stack, then mine it back to
+    // one Door item — both halves gone.
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+    inv := &gs.player.inventory
+
+    // A bench door from planks, buildable from the start.
+    door_recipe := -1
+    for r, i in recipe_table do if r.result == .Door { door_recipe = i; break }
+    testing.expect(t, door_recipe >= 0, "a Door recipe exists")
+    testing.expect_value(t, recipe_table[door_recipe].station, Station.Bench)
+
+    gs.player.pos = {20, 40}
+    for yy in 38 ..= 43 do for xx in 18 ..= 24 do set_tile(w, xx, yy, .Air)
+    set_tile(w, 22, 42, .Stone)           // ground the door hangs on
+    set_tile(w, 19, 41, .Crafting_Bench)  // bench in reach
+
+    inventory_insert(inv, .Plank, 4)
+    handle_craft_request(gs, Event{payload = {int_val = i32(door_recipe)}})
+    testing.expect_value(t, inventory_count(inv, .Door), 1)
+    testing.expect_value(t, inventory_count(inv, .Plank), 0)
+
+    // Place the 1×2 door (foot at 22,41; it rises into 22,40).
+    for &s, i in inv.slots do if s.item == .Door { inv.selected = i; break }
+    testing.expect(t, placement_ok(gs, .Door, 22, 41), "door fits the doorway")
+    eq_push(&gs.events, Event{type = .Place_Request, tile = {22, 41}})
+    process_events(gs)
+    testing.expect_value(t, get_tile(w, 22, 41), Tile_Type.Door)
+    testing.expect_value(t, get_tile(w, 22, 40), Tile_Type.Door)
+    testing.expect(t, is_solid(w, 22, 41) && is_solid(w, 22, 40), "a door is solid rock")
+
+    // Stable anchor like rock: a placed stone resting on the door holds.
+    set_tile(w, 22, 39, .Stone)
+    w.tile_flags[grid_idx(22, 39)] += {.Placed}
+    gravity_check_removed(gs, 22, 39)
+    testing.expect_value(t, gravity_count_active(gs), 0)
+    testing.expect_value(t, get_tile(w, 22, 39), Tile_Type.Stone)
+
+    // Mine one half: the whole door goes, exactly one Door drops back.
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {22, 41}})
+    process_events(gs)
+    testing.expect(t, get_tile(w, 22, 41) != .Door && get_tile(w, 22, 40) != .Door, "both halves removed")
+    testing.expect_value(t, w.items[grid_idx(22, 41)], Item.Door)
+}
+
+@(test)
+door_passes_player_blocks_enemies :: proc(t: ^testing.T) {
+    // A door is always open to the player and always shut to everyone else:
+    // move_body's pass_doors is the only difference.
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+
+    for yy in 48 ..= 52 do for xx in 96 ..= 104 do set_tile(w, xx, yy, .Air)
+    set_tile(w, 100, 50, .Door)   // a 2-tall door across the lane
+    set_tile(w, 100, 49, .Door)
+
+    grounded: bool
+
+    // Player (pass_doors) walks straight through, ending past the door column.
+    ppos := [2]f32{98, 49}
+    pvel := [2]f32{50, 0}
+    move_body(w, &ppos, &pvel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded, pass_doors = true)
+    testing.expect(t, ppos.x > 100, "the player phases through a door")
+
+    // An enemy (pass_doors defaults false) is stopped short of the door.
+    epos := [2]f32{98, 49}
+    evel := [2]f32{50, 0}
+    move_body(w, &epos, &evel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded)
+    testing.expect(t, epos.x < 100, "a door walls other entities out")
+}
+
+@(test)
 dirt_places_and_mines_back :: proc(t: ^testing.T) {
     // The dirt clod is a building block: place it as a Dirt tile, mine it back
     // into a clod.  A full round trip so the item↔tile pairing can't drift.

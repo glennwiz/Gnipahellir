@@ -63,7 +63,7 @@ update_player :: proc(gs: ^Game_State) {
     prev_grounded := p.grounded
 
     move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
-        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded)
+        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded, pass_doors = true)
 
     entity_map_move(&gs.world, PLAYER_ID, prev_center, player_tile(p))
 

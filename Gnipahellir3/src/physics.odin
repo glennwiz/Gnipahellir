@@ -26,11 +26,23 @@ package game
 BODY_EPS    :: f32(0.001)
 BODY_MARGIN :: f32(0.003)
 
+// A door is solid rock to every body EXCEPT the player, who always walks
+// through it (Glenn's design: no open/close, just permeable to the player and a
+// wall to enemies).  move_body's `pass_doors` selects which side of that a body
+// is on.  Everything else — anchoring, falling blocks, placement — reads plain
+// is_solid, so a door is always a stable anchor like rock.
+@(private = "file")
+blocks_body :: proc(w: ^World_Grid, x, y: int, pass_doors: bool) -> bool {
+    if pass_doors && is_door(w, x, y) do return false
+    return is_solid(w, x, y)
+}
+
 // Integrates gravity (0 = none, e.g. debug fly mode) and moves the body,
 // resolving against solid tiles.  `grounded` is written only when the body
-// moves vertically: true on landing, false while airborne.
+// moves vertically: true on landing, false while airborne.  `pass_doors` lets
+// the player phase through door tiles (enemies leave it false — doors wall them).
 move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
-                  dt, gravity, max_fall: f32, grounded: ^bool) {
+                  dt, gravity, max_fall: f32, grounded: ^bool, pass_doors := false) {
     if gravity != 0 {
         vel.y += gravity * dt
         if vel.y > max_fall do vel.y = max_fall
@@ -46,7 +58,7 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
         if dx > 0 {
             sweep_r: for c in int(pos.x + size.x - BODY_MARGIN) + 1 ..= int(new_x + size.x - BODY_MARGIN) {
                 for r in top ..= bot {
-                    if is_solid(w, c, r) {
+                    if blocks_body(w, c, r, pass_doors) {
                         new_x = f32(c) - size.x - BODY_EPS
                         vel.x = 0
                         break sweep_r
@@ -56,7 +68,7 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
         } else {
             sweep_l: for c := int(pos.x + BODY_MARGIN) - 1; c >= int(new_x + BODY_MARGIN); c -= 1 {
                 for r in top ..= bot {
-                    if is_solid(w, c, r) {
+                    if blocks_body(w, c, r, pass_doors) {
                         new_x = f32(c + 1) + BODY_EPS
                         vel.x = 0
                         break sweep_l
@@ -78,7 +90,7 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
             grounded^ = false
             sweep_d: for r in int(pos.y + size.y - BODY_MARGIN) + 1 ..= int(new_y + size.y - BODY_MARGIN) {
                 for c in left ..= right {
-                    if is_solid(w, c, r) {
+                    if blocks_body(w, c, r, pass_doors) {
                         new_y = f32(r) - size.y - BODY_EPS
                         vel.y = 0
                         grounded^ = true
@@ -90,7 +102,7 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
             grounded^ = false
             sweep_u: for r := int(pos.y + BODY_MARGIN) - 1; r >= int(new_y + BODY_MARGIN); r -= 1 {
                 for c in left ..= right {
-                    if is_solid(w, c, r) {
+                    if blocks_body(w, c, r, pass_doors) {
                         new_y = f32(r + 1) + BODY_EPS
                         vel.y = 0
                         break sweep_u

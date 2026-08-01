@@ -118,6 +118,10 @@ recipe_table := [?]Recipe{
     { .Runic_Gauntlets,  1, .Rune_Altar, {{.Gold_Gauntlets, 1},  {.Runic_Sky_Ore, 3}, {}} },
     { .Runic_Greaves,    1, .Rune_Altar, {{.Gold_Greaves, 1},    {.Runic_Sky_Ore, 5}, {}} },
     { .Runic_Boots,      1, .Rune_Altar, {{.Gold_Boots, 1},      {.Runic_Sky_Ore, 3}, {}} },
+    // A 2-tall wooden door, buildable from the very first bench — E toggles it
+    // open (walk through) or shut (solid).  One log's worth of planks.
+    // (Appended to keep existing recipe indices stable.)
+    { .Door,             1, .Bench, {{.Plank, 4},          {},                  {}} },
 }
 
 // One scan of the tiles around the player: which stations are in range.

@@ -179,6 +179,22 @@ DIRT_GRID :: Icon_Grid{
 	"............",
 }
 
+// A plank door (B leaf, D frame/seams, L rail highlight) with an iron knob (A).
+DOOR_GRID :: Icon_Grid{
+	"...DDDDDD...",
+	"..DLLLLLLD..",
+	"..DBBDBBBD..",
+	"..DBBDBBBD..",
+	"..DBBDBBBD..",
+	"..DBBDBBBD..",
+	"..DBBDBABD..",
+	"..DBBDBBBD..",
+	"..DBBDBBBD..",
+	"..DBBDBBBD..",
+	"..DBBDBBBD..",
+	"...DDDDDD...",
+}
+
 // Two boards, grain (D) and nails (A).
 PLANK_GRID :: Icon_Grid{
 	"............",
@@ -573,6 +589,8 @@ item_icons := [Item]Item_Icon{
 	.Silo             = {SMELTER_GRID, {{120, 128, 142, 255}, {70, 76, 88, 255}, {}, {200, 210, 225, 255}, {240, 246, 255, 255}}},
 	// Clod of loose earth dug from the shaft-mouth stratum
 	.Dirt             = {DIRT_GRID, {{110, 78, 46, 255}, {78, 52, 30, 255}, {146, 108, 70, 255}, {}, {}}},
+	// Wooden door — leaf, frame, rail highlight, iron knob
+	.Door             = {DOOR_GRID, {{150, 100, 55, 255}, {92, 60, 32, 255}, {182, 130, 78, 255}, {60, 60, 68, 255}, {}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

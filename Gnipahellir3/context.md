@@ -6,9 +6,9 @@ the game is, where the code stands right now, and what's queued next. When it
 disagrees with older docs, trust this file — then reconcile.
 
 - **Last updated:** 2026-08-01
-- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 105 green (`odin test src`)
-- **Save version:** 14 (`gnipahellir_save.dat` ≈ 2,658,280 bytes; `Dirt` item/tile + `.Placed` cell flag added, size unchanged — all append-only)
-- **Recent HEAD:** a6da044 (dirt blocks + collect motes + placed gravity — this session's arc), 858d7ad (shaft-mouth flagged), a8632c1 (starter pickaxe). Committed on master, **not yet pushed** (Glenn drives git).
+- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 107 green (`odin test src`)
+- **Save version:** 14 (`gnipahellir_save.dat` ≈ 2,658,280 bytes; `Dirt` + `Door` item/tile + `.Placed` cell flag added, size unchanged — all append-only)
+- **Recent HEAD:** 838c0c9 (G2 raylib unversion), 375de57 (docs), a6da044 (dirt blocks + collect motes + placed gravity — the session arc). **UNCOMMITTED: the player-permeable Door feature** (door.odin + physics/placement/render/tests). Committed work not yet pushed (Glenn drives git).
 
 ---
 
@@ -93,6 +93,7 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 - **Structural gravity (`gravity.odin`), now cell-aware:** faller test is `is_faller(w,x,y)` — unconditional `.Falls` types (Wood, Leaves, **Dirt**) OR a `.Falls_Placed` type on a `.Placed` cell (**placed Stone**). A faller stays up only while a 4-connected chain links it to an anchor (any solid non-faller, or the map edge). Cut the last link → the hanging piece detaches and slides at `FALL_SPEED` 3 tiles/s. **Landing: `.Settles` types (Dirt, placed Stone) re-stack as TILES sand-style** (re-marking `.Placed` so stacks keep falling); everything else crumbles to **drops** (felled tree → logs+leaves). Stacking is order-safe (`r` recomputed each frame off the live grid). Detach fires from `Tile_Mined`; motion is step 6b; `draw_falling_blocks` read-only. `Gravity_State` pool [256], NOT saved.
 - **Placed-block tracking:** `Tile_Flag.Placed` set on every player placement (`placement.odin`), cleared on mine (`handle_tile_mined`) and when lifted into the fall pool, re-marked on settle. Lives in `World_Grid.tile_flags` → **saved wholesale** (persists). This is what lets placed Stone fall while identical natural cave Stone stays inert.
 - **Shaft-mouth + starter-earth reward (`render.odin` / `events.odin`):** `draw_shaft_mouth` apron fade is squared falloff over `SHAFT_APRON_REACH` (=4) so the brown scuff hugs the lip. Shared const + `in_shaft_apron(w,x,y)` (world.odin) mark exactly the scuffed tiles; **mining a tile in that apron drops the rock on the ground AND banks a `Dirt` clod straight to the bag** with a **collect mote** (`spawn_collect_mote`, particles.odin — homes to the player; `Particle` gained `homing`/`target`). `Dirt` is a placeable building block (item+tile, mines back, obeys gravity).
+- **Door (`door.odin`, player-permeable wall):** craft at the Bench (4 Plank), place a **2-tall** pair (foot cell + the one above). It is **solid rock to everything** — never falls, full gravity anchor, falling blocks rest on it, **enemies walled out** — with ONE exception: the **player always phases through** it (no open/close, no button). The exception lives entirely in `move_body`'s `pass_doors` (physics.odin): the player's call passes `true`, every other body keeps the default `false`. `is_solid`/gravity/placement all read the door as plain solid rock. Mining either half removes the whole door for one `Door` item. `draw_pixel_door` (Pixel_Door style) knows top/bottom via a neighbor check. **Not committed yet.**
 - **Hold-to-place:** right-click held paints a run of blocks, one per tile (`Input_State.place_last` dedupes the sweep).
 
 ### Controls (quick ref — full in PLAYTEST.md)
@@ -116,6 +117,7 @@ Q drop stack 2 tiles ahead · ESC close windows / pause · F1 debug menu · F3 d
 - **Entrance shaft mouth — playtested & tuned.** `draw_shaft_mouth` (render.odin, render-only) dresses the descent lip: throat walls rim→dark, cut-soil edges, lit grass rim, and a brown scuff apron that now hugs the lip (squared falloff over `SHAFT_APRON_REACH`=4). Generic (keys off terrain in the `SURFACE_Y..CAVE_TOP` cap band), guarded by `shaft_mouth_is_dressable`. The `.Cave_Entrance` tile type stays **dead** (enum kept for save compat) — don't spend art on its `{60,0,80}` purple.
 - **Dirt tile art is a flat brown square** (solid-color fallback; no atlas sprite, no `draw_pixel_dirt`). Functional but plain — a small polish job: add a `Draw_Style.Pixel_Dirt` + `draw_pixel_dirt` proc, mirroring wood/leaves.
 - **Collect motes home to the player, not the hotbar.** Particles are world-space (drawn under the camera); the inventory HUD is a separate screen-space pass. Retargeting the mote to the actual hotbar slot needs a screen-space collect layer — the real follow-up if the "into the bag" read should point at the UI.
+- **Door polish:** the placement **ghost previews one cell**, not the full 1×2 (cosmetic — the placement itself is 2-tall and correct). The **Door recipe sits at the END of the Bench list** (appended to keep recipe indices stable for tests); reorder + fix the couple of index-based craft tests if you want it near the top. Door tile art is a simple plank leaf (`draw_pixel_door`), fine but not fancy.
 
 ### TOP PRIORITY: a big hand playtest is owed
 None of the retune/Silo/gravity work has been *felt* in-game yet:
@@ -137,7 +139,7 @@ Iron_Bucket can't scoop lava; potions exist but are unobtainable/unusable.
 
 ## 6. How to work here
 
-- **Verify every change:** `odin run src` builds, `odin test src` (headless, ~1 s, 100 tests). Every feature lands with tests. Extend soak tests (AI/boss), don't skip.
+- **Verify every change:** `odin run src` builds, `odin test src` (headless, ~2 s, 107 tests). Every feature lands with tests. Extend soak tests (AI/boss), don't skip.
 - **Toolchain caveat:** Odin dev-2026-07 dropped versioned raylib — imports are plain `vendor:raylib` (NOT `vendor:raylib/v55`). Two signatures shifted: `DrawCircleGradient` takes a `Vector2` center; hairline `DrawRectangleLines` flickers under the supersample → use `DrawRectangleLinesEx`. If a build breaks on an import, check `odin root`'s vendor tree AND raylib call shapes. (See memory `[[odin-toolchain-quirks]]`.)
 - **Working with Glenn:** he designs by conversation — give concrete options WITH a recommendation, then respect his fast, good decisions (write them down, don't re-litigate). He hand-playtests between sessions (`action.log` is ground truth — grep it for `strike`/`WARNING`/`Player`). He picks the FUN slice before the prerequisite; meet that energy but keep prereqs visible here. Small, verified commits. Keep it warm. ⚒️
 - **Commits:** conventional (`feat:`/`fix:`/`chore:`/`docs:`), lowercase, ≤50 chars. Glenn often drives git himself — check `git log` before assuming state.
@@ -165,7 +167,8 @@ Iron_Bucket can't scoop lava; potions exist but are unobtainable/unusable.
 
 ## 8. Recent shipped history (compact — git + Work_done.md carry the long form)
 
-- **2026-08-01** (master a693b85/82481b8/4368902, 100 tests): build unbroke (versioned raylib dropped → plain `vendor:raylib`, `DrawRectangleLinesEx` for hairlines, `DrawCircleGradient` Vector2 center); **structural gravity** slice (`gravity.odin`); hold-to-place block painting; pickaxe hover-target fix.
+- **2026-08-01 session 2** (master a6da044/375de57/838c0c9 + uncommitted Door, 107 tests): coherent surface/build arc — shaft-mouth apron fade (squared falloff, shared `SHAFT_APRON_REACH`); **Dirt** item/tile (placeable, gravity, mines back) + shaft-apron reward (rock on ground, dirt to bag); **collect motes** (`Particle.homing`/`target`, `spawn_collect_mote`); **placed-block gravity** (`.Placed` cell bit + `.Falls_Placed`/`.Settles` → placed Stone falls sand-style, natural stays); then the **player-permeable Door** (still uncommitted). Also committed the G2 prototype's raylib unversion fix (838c0c9).
+- **2026-08-01 session 1** (master a693b85/82481b8/4368902, 100 tests): build unbroke (versioned raylib dropped → plain `vendor:raylib`, `DrawRectangleLinesEx` for hairlines, `DrawCircleGradient` Vector2 center); **structural gravity** slice (`gravity.odin`); hold-to-place block painting; pickaxe hover-target fix.
 - **2026-07-19**: **the Silo** shipped (911dec4, save v14, draft1 §7.6 step 1). **G6 fixed** (70a6500, miner catch-up amortized). Doc cleanup: deleted `FABLE_START.md`, `score.md`, `progression_review.md` (shipped/superseded, in git history).
 - **2026-07-18 fix session** (commits 720b68e..a918662, 84 tests): shipped flagg.md's whole top list — both CRITICALs (Cloud Stone 20% chance-drop + puffy animated sky; Runic Dimension Spawner @ 500 Gold Bars + 20 Cloud Stone), the four locked decisions (min-1 player dmg, Garm 75/4/3 with phases 50/25, rituals B/C cost bars), G1 (same-kind spawner reclaim releases the anchor), G2 (`smash_tile` drops machine items), A1 (mote table OOB), A2 (autosave debounced 5 s). Since then on master: G5 boxed-in miner fix (5eba0f6), stuck-builder pillars up + own den never a cage (23b9132), F2 altar debug menu + sky-portal fixes (b8b35d6), stone tint alpha 210→120 (43c4633).
 - **All `.md` docs live in `gnipa_project/`** since 2026-07-18 (CLAUDE.md + this file stay at root).

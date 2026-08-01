@@ -393,6 +393,18 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))
     }
     sd^ = {}
+
+    // A door is two tiles: mining one half takes the whole door.  The generic
+    // path above already dropped a single Door for this half; remove the partner
+    // (no second drop) so no half is left standing.
+    if old_tile == .Door {
+        if px, py, ok := door_partner(&gs.world, x, y); ok {
+            pidx := grid_idx(px, py)
+            gs.world.tile_flags[pidx] -= {.Placed}
+            set_tile(&gs.world, px, py, gravity_open_tile(gs, py))
+            gravity_check_removed(gs, px, py)
+        }
+    }
 }
 
 // Q key: the selected stack lands two tiles ahead of the player — outside

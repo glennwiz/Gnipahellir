@@ -14,6 +14,8 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
     if place_tile == .Air do return false          // not placeable
     if !in_bounds(x, y) do return false
 
+    if place_tile == .Door do return door_placement_ok(gs, x, y)  // 1×2, own rules
+
     t := get_tile(&gs.world, x, y)                 // target must be open
     if t != .Air && t != .Void do return false
 
@@ -46,6 +48,27 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
 
     if .Solid in terrain_table[place_tile].flags && tile_overlaps_player(gs, x, y) do return false  // don't seal the player in
     return true
+}
+
+// A door needs two stacked open cells (clicked cell + the one above), both in
+// reach, plus a solid neighbour on some side to hang on.  No overlap check —
+// the player phases through doors, so placing one on yourself can't trap you.
+door_placement_ok :: proc(gs: ^Game_State, x, y: int) -> bool {
+    pcx := int(gs.player.pos.x + PLAYER_W*0.5)
+    pcy := int(gs.player.pos.y + PLAYER_H*0.5)
+    has_anchor := false
+    for c in door_cells(x, y) {
+        cx, cy := c[0], c[1]
+        if !in_bounds(cx, cy) do return false
+        t := get_tile(&gs.world, cx, cy)
+        if t != .Air && t != .Void do return false                     // must be open
+        if abs(cx - pcx) > PLAYER_REACH || abs(cy - pcy) > PLAYER_REACH do return false
+        if is_solid(&gs.world, cx-1, cy) || is_solid(&gs.world, cx+1, cy) ||
+           is_solid(&gs.world, cx, cy-1) || is_solid(&gs.world, cx, cy+1) {
+            has_anchor = true
+        }
+    }
+    return has_anchor
 }
 
 handle_place_request :: proc(gs: ^Game_State, e: Event) {
@@ -91,6 +114,12 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     set_tile(&gs.world, x, y, place_tile)
     gs.world.sim_data[grid_idx(x, y)] = {}  // a fresh machine starts cold, tray empty
     gs.world.tile_flags[grid_idx(x, y)] += {.Placed}  // player-built: gravity-eligible
+
+    // A door is two tiles: raise its upper half in the cell above.
+    if place_tile == .Door {
+        set_tile(&gs.world, x, y-1, .Door)
+        gs.world.tile_flags[grid_idx(x, y-1)] += {.Placed}
+    }
     eq_push(&gs.events, Event{type = .Tile_Placed, source = PLAYER_ID, tile = e.tile})
 
     // A placed spawner is a door waiting to be opened.
