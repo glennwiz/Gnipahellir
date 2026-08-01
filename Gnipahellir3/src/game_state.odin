@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 import "core:time"
 
 // ─── World Grid ───────────────────────────────────────────────────────────────
@@ -224,6 +224,7 @@ Input_State :: struct {
     mouse_tile:   [2]i32,
     mouse_world:  [2]f32,   // world-pixel space (camera-inverse) — mining/placement
     mouse_screen: [2]f32,   // virtual-screen space — UI hit-testing
+    place_last:   [2]i32,   // last tile a hold-to-place fired on — dedupes the sweep
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────

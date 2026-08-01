@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 
 // ─── Item Behavior Table ──────────────────────────────────────────────────────
 

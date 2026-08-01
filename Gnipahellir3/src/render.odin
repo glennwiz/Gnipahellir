@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 import "core:fmt"
 import "core:math"
 
@@ -176,7 +176,7 @@ draw_world :: proc(gs: ^Game_State) {
                     rl.DrawRectangle(px + 2 - grow, py + 2 - grow, 6 + grow*2, 6 + grow*2, glow_col)
                 }
                 rl.DrawRectangle(px + 2, py + 2, 6, 6, item_table[it].color)
-                rl.DrawRectangleLines(px + 1, py + 1, 8, 8, rl.WHITE)
+                rl.DrawRectangleLinesEx({f32(px) + 1, f32(py) + 1, 8, 8}, 1, rl.WHITE)
             }
         }
     }
@@ -712,8 +712,9 @@ draw_enemies_debug :: proc(gs: ^Game_State) {
 // the focus is computed in update_station_focus).
 draw_station_focus :: proc(gs: ^Game_State) {
     if gs.player.dead || gs.ui.focus_station == .None do return
-    rl.DrawRectangleLines(gs.ui.focus_tile.x * CELL_SIZE, gs.ui.focus_tile.y * CELL_SIZE,
-        CELL_SIZE, CELL_SIZE, NORSE_GOLD_HOT)
+    rl.DrawRectangleLinesEx(
+        {f32(gs.ui.focus_tile.x * CELL_SIZE), f32(gs.ui.focus_tile.y * CELL_SIZE), CELL_SIZE, CELL_SIZE},
+        1, NORSE_GOLD_HOT)
 }
 
 // Translucent preview of the selected placeable tile under the cursor — green

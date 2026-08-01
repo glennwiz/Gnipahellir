@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 
 // Virtual resolution: the game always simulates and renders at this fixed size;
 // the result is scaled (letterboxed) onto whatever the real window is.

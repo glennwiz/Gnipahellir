@@ -1,6 +1,6 @@
 package game
 
-import rl "vendor:raylib/v55"
+import rl "vendor:raylib"
 
 update_input :: proc(gs: ^Game_State) {
     inp := &gs.input
@@ -267,9 +267,16 @@ update_input :: proc(gs: ^Game_State) {
         }
     }
 
-    // Right-click: place the selected item at the mouse tile
-    if rl.IsMouseButtonPressed(.RIGHT) && !cursor_over_ui(gs) {
-        eq_push(&gs.events, Event{type = .Place_Request, tile = gs.input.mouse_tile})
+    // Right-click places the selected item.  Hold and sweep to "draw" a run of
+    // blocks — one per tile — until the bag runs dry (the handler stops when the
+    // stack hits zero).  Fires on a fresh press or when the cursor crosses into a
+    // new tile, so holding still doesn't re-fire (which would spam the
+    // special-item rejection toasts and churn the event queue).
+    if rl.IsMouseButtonDown(.RIGHT) && !cursor_over_ui(gs) {
+        if rl.IsMouseButtonPressed(.RIGHT) || inp.mouse_tile != inp.place_last {
+            eq_push(&gs.events, Event{type = .Place_Request, tile = inp.mouse_tile})
+            inp.place_last = inp.mouse_tile
+        }
     }
     when GAME_DEBUG {
         if rl.IsKeyPressed(.F3) {
