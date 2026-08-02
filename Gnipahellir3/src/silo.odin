@@ -126,7 +126,7 @@ silo_withdraw :: proc(gs: ^Game_State, s: ^Silo_State) {
             slot.count -= u32(taken)
             if taken > 0 do taken_any = true
             if taken < batch {  // bag is full
-                notify(gs, "The bag is full — %d items stay in the silo", silo_total(s))
+                notify(gs, "The bag is full - %d items stay in the silo", silo_total(s))
                 if taken_any do audio_play(&gs.audio, .Pickup)
                 return
             }
@@ -138,7 +138,7 @@ silo_withdraw :: proc(gs: ^Game_State, s: ^Silo_State) {
         notify(gs, "The silo empties into the bag")
         log_action(gs, "Player withdraws silo at (%d,%d)", s.tile.x, s.tile.y)
     } else {
-        notify(gs, "The silo is empty — drop stacks beside it to fill it")
+        notify(gs, "The silo is empty - drop stacks beside it to fill it")
     }
 }
 
@@ -151,7 +151,7 @@ silo_on_placed :: proc(gs: ^Game_State, tile: [2]i32) {
             level  = gs.level_index,
             tile   = tile,
         }
-        notify(gs, "The silo stands ready — drop stacks beside it, [%v] to empty it",
+        notify(gs, "The silo stands ready - drop stacks beside it, [%v] to empty it",
             gs.bindings[.Interact])
         log_action(gs, "Silo placed at (%d,%d) on level %d", tile.x, tile.y, gs.level_index)
         return

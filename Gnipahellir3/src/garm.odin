@@ -123,7 +123,7 @@ garm_update_phase :: proc(e: ^Enemy, gs: ^Game_State) {
 
     // The ring finishing is what breaks the ground open: flood follows.
     if g.phase == .Ring && g.build_i >= GARM_RING_LEN {
-        garm_enter_phase(e, gs, .Flood, "The ground splits — lava rises!")
+        garm_enter_phase(e, gs, .Flood, "The ground splits - lava rises!")
     }
 }
 

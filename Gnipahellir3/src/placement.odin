@@ -93,7 +93,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         // Explain the common templated-structure miss (the red ghost shows the rest).
         if tpl := structure_template_for(gs, slot.item); tpl != nil {
             if ok, want := structure_template_satisfied(&gs.world, tpl, x, y); !ok {
-                notify(gs, "The %s needs its %s foundation — build the plan (press B)",
+                notify(gs, "The %s needs its %s foundation - build the plan (press B)",
                     tpl.name, terrain_table[want].name)
             }
         }
@@ -102,23 +102,23 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
             if gs.level_index != LEVEL_DIMENSION {
                 notify(gs, "The Auto-Miner only wakes inside a spawned dimension")
             } else if gs.dimension.miner.active {
-                notify(gs, "One miner per expedition — reclaim the working one first")
+                notify(gs, "One miner per expedition - reclaim the working one first")
             }
         }
         // Explain the silo's two gates.
         if place_tile == .Silo {
             if gs.level_index == LEVEL_DIMENSION {
-                notify(gs, "The silo needs lasting ground — this world will collapse")
+                notify(gs, "The silo needs lasting ground - this world will collapse")
             } else if !silo_slot_free(gs) {
-                notify(gs, "Every silo is spoken for — reclaim one first")
+                notify(gs, "Every silo is spoken for - reclaim one first")
             }
         }
         // Explain the barrel's two gates.
         if place_tile == .Barrel {
             if gs.level_index == LEVEL_DIMENSION {
-                notify(gs, "The barrel needs lasting ground — this world will collapse")
+                notify(gs, "The barrel needs lasting ground - this world will collapse")
             } else if !barrel_slot_free(gs) {
-                notify(gs, "Every barrel is spoken for — reclaim one first")
+                notify(gs, "Every barrel is spoken for - reclaim one first")
             }
         }
         return
@@ -139,7 +139,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
 
     // A placed spawner is a door waiting to be opened.
     if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold || place_tile == .Dimension_Spawner_Runic {
-        notify(gs, "The spawner hums — press [%v] beside it to cross over", gs.bindings[.Interact])
+        notify(gs, "The spawner hums - press [%v] beside it to cross over", gs.bindings[.Interact])
     }
 
     // A placed Auto-Miner wakes the snake and anchors this dimension.
@@ -161,7 +161,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     if place_tile == .Sky_Altar && gs.level_index == LEVEL_SURFACE {
         gs.progression.sky_altar_pos = {i32(x), i32(y)}
         audio_play(&gs.audio, .Fanfare)
-        notify(gs, "The Sky Altar rises — a portal opens to the heavens!")
+        notify(gs, "The Sky Altar rises - a portal opens to the heavens!")
         spawn_deep_blueprint(gs)
     }
 }

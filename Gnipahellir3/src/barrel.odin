@@ -116,7 +116,7 @@ barrel_on_placed :: proc(gs: ^Game_State, tile: [2]i32) {
             level  = gs.level_index,
             tile   = tile,
         }
-        notify(gs, "A barrel stands ready — click it to stow and retrieve")
+        notify(gs, "A barrel stands ready - click it to stow and retrieve")
         log_action(gs, "Barrel placed at (%d,%d) on level %d", tile.x, tile.y, gs.level_index)
         return
     }

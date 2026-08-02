@@ -75,7 +75,7 @@ dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) 
 
     if gs.dimension.miner.active {
         if seed != gs.dimension.seed || kind != gs.dimension.kind {
-            notify(gs, "The Auto-Miner still gnaws at another world — reclaim it first")
+            notify(gs, "The Auto-Miner still gnaws at another world - reclaim it first")
             return
         }
         // Re-entering the anchored world: keep the saved grid as-is.

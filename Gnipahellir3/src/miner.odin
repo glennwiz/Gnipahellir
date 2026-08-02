@@ -89,13 +89,13 @@ miner_catchup :: proc(gs: ^Game_State) {
     if steps <= 0 do return
 
     m.mine_timer += owed
-    notify(gs, "The miner kept gnawing — %d blocks of backlog to chew through", steps)
+    notify(gs, "The miner kept gnawing - %d blocks of backlog to chew through", steps)
     log_action(gs, "Miner catch-up: %d steps queued", steps)
 }
 
 miner_fall_asleep :: proc(gs: ^Game_State, m: ^Miner_State) {
     m.asleep = true
-    notify(gs, "The dimension is played out — the miner sleeps")
+    notify(gs, "The dimension is played out - the miner sleeps")
     log_action(gs, "Miner asleep: no reachable ore")
 }
 
@@ -220,7 +220,7 @@ miner_withdraw :: proc(gs: ^Game_State) {
             h.count -= u32(taken)
             if taken > 0 do taken_any = true
             if taken < batch {  // bag is full
-                notify(gs, "The bag is full — %d blocks stay in the miner", miner_haul_total(m))
+                notify(gs, "The bag is full - %d blocks stay in the miner", miner_haul_total(m))
                 if taken_any do audio_play(&gs.audio, .Pickup)
                 return
             }
@@ -229,10 +229,10 @@ miner_withdraw :: proc(gs: ^Game_State) {
     }
     if taken_any {
         audio_play(&gs.audio, .Pickup)
-        notify(gs, "Haul claimed — the miner keeps gnawing")
+        notify(gs, "Haul claimed - the miner keeps gnawing")
         log_action(gs, "Player withdraws miner haul")
     } else {
-        notify(gs, "The miner has nothing yet — tier %d, one block per %.1fs",
+        notify(gs, "The miner has nothing yet - tier %d, one block per %.1fs",
             m.tier, miner_interval(m))
     }
 }
@@ -253,7 +253,7 @@ miner_absorb_gem :: proc(gs: ^Game_State, m: ^Miner_State) {
             if w.item_counts[idx] == 0 do w.items[idx] = .None
             m.tier = tier
             audio_play(&gs.audio, .Fanfare)
-            notify(gs, "The %s sinks in — the miner surges to one block per %.1fs",
+            notify(gs, "The %s sinks in - the miner surges to one block per %.1fs",
                 item_table[it].name, miner_interval(m))
             log_action(gs, "Miner fed %v: tier %d", it, m.tier)
             return  // one gem per tick is plenty
@@ -270,7 +270,7 @@ miner_on_placed :: proc(gs: ^Game_State, tile: [2]i32) {
         last_time = gs.elapsed_time,
     }
     audio_play(&gs.audio, .Fanfare)
-    notify(gs, "The Auto-Miner bites the rock — this world is anchored while it works")
+    notify(gs, "The Auto-Miner bites the rock - this world is anchored while it works")
     log_action(gs, "Auto-Miner placed at (%d,%d), dimension anchored", tile.x, tile.y)
 }
 
@@ -280,9 +280,9 @@ miner_on_mined :: proc(gs: ^Game_State) {
     m := &gs.dimension.miner
     lost := miner_haul_total(m)
     if lost > 0 {
-        notify(gs, "The miner is reclaimed — %d unclaimed blocks are lost with the world", lost)
+        notify(gs, "The miner is reclaimed - %d unclaimed blocks are lost with the world", lost)
     } else {
-        notify(gs, "The miner is reclaimed — the anchor releases")
+        notify(gs, "The miner is reclaimed - the anchor releases")
     }
     log_action(gs, "Auto-Miner reclaimed; %d blocks lost", lost)
     m^ = {}

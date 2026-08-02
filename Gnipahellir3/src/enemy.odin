@@ -765,7 +765,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     // the climb rule above.
     if target.y >= bt.y && in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) {
         if e.builder.pocket == 0 {
-            log_action(gs, "Builder out of blocks at (%d,%d) — replans", tx, ty+1)
+            log_action(gs, "Builder out of blocks at (%d,%d) - replans", tx, ty+1)
             nav.path = {}
             e.vel.x  = 0
             return true
@@ -789,7 +789,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
                 e.builder.escape_timer = 0
                 e.builder.escape_from  = builder_tile(e).y
                 nav.path = {}
-                log_action(gs, "Builder loops at (%d,%d) — pillars up and out", tx, ty+1)
+                log_action(gs, "Builder loops at (%d,%d) - pillars up and out", tx, ty+1)
             }
         } else {
             e.builder.last_place = pt
@@ -819,7 +819,7 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     if (head_clear && risen) || b.escape_timer >= ESCAPE_MAX_TIME {
         b.escaping = false
         nav.path   = {}
-        log_action(gs, "Builder#%d escape ends %d up — replanning", id, b.escape_from - bt.y)
+        log_action(gs, "Builder#%d escape ends %d up - replanning", id, b.escape_from - bt.y)
         return
     }
 
@@ -967,8 +967,8 @@ builder_alert :: proc(gs: ^Game_State, i: int) {
     e := &gs.enemies.data[i]
     b := &e.builder
     if b.goal == .Hunt { return }
-    log_action(gs, "Builder#%d den breached — hunting", i)
-    notify(gs, "A builder shrieks — it hunts you!")
+    log_action(gs, "Builder#%d den breached - hunting", i)
+    notify(gs, "A builder shrieks - it hunts you!")
     eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
     b.goal        = .Hunt
     b.los_timer   = 0
@@ -1016,7 +1016,7 @@ builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
         case .Encase_Den:
             // Couldn't get home — drop the block and fetch elsewhere rather
             // than freeze in a retry loop.
-            log_action(gs, "Builder#%d can't get home — drops %v", id, b.carry)
+            log_action(gs, "Builder#%d can't get home - drops %v", id, b.carry)
             b.carry = .Air
             builder_pause(b, JOB_COOLDOWN, .Fetch_Mineral)
         case .Hunt:
@@ -1385,7 +1385,7 @@ builder_encase :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 builder_hunt :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     b := &e.builder
     if gs.player.dead {
-        log_action(gs, "Builder#%d prey eliminated — back to work", id)
+        log_action(gs, "Builder#%d prey eliminated - back to work", id)
         builder_return_to_work(e)
         return
     }
@@ -1404,7 +1404,7 @@ builder_hunt :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         b.los_timer += dt
     }
     if !raiding && (f32(chebyshev(bt, pt)) > HUNT_LOSE_DIST || b.los_timer > LOS_MEMORY) {
-        log_action(gs, "Builder#%d lost the player — back to work", id)
+        log_action(gs, "Builder#%d lost the player - back to work", id)
         builder_return_to_work(e)
         return
     }
@@ -1457,7 +1457,7 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     // Spot the player while out working (den construction stays focused).
     if (b.goal == .Fetch_Mineral || b.goal == .Encase_Den) &&
        builder_sees_player(e, gs, HUNT_RADIUS) {
-        log_action(gs, "Builder#%d spots the player — hunting", id)
+        log_action(gs, "Builder#%d spots the player - hunting", id)
         b.goal        = .Hunt
         b.los_timer   = 0
         b.plan_target = {-99, -99}

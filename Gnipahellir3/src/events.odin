@@ -98,7 +98,7 @@ process_events :: proc(gs: ^Game_State) {
             // Machines teach themselves on placement.
             #partial switch get_tile(&gs.world, int(e.tile.x), int(e.tile.y)) {
             case .Smelter:
-                notify(gs, "Click the smelter and drag ore in — it casts bars")
+                notify(gs, "Click the smelter and drag ore in - it casts bars")
             case .Tree_Grower:
                 notify(gs, "The grower raises a tree when open sky is above")
             }
@@ -122,20 +122,20 @@ process_events :: proc(gs: ^Game_State) {
             case .Hell_Key:
                 eq_push(&gs.events, Event{type = .Game_Won})
             case .Sky_Blueprint:
-                notify(gs, "Sky Blueprint found — raise a Sky Altar to open the way above (B)")
+                notify(gs, "Sky Blueprint found - raise a Sky Altar to open the way above (B)")
             case .Pickaxe:
                 // First pickaxe: teach the core verb.  One-shot so a dropped-
                 // and-repicked pick doesn't nag.
                 if !gs.pickaxe_hint_shown {
                     gs.pickaxe_hint_shown = true
-                    notify(gs, "Pickaxe in hand — hold left-click by a wall to mine")
+                    notify(gs, "Pickaxe in hand - hold left-click by a wall to mine")
                 }
             case .Wood_Log:
                 // First log: teach hand-crafting — the hidden bootstrap verb
                 // (logs → planks → your first bench).  One-shot.
                 if !gs.craft_hint_shown {
                     gs.craft_hint_shown = true
-                    notify(gs, "Press [%v] to craft — turn logs into planks", gs.bindings[.Crafting])
+                    notify(gs, "Press [%v] to craft - turn logs into planks", gs.bindings[.Crafting])
                 }
             }
 
@@ -209,9 +209,9 @@ process_events :: proc(gs: ^Game_State) {
             // transition already performed by level_transition
             lvl := int(e.payload.int_val)
             if lvl == LEVEL_DIMENSION {
-                notify(gs, "— %s —", dimension_table[gs.dimension.kind].name)
+                notify(gs, "- %s -", dimension_table[gs.dimension.kind].name)
             } else if lvl >= 0 && lvl < NUM_LEVELS {
-                notify(gs, "— %s —", level_names[lvl])
+                notify(gs, "- %s -", level_names[lvl])
             }
             garm_maybe_awaken(gs)
 
@@ -222,12 +222,12 @@ process_events :: proc(gs: ^Game_State) {
             tier := int(e.payload.int_val)
             switch {
             case gs.progression.sky_altar_pos == {0, 0}:
-                notify(gs, "Sealed by runes — raise a Sky Altar on the Surface first")
+                notify(gs, "Sealed by runes - raise a Sky Altar on the Surface first")
             case tier >= 0 && tier < MAX_PROGRESSION_TIERS && !gs.progression.blueprint_found[tier]:
-                notify(gs, "Sealed by runes — find %s %s",
+                notify(gs, "Sealed by runes - find %s %s",
                     item_table[tier_blueprints[tier]].name, blueprint_places[tier])
             case:
-                notify(gs, "Sealed by runes — the sky ritual will break the seal")
+                notify(gs, "Sealed by runes - the sky ritual will break the seal")
             }
 
         case .Player_Died:
@@ -273,7 +273,7 @@ process_events :: proc(gs: ^Game_State) {
         case .Boss_Defeated:
             gs.progression.final_boss_defeated = true
             audio_play(&gs.audio, .Fanfare)
-            notify(gs, "GARM has fallen — claim the Hell Key!")
+            notify(gs, "GARM has fallen - claim the Hell Key!")
 
         case .Builder_Mined:
             audio_play(&gs.audio, .Builder_Dig, audio_tile_gain(gs, e.tile))
@@ -337,7 +337,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
             T  := builder_tile(en)
             roll_enemy_drops(gs, en.kind, T)   // loot lands where they fell
             if en.kind == .Garm {
-                log_action(gs, "GARM slain — Hell Key drops at (%d,%d)", T.x, T.y)
+                log_action(gs, "GARM slain - Hell Key drops at (%d,%d)", T.x, T.y)
                 eq_push(&gs.events, Event{type = .Boss_Defeated})
             }
         }
@@ -357,7 +357,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     if old_tile == .Silo {
         if s := silo_at(gs, gs.level_index, e.tile); s != nil {
             if silo_total(s) > 0 {
-                notify(gs, "The silo is too heavy to break — empty it first ([%v] beside it)",
+                notify(gs, "The silo is too heavy to break - empty it first ([%v] beside it)",
                     gs.bindings[.Interact])
                 return
             }
@@ -369,7 +369,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     if old_tile == .Barrel {
         if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
             if barrel_total(b) > 0 {
-                notify(gs, "The barrel is full — empty it before you break it")
+                notify(gs, "The barrel is full - empty it before you break it")
                 return
             }
         }

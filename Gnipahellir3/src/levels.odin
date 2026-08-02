@@ -299,7 +299,7 @@ spawn_deep_blueprint :: proc(gs: ^Game_State) {
     if gs.world.items[idx] != .None do return
     gs.world.items[idx]       = .Blueprint_A
     gs.world.item_counts[idx] = 1
-    notify(gs, "Something stirs deep below — seek the sealed chamber")
+    notify(gs, "Something stirs deep below - seek the sealed chamber")
 }
 
 // The HUD objective line: the first incomplete step of the progression loop,
@@ -309,7 +309,7 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
     if gs.game_won do return ""
     p := &gs.progression
     if p.final_boss_defeated {
-        return fmt.bprintf(buf, "GARM is slain — claim the Hell Key")
+        return fmt.bprintf(buf, "GARM is slain - claim the Hell Key")
     }
 
     tier := -1
@@ -320,7 +320,7 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
         }
     }
     if tier < 0 {
-        return fmt.bprintf(buf, "All rituals done — face GARM in %s", level_names[LEVEL_CAVE3])
+        return fmt.bprintf(buf, "All rituals done - face GARM in %s", level_names[LEVEL_CAVE3])
     }
     if p.sky_altar_pos == {0, 0} {
         return fmt.bprintf(buf, "Raise a Sky Altar on the Surface to open the way above")
@@ -330,7 +330,7 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
             item_table[tier_blueprints[tier]].name, blueprint_places[tier])
     }
     c := structure_costs[tier]
-    return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s — [%v] at the altar in the %s",
+    return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s - [%v] at the altar in the %s",
         c[0].count, item_table[c[0].item].name,
         c[1].count, item_table[c[1].item].name,
         gs.bindings[.Interact], level_names[LEVEL_SKY])
@@ -342,7 +342,7 @@ handle_ritual_request :: proc(gs: ^Game_State) {
     // The ritual only answers in the sky (design doc, review item C4) —
     // altars built below are inert.
     if gs.level_index != LEVEL_SKY {
-        notify(gs, "The altar is inert — the ritual only answers in the sky")
+        notify(gs, "The altar is inert - the ritual only answers in the sky")
         log_action(gs, "Ritual rejected: not on the sky level")
         return
     }
@@ -361,7 +361,7 @@ handle_ritual_request :: proc(gs: ^Game_State) {
         if all_built {
             notify(gs, "The altar's work is done")
         } else {
-            notify(gs, "The altar is silent — find a blueprint first")
+            notify(gs, "The altar is silent - find a blueprint first")
         }
         return
     }
@@ -429,7 +429,7 @@ update_ritual :: proc(gs: ^Game_State) {
     // during the swirl, but be safe: if it's gone, the altar falls silent.
     for ing in structure_costs[tier] {
         if inventory_count(&gs.player.inventory, ing.item) < ing.count {
-            notify(gs, "The offering slipped away — the altar falls silent")
+            notify(gs, "The offering slipped away - the altar falls silent")
             log_action(gs, "Ritual tier %d aborted: offering gone", tier)
             return
         }
@@ -722,7 +722,7 @@ debug_stamp_altar_template :: proc(gs: ^Game_State, tier: int, ax, ay: int) {
             }
         }
     }
-    notify(gs, "Debug: %s raised — the ritual answers in the sky", tpl.name)
+    notify(gs, "Debug: %s raised - the ritual answers in the sky", tpl.name)
 }
 
 // F2 altar kit: complete the next ritual free of charge.  The real

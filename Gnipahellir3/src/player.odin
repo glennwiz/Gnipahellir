@@ -234,7 +234,7 @@ player_pickup :: proc(gs: ^Game_State) {
                     gs.save_dirty = true
                     if !gs.forage_hint_shown {
                         gs.forage_hint_shown = true
-                        notify(gs, "Foraged a flower + seeds — sow a Flower Bed, brew potions at the bench")
+                        notify(gs, "Foraged a flower + seeds - sow a Flower Bed, brew potions at the bench")
                     }
                 }
             }

@@ -364,7 +364,7 @@ draw_title :: proc(gs: ^Game_State) {
 	center_text("GNIPAHELLIR", ty + 4, 110, rl.Color{120, 40, 10, u8(140 * pulse)})
 	center_text("GNIPAHELLIR", ty - 4, 110, rl.Color{120, 40, 10, u8(140 * pulse)})
 	center_text("GNIPAHELLIR", ty, 110, rl.Color{240, 205, 130, 255})
-	center_text("— III —", ty + 120, 30, rl.Color{200, 150, 70, 255})
+	center_text("- III -", ty + 120, 30, rl.Color{200, 150, 70, 255})
 	center_text("The hound howls before the cliff-cave", ty + 170, 20, text_dim)
 
 	prompt := u8(120 + 135 * (0.5 + 0.5 * math.sin(t * 2.5)))
@@ -401,7 +401,7 @@ draw_charselect :: proc(gs: ^Game_State) {
 		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
 	}
 	center_text("CHOOSE YOUR FORM", 110, 48, rl.Color{240, 205, 130, 255})
-	center_text("click a form — or press its number — to begin", 168, 20, text_dim)
+	center_text("click a form - or press its number - to begin", 168, 20, text_dim)
 
 	pulse := 0.6 + 0.4 * math.sin(t * 1.5)
 	hover := charselect_card_at_cursor(gs)
@@ -1004,10 +1004,10 @@ book_lines :: proc(tier: int) -> (cstring, cstring, cstring) {
 	switch tier {
 	case 0:
 		return "The sky-gift is bound. The first seal upon the deep is broken.",
-			"Return to the surface and descend once more — deep in the",
+			"Return to the surface and descend once more - deep in the",
 			"caves a barred portal now yields, opening the Deep Cave."
 	case 1:
-		return "The way sinks further. In the Deep Cave, seek its far depths —",
+		return "The way sinks further. In the Deep Cave, seek its far depths -",
 			"the sealed portal to Gnipahellir now opens to your hand.",
 			""
 	case 2:
@@ -1074,7 +1074,7 @@ draw_death_screen :: proc(gs: ^Game_State) {
 	center_text(cstring(raw_data(buf[:])), ty + 150, 20, rl.Color{255, 255, 255, u8(255 * fade)})
 
 	center_text(
-		"Death is final — the save burns on the pyre.",
+		"Death is final - the save burns on the pyre.",
 		ty + 200,
 		18,
 		rl.Color{160, 130, 120, u8(255 * fade)},
@@ -1083,7 +1083,7 @@ draw_death_screen :: proc(gs: ^Game_State) {
 	if gs.player.death_timer > DEATH_INPUT_DELAY {
 		pulse := u8(120 + 135 * (0.5 + 0.5 * math.sin(t * 2.5)))
 		center_text(
-			"PRESS [ENTER] — CARVE A NEW HERO",
+			"PRESS [ENTER] - CARVE A NEW HERO",
 			UI_H - 150,
 			26,
 			rl.Color{255, 220, 140, pulse},
@@ -1459,7 +1459,7 @@ draw_crafting :: proc(gs: ^Game_State) {
 		}
 	}
 	if n == 0 {
-		rl.DrawText("No recipes yet — gather materials", cx, cy + 24, 10, text_dim)
+		rl.DrawText("No recipes yet - gather materials", cx, cy + 24, 10, text_dim)
 	}
 
 	// ── Divider ──
@@ -1614,16 +1614,16 @@ draw_smelter :: proc(gs: ^Game_State) {
 	rl.DrawRectangleLines(px + 24, bar_y, SMELT_W - 48, 10, NORSE_BORDER)
 
 	rule, has_ore := smelt_rule_for(sd.in_item)
-	status := cstring("cold — drag ore into the furnace")
+	status := cstring("cold - drag ore into the furnace")
 	switch {
 	case burning:
 		status = "the fire eats ore and wood"
 	case has_ore && int(sd.in_count) < rule.ore_per_bar:
 		status = "not enough ore for a bar"
 	case has_ore && !has_fuel:
-		status = "no fuel — drag wood into the furnace"
+		status = "no fuel - drag wood into the furnace"
 	case has_ore:
-		status = "the tray blocks the cast — take the bars"
+		status = "the tray blocks the cast - take the bars"
 	}
 	rl.DrawText(status, px + 24, bar_y + 18, 10, burning ? NORSE_GOLD_HOT : text_dim)
 
@@ -1725,7 +1725,7 @@ draw_blueprint :: proc(gs: ^Game_State) {
 		draw_legend(x + 30, ly + 22, terrain_table[.Wood].color, "Wood (Plank/Log)")
 		draw_legend(x + 30, ly + 44, item_table[.Sky_Altar].color, "Sky Altar (cap)")
 		rl.DrawText(
-			"Build it on the grass — the portal blooms above the altar.",
+			"Build it on the grass - the portal blooms above the altar.",
 			x + 20,
 			y + BP_H - 32,
 			14,
@@ -1739,7 +1739,7 @@ draw_blueprint :: proc(gs: ^Game_State) {
 		rl.DrawText("BLUEPRINT", x + 20, y + 18, 24, accent)
 		rl.DrawText("You carry no blueprint yet.", x + 20, y + 64, 18, text_dim)
 		rl.DrawText(
-			"Delve the caves — a sky blueprint waits in each.",
+			"Delve the caves - a sky blueprint waits in each.",
 			x + 20,
 			y + 92,
 			16,

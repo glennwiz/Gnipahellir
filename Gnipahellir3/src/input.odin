@@ -405,7 +405,7 @@ update_input :: proc(gs: ^Game_State) {
             // A surface Sky Altar stamp raises the gate, as real placement would.
             if gs.debug.place_tile == .Sky_Altar && gs.level_index == LEVEL_SURFACE {
                 gs.progression.sky_altar_pos = {i32(x), i32(y)}
-                notify(gs, "The Sky Altar rises — a portal opens to the heavens!")
+                notify(gs, "The Sky Altar rises - a portal opens to the heavens!")
                 spawn_deep_blueprint(gs)
             }
             gs.debug.place_tile = .Air
@@ -442,13 +442,13 @@ update_input :: proc(gs: ^Game_State) {
                 notify(gs, "Debug: click a tile to stamp the Gold spawner")
             case 9:
                 inventory_insert(&gs.player.inventory, .Auto_Miner, 1)
-                notify(gs, "Debug: Auto-Miner in the bag — place it inside a dimension")
+                notify(gs, "Debug: Auto-Miner in the bag - place it inside a dimension")
             case 10:
                 gs.debug.life = !gs.debug.life
                 if gs.debug.life {
                     gs.debug.life_timer = 0
                     gs.debug.life_gen   = 0
-                    notify(gs, "The world stirs — Conway wakes")
+                    notify(gs, "The world stirs - Conway wakes")
                 } else {
                     notify(gs, "The world settles after %d generations", gs.debug.life_gen)
                 }
