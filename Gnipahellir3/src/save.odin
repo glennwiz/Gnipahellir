@@ -13,7 +13,7 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(14)  // v14: Silo_State array in Sim_State; v13: Builder_State pillar escape
+SAVE_VERSION :: i32(15)  // v15: smelter input buffer (Sim_Tile_Data.in_*), wood fuel removed; v14: Silo_State array in Sim_State
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this

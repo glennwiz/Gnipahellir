@@ -10,8 +10,7 @@ package game
 //  emits (sound, Tree_Grew) drains the same frame.
 
 SMELT_TIME     :: f32(3.0)   // seconds per bar
-SMELT_FUEL     :: Item.Wood_Log  // what the fire burns, laid beside it like ore
-BARS_PER_LOG   :: 3          // one log's embers fire this many casts
+SMELTER_IN_CAP :: MAX_STACK  // most ore the internal input buffer holds
 TREE_GROW_TIME :: f32(20.0)  // seconds per tree
 TREE_MAX_H     :: 5          // tallest grown trunk; clearance is checked to here
 
@@ -46,53 +45,43 @@ update_sim :: proc(gs: ^Game_State) {
     }
 }
 
-// A smelter feeds on ore stacks lying beside it (drag them onto its window,
-// or Q-drop them there) and burns wood laid the same way: while a neighbor
-// holds enough smeltable ore, another holds wood, and the tray has room, the
-// fire runs; when the timer fills, ore and a log are consumed and the bar
-// lands in the tray (sim_data.store_*) — never on the ground.  Progress
-// lives in sim_data.growth_timer — render reads it for the fire glow.
+// The smelting rule for an ore item, if it is smeltable.
+smelt_rule_for :: proc(it: Item) -> (Smelt_Rule, bool) {
+    for r in smelt_table do if r.ore == it do return r, true
+    return {}, false
+}
+
+// A smelter runs on an internal ore buffer (sim_data.in_*).  Ore reaches the
+// buffer two ways: the player drags it onto the furnace window (smelter_feed),
+// OR an ore pile lying on an adjacent cell is auto-pulled in — so a hopper of
+// ore beside the fire keeps it fed hands-off (smelter + silo out-chute + ore
+// pile still runs on its own).  While the buffer holds a bar's worth of one
+// ore and the tray has room, the fire burns; each SMELT_TIME it eats ore and a
+// bar lands in the tray (sim_data.store_*) — never on the ground.  No fuel:
+// the furnace smelts ore alone.  Progress lives in growth_timer for the glow.
 tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     w   := &gs.world
     idx := grid_idx(x, y)
     sd  := &w.sim_data[idx]
 
-    in_idx   := -1
-    fuel_idx := -1
-    rule: Smelt_Rule
-    for dy in -1 ..= 1 {
-        for dx in -1 ..= 1 {
-            if dx == 0 && dy == 0 do continue
-            nx, ny := x + dx, y + dy
-            if !in_bounds(nx, ny) do continue
-            n := grid_idx(nx, ny)
-            if fuel_idx < 0 && w.items[n] == SMELT_FUEL && w.item_counts[n] > 0 {
-                fuel_idx = n
-            }
-            if in_idx < 0 {
-                for r in smelt_table {
-                    if w.items[n] == r.ore && int(w.item_counts[n]) >= r.ore_per_bar {
-                        in_idx = n
-                        rule   = r
-                        break
-                    }
-                }
-            }
-        }
+    smelter_autopull(gs, x, y, sd)
+
+    rule, ok := smelt_rule_for(sd.in_item)
+    if !ok || int(sd.in_count) < rule.ore_per_bar {
+        sd.growth_timer = 0  // nothing loaded, or not yet a full bar's worth
+        return
     }
 
     // A silo next door is an out-chute: bars cast straight into its wide
-    // slots, skipping the 99-cap tray — smelter + silo + ore pile runs
-    // hands-off.
+    // slots, skipping the 99-cap tray.
     out_silo := silo_adjacent(gs, x, y)
     if out_silo != nil && !silo_has_room_for(out_silo, rule.bar) do out_silo = nil
 
     tray_ok := out_silo != nil ||
                sd.store_count == 0 ||
                (sd.store_item == rule.bar && int(sd.store_count) < MAX_STACK)
-    has_fuel := sd.fuel_charge > 0 || fuel_idx >= 0
-    if in_idx < 0 || !has_fuel || !tray_ok {
-        sd.growth_timer = 0  // the fire dies without ore, wood, or tray room
+    if !tray_ok {
+        sd.growth_timer = 0  // the tray is full — the cast has nowhere to land
         return
     }
 
@@ -100,15 +89,8 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     if sd.growth_timer < SMELT_TIME do return
     sd.growth_timer = 0
 
-    w.item_counts[in_idx] -= u8(rule.ore_per_bar)
-    if w.item_counts[in_idx] == 0 do w.items[in_idx] = .None
-    if sd.fuel_charge == 0 {
-        // the embers are spent — eat a log, good for BARS_PER_LOG casts
-        w.item_counts[fuel_idx] -= 1
-        if w.item_counts[fuel_idx] == 0 do w.items[fuel_idx] = .None
-        sd.fuel_charge = BARS_PER_LOG
-    }
-    sd.fuel_charge -= 1
+    sd.in_count -= u8(rule.ore_per_bar)
+    if sd.in_count == 0 do sd.in_item = .None
     if out_silo != nil {
         silo_add(out_silo, rule.bar, 1)
     } else {
@@ -124,20 +106,46 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     log_action(gs, "Smelter at (%d,%d) casts %v into its tray", x, y, rule.bar)
 }
 
-// Hand-feeding via the furnace window: the dragged bag stack lands on a cell
-// beside the smelter — the same ground stacks tick_smelter eats.  Only
-// smeltable ore and wood fuel are taken; a partial move leaves the rest in
-// the bag.
+// Draw ore piles lying on adjacent cells into the internal buffer, so a hopper
+// of ore beside the fire feeds it automatically.  Only smeltable ore, only
+// when the buffer is empty or already holds that ore with room.
+smelter_autopull :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data) {
+    if int(sd.in_count) >= SMELTER_IN_CAP do return
+    w := &gs.world
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 {
+            if dx == 0 && dy == 0 do continue
+            nx, ny := x + dx, y + dy
+            if !in_bounds(nx, ny) do continue
+            n  := grid_idx(nx, ny)
+            it := w.items[n]
+            if w.item_counts[n] == 0 do continue
+            if _, ok := smelt_rule_for(it); !ok do continue
+            if sd.in_item != .None && sd.in_item != it do continue
+            have := sd.in_item == it ? int(sd.in_count) : 0
+            take := min(int(w.item_counts[n]), SMELTER_IN_CAP - have)
+            if take <= 0 do continue
+            sd.in_item  = it
+            sd.in_count = u8(have + take)
+            w.item_counts[n] -= u8(take)
+            if w.item_counts[n] == 0 do w.items[n] = .None
+            return  // one pile per tick keeps it cheap
+        }
+    }
+}
+
+// Hand-feeding via the furnace window: the dragged bag stack loads the
+// smelter's internal input buffer.  Only smeltable ore is taken, one ore kind
+// at a time; a partial move (buffer near full) leaves the rest in the bag.
 smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int) -> bool {
     if gs.player.dead do return false
     if slot < 0 || slot >= MAX_INVENTORY do return false
+    if !in_bounds(int(tile.x), int(tile.y)) do return false
     s := &gs.player.inventory.slots[slot]
     if s.item == .None || s.count <= 0 do return false
 
-    smeltable := s.item == SMELT_FUEL
-    for r in smelt_table do if r.ore == s.item { smeltable = true; break }
-    if !smeltable {
-        notify(gs, "The furnace takes only ore and wood")
+    if _, ok := smelt_rule_for(s.item); !ok {
+        notify(gs, "The furnace takes only ore")
         return false
     }
 
@@ -148,44 +156,24 @@ smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int) -> bool {
         return false
     }
 
-    // A matching stack with room wins over an empty open cell.
-    w    := &gs.world
-    best := -1
-    find: for pass in 0 ..< 2 {
-        for dy in i32(-1) ..= 1 {
-            for dx in i32(-1) ..= 1 {
-                if dx == 0 && dy == 0 do continue
-                x, y := int(tile.x + dx), int(tile.y + dy)
-                if !in_bounds(x, y) do continue
-                idx := grid_idx(x, y)
-                if .Solid in terrain_table[w.terrain[idx]].flags do continue
-                if pass == 0 {
-                    if w.items[idx] == s.item && w.item_counts[idx] > 0 &&
-                       int(w.item_counts[idx]) < MAX_STACK {
-                        best = idx
-                        break find
-                    }
-                } else if w.items[idx] == .None || w.item_counts[idx] == 0 {
-                    best = idx
-                    break find
-                }
-            }
-        }
-    }
-    if best < 0 {
-        notify(gs, "No room beside the furnace")
+    sd := &gs.world.sim_data[grid_idx(int(tile.x), int(tile.y))]
+    if sd.in_item != .None && sd.in_item != s.item {
+        notify(gs, "The furnace is busy with another ore")
         return false
     }
-
-    have := w.items[best] == s.item ? int(w.item_counts[best]) : 0
-    take := min(s.count, MAX_STACK - have)
-    w.items[best]       = s.item
-    w.item_counts[best] = u8(have + take)
+    have := sd.in_item == s.item ? int(sd.in_count) : 0
+    take := min(s.count, SMELTER_IN_CAP - have)
+    if take <= 0 {
+        notify(gs, "The furnace is full")
+        return false
+    }
+    sd.in_item  = s.item
+    sd.in_count = u8(have + take)
     item := s.item
     s.count -= take
     if s.count == 0 do s.item = .None
     audio_play(&gs.audio, .Place)
-    log_action(gs, "Player feeds %v x%d to smelter at (%d,%d)", item, take, tile.x, tile.y)
+    log_action(gs, "Player loads %v x%d into smelter at (%d,%d)", item, take, tile.x, tile.y)
     return true
 }
 

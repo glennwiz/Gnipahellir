@@ -86,6 +86,22 @@ POTION_GRID :: Icon_Grid{
 	"............",
 }
 
+// A five-petal bloom on a green stem (A/L petals, B center, D stem).
+FLOWER_GRID :: Icon_Grid{
+	"............",
+	"....AAAA....",
+	"...ALBBLA...",
+	"...ABBBBA...",
+	"...ALBBLA...",
+	"....AAAA....",
+	".....D......",
+	".....D......",
+	"....DD......",
+	".....D......",
+	".....D......",
+	"............",
+}
+
 // Diagonal shaft, crystal tip — the tip's accent is the wand's tier.
 WAND_GRID :: Icon_Grid{
 	".........LA.",
@@ -591,6 +607,8 @@ item_icons := [Item]Item_Icon{
 	.Dirt             = {DIRT_GRID, {{110, 78, 46, 255}, {78, 52, 30, 255}, {146, 108, 70, 255}, {}, {}}},
 	// Wooden door — leaf, frame, rail highlight, iron knob
 	.Door             = {DOOR_GRID, {{150, 100, 55, 255}, {92, 60, 32, 255}, {182, 130, 78, 255}, {60, 60, 68, 255}, {}}},
+	// Foraged flower — petals, center, stem
+	.Flower           = {FLOWER_GRID, {{210, 120, 30, 255}, {46, 140, 46, 255}, {255, 245, 175, 255}, {255, 220, 50, 255}, {}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

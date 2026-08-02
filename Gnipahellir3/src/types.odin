@@ -161,6 +161,8 @@ Item :: enum u8 {
     Dirt,
     // Craftable 2-tall wooden door (appended: order is frozen)
     Door,
+    // Foraged surface flower — the reagent for Health Potions (appended: order is frozen)
+    Flower,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -198,7 +200,6 @@ Action :: enum u8 {
     Move_Right,
     Jump,
     Interact,
-    Drop_Item,
     Inventory,
     Crafting,
     Blueprint,
@@ -257,7 +258,6 @@ Event_Type :: enum u8 {
 
     // Items
     Item_Pickup,
-    Item_Dropped,
     Craft_Request,
     Craft_Complete,
     Station_Interact,

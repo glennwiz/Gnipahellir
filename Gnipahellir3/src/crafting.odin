@@ -122,6 +122,10 @@ recipe_table := [?]Recipe{
     // open (walk through) or shut (solid).  One log's worth of planks.
     // (Appended to keep existing recipe indices stable.)
     { .Door,             1, .Bench, {{.Plank, 4},          {},                  {}} },
+    // Healing: surface flowers, foraged by walking through them, brew into a
+    // Health Potion at the bench — early-game recovery.  (Appended to keep
+    // existing recipe indices stable.)
+    { .Potion_Health,    1, .Bench, {{.Flower, 3},         {},                  {}} },
 }
 
 // One scan of the tiles around the player: which stations are in range.

@@ -85,6 +85,7 @@ item_table := [Item]Item_Info{
     .Silo              = { "Silo",              {170, 180, 200, 255}, .Silo },
     .Dirt              = { "Dirt",              {110, 78,  46,  255}, .Dirt },
     .Door              = { "Door",              {150, 100, 55,  255}, .Door },
+    .Flower            = { "Flower",            {255, 220, 50,  255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
@@ -102,6 +103,12 @@ item_equip_slot := #partial [Item]Equip_Slot{
     .Silver_Sword = .Weapon,
     .Gold_Sword   = .Weapon,
     .Runic_Sword  = .Weapon,
+    // Wands share the weapon slot: hold a wand to mine (all ranges) OR a
+    // sword to fight — not both.  The equipped wand is the active mining tool.
+    .Mine_Wand        = .Weapon,
+    .Mine_Wand_Silver = .Weapon,
+    .Mine_Wand_Gold   = .Weapon,
+    .Mine_Wand_Runic  = .Weapon,
     .Aether_Charm = .Charm,
     .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,  .Runic_Helm       = .Head,
     .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest, .Runic_Chestplate = .Chest,
@@ -190,6 +197,35 @@ player_equip :: proc(gs: ^Game_State, inv_slot: int) {
     player_apply_max_hp(p)
     gs.save_dirty = true
     log_action(gs, "Player equips %s", item_table[item].name)
+}
+
+POTION_HEAL :: 5   // hp restored by one Health Potion
+
+// A consumable is used (drunk/eaten) from the bag rather than equipped.
+item_is_consumable :: proc(it: Item) -> bool {
+    return it == .Potion_Health
+}
+
+// Drink a consumable from a bag slot.  A Health Potion restores POTION_HEAL,
+// never past the cap; refused (nothing spent) at full health.
+player_consume :: proc(gs: ^Game_State, inv_slot: int) {
+    p := &gs.player
+    if inv_slot < 0 || inv_slot >= MAX_INVENTORY do return
+    s := &p.inventory.slots[inv_slot]
+    if s.item != .Potion_Health || s.count <= 0 do return
+
+    if p.hp >= p.hp_max {
+        notify(gs, "Already at full health")
+        return
+    }
+    heal := min(POTION_HEAL, p.hp_max - p.hp)
+    p.hp += heal
+    s.count -= 1
+    if s.count == 0 do s.item = .None
+    spawn_damage_number(&gs.floating_text, {p.pos.x + PLAYER_W*0.5, p.pos.y}, heal, HEAL_COLOR)
+    audio_play(&gs.audio, .Pickup)
+    gs.save_dirty = true
+    log_action(gs, "Player drinks a Health Potion (+%d hp)", heal)
 }
 
 // Unequip back into the bag; refused when the bag can't hold the item.

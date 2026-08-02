@@ -10,7 +10,8 @@ Sim_Tile_Data :: struct {
     spread_timer: f32,
     store_item:   Item, // smelter output tray — cast bars wait here, not on the ground
     store_count:  u8,
-    fuel_charge:  u8,   // bars the last-eaten log can still fire (BARS_PER_LOG per log)
+    in_item:      Item, // smelter input buffer — ore loaded into the furnace, waiting to smelt
+    in_count:     u8,
 }
 
 World_Grid :: struct {
@@ -203,6 +204,28 @@ Particle_Store :: struct {
     count: int,
 }
 
+// ─── Floating Combat Text ─────────────────────────────────────────────────────
+//
+//  Short-lived damage numbers that rise off a struck body and fade — a purely
+//  visual read that a hit landed (drawn in world-space, floating_text.odin).
+//  Transient like particles: spawned from update code, never saved.
+
+MAX_FLOATING_TEXT :: 32
+
+Floating_Text :: struct {
+    pos:      [2]f32,   // world tile coords; drifts upward as it ages
+    value:    int,
+    color:    rl.Color,
+    age:      f32,
+    lifetime: f32,
+    active:   bool,
+}
+
+Floating_Text_Store :: struct {
+    data:  [MAX_FLOATING_TEXT]Floating_Text,
+    count: int,
+}
+
 // ─── Falling Blocks (structural gravity) ──────────────────────────────────────
 //
 //  A tile cut loose from its anchor (gravity.odin) leaves the terrain grid and
@@ -239,7 +262,6 @@ Input_State :: struct {
     mine:         bool,
     attack:       bool,   // discrete press — sword swing
     interact:     bool,
-    drop_item:    bool,
     fly_up:       bool,   // debug fly mode only (W/S held)
     fly_down:     bool,
     mouse_tile:   [2]i32,
@@ -359,6 +381,7 @@ Game_State :: struct {
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,
+    floating_text: Floating_Text_Store,   // damage numbers (floating_text.odin)
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     ambience_timer: f32,   // countdown to the next ambient-mote probe pass
     mining:      Mining_Action,
@@ -385,6 +408,9 @@ Game_State :: struct {
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
+    pickaxe_hint_shown: bool, // one-shot: the "you can mine now" popup on first pickaxe (not saved)
+    craft_hint_shown:   bool, // one-shot: the "press C to craft" popup on first wood log (not saved)
+    forage_hint_shown:  bool, // one-shot: the "brew potions" popup on first foraged flower (not saved)
 
 
 
@@ -400,7 +426,6 @@ default_bindings := [Action]rl.KeyboardKey{
     .Move_Right = .D,
     .Jump       = .W,
     .Interact   = .E,
-    .Drop_Item  = .Q,
     .Inventory  = .TAB,
     .Crafting   = .C,
     .Blueprint  = .B,

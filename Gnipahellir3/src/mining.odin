@@ -5,11 +5,13 @@ package game
 //  Two-stage tool progression (G2's feel, ported):
 //    - Pickaxe: free, adjacent tiles only (chebyshev 1), PICK_HITS chips per
 //      tile — clicks right in front of you, sparks on every hit.
-//    - Mine wands: crafted tiers reach 2 / 4 / 8 tiles and drink mana per
+//    - Mine wands: crafted tiers reach 2 / 4 / 8 / 12 tiles and drink mana per
 //      shot.  A shot streams sparks to the tile and mines on impact
 //      (WAND_TRAVEL_TIME later) — the mining lands where the magic lands.
-//  The best wand carried decides reach; adjacent tiles always use the free
-//  pick so the wand never wastes mana on trivial digs.
+//  A wand is a WEAPON-SLOT tool: equip it (right-click in the bag) and it
+//  becomes the mining tool at EVERY range, adjacent tiles included — mana is
+//  the cost of the reach.  With a sword or nothing in the weapon slot, mining
+//  falls back to the free pick.
 
 PICK_RANGE      :: i32(1)
 PICK_HITS       :: 3
@@ -31,15 +33,9 @@ wand_mine_range := #partial [Item]i32{
     .Mine_Wand_Runic  = 12,
 }
 
-// Longest-reaching wand in the inventory (0 = none carried).
-best_wand :: proc(inv: ^Inventory) -> (best: Item, r: i32) {
-    for s in inv.slots {
-        if s.count > 0 && wand_mine_range[s.item] > r {
-            best = s.item
-            r    = wand_mine_range[s.item]
-        }
-    }
-    return
+// A mining wand (any tier) vs. a sword or ordinary item.
+is_wand :: proc(it: Item) -> bool {
+    return wand_mine_range[it] > 0
 }
 
 // The pick doesn't aim at the cursor — the cursor's rough DIRECTION from the
@@ -96,24 +92,26 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
     p.mine_timer -= dt
     if !gs.input.mine || p.mine_timer > 0 { return }
 
-    // Wand: pointing at a mineable tile beyond arm's reach fires the best
-    // wand carried — precise cursor aim is what the upgrade buys.
+    // Wand: an equipped wand mines the tile under the cursor at any range —
+    // adjacent included — for mana.  Precise cursor aim (and reach) is what the
+    // weapon slot buys over the pick.
     T := gs.input.mouse_tile
     d := chebyshev(T, player_tile(p))
-    if d > PICK_RANGE && in_bounds(int(T.x), int(T.y)) &&
+    if in_bounds(int(T.x), int(T.y)) &&
        .Mineable in terrain_table[get_tile(&gs.world, int(T.x), int(T.y))].flags {
-        wand, wrange := best_wand(&p.inventory)
-        cost  := WAND_MANA_COST
-        blast := false
+        wand   := p.equipment[.Weapon]
+        wrange := wand_mine_range[wand]
+        cost   := WAND_MANA_COST
+        blast  := false
         when GAME_DEBUG {
             if gs.debug.ultra_wand {
-                wand   = .Mine_Wand_Gold   // cheat needs no wand in the bag
+                wand   = .Mine_Wand_Gold   // cheat needs no wand equipped
                 wrange = ULTRA_WAND_RANGE
                 cost   = 0
                 blast  = true
             }
         }
-        if wand != .None && d <= wrange {
+        if wrange > 0 && d <= wrange {
             if p.mana < cost {
                 p.mine_timer = 0.6   // rate-limits the reminder while held
                 notify(gs, "Not enough mana!")

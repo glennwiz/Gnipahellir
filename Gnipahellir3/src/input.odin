@@ -88,7 +88,6 @@ update_input :: proc(gs: ^Game_State) {
     inp.mine       = rl.IsMouseButtonDown(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None
     inp.attack     = rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None
     inp.interact   = rl.IsKeyPressed(bind[.Interact])
-    inp.drop_item  = rl.IsKeyPressed(bind[.Drop_Item])
 
     // The smelter window follows its furnace: if that tile stops being a
     // smelter (mined out), the window closes.

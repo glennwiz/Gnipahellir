@@ -393,7 +393,6 @@ action_labels := [Action]cstring {
 	.Move_Right = "Move Right",
 	.Jump       = "Jump",
 	.Interact   = "Interact",
-	.Drop_Item  = "Drop Item",
 	.Inventory  = "Inventory",
 	.Crafting   = "Crafting",
 	.Blueprint  = "Blueprint",
@@ -929,9 +928,59 @@ draw_objective :: proc(gs: ^Game_State) {
 	rl.DrawText(text, x, 40, 18, rl.Color{210, 185, 140, 220})
 }
 
-// Timed popups, stacked top-center, fading out over the last NOTIFY_FADE s.
+// A single Elder-Futhark-style glyph, stroked from a vertical stave plus
+// branches within an (x,y,w,h) box.  The default bitmap font can't render real
+// rune codepoints, so we draw them as line segments — which also matches the
+// game's carved-stone pixel look.  `id` picks one of six shapes.
+draw_rune :: proc(id: int, x, y, w, h: f32, col: rl.Color, thick: f32) {
+	sx := x + w * 0.32                       // stave sits left of centre
+	L :: proc(ax, ay, bx, by: f32, col: rl.Color, thick: f32) {
+		rl.DrawLineEx({ax, ay}, {bx, by}, thick, col)
+	}
+	rx := x + w                              // right edge of the branch reach
+	switch id % 6 {
+	case 0: // Fehu ᚠ — two arms angling up-right
+		L(sx, y, sx, y + h, col, thick)
+		L(sx, y + h*0.14, rx, y + h*0.02, col, thick)
+		L(sx, y + h*0.42, rx, y + h*0.30, col, thick)
+	case 1: // Ansuz ᚨ — two arms angling down-right
+		L(sx, y, sx, y + h, col, thick)
+		L(sx, y + h*0.06, rx, y + h*0.30, col, thick)
+		L(sx, y + h*0.34, rx, y + h*0.58, col, thick)
+	case 2: // Thurisaz ᚦ — a thorn triangle on the stave
+		L(sx, y, sx, y + h, col, thick)
+		L(sx, y + h*0.28, rx, y + h*0.50, col, thick)
+		L(rx, y + h*0.50, sx, y + h*0.72, col, thick)
+	case 3: // Tiwaz ᛏ — an arrowhead pointing up
+		L(sx, y, sx, y + h, col, thick)
+		L(sx, y, sx - w*0.28, y + h*0.26, col, thick)
+		L(sx, y, sx + w*0.28, y + h*0.26, col, thick)
+	case 4: // Raido ᚱ — loop at top, leg kicking out
+		L(sx, y, sx, y + h, col, thick)
+		L(sx, y, rx, y + h*0.18, col, thick)
+		L(rx, y + h*0.18, sx, y + h*0.40, col, thick)
+		L(sx, y + h*0.40, rx, y + h, col, thick)
+	case 5: // Eihwaz ᛇ — notches kicking off top-right and bottom-left
+		L(sx, y, sx, y + h, col, thick)
+		L(sx, y, rx, y + h*0.16, col, thick)
+		L(sx, y + h, x, y + h*0.84, col, thick)
+	}
+}
+
+// Timed popups, stacked top-center as inscribed rune-plates that fade out over
+// the last NOTIFY_FADE s.  Each message wears a dark bordered plaque flanked by
+// a pair of runes that breathe with a slow gold pulse — a guiding voice, not
+// bland text.
 draw_notifications :: proc(gs: ^Game_State) {
 	NOTIFY_FONT :: 20
+	RUNE_H      :: f32(16)
+	RUNE_W      :: f32(11)
+	PAD_X       :: i32(16)   // plate edge → rune
+	GAP         :: i32(14)   // rune cluster → text
+	PLATE_H     :: i32(32)
+
+	pulse := (math.sin(f32(gs.elapsed_time) * 3) + 1) * 0.5   // shared breath
+
 	for i in 0 ..< gs.notify.count {
 		n := &gs.notify.items[i]
 
@@ -942,11 +991,45 @@ draw_notifications :: proc(gs: ^Game_State) {
 
 		text := cstring(raw_data(n.text[:])) // buffer is zeroed on push
 		tw := rl.MeasureText(text, NOTIFY_FONT)
-		x := (i32(UI_W) - tw) / 2
-		y := i32(70 + i * 28)
 
-		rl.DrawText(text, x + 1, y + 1, NOTIFY_FONT, rl.Color{0, 0, 0, u8(180 * alpha)})
-		rl.DrawText(text, x, y, NOTIFY_FONT, rl.Color{255, 240, 180, u8(255 * alpha)})
+		// Two runes flank each side; a paired cluster reads as an inscription.
+		rune_span := i32(RUNE_W)*2 + 4
+		plate_w := tw + 2*(PAD_X + rune_span + GAP)
+		x0 := (i32(UI_W) - plate_w) / 2
+		y0 := i32(56 + i32(i)*42)
+
+		// Plaque + gold border (Ex avoids the supersample hairline flicker).
+		bg := NORSE_PANEL;  bg.a = u8(f32(bg.a) * alpha)
+		rl.DrawRectangle(x0, y0, plate_w, PLATE_H, bg)
+		bord := NORSE_BORDER
+		bord.a = u8((110 + pulse*145) * alpha)
+		rl.DrawRectangleLinesEx({f32(x0), f32(y0), f32(plate_w), f32(PLATE_H)}, 2, bord)
+
+		// Carved corner ticks catch the light.
+		gold := NORSE_GOLD_HOT;  gold.a = u8(255 * alpha)
+		TICK :: i32(6)
+		rl.DrawRectangle(x0, y0, TICK, 2, gold)
+		rl.DrawRectangle(x0, y0, 2, TICK, gold)
+		rl.DrawRectangle(x0+plate_w-TICK, y0+PLATE_H-2, TICK, 2, gold)
+		rl.DrawRectangle(x0+plate_w-2, y0+PLATE_H-TICK, 2, TICK, gold)
+
+		// Flanking runes — their glow rides the shared pulse.
+		rcol := NORSE_GOLD
+		rcol.a = u8((150 + pulse*105) * alpha)
+		ry := f32(y0) + (f32(PLATE_H) - RUNE_H) / 2
+		base := int(n.len)
+		lx := f32(x0 + PAD_X)
+		draw_rune(base,   lx,            ry, RUNE_W, RUNE_H, rcol, 2)
+		draw_rune(base+3, lx + RUNE_W+4, ry, RUNE_W, RUNE_H, rcol, 2)
+		rx := f32(x0 + plate_w - PAD_X - rune_span)
+		draw_rune(base+1, rx,            ry, RUNE_W, RUNE_H, rcol, 2)
+		draw_rune(base+4, rx + RUNE_W+4, ry, RUNE_W, RUNE_H, rcol, 2)
+
+		// The message itself, centred, with its legibility shadow.
+		tx := (i32(UI_W) - tw) / 2
+		ty := y0 + (PLATE_H - NOTIFY_FONT) / 2
+		rl.DrawText(text, tx + 1, ty + 1, NOTIFY_FONT, rl.Color{0, 0, 0, u8(200 * alpha)})
+		rl.DrawText(text, tx, ty, NOTIFY_FONT, rl.Color{255, 240, 180, u8(255 * alpha)})
 	}
 }
 
@@ -1006,6 +1089,12 @@ draw_hud :: proc(gs: ^Game_State) {
 			rl.DrawText(cstring(raw_data(item_table[it].name)), 82, y + 5, 10, rl.WHITE)
 		}
 	}
+
+	// Control hints, bottom-left: the two menu keys a new hand needs — hand
+	// crafting has no world anchor, so it lives here as a standing reminder.
+	hint_buf: [48]u8
+	fmt.bprintf(hint_buf[:47], "[%v] Craft   [%v] Bag", gs.bindings[.Crafting], gs.bindings[.Inventory])
+	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
 }
 
 draw_inventory :: proc(gs: ^Game_State) {
@@ -1204,9 +1293,10 @@ draw_crafting :: proc(gs: ^Game_State) {
 
 // ─── Smelter Window ───────────────────────────────────────────────────────────
 //
-//  A 3×3 mirror of the tiles around the furnace: the center burns, the ring
-//  shows the ground stacks lying beside it — the same ones tick_smelter eats.
-//  Dragging ore from the bag anywhere onto this window lays it by the fire.
+//  A self-contained furnace: an INPUT slot holding the ore loaded into the
+//  fire, the fire itself glowing with progress, and the TRAY of cast bars.
+//  Drag ore from the bag onto this window to load it; an ore pile beside the
+//  furnace is auto-pulled into the same buffer.
 
 draw_smelter :: proc(gs: ^Game_State) {
 	px := gs.ui.win_pos[.Smelter].x
@@ -1228,82 +1318,46 @@ draw_smelter :: proc(gs: ^Game_State) {
 	heat := clamp(sd.growth_timer / SMELT_TIME, 0, 1)
 	burning := heat > 0
 
-	// What lies beside the fire — drives the status line.
-	has_ore, has_wood := false, false
-	for dy in -1 ..= 1 do for dx in -1 ..= 1 {
-		if dx == 0 && dy == 0 do continue
-		nx, ny := int(tile.x) + dx, int(tile.y) + dy
-		if !in_bounds(nx, ny) do continue
-		it := w.items[grid_idx(nx, ny)]
-		if w.item_counts[grid_idx(nx, ny)] == 0 do continue
-		if it == SMELT_FUEL do has_wood = true
-		for r in smelt_table do if it == r.ore {has_ore = true; break}
+	// INPUT: ore loaded into the fire (drag from the bag to add; a pile beside
+	// the furnace is auto-pulled in here too).
+	rl.DrawText("INPUT", px + 24, py + 52, 10, NORSE_GOLD)
+	ix, iy := px + 24, py + 68
+	rl.DrawRectangle(ix, iy, SLOT_PX, SLOT_PX, slot_bg)
+	rl.DrawRectangleLinesEx(
+		{f32(ix), f32(iy), SLOT_PX, SLOT_PX},
+		sd.in_count > 0 ? 2 : 1,
+		sd.in_count > 0 ? NORSE_GOLD_HOT : NORSE_BORDER,
+	)
+	if sd.in_count > 0 {
+		draw_item_icon(sd.in_item, ix + 10, iy + 8, 24)
+		cnt_buf: [8]u8
+		fmt.bprintf(cnt_buf[:7], "%d", sd.in_count)
+		rl.DrawText(cstring(raw_data(cnt_buf[:])), ix + 6, iy + SLOT_PX - 14, 10, rl.WHITE)
 	}
 
-	CELL :: SLOT_PX + 6
-	x0 := px + (SMELT_W - (3 * CELL - 6)) / 2
-	y0 := py + 56
-	for dy in i32(-1) ..= 1 {
-		for dx in i32(-1) ..= 1 {
-			x := x0 + (dx + 1) * CELL
-			y := y0 + (dy + 1) * CELL
-			if dx == 0 && dy == 0 {
-				// the fire itself, glowing with smelting progress
-				rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, rl.Color{30, 18, 14, 255})
-				if burning {
-					glow := rl.Color{255, u8(120 + 100 * heat), 50, u8(60 + 180 * heat)}
-					rl.DrawCircleGradient(
-						{f32(x + SLOT_PX / 2), f32(y + SLOT_PX / 2)},
-						16 + 8 * heat,
-						glow,
-						rl.Color{},
-					)
-				} else {
-					rl.DrawCircleGradient(
-						{f32(x + SLOT_PX / 2), f32(y + SLOT_PX / 2)},
-						10,
-						rl.Color{120, 60, 30, 90},
-						rl.Color{},
-					)
-				}
-				rl.DrawRectangleLinesEx(
-					{f32(x), f32(y), SLOT_PX, SLOT_PX},
-					2,
-					burning ? NORSE_GOLD_HOT : NORSE_BORDER,
-				)
-				continue
-			}
-			nx, ny := int(tile.x + dx), int(tile.y + dy)
-			if !in_bounds(nx, ny) || .Solid in terrain_table[w.terrain[grid_idx(nx, ny)]].flags {
-				// walled off — no stack can lie here
-				rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, rl.Color{18, 14, 12, 255})
-				rl.DrawRectangleLines(x, y, SLOT_PX, SLOT_PX, rl.Color{50, 42, 32, 255})
-				continue
-			}
-			idx := grid_idx(nx, ny)
-			rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, NORSE_ROW)
-			rl.DrawRectangleLines(x, y, SLOT_PX, SLOT_PX, NORSE_BORDER)
-			if it := w.items[idx]; it != .None && w.item_counts[idx] > 0 {
-				draw_item_icon(it, x + 10, y + 8, 24)
-				cnt_buf: [8]u8
-				fmt.bprintf(cnt_buf[:7], "%d", w.item_counts[idx])
-				rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
-			}
-		}
+	// The fire, glowing with smelting progress, to the right of the input.
+	fcx := f32(px + SMELT_W - 58)
+	fcy := f32(iy + SLOT_PX / 2)
+	if burning {
+		glow := rl.Color{255, u8(120 + 100 * heat), 50, u8(60 + 180 * heat)}
+		rl.DrawCircleGradient({fcx, fcy}, 16 + 8 * heat, glow, rl.Color{})
+	} else {
+		rl.DrawCircleGradient({fcx, fcy}, 10, rl.Color{120, 60, 30, 90}, rl.Color{})
 	}
 
 	// Smelting progress toward the next bar
-	bar_y := y0 + 3 * CELL + 8
+	bar_y := iy + SLOT_PX + 18
 	rl.DrawRectangle(px + 24, bar_y, SMELT_W - 48, 10, NORSE_ROW)
 	rl.DrawRectangle(px + 24, bar_y, i32(f32(SMELT_W - 48) * heat), 10, NORSE_GOLD)
 	rl.DrawRectangleLines(px + 24, bar_y, SMELT_W - 48, 10, NORSE_BORDER)
 
-	status := cstring("cold — lay ore beside the fire")
+	rule, has_ore := smelt_rule_for(sd.in_item)
+	status := cstring("cold — drag ore into the furnace")
 	switch {
 	case burning:
 		status = "the fire eats the ore"
-	case has_ore && !has_wood && sd.fuel_charge == 0:
-		status = "cold — the fire needs wood"
+	case has_ore && int(sd.in_count) < rule.ore_per_bar:
+		status = "not enough ore for a bar"
 	case has_ore:
 		status = "the tray blocks the cast — take the bars"
 	}
@@ -1327,7 +1381,7 @@ draw_smelter :: proc(gs: ^Game_State) {
 	}
 
 	rl.DrawText(
-		"drag ore and wood from the bag onto this window",
+		"drag ore from the bag onto this window",
 		px + 24,
 		py + SMELT_H - 22,
 		10,

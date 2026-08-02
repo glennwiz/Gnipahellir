@@ -110,20 +110,14 @@ update_player :: proc(gs: ^Game_State) {
     // ── Interact: portals, sky altar ──────────────────────────────
     if inp.interact do player_interact(gs)
 
-    // ── Drop: toss the selected stack ahead (handler does the move) ─
-    if inp.drop_item && p.inventory.selected >= 0 {
-        eq_push(&gs.events, Event{
-            type    = .Item_Dropped,
-            payload = {int_val = i32(p.inventory.selected)},
-        })
-    }
-
     // ── Mana regen ────────────────────────────────────────────────
     p.mana = min(p.mana + p.mana_regen * dt, p.mana_max)
 
-    // ── Melee: click near an enemy swings the equipped weapon ─────
+    // ── Melee: click near an enemy swings the equipped weapon (a wand in
+    //    the weapon slot is a mining tool, not a melee weapon) ─────
     p.attack_timer -= dt
-    if inp.attack && p.attack_timer <= 0 && p.equipment[.Weapon] != .None {
+    if inp.attack && p.attack_timer <= 0 &&
+       p.equipment[.Weapon] != .None && !is_wand(p.equipment[.Weapon]) {
         if id, found := enemy_near_tile(gs, gs.input.mouse_tile); found {
             if chebyshev(builder_tile(&gs.enemies.data[id]), player_tile(p)) <= MELEE_REACH {
                 p.attack_timer = SWORD_COOLDOWN
@@ -214,6 +208,20 @@ player_pickup :: proc(gs: ^Game_State) {
         for tx in left ..= right {
             if !in_bounds(tx, ty) do continue
             idx := grid_idx(tx, ty)
+
+            // Forage: walking through a surface flower plucks it for brewing.
+            if get_tile(&gs.world, tx, ty) == .Flower {
+                if inventory_insert(&p.inventory, .Flower, 1) {
+                    set_tile(&gs.world, tx, ty, .Air)
+                    spawn_collect_mote(gs, {i32(tx), i32(ty)}, .Flower)
+                    gs.save_dirty = true
+                    if !gs.forage_hint_shown {
+                        gs.forage_hint_shown = true
+                        notify(gs, "Foraged a flower — brew Health Potions at the bench")
+                    }
+                }
+            }
+
             it  := gs.world.items[idx]
             cnt := int(gs.world.item_counts[idx])
             if it == .None || cnt == 0 do continue

@@ -46,6 +46,42 @@ starter_pickaxe_waits_on_the_shaft_ledge :: proc(t: ^testing.T) {
 }
 
 @(test)
+first_pickaxe_teaches_mining_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // First pickaxe pickup pops the one-shot mining hint.
+    testing.expect(t, !gs.pickaxe_hint_shown, "hint starts unshown")
+    eq_push(&gs.events, Event{type = .Item_Pickup, payload = {int_val = i32(Item.Pickaxe)}})
+    process_events(gs)
+    testing.expect(t, gs.pickaxe_hint_shown, "first pickaxe should arm the hint")
+    testing.expect_value(t, gs.notify.count, 1)
+
+    // A second pickup (dropped-and-repicked) must not re-notify.
+    eq_push(&gs.events, Event{type = .Item_Pickup, payload = {int_val = i32(Item.Pickaxe)}})
+    process_events(gs)
+    testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
+first_wood_log_teaches_crafting_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // First wood log pops the one-shot hand-crafting hint.
+    testing.expect(t, !gs.craft_hint_shown, "hint starts unshown")
+    eq_push(&gs.events, Event{type = .Item_Pickup, payload = {int_val = i32(Item.Wood_Log)}})
+    process_events(gs)
+    testing.expect(t, gs.craft_hint_shown, "first log should arm the crafting hint")
+    testing.expect_value(t, gs.notify.count, 1)
+
+    // Later logs don't re-notify.
+    eq_push(&gs.events, Event{type = .Item_Pickup, payload = {int_val = i32(Item.Wood_Log)}})
+    process_events(gs)
+    testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
 mining_the_shaft_apron_yields_rock_and_dirt :: proc(t: ^testing.T) {
     // Digging the loose stratum the cave mouth cuts through drops the rock on
     // the ground the normal way AND banks a clod of dirt straight into the bag
@@ -826,12 +862,87 @@ mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
 }
 
 @(test)
+flowers_forage_into_the_bag :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    fx := int(gs.player.pos.x)
+    fy := int(gs.player.pos.y)
+    set_tile(&gs.world, fx, fy, .Flower)
+
+    // Walking through it plucks the flower into the bag and clears the tile.
+    player_pickup(gs)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Flower), 1)
+    testing.expect_value(t, get_tile(&gs.world, fx, fy), Tile_Type.Air)
+    testing.expect(t, gs.forage_hint_shown, "first forage teaches brewing")
+}
+
+@(test)
+health_potion_brews_from_flowers :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Flower, 3)
+
+    idx := -1
+    for r, i in recipe_table do if r.result == .Potion_Health { idx = i; break }
+    testing.expect(t, idx >= 0, "health potion recipe must exist")
+    handle_craft_request(gs, Event{payload = {int_val = i32(idx)}})
+
+    testing.expect_value(t, inventory_count(inv, .Potion_Health), 1)
+    testing.expect_value(t, inventory_count(inv, .Flower), 0)  // three flowers consumed
+}
+
+@(test)
+drinking_a_health_potion_heals :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Potion_Health, 2)
+    pslot := -1
+    for s, i in inv.slots do if s.item == .Potion_Health { pslot = i; break }
+
+    // Hurt, then drink: heals by POTION_HEAL (capped), one potion spent.
+    gs.player.hp = 3
+    player_consume(gs, pslot)
+    testing.expect_value(t, gs.player.hp, min(3 + POTION_HEAL, gs.player.hp_max))
+    testing.expect_value(t, inventory_count(inv, .Potion_Health), 1)
+
+    // At full health the potion is refused — nothing spent.
+    gs.player.hp = gs.player.hp_max
+    player_consume(gs, pslot)
+    testing.expect_value(t, inventory_count(inv, .Potion_Health), 1)
+}
+
+@(test)
 wand_mines_at_range_for_mana :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
     inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
+
+    // A wand sitting in the bag no longer fires — it must be equipped.
+    mine_swing(gs, {32, i32(SURFACE_Y)})
+    testing.expect(t, !gs.mining.active, "an unequipped wand must not fire")
+
+    // Equip it into the weapon slot; now it is the mining tool.
+    wslot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Mine_Wand { wslot = i; break }
+    player_equip(gs, wslot)
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand)
+
+    // Adjacent tile: the wand fires up close too (no more free-pick fallback).
+    mine_swing(gs, {31, i32(SURFACE_Y)})
+    testing.expect(t, gs.mining.active, "wand fires on an adjacent tile")
+    testing.expect_value(t, gs.player.mana, 100 - WAND_MANA_COST)
+    gs.mining = {}
+    gs.player.mana = 100
 
     // Two tiles out: the wand fires, drinks mana, and the tile breaks on impact
     mine_swing(gs, {32, i32(SURFACE_Y)})
@@ -877,11 +988,21 @@ wand_tiers_extend_reach :: proc(t: ^testing.T) {
         return gs.mining.active
     }
 
-    inventory_insert(&gs.player.inventory, .Mine_Wand_Silver, 1)
+    equip_wand :: proc(gs: ^Game_State, wand: Item) {
+        inventory_insert(&gs.player.inventory, wand, 1)
+        for s, i in gs.player.inventory.slots do if s.item == wand {
+            player_equip(gs, i)
+            return
+        }
+    }
+
+    equip_wand(gs, .Mine_Wand_Silver)
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand_Silver)
     testing.expect(t, fires_at(gs, 4), "silver wand reaches 4")
     testing.expect(t, !fires_at(gs, 5), "silver wand stops at 4")
 
-    inventory_insert(&gs.player.inventory, .Mine_Wand_Gold, 1)  // best wand wins
+    equip_wand(gs, .Mine_Wand_Gold)   // swapping wands: the gold now reaches farther
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand_Gold)
     testing.expect(t, fires_at(gs, 8), "gold wand reaches 8")
     testing.expect(t, !fires_at(gs, 9), "gold wand stops at 8")
 }
@@ -1598,6 +1719,28 @@ armor_blunts_enemy_blows_but_not_the_world :: proc(t: ^testing.T) {
         target = PLAYER_ID, payload = {int_val = 2}})
     process_events(gs)
     testing.expect_value(t, gs.player.hp, hp - 4)
+}
+
+@(test)
+player_damage_pops_a_floating_number :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A blow that lands spawns one damage number carrying the dealt amount.
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(0),
+        target = PLAYER_ID, payload = {int_val = 3}})
+    process_events(gs)
+    testing.expect_value(t, gs.floating_text.count, 1)
+    active := -1
+    for &ft, i in gs.floating_text.data do if ft.active { active = i; break }
+    testing.expect(t, active >= 0, "a floating number should be active after a hit")
+    testing.expect_value(t, gs.floating_text.data[active].value, 3)
+
+    // It rises and fades: past its lifetime the slot frees.
+    gs.delta_time = FLOAT_TEXT_LIFETIME + 0.01
+    update_floating_text(gs)
+    testing.expect_value(t, gs.floating_text.count, 0)
+    testing.expect(t, !gs.floating_text.data[active].active, "expired number must free its slot")
 }
 
 @(test)
@@ -2372,44 +2515,29 @@ ambience_breathes_motes_into_the_air :: proc(t: ^testing.T) {
 // ─── Machine sim (smelter, tree grower) ──────────────────────────────────────
 
 @(test)
-smelter_casts_bars_from_ground_ore :: proc(t: ^testing.T) {
+smelter_casts_bars_from_ore :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // A smelter on the surface with 4 iron ore and 1 wood laid beside it.
+    // A smelter on the surface with 4 iron ore laid beside it — no fuel needed.
     sx, sy := GRID_W/2, SURFACE_Y - 1
     set_tile(&gs.world, sx, sy, .Smelter)
     in_idx := grid_idx(sx - 1, sy)
     gs.world.items[in_idx]       = .Iron_Ore
     gs.world.item_counts[in_idx] = 4
-    fuel_idx := grid_idx(sx + 1, sy)
-    gs.world.items[fuel_idx]       = .Wood_Log
-    gs.world.item_counts[fuel_idx] = 1
 
-    // Two smelt cycles: 4 ore → 2 bars; one log covers both (BARS_PER_LOG=3).
+    // Two smelt cycles: the ore is auto-pulled into the buffer, 4 ore → 2 bars.
     frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
     for _ in 0 ..< frames {
         update_sim(gs)
         eq_clear(&gs.events)
     }
 
-    testing.expect_value(t, gs.world.items[in_idx], Item.None)    // ore fully eaten
-    testing.expect_value(t, gs.world.items[fuel_idx], Item.None)  // the log went in the fire
+    testing.expect_value(t, gs.world.items[in_idx], Item.None)    // ore fully pulled in
     sd := &gs.world.sim_data[grid_idx(sx, sy)]
     testing.expect_value(t, sd.store_item, Item.Iron_Bar)
     testing.expect_value(t, int(sd.store_count), 2)
-    testing.expect_value(t, int(sd.fuel_charge), BARS_PER_LOG - 2)  // embers left for one more
-
-    // The leftover embers fire a third bar with no wood beside the fire.
-    gs.world.items[in_idx]       = .Iron_Ore
-    gs.world.item_counts[in_idx] = 2
-    frames = int(SMELT_TIME / gs.delta_time) + 4
-    for _ in 0 ..< frames {
-        update_sim(gs)
-        eq_clear(&gs.events)
-    }
-    testing.expect_value(t, int(sd.store_count), 3)
-    testing.expect_value(t, int(sd.fuel_charge), 0)
+    testing.expect_value(t, int(sd.in_count), 0)  // buffer emptied by the two casts
 
     // Nothing lands on the ground — the bars wait in the tray.
     ground := 0
@@ -2419,22 +2547,19 @@ smelter_casts_bars_from_ground_ore :: proc(t: ^testing.T) {
     }
     testing.expect_value(t, ground, 0)
 
-    // The fire dies without ore: progress stays zero.
+    // The fire dies with the buffer empty: progress stays zero.
     update_sim(gs)
     testing.expect_value(t, sd.growth_timer, f32(0))
 }
 
 @(test)
-smelter_stalls_without_wood :: proc(t: ^testing.T) {
+smelter_stalls_without_ore :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // Ore beside the fire but nothing to burn: no progress, no bars.
+    // A bare furnace with nothing loaded and no pile beside it: no progress.
     sx, sy := GRID_W/2, SURFACE_Y - 1
     set_tile(&gs.world, sx, sy, .Smelter)
-    in_idx := grid_idx(sx - 1, sy)
-    gs.world.items[in_idx]       = .Iron_Ore
-    gs.world.item_counts[in_idx] = 4
 
     frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
     for _ in 0 ..< frames {
@@ -2445,7 +2570,7 @@ smelter_stalls_without_wood :: proc(t: ^testing.T) {
     sd := &gs.world.sim_data[grid_idx(sx, sy)]
     testing.expect_value(t, sd.growth_timer, f32(0))
     testing.expect_value(t, int(sd.store_count), 0)
-    testing.expect_value(t, int(gs.world.item_counts[in_idx]), 4)  // ore untouched
+    testing.expect_value(t, int(sd.in_count), 0)
 }
 
 @(test)
@@ -2466,17 +2591,22 @@ smelter_tray_collects_to_bag_and_spills_on_mine :: proc(t: ^testing.T) {
     testing.expect_value(t, int(sd.store_count), 0)
     testing.expect_value(t, sd.store_item, Item.None)
 
-    // Mining the furnace spills a loaded tray to the ground — never lost.
+    // Mining the furnace spills a loaded tray AND the loaded ore — never lost.
     sd.store_item  = .Gold_Bar
     sd.store_count = 2
+    sd.in_item     = .Iron_Ore
+    sd.in_count    = 3
     handle_tile_mined(gs, Event{tile = {i32(sx), i32(sy)}})
     testing.expect_value(t, int(sd.store_count), 0)  // tray died with the tile
-    spilled := 0
+    testing.expect_value(t, int(sd.in_count), 0)     // and so did the input buffer
+    bars, ore := 0, 0
     for dy in -2 ..= 2 do for dx in -2 ..= 2 {
         idx := grid_idx(sx + dx, sy + dy)
-        if gs.world.items[idx] == .Gold_Bar do spilled += int(gs.world.item_counts[idx])
+        if gs.world.items[idx] == .Gold_Bar do bars += int(gs.world.item_counts[idx])
+        if gs.world.items[idx] == .Iron_Ore do ore  += int(gs.world.item_counts[idx])
     }
-    testing.expect_value(t, spilled, 2)
+    testing.expect_value(t, bars, 2)
+    testing.expect_value(t, ore, 3)
 }
 
 @(test)
@@ -2501,73 +2631,42 @@ tree_grower_raises_trees_over_time :: proc(t: ^testing.T) {
 }
 
 @(test)
-q_drop_lands_ahead_of_the_pickup_sweep :: proc(t: ^testing.T) {
-    gs := test_state()
-    defer free(gs)
-
-    inventory_insert(&gs.player.inventory, .Iron_Ore, 5)
-    slot := -1
-    for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
-    gs.player.facing = 1
-
-    handle_item_dropped(gs, Event{payload = {int_val = i32(slot)}})
-    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
-
-    // The stack lies ahead of the player — the pickup sweep must not reclaim it.
-    player_pickup(gs)
-    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
-
-    tx := int(gs.player.pos.x + PLAYER_W*0.5) + 2
-    ty := int(gs.player.pos.y + PLAYER_H - 0.001)
-    found := 0
-    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
-        if !in_bounds(tx + dx, ty + dy) do continue
-        idx := grid_idx(tx + dx, ty + dy)
-        if gs.world.items[idx] == .Iron_Ore do found += int(gs.world.item_counts[idx])
-    }
-    testing.expect_value(t, found, 5)
-}
-
-// Ore lying beside a smelter, counted over its 8 neighbor cells.
-count_ore_beside :: proc(gs: ^Game_State, sx, sy: int, item: Item) -> int {
-    n := 0
-    for dy in -1 ..= 1 do for dx in -1 ..= 1 {
-        if dx == 0 && dy == 0 do continue
-        idx := grid_idx(sx + dx, sy + dy)
-        if gs.world.items[idx] == item do n += int(gs.world.item_counts[idx])
-    }
-    return n
-}
-
-@(test)
-smelter_feed_lays_bag_ore_beside_furnace :: proc(t: ^testing.T) {
+smelter_feed_loads_the_input_buffer :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     sx, sy := GRID_W/2, SURFACE_Y - 1
     set_tile(&gs.world, sx, sy, .Smelter)
     gs.player.pos = {f32(sx - 2), f32(sy - 1)}  // within BENCH_RANGE
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
 
     inventory_insert(&gs.player.inventory, .Iron_Ore, 5)
     slot := -1
     for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
 
-    ok := smelter_feed(gs, {i32(sx), i32(sy)}, slot)
-    testing.expect(t, ok, "feed rejected")
+    testing.expect(t, smelter_feed(gs, {i32(sx), i32(sy)}, slot), "feed rejected")
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
-    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 5)
+    testing.expect_value(t, sd.in_item, Item.Iron_Ore)
+    testing.expect_value(t, int(sd.in_count), 5)
 
-    // A second feed stacks onto the same cell rather than scattering.
+    // A second feed of the same ore stacks into the buffer.
     inventory_insert(&gs.player.inventory, .Iron_Ore, 3)
     for s, i in gs.player.inventory.slots do if s.item == .Iron_Ore { slot = i; break }
     testing.expect(t, smelter_feed(gs, {i32(sx), i32(sy)}, slot), "second feed rejected")
-    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 8)
+    testing.expect_value(t, int(sd.in_count), 8)
 
-    // Wood is fuel — the furnace takes it the same way.
+    // A different ore is refused while the buffer holds iron.
+    inventory_insert(&gs.player.inventory, .Silver_Ore, 2)
+    for s, i in gs.player.inventory.slots do if s.item == .Silver_Ore { slot = i; break }
+    testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "mismatched ore must be refused")
+    testing.expect_value(t, int(sd.in_count), 8)
+
+    // Wood is no longer fuel — the furnace refuses it.
     inventory_insert(&gs.player.inventory, .Wood_Log, 2)
     for s, i in gs.player.inventory.slots do if s.item == .Wood_Log { slot = i; break }
-    testing.expect(t, smelter_feed(gs, {i32(sx), i32(sy)}, slot), "wood feed rejected")
-    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Wood_Log), 2)
+    testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "wood must not feed the furnace")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 2)
+    testing.expect_value(t, int(sd.in_count), 8)
 }
 
 @(test)
@@ -2585,7 +2684,7 @@ smelter_feed_rejects_non_ore :: proc(t: ^testing.T) {
 
     testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "plank must not feed the fire")
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Plank), 3)
-    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Plank), 0)
+    testing.expect_value(t, int(gs.world.sim_data[grid_idx(sx, sy)].in_count), 0)
 }
 
 @(test)
@@ -2603,7 +2702,7 @@ smelter_feed_requires_reach :: proc(t: ^testing.T) {
 
     testing.expect(t, !smelter_feed(gs, {i32(sx), i32(sy)}, slot), "feed must fail out of reach")
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 4)
-    testing.expect_value(t, count_ore_beside(gs, sx, sy, .Iron_Ore), 0)
+    testing.expect_value(t, int(gs.world.sim_data[grid_idx(sx, sy)].in_count), 0)
 }
 
 // ─── Parallel dimensions (dimensions.odin) ────────────────────────────────────
@@ -3126,8 +3225,8 @@ smelter_casts_into_adjacent_silo :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // Smelter with a silo out-chute on its right; ore and wood laid on the
-    // far side, out of the silo's vacuum reach.
+    // Smelter with a silo out-chute on its right; an ore pile on the far
+    // side, out of the silo's vacuum reach.
     sx, sy := GRID_W/2, SURFACE_Y - 1
     set_tile(&gs.world, sx, sy, .Smelter)
     tile := [2]i32{i32(sx + 1), i32(sy)}
@@ -3136,9 +3235,6 @@ smelter_casts_into_adjacent_silo :: proc(t: ^testing.T) {
     in_idx := grid_idx(sx - 1, sy)
     gs.world.items[in_idx]       = .Iron_Ore
     gs.world.item_counts[in_idx] = 4
-    fuel_idx := grid_idx(sx - 1, sy - 1)
-    gs.world.items[fuel_idx]       = .Wood_Log
-    gs.world.item_counts[fuel_idx] = 1
 
     // Two smelt cycles: 4 ore → 2 bars, straight past the tray.
     frames := int((SMELT_TIME * 2) / gs.delta_time) + 4

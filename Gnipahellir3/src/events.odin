@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Item_Dropped, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect:
+        case .Tile_Placed, .Item_Pickup, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect:
             gs.save_dirty = true
         }
 
@@ -60,6 +60,8 @@ process_events :: proc(gs: ^Game_State) {
                     if dmg > 0 {
                         gs.player.hp -= dmg
                         audio_play(&gs.audio, .Hurt)
+                        spawn_damage_number(&gs.floating_text,
+                            {gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y}, dmg, DAMAGE_COLOR)
                         log_action(gs, "Player takes %d damage (hp %d)", dmg, gs.player.hp)
                         if gs.player.hp <= 0 {
                             gs.player.hp = 0
@@ -96,7 +98,7 @@ process_events :: proc(gs: ^Game_State) {
             // Machines teach themselves on placement.
             #partial switch get_tile(&gs.world, int(e.tile.x), int(e.tile.y)) {
             case .Smelter:
-                notify(gs, "Drop ore beside the smelter (Q) — it casts bars")
+                notify(gs, "Click the smelter and drag ore in — it casts bars")
             case .Tree_Grower:
                 notify(gs, "The grower raises a tree when open sky is above")
             }
@@ -121,10 +123,21 @@ process_events :: proc(gs: ^Game_State) {
                 eq_push(&gs.events, Event{type = .Game_Won})
             case .Sky_Blueprint:
                 notify(gs, "Sky Blueprint found — raise a Sky Altar to open the way above (B)")
+            case .Pickaxe:
+                // First pickaxe: teach the core verb.  One-shot so a dropped-
+                // and-repicked pick doesn't nag.
+                if !gs.pickaxe_hint_shown {
+                    gs.pickaxe_hint_shown = true
+                    notify(gs, "Pickaxe in hand — hold left-click by a wall to mine")
+                }
+            case .Wood_Log:
+                // First log: teach hand-crafting — the hidden bootstrap verb
+                // (logs → planks → your first bench).  One-shot.
+                if !gs.craft_hint_shown {
+                    gs.craft_hint_shown = true
+                    notify(gs, "Press [%v] to craft — turn logs into planks", gs.bindings[.Crafting])
+                }
             }
-
-        case .Item_Dropped:
-            handle_item_dropped(gs, e)
 
         case .Craft_Request:
             handle_craft_request(gs, e)
@@ -250,7 +263,13 @@ process_events :: proc(gs: ^Game_State) {
             handle_ritual_request(gs)
 
         case .Equip_Request:
-            player_equip(gs, int(e.payload.int_val))
+            // Right-click routes here: drink a consumable, else equip the gear.
+            slot := int(e.payload.int_val)
+            if slot >= 0 && slot < MAX_INVENTORY && item_is_consumable(gs.player.inventory.slots[slot].item) {
+                player_consume(gs, slot)
+            } else {
+                player_equip(gs, slot)
+            }
 
         case .Unequip_Request:
             player_unequip(gs, Equip_Slot(e.payload.int_val))
@@ -386,11 +405,17 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         }
     }
 
-    // A mined smelter spills its tray — cast bars are never lost.  Timers
-    // and tray die with the tile so a future machine here starts fresh.
+    // A mined smelter spills its tray AND its loaded ore — nothing in the
+    // furnace is lost.  Timers and buffers die with the tile so a future
+    // machine here starts fresh.
     sd := &gs.world.sim_data[idx]
-    if old_tile == .Smelter && sd.store_count > 0 {
-        spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))
+    if old_tile == .Smelter {
+        if sd.store_count > 0 {
+            spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))
+        }
+        if sd.in_count > 0 {
+            spawn_ground_item(&gs.world, e.tile, sd.in_item, int(sd.in_count))
+        }
     }
     sd^ = {}
 
@@ -405,27 +430,4 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
             gravity_check_removed(gs, px, py)
         }
     }
-}
-
-// Q key: the selected stack lands two tiles ahead of the player — outside
-// the pickup sweep, so it isn't collected right back the same frame.
-handle_item_dropped :: proc(gs: ^Game_State, e: Event) {
-    if gs.player.dead do return
-    p    := &gs.player
-    slot := int(e.payload.int_val)
-    if slot < 0 || slot >= MAX_INVENTORY do return
-    s := &p.inventory.slots[slot]
-    if s.item == .None || s.count <= 0 do return
-
-    tile := [2]i32{
-        clamp(i32(p.pos.x + PLAYER_W*0.5) + i32(p.facing)*2, 0, GRID_W - 1),
-        clamp(i32(p.pos.y + PLAYER_H - 0.001), 0, GRID_H - 1),  // foot row
-    }
-    item  := s.item
-    count := int(s.count)
-    s.item  = .None
-    s.count = 0
-    spawn_ground_item(&gs.world, tile, item, count)
-    audio_play(&gs.audio, .Place)
-    log_action(gs, "Player drops %v x%d at (%d,%d)", item, count, tile.x, tile.y)
 }

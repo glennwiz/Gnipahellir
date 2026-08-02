@@ -66,6 +66,9 @@ game_update :: proc(gs: ^Game_State) {
     // 9. Particles (visual only, pushes no events)
     update_particles(gs)
 
+    // 9b. Floating combat text — damage numbers rise and fade (visual only)
+    update_floating_text(gs)
+
     // 10. Audio (reads state only, never pushes events)
     update_audio(gs)
 

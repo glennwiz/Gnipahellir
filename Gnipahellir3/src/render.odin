@@ -27,6 +27,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
     draw_particles(&gs.particles)
+    draw_floating_text(&gs.floating_text)
     when GAME_DEBUG {
         if gs.ui.show_debug do draw_debug(gs)
     }
@@ -92,6 +93,7 @@ Draw_Style :: enum u8 {
     Pixel_Miner_Body,
     Pixel_Cloud,
     Pixel_Door,
+    Pixel_Dirt,
 }
 
 @(rodata)
@@ -106,6 +108,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Miner_Body  = .Pixel_Miner_Body,
     .Cloud       = .Pixel_Cloud,
     .Door        = .Pixel_Door,
+    .Dirt        = .Pixel_Dirt,
     // all others default to .Solid (zero value)
 }
 
@@ -320,6 +323,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Gem:        draw_pixel_gem(px, py, t)
     case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
     case .Pixel_Door:       draw_pixel_door(gs, px, py, x, y)
+    case .Pixel_Dirt:       draw_pixel_dirt(px, py)
     case .Pixel_Cloud:
         // Sky backdrop only — the puffs paint in draw_cloud_layer, a
         // second pass, so their bulges can spill over neighbor cells
@@ -373,6 +377,31 @@ draw_pixel_wood :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+1, by, 1, CELL_SIZE, dark)
     rl.DrawRectangle(bx+5, by, 1, CELL_SIZE, light)
     rl.DrawRectangle(bx+6, by, 1, CELL_SIZE, dark)
+}
+
+// ─── Pixel Art: Dirt ──────────────────────────────────────────────────────────
+//
+//  Turned earth: warm brown fill scattered with darker pebbles and lighter
+//  grit so a placed clod reads as soil, not a flat swatch.  Fixed pattern
+//  (like leaves) — it tiles cleanly across a stacked dirt wall.
+
+draw_pixel_dirt :: proc(bx, by: i32) {
+    base  := rl.Color{120, 84, 50, 255}
+    dark  := rl.Color{ 84, 58, 34, 255}
+    light := rl.Color{150, 112, 74, 255}
+
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, base)
+    // pebbles
+    rl.DrawRectangle(bx+1, by+2, 2, 2, dark)
+    rl.DrawRectangle(bx+6, by+1, 2, 2, dark)
+    rl.DrawRectangle(bx+4, by+5, 2, 2, dark)
+    rl.DrawRectangle(bx+7, by+6, 2, 2, dark)
+    // grit
+    rl.DrawRectangle(bx+3, by+0, 1, 1, light)
+    rl.DrawRectangle(bx+8, by+3, 1, 1, light)
+    rl.DrawRectangle(bx+0, by+6, 1, 1, light)
+    rl.DrawRectangle(bx+2, by+7, 1, 1, light)
+    rl.DrawRectangle(bx+5, by+8, 1, 1, light)
 }
 
 // ─── Pixel Art: Door ──────────────────────────────────────────────────────────
@@ -726,9 +755,8 @@ draw_player :: proc(p: ^Player) {
         }
     }
 
-    // Tool in hand, on the leading side. Derived from what the mage actually
-    // carries (mining reads its tool from the bag; `equipment` holds worn
-    // gear, not tools). Best wand wins, else the pickaxe once it's picked up.
+    // Tool in hand, on the leading side: the equipped wand (weapon slot) if
+    // one is worn, else the pickaxe once it's picked up.
     held := held_tool(p)
     if held != .None {
         hand_x := origin_x + total_w - ps * 2
@@ -751,14 +779,10 @@ draw_player :: proc(p: ^Player) {
     }
 }
 
-// The implement the mage visibly holds: best wand carried, else pickaxe.
+// The implement the mage visibly holds: the equipped wand, else the pickaxe.
 held_tool :: proc(p: ^Player) -> Item {
-    switch {
-    case inventory_count(&p.inventory, .Mine_Wand_Gold)   > 0: return .Mine_Wand_Gold
-    case inventory_count(&p.inventory, .Mine_Wand_Silver) > 0: return .Mine_Wand_Silver
-    case inventory_count(&p.inventory, .Mine_Wand)        > 0: return .Mine_Wand
-    case inventory_count(&p.inventory, .Pickaxe)          > 0: return .Pickaxe
-    }
+    if w := p.equipment[.Weapon]; is_wand(w) do return w
+    if inventory_count(&p.inventory, .Pickaxe) > 0 do return .Pickaxe
     return .None
 }
 
