@@ -713,7 +713,6 @@ world_init :: proc(w: ^World_Grid) {
 	for chunk in 0 ..< GRID_W / CHUNK {
 		h1 := whash(u32(chunk) * 31337)
 		h2 := whash(u32(chunk) * 99991)
-		h3 := whash(u32(chunk) * 7919)
 
 		if h1 % 10 < 7 {
 			tx := chunk * CHUNK + int(h1 % u32(CHUNK))
@@ -722,15 +721,17 @@ world_init :: proc(w: ^World_Grid) {
 				place_tree(w, tx, SURFACE_Y, tree_height)
 			}
 		}
+	}
 
-		flower_count := 3 + int(h3 % 4)   // 3–6 per chunk (was 0–2 — too sparse)
-		for i in 0 ..< flower_count {
-			hf := whash(u32(chunk) * 1000 + u32(i))
-			fx := chunk * CHUNK + int(hf % u32(CHUNK))
-			fy := SURFACE_Y - 1
-			if in_bounds(fx, fy) && get_tile(w, fx, fy) == .Air {
-				set_tile(w, fx, fy, .Flower)
-			}
+	// A handful of wild flowers for the whole surface — the seed source for
+	// flower farming, deliberately scarce (beds are how you scale up).
+	flower_count := 5 + int(whash(424242) % 4)   // 5–8 across the level
+	for i in 0 ..< flower_count {
+		hf := whash(u32(i) * 2654435761 + 101)
+		fx := int(hf % u32(GRID_W))
+		fy := SURFACE_Y - 1
+		if in_bounds(fx, fy) && get_tile(w, fx, fy) == .Air {
+			set_tile(w, fx, fy, .Flower)
 		}
 	}
 
