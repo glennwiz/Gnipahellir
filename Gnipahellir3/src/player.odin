@@ -209,10 +209,13 @@ player_pickup :: proc(gs: ^Game_State) {
             if !in_bounds(tx, ty) do continue
             idx := grid_idx(tx, ty)
 
-            // Forage: walking through a wild flower (1 bloom) or a planted
-            // flower bed (5 blooms) harvests each bloom for a Flower plus a
-            // handful of seeds, then clears the tile.
-            if ft := get_tile(&gs.world, tx, ty); ft == .Flower || ft == .Flower_Bed {
+            // Forage: walking through a wild flower (1 bloom) or a RIPE flower
+            // bed (5 blooms) harvests each bloom for a Flower plus a handful of
+            // seeds, then clears the tile.  An unripe bed is left to keep growing.
+            ft := get_tile(&gs.world, tx, ty)
+            ripe_bed := ft == .Flower_Bed &&
+                gs.world.sim_data[idx].growth_timer >= FLOWER_BED_GROW_TIME
+            if ft == .Flower || ripe_bed {
                 blooms := ft == .Flower_Bed ? FLOWER_BED_BLOOMS : 1
                 got := 0
                 for _ in 0 ..< blooms {
@@ -225,6 +228,7 @@ player_pickup :: proc(gs: ^Game_State) {
                 }
                 if got > 0 {
                     set_tile(&gs.world, tx, ty, .Air)
+                    gs.world.sim_data[idx] = {}   // clear the bed's growth timer
                     spawn_collect_mote(gs, {i32(tx), i32(ty)}, .Flower)
                     spawn_collect_mote(gs, {i32(tx), i32(ty)}, .Flower_Seed)
                     gs.save_dirty = true

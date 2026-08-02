@@ -12,6 +12,7 @@ package game
 SMELT_TIME     :: f32(3.0)   // seconds per bar
 SMELTER_IN_CAP :: MAX_STACK  // most ore the internal input buffer holds
 TREE_GROW_TIME :: f32(20.0)  // seconds per tree
+FLOWER_BED_GROW_TIME :: f32(120.0)  // seconds for a bed to bloom (~2 min)
 TREE_MAX_H     :: 5          // tallest grown trunk; clearance is checked to here
 
 // What a smelter eats and what it casts.  New smeltable = new row.
@@ -32,7 +33,16 @@ smelt_table := [?]Smelt_Rule{
 tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Smelter     = tick_smelter,
     .Tree_Grower = tick_grower,
+    .Flower_Bed  = tick_flower_bed,
     .Silo        = tick_silo,
+}
+
+// A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
+// harvested (walked through, player_pickup).  Progress lives in growth_timer,
+// read by render for the growth stages.
+tick_flower_bed :: proc(gs: ^Game_State, x, y: int) {
+    sd := &gs.world.sim_data[grid_idx(x, y)]
+    sd.growth_timer = min(sd.growth_timer + gs.delta_time, FLOWER_BED_GROW_TIME)
 }
 
 update_sim :: proc(gs: ^Game_State) {

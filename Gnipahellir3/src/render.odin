@@ -326,7 +326,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
     case .Pixel_Door:       draw_pixel_door(gs, px, py, x, y)
     case .Pixel_Dirt:       draw_pixel_dirt(px, py)
-    case .Pixel_Flower_Bed: draw_pixel_flower_bed(px, py)
+    case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
     case .Pixel_Cloud:
         // Sky backdrop only — the puffs paint in draw_cloud_layer, a
         // second pass, so their bulges can spill over neighbor cells
@@ -409,21 +409,46 @@ draw_pixel_dirt :: proc(bx, by: i32) {
 
 // ─── Pixel Art: Flower Bed ────────────────────────────────────────────────────
 //
-//  A tilled soil strip with five little blooms poking up — a planted crop the
-//  player walks through to harvest (player_pickup).
+//  A plank-framed soil bed whose five stalks grow over FLOWER_BED_GROW_TIME:
+//  sprouts → stems → buds → swaying blooms.  Growth (sim_data.growth_timer)
+//  drives the stalk height, and the ripe blooms spill up into the cell above
+//  (a surface crop with open sky overhead), so it reads taller than one cell.
 
-draw_pixel_flower_bed :: proc(bx, by: i32) {
+draw_pixel_flower_bed :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
     soil   := rl.Color{ 92, 62, 38, 255}
     soil_d := rl.Color{ 68, 46, 28, 255}
+    frame  := rl.Color{140, 100, 55, 255}
     stem   := rl.Color{ 46, 140, 46, 255}
-    petal  := rl.Color{255, 220, 50, 255}
-    petal2 := rl.Color{255, 150, 60, 255}
+    stem_d := rl.Color{ 30, 100, 34, 255}
+    bud    := rl.Color{120, 170, 70, 255}
 
-    rl.DrawRectangle(bx, by+5, CELL_SIZE, CELL_SIZE-5, soil)   // soil bed
-    rl.DrawRectangle(bx, by+8, CELL_SIZE, 2, soil_d)           // dark furrow
-    for x, i in ([5]i32{0, 2, 4, 6, 8}) {
-        rl.DrawRectangle(bx+x, by+2, 1, 4, stem)               // stem
-        rl.DrawRectangle(bx+x, by+1, 1, 1, i % 2 == 0 ? petal : petal2)  // bloom
+    p := clamp(gs.world.sim_data[grid_idx(x, y)].growth_timer / FLOWER_BED_GROW_TIME, 0, 1)
+    ripe := p >= 1.0
+
+    soil_top := by + 6
+    rl.DrawRectangle(bx, soil_top, CELL_SIZE, CELL_SIZE - 6, soil)   // tilled soil
+    rl.DrawRectangle(bx, by + 8, CELL_SIZE, 2, soil_d)              // dark furrow
+    rl.DrawRectangle(bx, soil_top, CELL_SIZE, 1, frame)            // plank lip
+    rl.DrawRectangle(bx, soil_top, 1, CELL_SIZE - 6, frame)        // left rail
+    rl.DrawRectangle(bx + CELL_SIZE - 1, soil_top, 1, CELL_SIZE - 6, frame)  // right rail
+
+    petals := [5]rl.Color{
+        {255, 220, 50, 255}, {255, 150, 60, 255}, {255, 90, 120, 255},
+        {200, 120, 255, 255}, {255, 220, 50, 255},
+    }
+    for sx, i in ([5]i32{1, 3, 5, 7, 9}) {
+        h    := i32(2 + p * 13)   // 2px sprout → 15px stalk (spills a cell up)
+        sway := ripe ? i32(math.sin(gs.elapsed_time * 2 + f32(i)) * 1.2) : 0
+        top  := soil_top - h
+        hx   := bx + sx + sway
+        rl.DrawRectangle(hx, top, 1, h, i % 2 == 0 ? stem : stem_d)
+        if ripe {
+            rl.DrawRectangle(hx - 1, top - 1, 3, 1, petals[i])          // side petals
+            rl.DrawRectangle(hx,     top - 2, 1, 3, petals[i])          // top/bottom
+            rl.DrawRectangle(hx,     top - 1, 1, 1, rl.Color{255, 240, 180, 255})  // core
+        } else if p > 0.55 {
+            rl.DrawRectangle(hx, top - 1, 1, 1, bud)                    // budding
+        }
     }
 }
 

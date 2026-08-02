@@ -948,7 +948,7 @@ flowers_forage_into_the_bag :: proc(t: ^testing.T) {
 }
 
 @(test)
-flower_bed_harvests_five_blooms :: proc(t: ^testing.T) {
+flower_bed_ripens_then_harvests :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
@@ -956,14 +956,27 @@ flower_bed_harvests_five_blooms :: proc(t: ^testing.T) {
     bx := int(gs.player.pos.x)
     by := int(gs.player.pos.y)
     set_tile(&gs.world, bx, by, .Flower_Bed)
-
-    // Walking through the bed harvests all five blooms (+ seeds) and clears it.
-    player_pickup(gs)
     inv := &gs.player.inventory
+
+    // Unripe: walking through yields nothing, the bed stays put.
+    player_pickup(gs)
+    testing.expect_value(t, inventory_count(inv, .Flower), 0)
+    testing.expect_value(t, get_tile(&gs.world, bx, by), Tile_Type.Flower_Bed)
+
+    // It grows over time (and caps at the ripe mark).
+    gs.delta_time = 1.0
+    update_sim(gs); eq_clear(&gs.events)
+    update_sim(gs); eq_clear(&gs.events)
+    testing.expect(t, gs.world.sim_data[grid_idx(bx, by)].growth_timer > 0, "the bed grows over time")
+
+    // Ripe: walking through harvests all five blooms (+ seeds) and clears it.
+    gs.world.sim_data[grid_idx(bx, by)].growth_timer = FLOWER_BED_GROW_TIME
+    player_pickup(gs)
     testing.expect_value(t, inventory_count(inv, .Flower), FLOWER_BED_BLOOMS)
     testing.expect(t, inventory_count(inv, .Flower_Seed) >= FLOWER_BED_BLOOMS * FLOWER_SEED_MIN,
         "each bloom yields seeds")
     testing.expect_value(t, get_tile(&gs.world, bx, by), Tile_Type.Air)
+    testing.expect_value(t, gs.world.sim_data[grid_idx(bx, by)].growth_timer, f32(0))  // cleared
 }
 
 @(test)
