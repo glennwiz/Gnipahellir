@@ -82,6 +82,24 @@ first_wood_log_teaches_crafting_once :: proc(t: ^testing.T) {
 }
 
 @(test)
+first_wand_teaches_equipping :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // First crafted wand pops the one-shot "equip it" hint.
+    testing.expect(t, !gs.wand_hint_shown, "hint starts unshown")
+    eq_push(&gs.events, Event{type = .Craft_Complete, payload = {int_val = i32(Item.Mine_Wand)}})
+    process_events(gs)
+    testing.expect(t, gs.wand_hint_shown, "first wand should arm the equip hint")
+    testing.expect_value(t, gs.notify.count, 1)
+
+    // A later wand (any tier) doesn't re-notify.
+    eq_push(&gs.events, Event{type = .Craft_Complete, payload = {int_val = i32(Item.Mine_Wand_Silver)}})
+    process_events(gs)
+    testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
 mining_the_shaft_apron_yields_rock_and_dirt :: proc(t: ^testing.T) {
     // Digging the loose stratum the cave mouth cuts through drops the rock on
     // the ground the normal way AND banks a clod of dirt straight into the bag

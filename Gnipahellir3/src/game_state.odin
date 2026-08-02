@@ -411,6 +411,7 @@ Game_State :: struct {
     pickaxe_hint_shown: bool, // one-shot: the "you can mine now" popup on first pickaxe (not saved)
     craft_hint_shown:   bool, // one-shot: the "press C to craft" popup on first wood log (not saved)
     forage_hint_shown:  bool, // one-shot: the "brew potions" popup on first foraged flower (not saved)
+    wand_hint_shown:    bool, // one-shot: the "equip the wand" popup on first crafted wand (not saved)
 
 
 

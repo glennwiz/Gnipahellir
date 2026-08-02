@@ -144,7 +144,13 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Craft_Complete:
             audio_play(&gs.audio, .Pickup)
-            spawn_craft_burst(gs, Item(e.payload.int_val))
+            crafted := Item(e.payload.int_val)
+            spawn_craft_burst(gs, crafted)
+            // First wand: it's weapon-slot gear now, inert in the bag until worn.
+            if is_wand(crafted) && !gs.wand_hint_shown {
+                gs.wand_hint_shown = true
+                notify(gs, "Equip the wand (right-click it in the bag) to mine at range")
+            }
 
         case .Station_Interact:
             gs.ui.active_station = Station(e.payload.int_val)
