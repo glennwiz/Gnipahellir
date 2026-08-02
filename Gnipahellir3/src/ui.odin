@@ -784,6 +784,7 @@ draw_station_prompt :: proc(gs: ^Game_State) {
 
 draw_ui :: proc(gs: ^Game_State) {
 	draw_hud(gs)
+	draw_hover_label(gs)
 	draw_objective(gs)
 	draw_notifications(gs)
 	draw_station_prompt(gs)
@@ -1115,6 +1116,28 @@ draw_notifications :: proc(gs: ^Game_State) {
 		rl.DrawText(text, tx + 1, ty + 1, NOTIFY_FONT, rl.Color{0, 0, 0, u8(200 * alpha)})
 		rl.DrawText(text, tx, ty, NOTIFY_FONT, rl.Color{255, 240, 180, u8(255 * alpha)})
 	}
+}
+
+// A small plate beside the cursor naming the tile it points at — the
+// genre-standard "what am I pointing at" readout. Empty sky/void and any
+// pointer over a panel or full-screen modal are skipped.
+draw_hover_label :: proc(gs: ^Game_State) {
+	if gs.ui.show_book || gs.player.dead || cursor_over_ui(gs) do return
+	t := get_tile(&gs.world, int(gs.ui.hover_tile.x), int(gs.ui.hover_tile.y))
+	if t == .Air || t == .Void do return
+
+	FONT :: 10
+	PAD  :: i32(6)
+	text := cstring(raw_data(terrain_table[t].name))
+	tw := rl.MeasureText(text, FONT)
+	pw := tw + PAD*2
+	ph := i32(FONT) + PAD*2
+	x := clamp(i32(gs.input.mouse_screen.x) + 14, 0, i32(UI_W) - pw)
+	y := clamp(i32(gs.input.mouse_screen.y) + 18, 0, i32(UI_H) - ph)
+
+	rl.DrawRectangle(x, y, pw, ph, NORSE_PANEL)
+	rl.DrawRectangleLines(x, y, pw, ph, NORSE_BORDER)
+	rl.DrawText(text, x + PAD, y + PAD, FONT, rl.Color{255, 240, 180, 255})
 }
 
 draw_hud :: proc(gs: ^Game_State) {

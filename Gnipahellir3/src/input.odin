@@ -155,9 +155,19 @@ update_input :: proc(gs: ^Game_State) {
         }
     }
 
-    // UI toggles
+    // UI toggles. TAB with any window open sweeps them all shut (like ESC);
+    // otherwise it opens the bag.
     if rl.IsKeyPressed(bind[.Inventory]) {
-        gs.ui.show_inventory = !gs.ui.show_inventory
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter {
+            gs.ui.show_inventory = false
+            gs.ui.show_crafting  = false
+            gs.ui.show_blueprint = false
+            gs.ui.show_smelter   = false
+            gs.ui.drag_item      = .None
+            gs.ui.drag_tray      = false
+        } else {
+            gs.ui.show_inventory = true
+        }
     }
     if rl.IsKeyPressed(bind[.Crafting]) {
         gs.ui.show_crafting = !gs.ui.show_crafting
