@@ -193,9 +193,8 @@ update_input :: proc(gs: ^Game_State) {
                 if is_blueprint(gs.player.inventory.slots[slot].item) {
                     gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
                 }
-                // Grabbing a bag stack starts a drag while the anvil or the
-                // furnace can take it
-                if gs.ui.show_crafting || gs.ui.show_smelter {
+                // Grabbing a bag stack starts a drag while the furnace can take it
+                if gs.ui.show_smelter {
                     s := gs.player.inventory.slots[slot]
                     if s.item != .None && s.count > 0 {
                         gs.ui.drag_item = s.item
@@ -218,15 +217,14 @@ update_input :: proc(gs: ^Game_State) {
             }
         }
         if gs.ui.show_crafting {
-            if off := craft_offer_at_cursor(gs); off >= 0 {
-                gs.ui.craft_offer[off] = .None  // take an offering back off the anvil
-            } else if idx := craft_result_at_cursor(gs); idx >= 0 {
-                eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = i32(idx)}})
-            } else if row := recipe_at_cursor(gs); row >= 0 {
-                // A hint row lays its materials on the anvil for you
-                for ing, i in recipe_table[row].ingredients {
-                    gs.ui.craft_offer[i] = ing.item
+            // Click the CRAFT button to forge the shown recipe; else click a
+            // recipe card to select it.
+            if craft_button_hovered(gs) {
+                if sel := craft_selected_recipe(gs); sel >= 0 {
+                    eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = i32(sel)}})
                 }
+            } else if card := craft_card_at_cursor(gs); card >= 0 {
+                gs.ui.craft_selected = card
             }
         }
     }
@@ -243,10 +241,6 @@ update_input :: proc(gs: ^Game_State) {
                 eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
             }
             gs.ui.drag_tray = false
-        } else if off := craft_offer_at_cursor(gs); off >= 0 {
-            already := false
-            for it in gs.ui.craft_offer do if it == gs.ui.drag_item do already = true
-            if !already do gs.ui.craft_offer[off] = gs.ui.drag_item
         } else if cursor_in_window(gs, .Smelter) {
             eq_push(&gs.events, Event{
                 type    = .Smelter_Feed,

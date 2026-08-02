@@ -1303,35 +1303,23 @@ station_ladder :: proc(t: ^testing.T) {
 }
 
 @(test)
-anvil_offer_matching :: proc(t: ^testing.T) {
+craft_selection_resolves_to_a_visible_recipe :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
-
-    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
-    buf: [len(recipe_table)]int
-
-    // Empty anvil matches nothing
-    testing.expect_value(t, offer_matches(gs, &buf), 0)
-
-    // A wood log by hand: the plank recipe, counts not required to match
-    gs.ui.craft_offer = {.Wood_Log, .None, .None}
-    n := offer_matches(gs, &buf)
-    testing.expect_value(t, n, 1)
-    testing.expect_value(t, recipe_table[buf[0]].result, Item.Plank)
-
-    // Iron + plank with the hand window: nothing — all its shapes are bench work
-    gs.ui.craft_offer = {.Iron_Ore, .Plank, .None}
-    testing.expect_value(t, offer_matches(gs, &buf), 0)
-
-    // With the window opened at a bench the same offer is ambiguous:
-    // sword, wand and five armor pieces
-    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
     gs.ui.active_station = .Bench
-    testing.expect_value(t, offer_matches(gs, &buf), 7)
 
-    // An extra material breaks the set — no partial matches
-    gs.ui.craft_offer = {.Iron_Ore, .Plank, .Wood_Log}
-    testing.expect_value(t, offer_matches(gs, &buf), 0)
+    // Nothing chosen yet → the first visible recipe is offered by default.
+    gs.ui.craft_selected = -1
+    sel := craft_selected_recipe(gs)
+    testing.expect(t, sel >= 0, "a visible recipe is offered by default")
+
+    // Choosing a specific visible recipe sticks.
+    gs.ui.craft_selected = sel
+    testing.expect_value(t, craft_selected_recipe(gs), sel)
+
+    // An out-of-range / hidden selection falls back to something visible.
+    gs.ui.craft_selected = 9999
+    testing.expect(t, craft_selected_recipe(gs) >= 0, "invalid selection falls back to first visible")
 }
 
 @(test)

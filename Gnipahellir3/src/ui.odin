@@ -20,13 +20,20 @@ INV_PANEL_H :: 450
 INV_PANEL_X :: (UI_W - INV_PANEL_W) / 2 - 40 // default position (draggable)
 INV_PANEL_Y :: (UI_H - INV_PANEL_H) / 2
 
-// Crafting: tall list right of the inventory popup, taking the remaining width.
-CRAFT_X :: INV_PANEL_X + INV_PANEL_W + 8 // default content origin (draggable)
-CRAFT_Y :: 160
-CRAFT_W :: UI_W - CRAFT_X - 6
-CRAFT_ROW_H :: 20 // hand + one station's rows (max ~17) + anvil header must fit UI_H
-CRAFT_OFFER_H :: 132 // anvil header: offer slots + candidate results
-CRAFT_SLOT_GAP :: 6
+// Crafting: a two-column "forge" panel right of the inventory popup — a grid of
+// recipe cards on the left, a detail + CRAFT panel on the right.
+CRAFT_X :: INV_PANEL_X + INV_PANEL_W + 8 // default panel corner (draggable)
+CRAFT_Y :: 130
+CRAFT_COLS     :: 4                       // recipe cards per row
+CRAFT_CARD     :: SLOT_PX                 // card = one item slot (44)
+CRAFT_CARD_GAP :: 8
+CRAFT_GRID_W   :: CRAFT_COLS * (CRAFT_CARD + CRAFT_CARD_GAP)   // 208
+CRAFT_DETAIL_W :: 210                     // right-hand detail column
+CRAFT_PAD      :: 12
+CRAFT_PANEL_W  :: CRAFT_PAD + CRAFT_GRID_W + 14 + CRAFT_DETAIL_W + CRAFT_PAD  // 466
+CRAFT_PANEL_H  :: 400
+CRAFT_BTN_W    :: CRAFT_DETAIL_W - 16
+CRAFT_BTN_H    :: 34
 
 // Equipment boxes — the paperdoll column (weapon, armor head→feet, charm).
 EQUIP_STEP :: 50
@@ -67,7 +74,7 @@ WINDOW_HEADER_H :: 40
 @(rodata)
 default_window_pos := [UI_Window][2]i32 {
 	.Inventory = {INV_PANEL_X, INV_PANEL_Y},
-	.Crafting  = {CRAFT_X - 6, CRAFT_Y - 28},
+	.Crafting  = {CRAFT_X, CRAFT_Y},
 	.Smelter   = {SMELT_X, SMELT_Y},
 	.Blueprint = {BP_X, BP_Y},
 }
@@ -84,13 +91,7 @@ window_rect :: proc(gs: ^Game_State, w: UI_Window) -> (x, y, ww, wh: i32, open: 
 	case .Inventory:
 		return p.x, p.y, INV_PANEL_W, INV_PANEL_H, gs.ui.show_inventory
 	case .Crafting:
-		vis: [len(recipe_table)]int
-		n := visible_recipes(gs, &vis)
-		return p.x,
-			p.y,
-			CRAFT_W + 12,
-			42 + CRAFT_OFFER_H + i32(n) * CRAFT_ROW_H,
-			gs.ui.show_crafting
+		return p.x, p.y, CRAFT_PANEL_W, CRAFT_PANEL_H, gs.ui.show_crafting
 	case .Smelter:
 		return p.x, p.y, SMELT_W, SMELT_H, gs.ui.show_smelter
 	case .Blueprint:
@@ -123,7 +124,56 @@ equip_origin :: proc(gs: ^Game_State) -> (x, y: i32) {
 // title band above the content is 28px).
 craft_origin :: proc(gs: ^Game_State) -> (x, y: i32) {
 	p := gs.ui.win_pos[.Crafting]
-	return p.x + 6, p.y + 28
+	return p.x + CRAFT_PAD, p.y + 28
+}
+
+// Top-left of recipe card `slot` (0-based, laid out row-major in the grid).
+craft_card_rect :: proc(gs: ^Game_State, slot: int) -> (x, y: i32) {
+	cx, cy := craft_origin(gs)
+	col := i32(slot % CRAFT_COLS)
+	row := i32(slot / CRAFT_COLS)
+	return cx + col * (CRAFT_CARD + CRAFT_CARD_GAP), cy + 6 + row * (CRAFT_CARD + CRAFT_CARD_GAP)
+}
+
+// Recipe-table index of the card under the cursor, or -1.
+craft_card_at_cursor :: proc(gs: ^Game_State) -> int {
+	if !gs.ui.show_crafting do return -1
+	vis: [len(recipe_table)]int
+	n := visible_recipes(gs, &vis)
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	for slot in 0 ..< n {
+		x, y := craft_card_rect(gs, slot)
+		if mx >= x && mx < x + CRAFT_CARD && my >= y && my < y + CRAFT_CARD do return vis[slot]
+	}
+	return -1
+}
+
+// The CRAFT button rect in the detail column (aligned with the detail content
+// origin used in draw_crafting: cx + CRAFT_GRID_W + 16).
+craft_button_rect :: proc(gs: ^Game_State) -> (x, y: i32) {
+	cx, cy := craft_origin(gs)
+	detx := cx + CRAFT_GRID_W + 16
+	return detx + 8, cy + CRAFT_PANEL_H - 28 - CRAFT_BTN_H - 20
+}
+
+// True when the cursor is over the CRAFT button.
+craft_button_hovered :: proc(gs: ^Game_State) -> bool {
+	if !gs.ui.show_crafting do return false
+	bx, by := craft_button_rect(gs)
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	return mx >= bx && mx < bx + CRAFT_BTN_W && my >= by && my < by + CRAFT_BTN_H
+}
+
+// The recipe shown in the detail panel: the selected one if it is still
+// visible at this station, else the first visible recipe (-1 = none).
+craft_selected_recipe :: proc(gs: ^Game_State) -> int {
+	vis: [len(recipe_table)]int
+	n := visible_recipes(gs, &vis)
+	if n == 0 do return -1
+	for slot in 0 ..< n do if vis[slot] == gs.ui.craft_selected do return gs.ui.craft_selected
+	return vis[0]
 }
 
 // The smelter tray slot (cast bars wait here) — shared by draw and hit-test.
@@ -719,58 +769,6 @@ slot_at_cursor :: proc(gs: ^Game_State) -> int {
 	return r * INV_COLS + c
 }
 
-// Recipe-table index of the crafting row under the cursor, or -1.
-recipe_at_cursor :: proc(gs: ^Game_State) -> int {
-	cx, cy := craft_origin(gs)
-	mx := i32(gs.input.mouse_screen.x)
-	my := i32(gs.input.mouse_screen.y)
-	if mx < cx || mx >= cx + CRAFT_W do return -1
-	if my < cy + CRAFT_OFFER_H do return -1 // anvil header, not the list
-	row := int((my - cy - CRAFT_OFFER_H - 4) / CRAFT_ROW_H)
-	vis: [len(recipe_table)]int
-	n := visible_recipes(gs, &vis)
-	if row < 0 || row >= n do return -1
-	return vis[row]
-}
-
-// Anvil offer slot i (0..2) top-left corner.
-craft_offer_rect :: proc(gs: ^Game_State, i: int) -> (x, y: i32) {
-	cx, cy := craft_origin(gs)
-	return cx + 4 + i32(i) * (SLOT_PX + CRAFT_SLOT_GAP), cy + 14
-}
-
-// Candidate result slot j top-left corner.
-craft_result_rect :: proc(gs: ^Game_State, j: int) -> (x, y: i32) {
-	cx, cy := craft_origin(gs)
-	return cx + 4 + i32(j) * (SLOT_PX + CRAFT_SLOT_GAP), cy + 80
-}
-
-// Anvil offer slot under the cursor, or -1.
-craft_offer_at_cursor :: proc(gs: ^Game_State) -> int {
-	if !gs.ui.show_crafting do return -1
-	mx := i32(gs.input.mouse_screen.x)
-	my := i32(gs.input.mouse_screen.y)
-	for i in 0 ..< len(gs.ui.craft_offer) {
-		x, y := craft_offer_rect(gs, i)
-		if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return i
-	}
-	return -1
-}
-
-// Recipe-table index of the candidate result under the cursor, or -1.
-craft_result_at_cursor :: proc(gs: ^Game_State) -> int {
-	if !gs.ui.show_crafting do return -1
-	mx := i32(gs.input.mouse_screen.x)
-	my := i32(gs.input.mouse_screen.y)
-	matches: [len(recipe_table)]int
-	m := offer_matches(gs, &matches)
-	for j in 0 ..< m {
-		x, y := craft_result_rect(gs, j)
-		if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return matches[j]
-	}
-	return -1
-}
-
 // ─── Drawing ──────────────────────────────────────────────────────────────────
 
 // "[E] CRAFTING BENCH" while a station is in reach — hidden once the window
@@ -1175,119 +1173,131 @@ draw_inventory :: proc(gs: ^Game_State) {
 	}
 }
 
+// A "forge" panel: a grid of recipe cards on the left, and a detail column on
+// the right (big result icon, ingredient have/need rows, a glowing CRAFT
+// button).  Reads craft_selected_recipe for the shown recipe.
 draw_crafting :: proc(gs: ^Game_State) {
 	vis: [len(recipe_table)]int
 	n := visible_recipes(gs, &vis)
 	in_reach := player_near_station(gs, gs.ui.active_station)
+	pulse := f32((math.sin(f32(gs.elapsed_time) * 3) + 1) * 0.5)
 
 	wx, wy, ww, wh, _ := window_rect(gs, .Crafting)
 	cx, cy := craft_origin(gs)
-	rl.DrawRectangle(wx, wy, ww, wh, panel_bg)
-	rl.DrawRectangleLines(wx, wy, ww, wh, panel_border)
-	rl.DrawText(
-		station_title[gs.ui.active_station],
-		cx,
-		wy + 8,
-		10,
-		in_reach ? rl.GREEN : text_dim,
-	)
-	draw_rune_strip(f32(cx + CRAFT_W) - 100, f32(wy) + 13, 8, rl.Color{200, 150, 70, 90})
 
-	// Anvil: offer slots hold references — the items themselves stay in the
-	// bag until a result is actually crafted.
-	rl.DrawText(
-		"LAY ON THE ANVIL  (drag from bag, click to take back)",
-		cx + 4,
-		cy + 2,
-		10,
-		text_dim,
-	)
-	hov_offer := craft_offer_at_cursor(gs)
-	for it, i in gs.ui.craft_offer {
-		x, y := craft_offer_rect(gs, i)
-		rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, slot_bg)
-		rl.DrawRectangleLinesEx(
-			{f32(x), f32(y), SLOT_PX, SLOT_PX},
-			hov_offer == i ? 2 : 1,
-			hov_offer == i ? NORSE_GOLD_HOT : panel_border,
-		)
-		if it != .None {
-			draw_item_icon(it, x + 10, y + 8, 24)
-			cnt_buf: [8]u8
-			fmt.bprintf(cnt_buf[:7], "%d", inventory_count(&gs.player.inventory, it))
-			rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
+	// Panel + carved frame.
+	rl.DrawRectangle(wx, wy, ww, wh, NORSE_PANEL)
+	rl.DrawRectangleLinesEx({f32(wx), f32(wy), f32(ww), f32(wh)}, 2, NORSE_BORDER)
+	TICK :: i32(7)
+	rl.DrawRectangle(wx, wy, TICK, 2, NORSE_GOLD_HOT)
+	rl.DrawRectangle(wx, wy, 2, TICK, NORSE_GOLD_HOT)
+	rl.DrawRectangle(wx+ww-TICK, wy+wh-2, TICK, 2, NORSE_GOLD_HOT)
+	rl.DrawRectangle(wx+ww-2, wy+wh-TICK, 2, TICK, NORSE_GOLD_HOT)
+
+	// Title band.
+	rl.DrawText(station_title[gs.ui.active_station], wx + CRAFT_PAD, wy + 8, 20,
+		in_reach ? NORSE_GOLD_HOT : text_dim)
+	draw_rune_strip(f32(wx + ww) - 64, f32(wy) + 15, 7, rl.Color{200, 150, 70, 120})
+	if !in_reach do rl.DrawText("(too far)", wx + ww - 150, wy + 14, 12, text_dim)
+	rl.DrawRectangle(wx + CRAFT_PAD, wy + 30, ww - 2*CRAFT_PAD, 1, NORSE_BORDER)
+
+	// ── Left: recipe card grid ──
+	hov_card := craft_card_at_cursor(gs)
+	sel      := craft_selected_recipe(gs)
+	for slot in 0 ..< n {
+		ri := vis[slot]
+		r  := &recipe_table[ri]
+		x, y := craft_card_rect(gs, slot)
+		ok       := recipe_craftable(gs, r)
+		selected := ri == sel
+		hovered  := ri == hov_card
+
+		rl.DrawRectangle(x, y, CRAFT_CARD, CRAFT_CARD, selected ? NORSE_ROW_HOT : NORSE_ROW)
+		bcol := NORSE_BORDER
+		switch {
+		case selected: bcol = NORSE_GOLD_HOT
+		case hovered:  bcol = NORSE_GOLD
+		case ok:       bcol = rl.Color{96, 150, 96, 255}   // craftable now → faint green
 		}
-	}
-
-	// Candidate results: everything the offered set could become here.
-	// Green = craftable now, dim = matching shape but missing amounts.
-	rl.DrawText("TAKES SHAPE", cx + 4, cy + 66, 10, text_dim)
-	matches: [len(recipe_table)]int
-	m := offer_matches(gs, &matches)
-	hov_result := craft_result_at_cursor(gs)
-	if hov_result >= 0 {
-		rl.DrawText(
-			cstring(raw_data(item_table[recipe_table[hov_result].result].name)),
-			cx + 90,
-			cy + 66,
-			10,
-			NORSE_GOLD_HOT,
-		)
-	}
-	if m == 0 {
-		offered := false
-		for it in gs.ui.craft_offer do if it != .None do offered = true
-		rl.DrawText(
-			offered ? "these materials shape nothing here" : "lay materials to see what they may become",
-			cx + 4,
-			cy + 94,
-			10,
-			text_dim,
-		)
-	}
-	for j in 0 ..< m {
-		r := &recipe_table[matches[j]]
-		x, y := craft_result_rect(gs, j)
-		ok := recipe_craftable(gs, r)
-		rl.DrawRectangle(x, y, SLOT_PX, SLOT_PX, slot_bg)
-		border := panel_border
-		if ok do border = hov_result == matches[j] ? NORSE_GOLD_HOT : rl.GREEN
-		rl.DrawRectangleLinesEx({f32(x), f32(y), SLOT_PX, SLOT_PX}, ok ? 2 : 1, border)
+		rl.DrawRectangleLinesEx({f32(x), f32(y), CRAFT_CARD, CRAFT_CARD}, (selected || hovered) ? 2 : 1, bcol)
 		draw_item_icon(r.result, x + 10, y + 8, 24, ok ? 255 : 110)
 		if r.result_count > 1 {
-			cnt_buf: [8]u8
-			fmt.bprintf(cnt_buf[:7], "x%d", r.result_count)
-			rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
+			cnt: [8]u8
+			fmt.bprintf(cnt[:7], "x%d", r.result_count)
+			rl.DrawText(cstring(raw_data(cnt[:])), x + 5, y + CRAFT_CARD - 13, 10, rl.WHITE)
 		}
 	}
+	if n == 0 {
+		rl.DrawText("No recipes yet — gather materials", cx, cy + 24, 10, text_dim)
+	}
 
-	// Recipe hints: click a row to load its materials onto the anvil.
-	rl.DrawRectangle(cx - 2, cy + CRAFT_OFFER_H - 6, CRAFT_W + 4, 1, panel_border)
-	for row in 0 ..< n {
-		r := &recipe_table[vis[row]]
-		y := cy + CRAFT_OFFER_H + 4 + i32(row) * CRAFT_ROW_H
+	// ── Divider ──
+	dx := cx + CRAFT_GRID_W + 6
+	rl.DrawRectangle(dx, cy + 4, 1, wh - 44, NORSE_BORDER)
 
-		row_buf: [128]u8
-		pos := 0
-		s := fmt.bprintf(
-			row_buf[pos:100],
-			"%s x%d  <- ",
-			item_table[r.result].name,
-			r.result_count,
-		)
-		pos += len(s)
-		for ing in r.ingredients {
-			if ing.item == .None do continue
-			s = fmt.bprintf(row_buf[pos:120], "%d %s  ", ing.count, item_table[ing.item].name)
-			pos += len(s)
-		}
-		if r.station != .None {
-			s = fmt.bprintf(row_buf[pos:126], "%s", station_tag[r.station])
-			pos += len(s)
-		}
+	// ── Right: detail column ──
+	detx := dx + 10
+	if sel < 0 do return
+	r  := &recipe_table[sel]
+	ok := recipe_craftable(gs, r)
 
-		col := recipe_craftable(gs, r) ? rl.GREEN : text_dim
-		rl.DrawText(cstring(raw_data(row_buf[:])), cx + 4, y + 5, 10, col)
+	// Big result icon, framed.
+	ix := detx + (CRAFT_DETAIL_W - 60) / 2
+	rl.DrawRectangle(ix, cy + 8, 60, 60, slot_bg)
+	rl.DrawRectangleLinesEx({f32(ix), f32(cy + 8), 60, 60}, 2, ok ? NORSE_GOLD : NORSE_BORDER)
+	draw_item_icon(r.result, ix + 6, cy + 14, 48)
+
+	// Name (centered), and result count.
+	name := cstring(raw_data(item_table[r.result].name))
+	nw := rl.MeasureText(name, 18)
+	rl.DrawText(name, detx + (CRAFT_DETAIL_W - nw)/2, cy + 74, 18, NORSE_GOLD_HOT)
+	if r.result_count > 1 {
+		cbuf: [12]u8
+		fmt.bprintf(cbuf[:11], "makes %d", r.result_count)
+		cw := rl.MeasureText(cstring(raw_data(cbuf[:])), 10)
+		rl.DrawText(cstring(raw_data(cbuf[:])), detx + (CRAFT_DETAIL_W - cw)/2, cy + 94, 10, text_dim)
+	}
+	rl.DrawRectangle(detx, cy + 110, CRAFT_DETAIL_W - 4, 1, NORSE_BORDER)
+	rl.DrawText("MATERIALS", detx, cy + 116, 10, NORSE_GOLD)
+
+	// Ingredient rows: icon + name + have/need (green if satisfied, red if not).
+	iy := cy + 132
+	for ing in r.ingredients {
+		if ing.item == .None do continue
+		have := inventory_count(&gs.player.inventory, ing.item)
+		enough := have >= ing.count
+		rl.DrawRectangle(detx, iy, 22, 22, slot_bg)
+		rl.DrawRectangleLines(detx, iy, 22, 22, NORSE_BORDER)
+		draw_item_icon(ing.item, detx + 3, iy + 2, 16)
+		rl.DrawText(cstring(raw_data(item_table[ing.item].name)), detx + 30, iy + 2, 11, rl.Color{225, 215, 195, 255})
+		hbuf: [16]u8
+		fmt.bprintf(hbuf[:15], "%d/%d", have, ing.count)
+		hs := cstring(raw_data(hbuf[:]))
+		hw := rl.MeasureText(hs, 12)
+		rl.DrawText(hs, detx + CRAFT_DETAIL_W - hw - 8, iy + 4, 12,
+			enough ? rl.Color{110, 210, 110, 255} : rl.Color{225, 90, 80, 255})
+		iy += 28
+	}
+
+	// CRAFT button — glows when craftable, dim otherwise.
+	bx, by := craft_button_rect(gs)
+	hovered := craft_button_hovered(gs)
+	bg := NORSE_ROW
+	if ok do bg = rl.Color{u8(70 + pulse*40), u8(52 + pulse*28), 26, 255}
+	rl.DrawRectangle(bx, by, CRAFT_BTN_W, CRAFT_BTN_H, bg)
+	bord := ok ? (hovered ? NORSE_GOLD_HOT : NORSE_GOLD) : NORSE_BORDER
+	rl.DrawRectangleLinesEx({f32(bx), f32(by), CRAFT_BTN_W, CRAFT_BTN_H}, ok ? 2 : 1, bord)
+	label := cstring("CRAFT")
+	lw := rl.MeasureText(label, 18)
+	lcol := ok ? NORSE_GOLD_HOT : text_dim
+	rl.DrawText(label, bx + (CRAFT_BTN_W - lw)/2, by + 8, 18, lcol)
+
+	// A one-line reason under the button when you can't forge it.
+	if !ok {
+		msg := cstring("need more materials")
+		if !in_reach do msg = "stand by the station"
+		mw := rl.MeasureText(msg, 10)
+		rl.DrawText(msg, bx + (CRAFT_BTN_W - mw)/2, by + CRAFT_BTN_H + 5, 10, text_dim)
 	}
 }
 

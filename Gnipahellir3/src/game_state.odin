@@ -285,8 +285,8 @@ UI_State :: struct {
     show_settings:   bool,   // volume sliders + key rebinding screen
     settings_capture: int,   // action index awaiting a new key, -1 = none
     settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
-    craft_offer:     [3]Item, // anvil offering slots — references, items stay in the bag
-    drag_item:       Item,    // bag stack being dragged onto the anvil/smelter (.None = no drag)
+    craft_selected:  int,     // recipe-table index selected in the crafting window's card grid
+    drag_item:       Item,    // bag stack being dragged onto the smelter (.None = no drag)
     drag_slot:       int,     // bag slot the drag started from (smelter feed takes from it)
     drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
     win_pos:         [UI_Window][2]i32, // top-left of each floating window (draggable)

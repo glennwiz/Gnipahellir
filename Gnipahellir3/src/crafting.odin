@@ -26,13 +26,6 @@ station_tile := [Station]Tile_Type{
     .Rune_Altar = .Rune_Altar,
 }
 
-@(rodata)
-station_tag := [Station]string{
-    .None       = "",
-    .Bench      = "[bench]",
-    .Forge      = "[forge]",
-    .Rune_Altar = "[altar]",
-}
 
 // Window title and interact-prompt name, per station.
 @(rodata)
@@ -255,38 +248,6 @@ update_station_focus :: proc(gs: ^Game_State) {
         return
     }
     gs.ui.focus_station, gs.ui.focus_tile = nearest_station(gs)
-}
-
-// All recipes whose ingredient item-set equals the offered set (order-
-// insensitive, no extras, nothing missing) and whose station matches the one
-// the window was opened at (hand recipes always match).  One offer can match
-// several recipes — iron + plank alone could become a sword, a wand or any
-// iron armor piece — so the anvil shows every candidate and the player clicks
-// the result they want.  Counts are NOT checked here: candidates you lack
-// materials for still show (dim), recipe_craftable gates the actual craft.
-offer_matches :: proc(gs: ^Game_State, buf: ^[len(recipe_table)]int) -> int {
-    n_offer := 0
-    for it in gs.ui.craft_offer do if it != .None do n_offer += 1
-    if n_offer == 0 do return 0
-    n := 0
-    outer: for r, i in recipe_table {
-        if r.station != .None && r.station != gs.ui.active_station do continue
-        n_ing := 0
-        for ing in r.ingredients {
-            if ing.item == .None do continue
-            n_ing += 1
-            found := false
-            for it in gs.ui.craft_offer {
-                if it == ing.item { found = true; break }
-            }
-            if !found do continue outer
-        }
-        if n_ing == n_offer {
-            buf[n] = i
-            n += 1
-        }
-    }
-    return n
 }
 
 // Recipes shown in the crafting window: hand recipes plus those of the
