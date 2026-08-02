@@ -27,6 +27,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
     draw_particles(&gs.particles)
+    draw_ritual(gs)
     draw_floating_text(&gs.floating_text)
     when GAME_DEBUG {
         if gs.ui.show_debug do draw_debug(gs)
@@ -294,6 +295,51 @@ draw_falling_blocks :: proc(gs: ^Game_State) {
         case .Leaves: draw_pixel_leaves(bx, by)
         case:         rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[b.tile].color)
         }
+    }
+}
+
+// The Sky-Altar offering: the ingredients orbit a swelling glow above the
+// capstone while a counter-rotating ring of rainbow runes wheels around them.
+// Read-only — the swirl motes and the finishing flash are particles.
+draw_ritual :: proc(gs: ^Game_State) {
+    if !gs.ritual.active do return
+    r    := &gs.ritual
+    t    := r.timer
+    prog := clamp(t / RITUAL_DURATION, 0, 1)
+    cx   := f32(r.altar.x) * CELL_SIZE + CELL_SIZE*0.5
+    cy   := (f32(r.altar.y) - 1.5) * CELL_SIZE + CELL_SIZE*0.5
+
+    // A glow that swells and pulses as the offering nears completion.
+    glow := (0.6 + prog*1.4) * CELL_SIZE
+    pulse := 0.6 + 0.4 * math.sin(t * 9)
+    for k := 3; k >= 1; k -= 1 {
+        a := u8(38 * f32(k) / 3 * pulse)
+        rl.DrawCircleV({cx, cy}, glow * f32(k), rl.Color{255, 240, 185, a})
+    }
+
+    // Ingredient icons orbiting, spiralling inward toward the glow.
+    orbit := (2.6 - prog*1.4) * CELL_SIZE
+    ings  := structure_costs[r.tier]
+    for ing, i in ings {
+        ang := t*3.0 + f32(i) * (2*math.PI / f32(len(ings)))
+        sz  := i32(f32(CELL_SIZE) * 1.4)
+        ix  := i32(cx + math.cos(ang)*orbit) - sz/2
+        iy  := i32(cy + math.sin(ang)*orbit) - sz/2
+        draw_item_icon(ing.item, ix, iy, sz)
+    }
+
+    // A counter-rotating ring of runes, each cycling the rainbow.
+    rune_r := (3.4 - prog*1.0) * CELL_SIZE
+    RUNES  :: 6
+    for i in 0 ..< RUNES {
+        ang := -t*2.0 + f32(i) * (2*math.PI / RUNES)
+        rx  := cx + math.cos(ang)*rune_r
+        ry  := cy + math.sin(ang)*rune_r
+        hue := f32(math.mod(f64(t*120 + f32(i)*60), 360))
+        col := rl.ColorFromHSV(hue, 0.7, 1.0)
+        col.a = u8(200 * (0.4 + 0.6*prog))
+        draw_title_rune(title_runes[(i*2) % len(title_runes)], rx, ry,
+            f32(CELL_SIZE)*1.3, ang + math.PI/2, col, 1.5, 4)
     }
 }
 

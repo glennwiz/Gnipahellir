@@ -132,6 +132,41 @@ spawn_grow_burst :: proc(gs: ^Game_State, T: [2]i32) {
     }
 }
 
+// Sky-Altar ritual: each frame of the offering, a few rainbow motes spiral in
+// from a ring toward the point above the altar — reads as the gift being drawn
+// together.  Hue rides the ritual clock so the whole swirl cycles the spectrum.
+RITUAL_SWIRL_R :: f32(3.5)  // tiles — the ring the motes spiral in from
+spawn_ritual_swirl :: proc(gs: ^Game_State, altar: [2]i32, t: f32) {
+    center := [2]f32{f32(altar.x) + 0.5, f32(altar.y) - 1.5}  // float above the capstone
+    for i in 0 ..< 3 {
+        seed := u32(gs.frame)*47 + u32(i)*733
+        ang  := f32(whash(seed) % 628) / 100.0                // 0..2π
+        r    := RITUAL_SWIRL_R * (0.7 + jitter(seed + 1, 0.3))
+        pos  := center + {math.cos(ang) * r, math.sin(ang) * r}
+        inward := center - pos
+        tang   := [2]f32{-inward.y, inward.x} * 0.6           // swirl as it falls in
+        vel    := inward * 1.6 + tang
+        hue    := f32(math.mod(f64(t*140 + f32(i)*47 + ang*57.3), 360))
+        spawn_particle(&gs.particles, pos, vel, rl.ColorFromHSV(hue, 0.8, 1.0),
+            0.5 + jitter(seed + 3, 0.15))
+    }
+}
+
+// The finishing flash: a bright radial burst of white and gold thrown out from
+// the altar as the structure is raised.
+spawn_ritual_flash :: proc(gs: ^Game_State, altar: [2]i32) {
+    center := [2]f32{f32(altar.x) + 0.5, f32(altar.y) - 1.5}
+    RING :: 28
+    for i in 0 ..< RING {
+        ang   := f32(i) * (2 * math.PI / RING)
+        seed  := u32(gs.frame)*13 + u32(i)*401
+        speed := 8 + jitter(seed, 3)
+        vel   := [2]f32{math.cos(ang) * speed, math.sin(ang) * speed}
+        col   := rl.Color{255, 255, 255, 255} if i % 2 == 0 else rl.Color{255, 230, 140, 255}
+        spawn_particle(&gs.particles, center, vel, col, 0.4 + jitter(seed + 1, 0.12))
+    }
+}
+
 // ─── Ambience ─────────────────────────────────────────────────────────────────
 //
 //  Stray motes of magic drifting up through each level's air, and station

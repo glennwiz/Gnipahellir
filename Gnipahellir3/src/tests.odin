@@ -498,12 +498,56 @@ ritual_consumes_and_unlocks :: proc(t: ^testing.T) {
     inventory_insert(inv, .Cloud_Stone, 8)
     inventory_insert(inv, .Plank, 4)
     handle_ritual_request(gs)
+    testing.expect(t, gs.ritual.active, "the offering swirl begins")
+    testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 8)  // not consumed until the flash
+
+    // Drive the swirl to its finishing flash
+    gs.delta_time = 0.1
+    for gs.ritual.active do update_ritual(gs)
     process_events(gs)
 
     testing.expect(t, gs.progression.sky_structure_complete[0], "structure A complete")
     testing.expect(t, gs.progression.cave_unlocked[0], "cave 2 unlocked")
     testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 0)
     testing.expect_value(t, inventory_count(inv, .Plank), 0)
+    testing.expect(t, gs.ui.show_book, "a completed ritual leaves the instruction tome")
+}
+
+@(test)
+ritual_swirls_then_leaves_a_tome :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    inv := &gs.player.inventory
+    gs.level_index = LEVEL_SKY
+    gs.progression.blueprint_found[0] = true
+    inventory_insert(inv, .Cloud_Stone, 8)
+    inventory_insert(inv, .Plank, 4)
+
+    handle_ritual_request(gs)
+    testing.expect(t, gs.ritual.active, "offering starts the swirl")
+
+    // A second E during the swirl is ignored — no double-start, no re-notify
+    n := gs.notify.count
+    handle_ritual_request(gs)
+    testing.expect(t, gs.ritual.active, "still exactly one ritual")
+    testing.expect_value(t, gs.notify.count, n)
+
+    // Halfway through: nothing consumed, no structure yet
+    gs.delta_time = RITUAL_DURATION * 0.5
+    update_ritual(gs)
+    testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 8)
+    testing.expect(t, !gs.progression.sky_structure_complete[0], "not done mid-swirl")
+
+    // The finishing flash
+    gs.delta_time = RITUAL_DURATION
+    update_ritual(gs)
+    process_events(gs)
+    testing.expect(t, !gs.ritual.active, "swirl ends at the flash")
+    testing.expect(t, gs.ui.show_book, "the tome opens")
+    testing.expect_value(t, gs.ui.book_tier, 0)
+    testing.expect(t, gs.progression.sky_structure_complete[0], "structure raised")
+    testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 0)
 }
 
 @(test)
@@ -2034,6 +2078,8 @@ garm_spawns_only_behind_boss_gate :: proc(t: ^testing.T) {
     gs.level_index = LEVEL_SKY  // ritual gating
     handle_ritual_request(gs)
     gs.level_index = LEVEL_CAVE3
+    gs.delta_time = 0.1
+    for gs.ritual.active do update_ritual(gs)  // swirl through to the finishing flash
     process_events(gs)
     testing.expect(t, garm_present(gs), "Garm awakens when the boss gate opens")
 

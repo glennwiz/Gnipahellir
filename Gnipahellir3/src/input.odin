@@ -79,6 +79,17 @@ update_input :: proc(gs: ^Game_State) {
         return
     }
 
+    // The instruction tome the ritual leaves: E / ESC / click turns the last
+    // page and the world resumes (the sim is frozen while it's open — see
+    // game_update).
+    if gs.ui.show_book {
+        if rl.IsKeyPressed(.ESCAPE) || rl.IsKeyPressed(gs.bindings[.Interact]) ||
+           rl.IsMouseButtonPressed(.LEFT) {
+            gs.ui.show_book = false
+        }
+        return
+    }
+
     // Rebindable keys come from the bindings table (settings screen); arrows
     // and space stay as fixed movement/jump alternates.
     bind := gs.bindings

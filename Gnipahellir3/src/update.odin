@@ -10,7 +10,7 @@ game_update :: proc(gs: ^Game_State) {
     // Title, pause menu and settings screens freeze the sim entirely. Only
     // the menu's own requests (New Game / Save and Quit), queued as events
     // by input, still run.
-    if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings {
+    if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings || gs.ui.show_book {
         process_events(gs)
         eq_clear(&gs.events)
         return
@@ -50,6 +50,10 @@ game_update :: proc(gs: ^Game_State) {
     // 5d. Recipe unlocks — reveal recipes whose gating material is now held
     //     (writes progression, pops a notify; pushes no events)
     update_recipe_unlocks(gs)
+
+    // 5e. Sky-Altar ritual — advances the offering swirl; on completion pushes
+    //     Structure_Complete, so it must precede process_events
+    update_ritual(gs)
 
     // 6. Events — drains the queue completely, including events pushed by
     //    handlers mid-drain.  Systems ordered AFTER this step must not push

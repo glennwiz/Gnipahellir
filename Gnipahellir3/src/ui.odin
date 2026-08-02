@@ -798,6 +798,7 @@ draw_ui :: proc(gs: ^Game_State) {
 		rl.DrawRectangleLines(mx - 12, my - 12, 24, 24, NORSE_GOLD_HOT)
 	}
 	if gs.ui.show_blueprint do draw_blueprint(gs)
+	if gs.ui.show_book do draw_book(gs)
 	if gs.game_won do draw_win_screen(gs)
 	if gs.player.dead do draw_death_screen(gs)
 	when GAME_DEBUG {
@@ -807,6 +808,91 @@ draw_ui :: proc(gs: ^Game_State) {
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top
 	if gs.ui.show_settings do draw_settings(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included
+}
+
+// ─── Ritual Instruction Tome ──────────────────────────────────────────────────
+//
+//  Left by a completed Sky-Altar offering: an illuminated book that opens on a
+//  white flash and tells the player where the freshly-unsealed portal waits.
+//  Screen-space modal; the sim is frozen while it's up (E/ESC/click closes).
+
+draw_book :: proc(gs: ^Game_State) {
+	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{10, 8, 6, 205})
+
+	bw := i32(760)
+	bh := i32(460)
+	bx := (UI_W - bw) / 2
+	by := (UI_H - bh) / 2
+
+	// Leather cover + gold frame
+	rl.DrawRectangle(bx - 14, by - 14, bw + 28, bh + 28, rl.Color{46, 30, 18, 255})
+	rl.DrawRectangleLinesEx({f32(bx - 14), f32(by - 14), f32(bw + 28), f32(bh + 28)}, 3, NORSE_GOLD)
+
+	// Two parchment pages with a shaded spine down the middle
+	rl.DrawRectangle(bx, by, bw, bh, rl.Color{234, 220, 188, 255})
+	rl.DrawRectangle(bx + bw / 2 - 10, by, 20, bh, rl.Color{200, 184, 150, 255})
+	rl.DrawLine(bx + bw / 2, by, bx + bw / 2, by + bh, rl.Color{150, 130, 100, 255})
+
+	ink := rl.Color{60, 44, 28, 255}
+	faint := rl.Color{120, 100, 74, 255}
+
+	// Header rune band + title
+	draw_rune_strip(f32(bx + bw / 2), f32(by + 34), 12, NORSE_GOLD)
+	title := book_title(gs.ui.book_tier)
+	tw := rl.MeasureText(title, 40)
+	rl.DrawText(title, bx + (bw - tw) / 2, by + 60, 40, ink)
+	rl.DrawLine(bx + 60, by + 112, bx + bw - 60, by + 112, faint)
+
+	// Body — the passage to the next portal
+	l1, l2, l3 := book_lines(gs.ui.book_tier)
+	ty := by + 156
+	for line in ([3]cstring{l1, l2, l3}) {
+		if line != "" {
+			lw := rl.MeasureText(line, 20)
+			rl.DrawText(line, bx + (bw - lw) / 2, ty, 20, ink)
+		}
+		ty += 40
+	}
+
+	hint: cstring = "[E] close the tome"
+	hw := rl.MeasureText(hint, 16)
+	rl.DrawText(hint, bx + (bw - hw) / 2, by + bh - 40, 16, faint)
+
+	// Flash-in: a white wash over the first frames, fading to the page. gs.frame
+	// advances even while the sim is frozen, so the flash always plays.
+	frames := gs.frame - gs.ui.book_open_frame
+	if frames < 16 {
+		flash := 1.0 - f32(frames) / 16.0
+		rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{255, 250, 236, u8(255 * flash)})
+	}
+}
+
+book_title :: proc(tier: int) -> cstring {
+	switch tier {
+	case 0: return "The First Seal"
+	case 1: return "The Second Seal"
+	case 2: return "The Final Seal"
+	}
+	return "The Rune-Book of Passage"
+}
+
+// Three centered lines of instruction pointing at the portal the ritual opened.
+book_lines :: proc(tier: int) -> (cstring, cstring, cstring) {
+	switch tier {
+	case 0:
+		return "The sky-gift is bound. The first seal upon the deep is broken.",
+			"Return to the surface and descend once more — deep in the",
+			"caves a barred portal now yields, opening the Deep Cave."
+	case 1:
+		return "The way sinks further. In the Deep Cave, seek its far depths —",
+			"the sealed portal to Gnipahellir now opens to your hand.",
+			""
+	case 2:
+		return "The last seal shatters. Gnipahellir's floor trembles below.",
+			"Descend to the yawning chasm and face GARM.",
+			""
+	}
+	return "A passage has opened below. Descend, and seek the next portal.", "", ""
 }
 
 // ─── Death Screen ─────────────────────────────────────────────────────────────

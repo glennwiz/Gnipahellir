@@ -338,6 +338,7 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
 
 handle_ritual_request :: proc(gs: ^Game_State) {
     if gs.player.dead do return
+    if gs.ritual.active do return  // an offering is already underway
     // The ritual only answers in the sky (design doc, review item C4) —
     // altars built below are inert.
     if gs.level_index != LEVEL_SKY {
@@ -373,11 +374,75 @@ handle_ritual_request :: proc(gs: ^Game_State) {
             return
         }
     }
+    // The offering is complete — begin the swirl.  Materials aren't consumed
+    // until the finishing flash (update_ritual), so a save or an interruption
+    // mid-swirl loses nothing.
+    altar, ok := altar_near_player(gs)
+    if !ok {
+        // E only routes here when an altar is in reach, but fall back to the
+        // player's tile so the animation still has a stage.
+        altar = {i32(gs.player.pos.x + PLAYER_W*0.5), i32(gs.player.pos.y + PLAYER_H*0.5)}
+    }
+    start_ritual(gs, tier, altar)
+}
+
+// The Sky_Altar tile within reach of the player — the ritual's stage.
+altar_near_player :: proc(gs: ^Game_State) -> ([2]i32, bool) {
+    cx := int(gs.player.pos.x + PLAYER_W*0.5)
+    cy := int(gs.player.pos.y + PLAYER_H*0.5)
+    for dy in -BENCH_RANGE ..= BENCH_RANGE {
+        for dx in -BENCH_RANGE ..= BENCH_RANGE {
+            if get_tile(&gs.world, cx+dx, cy+dy) == .Sky_Altar {
+                return {i32(cx+dx), i32(cy+dy)}, true
+            }
+        }
+    }
+    return {}, false
+}
+
+// How long the offering swirls over the altar before the finishing flash.
+RITUAL_DURATION :: f32(2.0)
+
+start_ritual :: proc(gs: ^Game_State, tier: int, altar: [2]i32) {
+    gs.ritual = {active = true, timer = 0, tier = tier, altar = altar}
+    audio_play(&gs.audio, .Wand_Fire)
+    notify(gs, "The altar draws in your offering...")
+    log_action(gs, "Ritual tier %d begun", tier)
+}
+
+// Step 5e — advances the offering animation.  Spawns the rainbow swirl each
+// frame; at RITUAL_DURATION it consumes the materials, raises the structure
+// (Structure_Complete) and opens the instruction tome.  Pushes an event, so it
+// must run before process_events.
+update_ritual :: proc(gs: ^Game_State) {
+    if !gs.ritual.active do return
+    gs.ritual.timer += gs.delta_time
+    spawn_ritual_swirl(gs, gs.ritual.altar, gs.ritual.timer)
+
+    if gs.ritual.timer < RITUAL_DURATION do return
+
+    tier := gs.ritual.tier
+    altar := gs.ritual.altar
+    gs.ritual.active = false
+
+    // Re-check the offering is still in the bag — nothing normally spends it
+    // during the swirl, but be safe: if it's gone, the altar falls silent.
+    for ing in structure_costs[tier] {
+        if inventory_count(&gs.player.inventory, ing.item) < ing.count {
+            notify(gs, "The offering slipped away — the altar falls silent")
+            log_action(gs, "Ritual tier %d aborted: offering gone", tier)
+            return
+        }
+    }
     for ing in structure_costs[tier] {
         inventory_remove(&gs.player.inventory, ing.item, ing.count)
     }
+    spawn_ritual_flash(gs, altar)
     eq_push(&gs.events, Event{type = .Structure_Complete, payload = {int_val = i32(tier)}})
-    log_action(gs, "Sky structure %d complete", tier)
+    gs.ui.show_book       = true
+    gs.ui.book_tier       = tier
+    gs.ui.book_open_frame = gs.frame
+    log_action(gs, "Sky structure %d complete (ritual)", tier)
 }
 
 // ─── Generation: caves 2–3 ────────────────────────────────────────────────────

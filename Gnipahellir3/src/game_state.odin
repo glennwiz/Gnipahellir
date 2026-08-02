@@ -283,6 +283,9 @@ UI_State :: struct {
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
     show_title:      bool,   // boot title screen; any key dismisses it into the menu
     show_settings:   bool,   // volume sliders + key rebinding screen
+    show_book:       bool,   // the ritual's instruction tome overlay (opens on a completed offering)
+    book_tier:       int,    // which structure tier's passage the tome describes
+    book_open_frame: u64,    // gs.frame the tome opened — drives the flash-in (frame counts even while paused)
     settings_capture: int,   // action index awaiting a new key, -1 = none
     settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
     craft_selected:  int,     // recipe-table index selected in the crafting window's card grid
@@ -378,6 +381,20 @@ Progression_State :: struct {
     recipe_unlocked:        [Item]bool,  // sticky: a recipe (keyed by result) revealed once its gating material was held (crafting.odin)
 }
 
+// ─── Sky Altar ritual (the offering animation) ────────────────────────────────
+//
+//  A completed offering doesn't finish instantly: for RITUAL_DURATION the
+//  materials swirl over the altar amid runes and rainbow light, then a flash
+//  raises the structure and leaves an instruction tome.  Transient — not saved
+//  (a mid-ritual save just drops the animation; the offering isn't consumed
+//  until the finishing flash, so nothing is lost).
+Ritual_State :: struct {
+    active: bool,
+    timer:  f32,     // 0 → RITUAL_DURATION
+    tier:   int,     // structure tier being raised
+    altar:  [2]i32,  // the Sky_Altar tile the offering plays over
+}
+
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
 Persistent_Stats :: struct {
@@ -401,6 +418,7 @@ Game_State :: struct {
     particles:   Particle_Store,
     floating_text: Floating_Text_Store,   // damage numbers (floating_text.odin)
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
+    ritual:      Ritual_State,    // the Sky Altar offering animation (levels.odin); transient, not saved
     ambience_timer: f32,   // countdown to the next ambient-mote probe pass
     mining:      Mining_Action,
     events:      Event_Queue,

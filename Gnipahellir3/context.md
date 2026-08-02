@@ -6,7 +6,7 @@ the game is, where the code stands right now, and what's queued next. When it
 disagrees with older docs, trust this file — then reconcile.
 
 - **Last updated:** 2026-08-02
-- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 118 green (`odin test src`)
+- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 119 green (`odin test src`)
 - **Save version:** 16 (`gnipahellir_save.dat` ≈ 2,658,352 bytes; **v16** added `Progression_State.recipe_unlocked` (recipe unlock tree, +72 B); **v15** swapped the smelter's wood-fuel field for an input buffer. Old saves reset on each bump — backups at `gnipahellir_save.v15.bak` / `.v14.bak`.)
 - **Recent HEAD:** 8004d6d (player-permeable door) + **this session's polish/mechanics pass** (committed): dirt tile art, floating damage/heal numbers, rune-plate notifications, tutorial hints + HUD craft chip, smelter rebuilt (internal ore buffer + auto-pull, no fuel), Q-drop removed, wands are weapon-slot tools mining at all ranges, early-game healing (forage flowers → brew potions). Not yet pushed (Glenn drives git).
 
@@ -61,8 +61,8 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 
 ### game_update order
 1 input · 2 player · 3 enemies · 4 projectiles · 5 mining · 5b sim (smelters/growers) ·
-5b2 miner (dimension only) · 5c station-focus · **6b falling-blocks (gravity)** ·
-6 process_events · 7 notifications · 8 ambience · 9 particles · 10 audio.
+5b2 miner (dimension only) · 5c station-focus · 5d recipe-unlocks · **5e ritual (offering swirl)** ·
+6 process_events · **6b falling-blocks (gravity)** · 7 notifications · 8 ambience · 9 particles · 10 audio.
 
 ---
 
@@ -82,6 +82,29 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 
 ## 4. Where the code stands (systems that work)
 
+- **Sky-Altar ritual ceremony (2026-08-02, uncommitted):** the offering was
+  instant — E at the altar consumed materials and unlocked the cave in one
+  frame. Now it's a staged ritual: `handle_ritual_request` (levels.odin)
+  validates as before, then `start_ritual` begins a **2 s swirl** (`Ritual_State`
+  in Game_State, transient/not saved; `RITUAL_DURATION`) — `update_ritual`
+  (game_update **step 5e**) spawns `spawn_ritual_swirl` rainbow motes each frame
+  and `draw_ritual` (render, world-space, read-only) orbits the **ingredient
+  icons** + a counter-rotating **rune ring** around a swelling glow over the
+  altar. **Materials aren't consumed until the finishing flash** (re-validated
+  in `update_ritual`), so a mid-swirl save/interrupt loses nothing. At the end:
+  `spawn_ritual_flash` (white/gold burst), push `Structure_Complete` (unchanged
+  cave-unlock/Garm path), and open an **instruction tome** — `draw_book`
+  (ui.odin), a full-screen leather-and-parchment modal with a white flash-in
+  (`gs.frame - book_open_frame`, frame counts while paused) and per-tier
+  `book_title`/`book_lines` naming the freshly-unsealed portal (Deep Cave →
+  Gnipahellir → GARM). Sim frozen while the tome is up (game_update freeze +
+  input early-return); **E/ESC/click** closes it and the world resumes same
+  frame. Tests: `ritual_consumes_and_unlocks` + the Garm-wake test now drive the
+  swirl to completion; new `ritual_swirls_then_leaves_a_tome` covers the
+  re-entry guard, deferred consumption, and the tome. **Not yet eyeballed
+  in-game** — the swirl geometry/tome layout want a visual playtest. *(Open:
+  "leave a book" is a modal tome here; a physical, re-readable book at the altar
+  is the alternative if Glenn wants it tangible.)*
 - **Crafting window redesigned (2026-08-02):** was a text-row list + a drag-to-anvil "takes shape" model — now a **two-column forge panel** (`draw_crafting`): a **grid of recipe icon-cards** on the left (framed slot per recipe, faint-green border when craftable now, gold when selected/hovered, dimmed icon when you lack materials, count badge) and a **detail column** on the right — big result icon, name, **ingredient rows with have/need counts** (green satisfied / red short), and a **CRAFT button** that pulses gold when affordable and greys with a reason ("need more materials" / "stand by the station") when not. Wrapped in the Norse panel (gold frame, corner ticks, rune strip). **The anvil model is gone** — `craft_offer`/`offer_matches`/the anvil hit-testers removed; new state is `UI_State.craft_selected` (recipe index) resolved via `craft_selected_recipe` (falls back to first visible). Input: click a card to select, click CRAFT to forge (`Craft_Request`); crafting no longer uses bag-drag (smelter still does). Hit-testers: `craft_card_at_cursor`, `craft_button_hovered`. **Not yet eyeballed in-game — layout math checked, needs a visual playtest.**
 - **Recipe unlock tree (2026-08-02):** the craft window was a firehose (every bench recipe at once). Now recipes are **hidden until you first hold their gating material** — a paced tech-tree reveal. Keyed by each recipe's (unique) **result item** in `recipe_unlock` (crafting.odin): Plank/Bench known from the start → wood unlocks Tree_Grower/Door → flowers unlock potions/beds → **Iron_Ore** reveals Smelter/Sword/Wand → **Iron_Bar** reveals armor + Forge + Silo → Silver/Gold bars → Cloud_Stone (Rune Altar) → Runic_Sky_Ore (runic tier). Unlock is **sticky** (`Progression_State.recipe_unlocked[Item]`, saved) — stays revealed after the material is spent. `update_recipe_unlocks` (game_update step 5d) polls inventory, flips new unlocks, and pops one **"New recipe: X (+N more)"** note. `visible_recipes` hides locked rows (the player-facing gate); `recipe_craftable` is NOT gated (tests craft directly, and clicks only reach visible rows). **Tune early-game pacing by editing `recipe_unlock`.**
 - **World seed (2026-08-02):** level generation is seeded — `gs.world_seed` is mixed (additively) into the gen hashes for the surface, cave 1, caves 2/3, and sky, so **every New Game gets a fresh world** (seed from `time.now()`). Override with the **`GNIPA_SEED` env var** (a number → reproducible/shareable worlds; used for debugging a specific layout). Seed **0 reproduces the original fixed world** — `game_state_init`'s default, so the boot title screen and all headless tests stay deterministic. The seed is **not saved** (the world grid is saved wholesale; seed only matters at gen time — minor caveat: a level first generated *after* a reload uses the default seed, not the run's original). Dimensions keep their position-derived seed (unchanged). New-game seed is logged to `action.log`.
