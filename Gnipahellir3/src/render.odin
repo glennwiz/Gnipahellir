@@ -175,14 +175,22 @@ draw_world :: proc(gs: ^Game_State) {
             it := w.items[idx]
             if it != .None && w.item_counts[idx] > 0 {
                 if is_blueprint(it) {
-                    // Blueprints pulse in a warm gold, with a dark halo behind
-                    // it so the ring reads against the light-blue sky instead
-                    // of blending into it.
+                    // Blueprints pulse in a brightened version of their own
+                    // seal color (bronze/silver/gold/sky — see items.odin) so
+                    // each tier's glow reads apart, with a dark halo behind it
+                    // so the ring shows against the light-blue sky instead of
+                    // blending into it.
                     pulse    := (math.sin(gs.elapsed_time * BLUEPRINT_PULSE_SPEED) + 1) * 0.5
                     grow     := i32(pulse * 5)
                     halo_ext := grow + 2
                     rl.DrawRectangle(px + 2 - halo_ext, py + 2 - halo_ext, 6 + halo_ext*2, 6 + halo_ext*2, rl.Color{0, 0, 0, 100})
-                    glow_col := rl.Color{255, 220, 80, u8(150 + pulse * 105)}
+                    base := item_table[it].color
+                    glow_col := rl.Color{
+                        u8(clamp(f32(base.r) * 1.3 + 40, 0, 255)),
+                        u8(clamp(f32(base.g) * 1.3 + 40, 0, 255)),
+                        u8(clamp(f32(base.b) * 1.3 + 40, 0, 255)),
+                        u8(150 + pulse * 105),
+                    }
                     rl.DrawRectangle(px + 2 - grow, py + 2 - grow, 6 + grow*2, 6 + grow*2, glow_col)
                 }
                 rl.DrawRectangle(px + 2, py + 2, 6, 6, item_table[it].color)

@@ -36,9 +36,12 @@ item_table := [Item]Item_Info{
     .Smelter        = { "Smelter",         {200, 100, 0,   255}, .Smelter },
     .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air },
     .Hell_Key       = { "Hell Key",        {220, 30,  60,  255}, .Air },
-    .Blueprint_A    = { "Blueprint A",     {80,  160, 255, 255}, .Air },
-    .Blueprint_B    = { "Blueprint B",     {80,  160, 255, 255}, .Air },
-    .Blueprint_C    = { "Blueprint C",     {80,  160, 255, 255}, .Air },
+    // Blueprint seal color echoes its ritual's material cost — bronze/silver/
+    // gold — so the three tiers read apart at a glance instead of sharing one
+    // blue swatch (icon seal wax in item_art.odin mirrors these).
+    .Blueprint_A    = { "Blueprint A",     {182, 108, 58,  255}, .Air },
+    .Blueprint_B    = { "Blueprint B",     {205, 205, 225, 255}, .Air },
+    .Blueprint_C    = { "Blueprint C",     {235, 195, 60,  255}, .Air },
     .Sky_Blueprint  = { "Sky Blueprint",   {120, 200, 255, 255}, .Air },
     .Sky_Altar      = { "Sky Altar",       {200, 200, 255, 255}, .Sky_Altar },
     .Cloud_Stone    = { "Cloud Stone",     {200, 220, 255, 255}, .Air },
