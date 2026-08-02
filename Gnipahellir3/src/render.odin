@@ -94,6 +94,7 @@ Draw_Style :: enum u8 {
     Pixel_Cloud,
     Pixel_Door,
     Pixel_Dirt,
+    Pixel_Flower_Bed,
 }
 
 @(rodata)
@@ -109,6 +110,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Cloud       = .Pixel_Cloud,
     .Door        = .Pixel_Door,
     .Dirt        = .Pixel_Dirt,
+    .Flower_Bed  = .Pixel_Flower_Bed,
     // all others default to .Solid (zero value)
 }
 
@@ -324,6 +326,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
     case .Pixel_Door:       draw_pixel_door(gs, px, py, x, y)
     case .Pixel_Dirt:       draw_pixel_dirt(px, py)
+    case .Pixel_Flower_Bed: draw_pixel_flower_bed(px, py)
     case .Pixel_Cloud:
         // Sky backdrop only — the puffs paint in draw_cloud_layer, a
         // second pass, so their bulges can spill over neighbor cells
@@ -402,6 +405,26 @@ draw_pixel_dirt :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+0, by+6, 1, 1, light)
     rl.DrawRectangle(bx+2, by+7, 1, 1, light)
     rl.DrawRectangle(bx+5, by+8, 1, 1, light)
+}
+
+// ─── Pixel Art: Flower Bed ────────────────────────────────────────────────────
+//
+//  A tilled soil strip with five little blooms poking up — a planted crop the
+//  player walks through to harvest (player_pickup).
+
+draw_pixel_flower_bed :: proc(bx, by: i32) {
+    soil   := rl.Color{ 92, 62, 38, 255}
+    soil_d := rl.Color{ 68, 46, 28, 255}
+    stem   := rl.Color{ 46, 140, 46, 255}
+    petal  := rl.Color{255, 220, 50, 255}
+    petal2 := rl.Color{255, 150, 60, 255}
+
+    rl.DrawRectangle(bx, by+5, CELL_SIZE, CELL_SIZE-5, soil)   // soil bed
+    rl.DrawRectangle(bx, by+8, CELL_SIZE, 2, soil_d)           // dark furrow
+    for x, i in ([5]i32{0, 2, 4, 6, 8}) {
+        rl.DrawRectangle(bx+x, by+2, 1, 4, stem)               // stem
+        rl.DrawRectangle(bx+x, by+1, 1, 1, i % 2 == 0 ? petal : petal2)  // bloom
+    }
 }
 
 // ─── Pixel Art: Door ──────────────────────────────────────────────────────────

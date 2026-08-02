@@ -365,6 +365,17 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Door,
 		0,
 	},
+	.Flower_Bed              = {
+		"Flower Bed",
+		// A planted crop: walkable like a wild flower, harvested by walking
+		// through it (player_pickup), not mined — so no drop_item.
+		{.Walkable},
+		rl.Color{120, 90, 50, 255},
+		1,
+		0,
+		.None,
+		0,
+	},
 	.Dirt                    = {
 		"Dirt",
 		// A building block (like Stone/Grass, not a machine) that obeys gravity:
@@ -712,7 +723,7 @@ world_init :: proc(w: ^World_Grid) {
 			}
 		}
 
-		flower_count := int(h3 % 3)
+		flower_count := 3 + int(h3 % 4)   // 3–6 per chunk (was 0–2 — too sparse)
 		for i in 0 ..< flower_count {
 			hf := whash(u32(chunk) * 1000 + u32(i))
 			fx := chunk * CHUNK + int(hf % u32(CHUNK))

@@ -126,6 +126,9 @@ recipe_table := [?]Recipe{
     // Health Potion at the bench — early-game recovery.  (Appended to keep
     // existing recipe indices stable.)
     { .Potion_Health,    1, .Bench, {{.Flower, 3},         {},                  {}} },
+    // Flower farming: sow seeds into a bed (with soil + a plank frame) — it
+    // grows 5 flowers you harvest by walking through it.  (Appended.)
+    { .Flower_Bed,       1, .Bench, {{.Dirt, 1},           {.Plank, 1},         {.Flower_Seed, 5}} },
 }
 
 // One scan of the tiles around the player: which stations are in range.

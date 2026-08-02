@@ -889,11 +889,56 @@ flowers_forage_into_the_bag :: proc(t: ^testing.T) {
     fy := int(gs.player.pos.y)
     set_tile(&gs.world, fx, fy, .Flower)
 
-    // Walking through it plucks the flower into the bag and clears the tile.
+    // Walking through it plucks the flower + a handful of seeds, clears tile.
     player_pickup(gs)
-    testing.expect_value(t, inventory_count(&gs.player.inventory, .Flower), 1)
+    inv := &gs.player.inventory
+    testing.expect_value(t, inventory_count(inv, .Flower), 1)
+    seeds := inventory_count(inv, .Flower_Seed)
+    testing.expect(t, seeds >= FLOWER_SEED_MIN && seeds <= FLOWER_SEED_MAX, "a flower yields 2–5 seeds")
     testing.expect_value(t, get_tile(&gs.world, fx, fy), Tile_Type.Air)
     testing.expect(t, gs.forage_hint_shown, "first forage teaches brewing")
+}
+
+@(test)
+flower_bed_harvests_five_blooms :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    bx := int(gs.player.pos.x)
+    by := int(gs.player.pos.y)
+    set_tile(&gs.world, bx, by, .Flower_Bed)
+
+    // Walking through the bed harvests all five blooms (+ seeds) and clears it.
+    player_pickup(gs)
+    inv := &gs.player.inventory
+    testing.expect_value(t, inventory_count(inv, .Flower), FLOWER_BED_BLOOMS)
+    testing.expect(t, inventory_count(inv, .Flower_Seed) >= FLOWER_BED_BLOOMS * FLOWER_SEED_MIN,
+        "each bloom yields seeds")
+    testing.expect_value(t, get_tile(&gs.world, bx, by), Tile_Type.Air)
+}
+
+@(test)
+flower_bed_brews_from_dirt_plank_seeds :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Dirt, 1)
+    inventory_insert(inv, .Plank, 1)
+    inventory_insert(inv, .Flower_Seed, 5)
+
+    idx := -1
+    for r, i in recipe_table do if r.result == .Flower_Bed { idx = i; break }
+    testing.expect(t, idx >= 0, "flower bed recipe must exist")
+    handle_craft_request(gs, Event{payload = {int_val = i32(idx)}})
+
+    testing.expect_value(t, inventory_count(inv, .Flower_Bed), 1)
+    testing.expect_value(t, inventory_count(inv, .Flower_Seed), 0)  // 5 seeds consumed
+    testing.expect_value(t, inventory_count(inv, .Dirt), 0)
+    testing.expect_value(t, inventory_count(inv, .Plank), 0)
 }
 
 @(test)
@@ -2965,6 +3010,7 @@ miner_placement_gated_to_dimensions :: proc(t: ^testing.T) {
     // A valid open spot on the surface — still refused: wrong world.
     sx := 30
     gs.player.pos = {f32(sx), f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, sx + 2, SURFACE_Y - 1, .Air)  // clear any wild flower here
     testing.expect(t, !placement_ok(gs, .Auto_Miner, sx + 2, SURFACE_Y - 1),
         "miner must not place outside a dimension")
     testing.expect(t, placement_ok(gs, .Stone_Block, sx + 2, SURFACE_Y - 1),

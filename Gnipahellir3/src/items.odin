@@ -86,6 +86,8 @@ item_table := [Item]Item_Info{
     .Dirt              = { "Dirt",              {110, 78,  46,  255}, .Dirt },
     .Door              = { "Door",              {150, 100, 55,  255}, .Door },
     .Flower            = { "Flower",            {255, 220, 50,  255}, .Air },
+    .Flower_Seed       = { "Flower Seed",       {150, 120, 60,  255}, .Air },
+    .Flower_Bed        = { "Flower Bed",        {120, 90,  50,  255}, .Flower_Bed },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
@@ -200,6 +202,12 @@ player_equip :: proc(gs: ^Game_State, inv_slot: int) {
 }
 
 POTION_HEAL :: 5   // hp restored by one Health Potion
+
+// Flower farming: a harvested flower yields this many seeds; a planted bed
+// grows this many flowers, each harvested for its own seeds.
+FLOWER_SEED_MIN   :: 2
+FLOWER_SEED_MAX   :: 5
+FLOWER_BED_BLOOMS :: 5
 
 // A consumable is used (drunk/eaten) from the bag rather than equipped.
 item_is_consumable :: proc(it: Item) -> bool {

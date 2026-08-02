@@ -83,6 +83,9 @@ Tile_Type :: enum u8 {
     // 2-tall wooden door — one tile type, open/closed via Tile_Flag.Open
     // (appended: terrain is saved as u8, order is frozen)
     Door,
+    // Planted flower bed — a crop of 5 flowers, harvested by walking through
+    // (appended: terrain is saved as u8, order is frozen)
+    Flower_Bed,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -163,6 +166,10 @@ Item :: enum u8 {
     Door,
     // Foraged surface flower — the reagent for Health Potions (appended: order is frozen)
     Flower,
+    // Flower farming: seeds shaken from a harvested flower, sown into a bed
+    // (appended: order is frozen)
+    Flower_Seed,
+    Flower_Bed,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

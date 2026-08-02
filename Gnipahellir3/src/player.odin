@@ -209,15 +209,28 @@ player_pickup :: proc(gs: ^Game_State) {
             if !in_bounds(tx, ty) do continue
             idx := grid_idx(tx, ty)
 
-            // Forage: walking through a surface flower plucks it for brewing.
-            if get_tile(&gs.world, tx, ty) == .Flower {
-                if inventory_insert(&p.inventory, .Flower, 1) {
+            // Forage: walking through a wild flower (1 bloom) or a planted
+            // flower bed (5 blooms) harvests each bloom for a Flower plus a
+            // handful of seeds, then clears the tile.
+            if ft := get_tile(&gs.world, tx, ty); ft == .Flower || ft == .Flower_Bed {
+                blooms := ft == .Flower_Bed ? FLOWER_BED_BLOOMS : 1
+                got := 0
+                for _ in 0 ..< blooms {
+                    if !inventory_insert(&p.inventory, .Flower, 1) do break
+                    got += 1
+                    seeds := rand_range(gs, FLOWER_SEED_MIN, FLOWER_SEED_MAX)
+                    if !inventory_insert(&p.inventory, .Flower_Seed, seeds) {
+                        spawn_ground_item(&gs.world, {i32(tx), i32(ty)}, .Flower_Seed, seeds)
+                    }
+                }
+                if got > 0 {
                     set_tile(&gs.world, tx, ty, .Air)
                     spawn_collect_mote(gs, {i32(tx), i32(ty)}, .Flower)
+                    spawn_collect_mote(gs, {i32(tx), i32(ty)}, .Flower_Seed)
                     gs.save_dirty = true
                     if !gs.forage_hint_shown {
                         gs.forage_hint_shown = true
-                        notify(gs, "Foraged a flower — brew Health Potions at the bench")
+                        notify(gs, "Foraged a flower + seeds — sow a Flower Bed, brew potions at the bench")
                     }
                 }
             }

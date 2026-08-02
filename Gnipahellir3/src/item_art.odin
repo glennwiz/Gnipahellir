@@ -86,6 +86,22 @@ POTION_GRID :: Icon_Grid{
 	"............",
 }
 
+// A scatter of seeds — each a body pixel with a shadow (B body, D shadow).
+SEED_GRID :: Icon_Grid{
+	"............",
+	"....B.......",
+	"...BD.......",
+	"............",
+	".......B....",
+	"......BD....",
+	"..B.........",
+	".BD.........",
+	"............",
+	".....B......",
+	"....BD......",
+	"............",
+}
+
 // A five-petal bloom on a green stem (A/L petals, B center, D stem).
 FLOWER_GRID :: Icon_Grid{
 	"............",
@@ -609,6 +625,10 @@ item_icons := [Item]Item_Icon{
 	.Door             = {DOOR_GRID, {{150, 100, 55, 255}, {92, 60, 32, 255}, {182, 130, 78, 255}, {60, 60, 68, 255}, {}}},
 	// Foraged flower — petals, center, stem
 	.Flower           = {FLOWER_GRID, {{210, 120, 30, 255}, {46, 140, 46, 255}, {255, 245, 175, 255}, {255, 220, 50, 255}, {}}},
+	// Flower seeds — tan bodies with shadows
+	.Flower_Seed      = {SEED_GRID, {{176, 146, 84, 255}, {110, 84, 44, 255}, {}, {}, {}}},
+	// Flower bed — reuse the bloom icon (a planted crop)
+	.Flower_Bed       = {FLOWER_GRID, {{210, 120, 30, 255}, {46, 140, 46, 255}, {255, 245, 175, 255}, {255, 220, 50, 255}, {}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────
