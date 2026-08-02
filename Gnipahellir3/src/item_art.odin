@@ -505,9 +505,12 @@ item_icons := [Item]Item_Icon{
 	.Smelter          = {SMELTER_GRID, {{105, 95, 95, 255}, {68, 60, 60, 255}, {}, {230, 120, 35, 255}, {255, 200, 60, 255}}},
 	.Iron_Bucket      = {BUCKET_GRID, PAL_IRON},
 	.Hell_Key         = {KEY_GRID, {{220, 30, 60, 255}, {150, 16, 38, 255}, {}, {}, {}}},
-	.Blueprint_A      = {BLUEPRINT_GRID, {{226, 206, 162, 255}, {188, 164, 118, 255}, {}, {178, 60, 42, 255}, {}}},
-	.Blueprint_B      = {BLUEPRINT_GRID, {{226, 206, 162, 255}, {188, 164, 118, 255}, {}, {178, 60, 42, 255}, {}}},
-	.Blueprint_C      = {BLUEPRINT_GRID, {{226, 206, 162, 255}, {188, 164, 118, 255}, {}, {178, 60, 42, 255}, {}}},
+	// Same rolled-scroll shape for all three; the seal wax (accent) carries the
+	// tier's material — bronze (Plank), silver (Silver Bar), gold (Gold Bar) —
+	// so A/B/C stop being pixel-identical (ground colors in items.odin match).
+	.Blueprint_A      = {BLUEPRINT_GRID, {{226, 206, 162, 255}, {188, 164, 118, 255}, {}, {182, 108, 58,  255}, {}}},
+	.Blueprint_B      = {BLUEPRINT_GRID, {{214, 208, 214, 255}, {172, 168, 182, 255}, {}, {205, 205, 225, 255}, {}}},
+	.Blueprint_C      = {BLUEPRINT_GRID, {{235, 218, 168, 255}, {196, 172, 110, 255}, {}, {235, 195, 60,  255}, {}}},
 	.Sky_Blueprint    = {BLUEPRINT_GRID, {{150, 195, 235, 255}, {112, 152, 196, 255}, {}, {240, 250, 255, 255}, {}}},
 	.Sky_Altar        = {SKY_ALTAR_GRID, {{}, {}, {190, 230, 255, 255}, {90, 180, 255, 255}, {}}},
 	.Cloud_Stone      = {CLOUD_STONE_GRID, {{225, 235, 250, 255}, {172, 186, 215, 255}, {250, 252, 255, 255}, {}, {}}},
