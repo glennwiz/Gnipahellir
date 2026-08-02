@@ -134,6 +134,7 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
     gs.level_index = dest
     gs.player.pos  = dest_pos
     gs.player.vel  = {}
+    camera_snap_y(gs)  // cut the view to the new spot, don't slide across levels
     // Entering mid-jump must not carry the old level's fall peak: the
     // drop would be measured across worlds and land as phantom damage.
     gs.player.fall_peak_y = dest_pos.y

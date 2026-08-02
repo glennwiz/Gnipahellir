@@ -156,6 +156,7 @@ process_events :: proc(gs: ^Game_State) {
             gs.ui.active_station = Station(e.payload.int_val)
             gs.ui.show_crafting  = true
             gs.ui.show_inventory = true  // the anvil drags from the bag
+            place_craft_pair(gs)         // center the pair so nothing spills off-screen
             log_action(gs, "Player opens %v station", gs.ui.active_station)
 
         case .Smelter_Interact:

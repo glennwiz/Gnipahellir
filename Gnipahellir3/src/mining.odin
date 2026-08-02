@@ -99,9 +99,13 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	// adjacent included — for mana.  Precise cursor aim (and reach) is what the
 	// weapon slot buys over the pick.
 	T := gs.input.mouse_tile
+	tt := get_tile(&gs.world, int(T.x), int(T.y))
 	d := chebyshev(T, player_tile(p))
+	// A wand never strikes a machine/station/spawner — clicking one with a wand
+	// in hand does nothing (you reclaim a structure with the pick, up close).
 	if in_bounds(int(T.x), int(T.y)) &&
-	   .Mineable in terrain_table[get_tile(&gs.world, int(T.x), int(T.y))].flags {
+	   .Mineable in terrain_table[tt].flags &&
+	   !is_structure_tile[tt] {
 		wand := p.equipment[.Weapon]
 		wrange := wand_mine_range[wand]
 		cost := WAND_MANA_COST

@@ -5,10 +5,10 @@ session; update it at the end of every session.** It is a living snapshot: what
 the game is, where the code stands right now, and what's queued next. When it
 disagrees with older docs, trust this file — then reconcile.
 
-- **Last updated:** 2026-08-02
-- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 124 green (`odin test src`)
-- **Save version:** 18 (`gnipahellir_save.dat` ≈ 3,160,496 bytes; **v18** added `Sim_Tile_Data.fuel_count` (smelter wood fuel, +4 B/cell ×6 grids); **v17** added `Sim_State.barrels` (4×4 storage chests); **v16** added `recipe_unlocked`. Old saves reset on each bump — backups at `.v16.bak` / `.v15.bak` / `.v14.bak`.)
-- **Recent HEAD:** blueprint tiers now read apart by **seal color** (bronze/silver/gold; merged from the `visuals/blueprint-art` worktree) + an **em-dash→ASCII text fix** (raylib's ASCII-only font drew every `—` as `?`, incl. the title's `? III ?` and the char-pick line). Prior: storage barrel + smelter wood-fuel + drag-to-drop ground piles + shaft-mouth loam art. Also carries Glenn's playtest tweak: **basic wand reach 2 → 3** (`wand_mine_range`, mining.odin). Not yet pushed (Glenn drives git).
+- **Last updated:** 2026-08-03
+- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 125 green (`odin test src`)
+- **Save version:** 18 (`gnipahellir_save.dat` ≈ 3,160,496 bytes; **v18** added `Sim_Tile_Data.fuel_count` (smelter wood fuel, +4 B/cell ×6 grids); **v17** added `Sim_State.barrels` (4×4 storage chests); **v16** added `recipe_unlocked`. Old saves reset on each bump — backups at `.v16.bak` / `.v15.bak` / `.v14.bak`. This session's UI/feel work added NO saved fields — all transient.)
+- **Recent HEAD:** a UI/feel pass (uncommitted at session start, committed 2026-08-03): **windows auto-center as a pair** when the crafting+bag open together (no more forge spilling off-screen) yet **respect hand-drags** (`win_moved`); a **bottom-center placement chip** showing the selected block (click = open bag); a **vertical camera deadzone** so jumping doesn't bob the view when zoomed in; the **Tree Grower's sapling stalk now climbs the full trunk height** before the tree pops in; and **wands no longer strike structures** (machines/stations/spawners/altars — reclaim with the pick). Prior HEAD: blueprint seal-colors + em-dash→ASCII text fix; storage barrel + smelter wood-fuel + drag-to-drop piles. Carries Glenn's tweak: basic wand reach 2 → 3.
 
 ---
 
@@ -82,6 +82,43 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 
 ## 4. Where the code stands (systems that work)
 
+- **UI/feel pass (2026-08-03):** five small quality fixes.
+  - **Floating-window auto-layout that respects drags** (`ui.odin`/`input.odin`/
+    `game_state.odin`): the bag+forge together are 990px wide on a 1280 canvas, so
+    the old "center the bag alone" default spilled the crafting panel ~52px off
+    the right. Now `place_craft_pair` centers the **pair** whenever crafting opens
+    beside the bag (C hotkey and station-open), and `place_bag_centered` centers
+    the bag for TAB-alone. A new `UI_State.win_moved[UI_Window]` flag is set on any
+    header-drag; auto-layout **skips a hand-placed window**, so custom positions
+    hold for the session. Transient (not saved) — resets to sane defaults on a
+    fresh launch.
+  - **Selected-block placement chip** (`draw_sel_chip`, bottom-center HUD):
+    always shows what right-click will place — icon + count, name label tinted
+    gold when placeable (`place_tile != .Air`, dimmed otherwise), "no block" when
+    nothing's selected. **Click it → toggles the bag** (`sel_chip_hovered`, wired
+    in `cursor_over_ui` so mining/placing is suppressed under it; click handler in
+    input.odin). Replaced the old top-left `[item xN]` text.
+  - **Vertical camera deadzone** (`render.odin` `update_camera`/`camera_snap_y`,
+    step **2b** in game_update; `gs.cam_y`, transient): camera **X** follows the
+    player exactly, **Y** tracks an anchor that only moves when the player leaves a
+    ±3.5-tile band (`CAM_DEADZONE_Y`). A jump arc (~3 tiles) stays inside → the
+    view holds still; falling/climbing past the band drags it. Snapped (no slide)
+    on level transition / spawn / load / new game. Only felt when zoomed in (at
+    zoom 1 the camera clamps Y to level-center anyway). *(Pure deadzone: after a
+    big fall/climb the player rests at the band edge until they move vertically —
+    a grounded re-center lerp is the follow-up if that reads odd.)*
+  - **Tree Grower stalk climbs to full length** (`draw_machine_progress`): the
+    growing green sapling now rises to `TREE_MAX_H`×`CELL_SIZE` (5 tiles / 50px)
+    over the timer, with tip leaves + side sprigs, instead of a 7px stub that
+    popped straight to a tree. Clearance is guaranteed (tick_grower checks to
+    `TREE_MAX_H`). Grow **time** unchanged (20 s).
+  - **Wands never strike structures** (`world.odin` `is_structure_tile` table +
+    `mining.odin` guard): a wand aimed at a machine/station/spawner/altar does
+    nothing (no shot, no mana) — you **reclaim a structure with the pick, up
+    close** (which spills contents safely). Fixed the "wand-mines the smelter from
+    range" bug. Test: `wand_does_not_strike_structures`. *(Caveat: a player with
+    ONLY a wand and no pickaxe can't knock out a structure at all — intended, but
+    a pick-always-available-for-reclaim tweak is the fallback if it bites.)*
 - **Sky-Altar ritual ceremony (2026-08-02, uncommitted):** the offering was
   instant — E at the altar consumed materials and unlocked the cave in one
   frame. Now it's a staged ritual: `handle_ritual_request` (levels.odin)

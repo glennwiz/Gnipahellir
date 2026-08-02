@@ -94,6 +94,7 @@ start_new_game :: proc(gs: ^Game_State) {
     gs.player.pos            = {f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H}
     gs.player.clothing_color = rl.BLUE
     gs.player.hair_color     = rl.ORANGE
+    camera_snap_y(gs)
     gs.ui.show_menu          = false
     gs.ui.show_title         = false  // game_state_init re-arms the boot title screen
     gs.ui.show_charselect    = true   // pick a look before the fresh run begins

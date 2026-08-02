@@ -156,9 +156,17 @@ update_input :: proc(gs: ^Game_State) {
                 clamp(i32(inp.mouse_screen.x) - gs.ui.win_drag_off.x, 80 - ww, UI_W - 80),
                 clamp(i32(inp.mouse_screen.y) - gs.ui.win_drag_off.y, 0, UI_H - WINDOW_HEADER_H),
             }
+            gs.ui.win_moved[w] = true  // hand-placed now — auto-layout won't touch it
         } else {
             gs.ui.win_drag = -1
         }
+    }
+
+    // The bottom-center placement chip is a shortcut to the bag: click it to
+    // toggle the inventory (mine/attack were already suppressed over the chip).
+    if rl.IsMouseButtonPressed(.LEFT) && sel_chip_hovered(gs) && gs.ui.win_drag < 0 && gs.ui.drag_item == .None {
+        gs.ui.show_inventory = !gs.ui.show_inventory
+        if gs.ui.show_inventory && !gs.ui.show_crafting do place_bag_centered(gs)
     }
 
     // Clicking a station or smelter tile in reach opens its window instead of
@@ -197,6 +205,7 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.drag_barrel    = -1
         } else {
             gs.ui.show_inventory = true
+            place_bag_centered(gs)
         }
     }
     if rl.IsKeyPressed(bind[.Crafting]) {
@@ -204,6 +213,7 @@ update_input :: proc(gs: ^Game_State) {
         if gs.ui.show_crafting {
             gs.ui.active_station = .None  // the hotkey is hand crafting only
             gs.ui.show_inventory = true   // the anvil drags from the bag
+            place_craft_pair(gs)          // center the pair so nothing spills off-screen
         }
     }
     if rl.IsKeyPressed(bind[.Blueprint]) {

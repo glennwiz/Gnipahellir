@@ -64,6 +64,12 @@ BARREL_H :: BARREL_GRID_Y + BARREL_ROWS * SLOT_PX + 28      // header + grid + f
 BARREL_X :: 420 // default position (draggable)
 BARREL_Y :: 200
 
+// Selected-block chip — a bottom-center HUD slot showing what right-click will
+// place (icon + count).  Clicking it opens the bag.
+SEL_CHIP   :: 52
+SEL_CHIP_X :: (UI_W - SEL_CHIP) / 2
+SEL_CHIP_Y :: UI_H - 70
+
 // ─── Floating Windows (draggable) ─────────────────────────────────────────────
 //
 //  Each floating window's top-left lives in UI_State.win_pos (defaults below);
@@ -110,6 +116,22 @@ window_rect :: proc(gs: ^Game_State, w: UI_Window) -> (x, y, ww, wh: i32, open: 
 		return p.x, p.y, BP_W, BP_H, gs.ui.show_blueprint
 	}
 	return
+}
+
+// Snap the bag+forge to a centered pair so the crafting panel doesn't spill off
+// the right edge.  Called when crafting opens beside the inventory (hotkey or
+// station).  A window the player has hand-dragged (win_moved) keeps its spot.
+place_craft_pair :: proc(gs: ^Game_State) {
+	total := i32(INV_PANEL_W + 8 + CRAFT_PANEL_W)
+	left  := (i32(UI_W) - total) / 2
+	if !gs.ui.win_moved[.Inventory] do gs.ui.win_pos[.Inventory] = {left, INV_PANEL_Y}
+	if !gs.ui.win_moved[.Crafting]  do gs.ui.win_pos[.Crafting]  = {left + INV_PANEL_W + 8, CRAFT_Y}
+}
+
+// Center the bag on its own (TAB with nothing else open), unless hand-placed.
+place_bag_centered :: proc(gs: ^Game_State) {
+	if gs.ui.win_moved[.Inventory] do return
+	gs.ui.win_pos[.Inventory] = {(UI_W - INV_PANEL_W) / 2, INV_PANEL_Y}
 }
 
 // True when the cursor is inside an open window's bounds.
@@ -858,10 +880,19 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	for w in UI_Window {
 		if cursor_in_window(gs, w) do return true
 	}
+	if sel_chip_hovered(gs) do return true  // the bottom-center placement chip
 	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings {
 		return true // full-screen modals — everything behind them is blocked
 	}
 	return false
+}
+
+// True when the cursor is over the selected-block chip (bottom-center HUD).
+sel_chip_hovered :: proc(gs: ^Game_State) -> bool {
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	return mx >= SEL_CHIP_X && mx < SEL_CHIP_X + SEL_CHIP &&
+	       my >= SEL_CHIP_Y && my < SEL_CHIP_Y + SEL_CHIP
 }
 
 // Equip box under the cursor, or .None (the boxes stack vertically).
@@ -1277,23 +1308,9 @@ draw_hud :: proc(gs: ^Game_State) {
 	rl.DrawRectangle(24, 34, mana_w, 10, rl.Color{60, 90, 220, 255})
 	rl.DrawRectangleLines(24, 34, 200, 10, panel_border)
 
-	// Level name + selected item
+	// Level name (the selected item now reads off the bottom-center chip).
 	name_buf: [64]u8
-	inv := &gs.player.inventory
-	if inv.selected >= 0 &&
-	   inv.slots[inv.selected].item != .None &&
-	   inv.slots[inv.selected].count > 0 {
-		sel := inv.slots[inv.selected]
-		fmt.bprintf(
-			name_buf[:63],
-			"%s   [%s x%d]",
-			level_names[gs.level_index],
-			item_table[sel.item].name,
-			sel.count,
-		)
-	} else {
-		fmt.bprintf(name_buf[:63], "%s", level_names[gs.level_index])
-	}
+	fmt.bprintf(name_buf[:63], "%s", level_names[gs.level_index])
 	rl.DrawText(cstring(raw_data(name_buf[:])), 24, 50, 10, rl.WHITE)
 
 	// Stat line (base + equipment)
@@ -1324,6 +1341,54 @@ draw_hud :: proc(gs: ^Game_State) {
 	hint_buf: [48]u8
 	fmt.bprintf(hint_buf[:47], "[%v] Craft   [%v] Bag", gs.bindings[.Crafting], gs.bindings[.Inventory])
 	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
+
+	draw_sel_chip(gs)
+}
+
+// The bottom-center placement chip: shows the selected item's icon + count, a
+// name label tinted by whether it can be placed, and an empty prompt when
+// nothing is selected.  Clicking it (handled in input.odin) opens the bag.
+draw_sel_chip :: proc(gs: ^Game_State) {
+	inv := &gs.player.inventory
+	hov := sel_chip_hovered(gs)
+	x := i32(SEL_CHIP_X)
+	y := i32(SEL_CHIP_Y)
+
+	has_sel := inv.selected >= 0 &&
+		inv.slots[inv.selected].item != .None &&
+		inv.slots[inv.selected].count > 0
+
+	item: Item = .None
+	count := 0
+	if has_sel {
+		item  = inv.slots[inv.selected].item
+		count = inv.slots[inv.selected].count
+	}
+	placeable := has_sel && item_table[item].place_tile != .Air
+
+	rl.DrawRectangle(x, y, SEL_CHIP, SEL_CHIP, NORSE_ROW)
+	bcol := NORSE_BORDER
+	switch {
+	case hov:       bcol = NORSE_GOLD_HOT
+	case placeable: bcol = NORSE_GOLD
+	}
+	rl.DrawRectangleLinesEx({f32(x), f32(y), SEL_CHIP, SEL_CHIP}, (hov || placeable) ? 2 : 1, bcol)
+
+	if has_sel {
+		draw_item_icon(item, x + 12, y + 8, 32, placeable ? 255 : 120)
+		if count > 1 {
+			cbuf: [8]u8
+			fmt.bprintf(cbuf[:7], "%d", count)
+			rl.DrawText(cstring(raw_data(cbuf[:])), x + 6, y + SEL_CHIP - 14, 11, rl.WHITE)
+		}
+		name := cstring(raw_data(item_table[item].name))
+		nw := rl.MeasureText(name, 11)
+		rl.DrawText(name, x + (SEL_CHIP - nw)/2, y - 16, 11, placeable ? NORSE_GOLD_HOT : text_dim)
+	} else {
+		hint := cstring("no block")
+		hw := rl.MeasureText(hint, 10)
+		rl.DrawText(hint, x + (SEL_CHIP - hw)/2, y - 15, 10, text_dim)
+	}
 }
 
 draw_inventory :: proc(gs: ^Game_State) {

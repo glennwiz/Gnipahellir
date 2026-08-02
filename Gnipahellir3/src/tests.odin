@@ -1177,6 +1177,32 @@ wand_mines_at_range_for_mana :: proc(t: ^testing.T) {
 }
 
 @(test)
+wand_does_not_strike_structures :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+
+    // Equip a wand — the mining tool at every range.
+    inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
+    for s, i in gs.player.inventory.slots do if s.item == .Mine_Wand { player_equip(gs, i); break }
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand)
+
+    // A smelter two tiles out is a structure: the wand must not fire at it and
+    // no mana is spent — you reclaim a machine with the pick, up close.
+    set_tile(&gs.world, 32, SURFACE_Y, .Smelter)
+    mana_before := gs.player.mana
+    mine_swing(gs, {32, i32(SURFACE_Y)})
+    testing.expect(t, !gs.mining.active, "a wand must not strike a structure")
+    testing.expect_value(t, gs.player.mana, mana_before)
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Smelter)
+
+    // Sanity: it still fires at ordinary mineable terrain at the same range.
+    mine_swing(gs, {28, i32(SURFACE_Y)})
+    testing.expect(t, gs.mining.active, "the wand still mines plain terrain")
+}
+
+@(test)
 wand_tiers_extend_reach :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

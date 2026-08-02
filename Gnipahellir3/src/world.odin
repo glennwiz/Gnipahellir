@@ -401,6 +401,25 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	},
 }
 
+// Player-built machines, stations, spawners and altars — tiles you interact
+// with, not terrain you dig.  A wand never fires at one (mining.odin): you
+// reclaim a structure with the pick up close, which spills its contents safely.
+@(rodata)
+is_structure_tile := #partial [Tile_Type]bool {
+	.Crafting_Bench          = true,
+	.Dvergr_Forge            = true,
+	.Rune_Altar              = true,
+	.Sky_Altar               = true,
+	.Tree_Grower             = true,
+	.Smelter                 = true,
+	.Silo                    = true,
+	.Barrel                  = true,
+	.Auto_Miner              = true,
+	.Dimension_Spawner       = true,
+	.Dimension_Spawner_Gold  = true,
+	.Dimension_Spawner_Runic = true,
+}
+
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────
 
 grid_idx :: #force_inline proc(x, y: int) -> int {

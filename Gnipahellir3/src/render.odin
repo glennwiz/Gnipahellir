@@ -58,6 +58,11 @@ ZOOM_STEP :: f32(0.15)   // per mouse-wheel notch
 ZOOM_MIN  :: f32(1.0)    // 1.0 = whole level (the level is exactly SCREEN_W×SCREEN_H)
 ZOOM_MAX  :: f32(4.0)
 
+// Vertical camera deadzone (world px): the Y anchor only moves once the player
+// leaves this band around it, so a jump arc (~3 tiles) stays inside and doesn't
+// bob the view.  A little wider than a full jump so the whole arc is swallowed.
+CAM_DEADZONE_Y :: f32(3.5 * CELL_SIZE)
+
 // Player-centered camera, clamped so we never show past the level edges.  At
 // zoom 1.0 the clamp pins it to level-center → the whole level, as before.
 // Shared by render and input so both agree on the world↔screen mapping.
@@ -68,7 +73,9 @@ game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
     // Exact float player center — the supersampled texture + float sprite draw
     // let both glide sub-pixel, so no integer snapping is needed here.
     px := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE
-    py := (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
+    // X follows the player exactly; Y tracks the deadzoned anchor (update_camera)
+    // so jumping doesn't slide the view up and down.
+    py := gs.cam_y
     return rl.Camera2D{
         target   = {clamp(px, half_w, f32(SCREEN_W) - half_w),
                     clamp(py, half_h, f32(SCREEN_H) - half_h)},
@@ -76,6 +83,23 @@ game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
         rotation = 0,
         zoom     = zoom,
     }
+}
+
+// The camera Y anchor: snap it straight to the player (level entry, spawn,
+// teleport) so the view doesn't slide across the cut.
+camera_snap_y :: proc(gs: ^Game_State) {
+    gs.cam_y = (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
+}
+
+// Advance the Y anchor with a vertical deadzone: it only moves when the player
+// leaves the band, so a jump (arc inside the band) leaves the view still, while
+// falling or climbing past the band drags it along.  Run each frame after the
+// player moves.  At zoom 1.0 game_camera clamps Y to level-center anyway, so
+// this is only felt when zoomed in.
+update_camera :: proc(gs: ^Game_State) {
+    py := (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
+    if py < gs.cam_y - CAM_DEADZONE_Y do gs.cam_y = py + CAM_DEADZONE_Y
+    if py > gs.cam_y + CAM_DEADZONE_Y do gs.cam_y = py - CAM_DEADZONE_Y
 }
 
 // ─── Tile Draw Style ──────────────────────────────────────────────────────────
@@ -431,11 +455,24 @@ draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Tree_Grower:
         p := gs.world.sim_data[grid_idx(x, y)].growth_timer / TREE_GROW_TIME
         if p <= 0 do return
-        h := i32(1 + clamp(p, 0, 1)*6)
-        rl.DrawRectangle(px + CELL_SIZE/2 - 1, py - h, 2, h, rl.Color{70, 190, 60, 255})
-        if p > 0.5 {
-            rl.DrawRectangle(px + CELL_SIZE/2 - 3, py - h, 2, 2, rl.Color{110, 230, 110, 255})
-            rl.DrawRectangle(px + CELL_SIZE/2 + 1, py - h + 1, 2, 2, rl.Color{110, 230, 110, 255})
+        cp := clamp(p, 0, 1)
+        // The sapling stem climbs the full trunk height (TREE_MAX_H tiles) as it
+        // grows, so it reads as a stalk rising to full length before the grown
+        // tree pops in — not a stub that jumps straight to a tree.  The column
+        // above is guaranteed clear sky (tick_grower checks to TREE_MAX_H).
+        full   := f32(TREE_MAX_H * CELL_SIZE)
+        h      := i32(2 + cp*(full-2))
+        stem_x := px + CELL_SIZE/2 - 1
+        stalk  := rl.Color{70, 190, 60, 255}
+        leaf   := rl.Color{110, 230, 110, 255}
+        rl.DrawRectangle(stem_x, py - h, 2, h, stalk)
+        // A pair of little leaves at the climbing tip.
+        rl.DrawRectangle(stem_x - 2, py - h,     2, 2, leaf)
+        rl.DrawRectangle(stem_x + 2, py - h + 1, 2, 2, leaf)
+        // Side sprigs unfurl up the stem as it lengthens.
+        if h > CELL_SIZE {
+            rl.DrawRectangle(stem_x - 2, py - h/2, 2, 2, leaf)
+            rl.DrawRectangle(stem_x + 2, py - h/3, 2, 2, leaf)
         }
     }
 }

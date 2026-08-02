@@ -21,6 +21,10 @@ game_update :: proc(gs: ^Game_State) {
     // 2. Player
     update_player(gs)
 
+    // 2b. Camera — advance the deadzoned Y anchor now that the player has moved
+    //     (visual only; writes gs.cam_y, reads player pos)
+    update_camera(gs)
+
     // 3. Enemies
     update_enemies(gs)
 

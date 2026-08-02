@@ -298,6 +298,7 @@ UI_State :: struct {
     drag_input:      bool,    // the drag holds the smelter's loaded ore (pulling it back out)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     win_pos:         [UI_Window][2]i32, // top-left of each floating window (draggable)
+    win_moved:       [UI_Window]bool,   // player has hand-dragged this window; auto-layout leaves it alone
     win_drag:        int,     // window being dragged by its header, -1 = none
     win_drag_off:    [2]i32,  // cursor offset inside the window at grab
     smelter_tile:    [2]i32,  // furnace the smelter window is looking at
@@ -449,6 +450,7 @@ Game_State :: struct {
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
+    cam_y:        f32,    // camera Y anchor (world px); a deadzone keeps jumps from bobbing the view — not saved
     player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved

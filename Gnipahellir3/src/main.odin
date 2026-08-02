@@ -53,6 +53,7 @@ main :: proc() {
         gs.player.clothing_color = rl.BLUE
         gs.player.hair_color     = rl.ORANGE
     }
+    camera_snap_y(gs)  // start the view centered on the player, wherever they spawned/loaded
     load_stats(&gs.stats)
     load_settings(gs)  // after audio_init: overrides its default volumes
 
