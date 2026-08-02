@@ -4,7 +4,9 @@ package game
 //
 //  Two-stage tool progression (G2's feel, ported):
 //    - Pickaxe: free, adjacent tiles only (chebyshev 1), PICK_HITS chips per
-//      tile — clicks right in front of you, sparks on every hit.
+//      tile — clicks right in front of you, sparks on every hit.  With NO
+//      pickaxe you can still knock down trees bare-handed (Wood only) at
+//      BARE_HAND_MULT× the hits — no other tile yields to fists.
 //    - Mine wands: crafted tiers reach 2 / 4 / 8 / 12 tiles and drink mana per
 //      shot.  A shot streams sparks to the tile and mines on impact
 //      (WAND_TRAVEL_TIME later) — the mining lands where the magic lands.
@@ -16,6 +18,7 @@ package game
 PICK_RANGE      :: i32(1)
 PICK_HITS       :: 3
 PICK_SWING_TIME :: f32(0.28)
+BARE_HAND_MULT  :: 3   // no pickaxe: you can still knock down trees, 3× the hits
 
 WAND_MANA_COST   :: f32(5)     // pool 100, regen 5/s: ~20-shot burst, then throttled
 WAND_COOLDOWN    :: f32(0.25)
@@ -126,14 +129,19 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
         }
     }
 
-    // Pick: no aiming, just a rough direction — chip the first workable tile.
-    if inventory_count(&p.inventory, .Pickaxe) == 0 { return }
+    // Pick / bare hands: no aiming, just a rough direction — chip the first
+    // workable tile.  A pickaxe works any mineable tile in PICK_HITS chips;
+    // bare-handed you can still knock down TREES (Wood), but it takes
+    // BARE_HAND_MULT× the hits — nothing else yields to fists.
+    has_pick := inventory_count(&p.inventory, .Pickaxe) > 0
     targets: [2][2]i32
     n := pick_targets(p, gs.input.mouse_world, &targets)
     for i in 0 ..< n {
         C := targets[i]
         if !in_bounds(int(C.x), int(C.y)) { continue }
-        if .Mineable not_in terrain_table[get_tile(&gs.world, int(C.x), int(C.y))].flags { continue }
+        tile := get_tile(&gs.world, int(C.x), int(C.y))
+        if .Mineable not_in terrain_table[tile].flags { continue }
+        if !has_pick && tile != .Wood { continue }   // fists fell trees only
 
         if C.x != i32(p.pos.x + PLAYER_W*0.5) {
             p.facing = 1 if C.x > i32(p.pos.x + PLAYER_W*0.5) else -1
@@ -145,7 +153,8 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
         }
         p.chip_hits += 1
         spawn_chip_sparks(gs, C)
-        if int(p.chip_hits) >= PICK_HITS {
+        hits_needed := has_pick ? PICK_HITS : PICK_HITS * BARE_HAND_MULT
+        if int(p.chip_hits) >= hits_needed {
             p.chip_hits = 0
             eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = C})
         } else {

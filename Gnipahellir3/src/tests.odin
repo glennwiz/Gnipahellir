@@ -864,6 +864,33 @@ pick_chips_by_rough_direction :: proc(t: ^testing.T) {
 }
 
 @(test)
+bare_hands_fell_trees_slower :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Drop the starter pickaxe: bare hands only.
+    inv := &gs.player.inventory
+    for &s in inv.slots do if s.item == .Pickaxe do s = {}
+    testing.expect_value(t, inventory_count(inv, .Pickaxe), 0)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+
+    // Fists can't break stone — swing well past the tree cost, it holds.
+    set_tile(&gs.world, 31, SURFACE_Y, .Stone)
+    for _ in 0 ..< PICK_HITS * BARE_HAND_MULT + 2 { mine_swing(gs, {31, i32(SURFACE_Y)}) }
+    testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y), Tile_Type.Stone)
+
+    // A tree comes down — but only after 3× the hits.
+    set_tile(&gs.world, 31, SURFACE_Y, .Wood)
+    gs.player.chip_hits = 0
+    gs.player.chip_tile = {-1, -1}
+    for _ in 0 ..< PICK_HITS * BARE_HAND_MULT - 1 { mine_swing(gs, {31, i32(SURFACE_Y)}) }
+    testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y), Tile_Type.Wood)  // not yet
+    mine_swing(gs, {31, i32(SURFACE_Y)})
+    testing.expect(t, get_tile(&gs.world, 31, SURFACE_Y) != .Wood, "the 9th hit fells it")
+}
+
+@(test)
 mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
