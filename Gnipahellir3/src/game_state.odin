@@ -360,6 +360,7 @@ Progression_State :: struct {
     cave_unlocked:          [MAX_PROGRESSION_TIERS]bool,
     final_boss_defeated:    bool,
     sky_altar_pos:          [2]i32,  // surface tile of the built sky-gate altar; {0,0} = closed
+    recipe_unlocked:        [Item]bool,  // sticky: a recipe (keyed by result) revealed once its gating material was held (crafting.odin)
 }
 
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
@@ -483,6 +484,12 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.world_seed         = world_seed
     gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu
     // No starting tools — the pickaxe waits on the grass (see world_init).
+
+    // Recipes with no gating material (Plank, Bench) are known from the start;
+    // pre-mark them so update_recipe_unlocks doesn't announce them as "new".
+    for r in recipe_table {
+        if recipe_unlock[r.result] == .None do gs.progression.recipe_unlocked[r.result] = true
+    }
 
     world_init(&gs.world, world_seed)
     spawn_level_1_enemies(gs)

@@ -1003,6 +1003,40 @@ flower_bed_brews_from_dirt_plank_seeds :: proc(t: ^testing.T) {
 }
 
 @(test)
+recipes_unlock_when_their_material_is_found :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.active_station = .Bench
+
+    visible :: proc(gs: ^Game_State, result: Item) -> bool {
+        vis: [len(recipe_table)]int
+        n := visible_recipes(gs, &vis)
+        for row in 0 ..< n do if recipe_table[vis[row]].result == result do return true
+        return false
+    }
+
+    // Hand recipes are known from the start; the smelter (needs iron) is hidden.
+    testing.expect(t, gs.progression.recipe_unlocked[.Crafting_Bench], "bench known from start")
+    testing.expect(t, !gs.progression.recipe_unlocked[.Smelter], "smelter hidden until iron")
+    testing.expect(t, !visible(gs, .Smelter), "smelter not listed before iron")
+
+    // Finding iron ore reveals the iron-tier recipes (with a notify).
+    inventory_insert(&gs.player.inventory, .Iron_Ore, 1)
+    update_recipe_unlocks(gs)
+    testing.expect(t, gs.progression.recipe_unlocked[.Smelter], "iron reveals the smelter")
+    testing.expect(t, gs.notify.count >= 1, "a new recipe pops a note")
+    testing.expect(t, visible(gs, .Smelter), "smelter now listed")
+
+    // Sticky: spending the iron doesn't re-hide the recipe.
+    inventory_remove(&gs.player.inventory, .Iron_Ore, 1)
+    update_recipe_unlocks(gs)
+    testing.expect(t, gs.progression.recipe_unlocked[.Smelter], "unlock is sticky")
+
+    // A deeper-tier recipe is still gated.
+    testing.expect(t, !gs.progression.recipe_unlocked[.Dvergr_Forge], "forge waits on a smelted bar")
+}
+
+@(test)
 health_potion_brews_from_flowers :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

@@ -131,6 +131,72 @@ recipe_table := [?]Recipe{
     { .Flower_Bed,       1, .Bench, {{.Dirt, 1},           {.Plank, 1},         {.Flower_Seed, 5}} },
 }
 
+// ─── Recipe unlock tree ───────────────────────────────────────────────────────
+//
+//  A recipe stays hidden until the player first obtains its gating material —
+//  turning the craft window from a firehose into a paced reveal.  Keyed by the
+//  recipe's (unique) RESULT item; .None (the map default) = known from the
+//  start.  The unlock is STICKY (Progression_State.recipe_unlocked): once the
+//  material has been held, the recipe stays available even after it's spent.
+//  Tuning the pace of the early game = editing this table.
+@(rodata)
+recipe_unlock := #partial [Item]Item{
+    // Domestic tier — the moment you can work wood / forage
+    .Tree_Grower   = .Plank,
+    .Door          = .Plank,
+    .Sky_Altar     = .Stone_Block,
+    .Potion_Health = .Flower,
+    .Flower_Bed    = .Flower_Seed,
+    // Iron tier — reward for reaching the first ore
+    .Smelter     = .Iron_Ore,
+    .Sword       = .Iron_Ore,
+    .Mine_Wand   = .Iron_Ore,
+    .Iron_Bucket = .Iron_Ore,
+    // Smelted tier — opens once you cast your first bar
+    .Iron_Helm = .Iron_Bar, .Iron_Chestplate = .Iron_Bar, .Iron_Gauntlets = .Iron_Bar,
+    .Iron_Greaves = .Iron_Bar, .Iron_Boots = .Iron_Bar,
+    .Dvergr_Forge = .Iron_Bar, .Silo = .Iron_Bar,
+    // Silver / gold ladders
+    .Silver_Sword = .Silver_Bar, .Mine_Wand_Silver = .Silver_Bar,
+    .Silver_Helm = .Silver_Bar, .Silver_Chestplate = .Silver_Bar, .Silver_Gauntlets = .Silver_Bar,
+    .Silver_Greaves = .Silver_Bar, .Silver_Boots = .Silver_Bar,
+    .Gold_Sword = .Gold_Bar, .Mine_Wand_Gold = .Gold_Bar,
+    .Gold_Helm = .Gold_Bar, .Gold_Chestplate = .Gold_Bar, .Gold_Gauntlets = .Gold_Bar,
+    .Gold_Greaves = .Gold_Bar, .Gold_Boots = .Gold_Bar,
+    .Dimension_Spawner_Gold = .Gold_Bar, .Dimension_Spawner_Runic = .Gold_Bar,
+    // Sky tier
+    .Rune_Altar = .Cloud_Stone, .Dimension_Spawner = .Cloud_Stone,
+    .Aether_Charm = .Aether_Crystal,
+    .Auto_Miner = .Emerald,
+    // Runic endgame
+    .Mine_Wand_Runic = .Runic_Sky_Ore, .Runic_Sword = .Runic_Sky_Ore,
+    .Runic_Helm = .Runic_Sky_Ore, .Runic_Chestplate = .Runic_Sky_Ore, .Runic_Gauntlets = .Runic_Sky_Ore,
+    .Runic_Greaves = .Runic_Sky_Ore, .Runic_Boots = .Runic_Sky_Ore,
+    // .Plank and .Crafting_Bench default to .None — known from the very start.
+}
+
+// Reveal recipes whose gating material the player now holds (sticky), popping a
+// one-shot "New recipe" note.  Step in game_update; reads inventory, pushes no
+// events.  Pre-marked (.None) recipes never notify — see game_state_init.
+update_recipe_unlocks :: proc(gs: ^Game_State) {
+    first: Item = .None
+    more  := 0
+    for r in recipe_table {
+        if gs.progression.recipe_unlocked[r.result] do continue
+        req := recipe_unlock[r.result]
+        if req != .None && inventory_count(&gs.player.inventory, req) == 0 do continue
+        gs.progression.recipe_unlocked[r.result] = true
+        if first == .None { first = r.result } else { more += 1 }
+    }
+    if first != .None {
+        if more > 0 {
+            notify(gs, "New recipe: %s  (+%d more)", item_table[first].name, more)
+        } else {
+            notify(gs, "New recipe: %s", item_table[first].name)
+        }
+    }
+}
+
 // One scan of the tiles around the player: which stations are in range.
 // .None is always "in range" — hand recipes work anywhere.
 stations_in_range :: proc(gs: ^Game_State) -> [Station]bool {
@@ -231,6 +297,7 @@ visible_recipes :: proc(gs: ^Game_State, idx_buf: ^[len(recipe_table)]int) -> in
     n := 0
     for r, i in recipe_table {
         if r.station != .None && r.station != gs.ui.active_station do continue
+        if !gs.progression.recipe_unlocked[r.result] do continue   // hidden until discovered
         idx_buf[n] = i
         n += 1
     }

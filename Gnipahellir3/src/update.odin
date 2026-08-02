@@ -47,6 +47,10 @@ game_update :: proc(gs: ^Game_State) {
     //     tile highlight and click handler (writes UI_State only)
     update_station_focus(gs)
 
+    // 5d. Recipe unlocks — reveal recipes whose gating material is now held
+    //     (writes progression, pops a notify; pushes no events)
+    update_recipe_unlocks(gs)
+
     // 6. Events — drains the queue completely, including events pushed by
     //    handlers mid-drain.  Systems ordered AFTER this step must not push
     //    events: they would be destroyed unprocessed by the clear below.

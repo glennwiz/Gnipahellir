@@ -6,8 +6,8 @@ the game is, where the code stands right now, and what's queued next. When it
 disagrees with older docs, trust this file — then reconcile.
 
 - **Last updated:** 2026-08-02
-- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 112 green (`odin test src`)
-- **Save version:** 15 (`gnipahellir_save.dat` ≈ 2,658,280 bytes; smelter input buffer replaced wood-fuel field in `Sim_Tile_Data` — total size unchanged, byte-*meaning* changed, so v15 rejects old v14 saves. **A v14 backup sits at `gnipahellir_save.v14.bak`.**)
+- **Branch:** master · **Build:** green (`odin run src`) · **Tests:** 118 green (`odin test src`)
+- **Save version:** 16 (`gnipahellir_save.dat` ≈ 2,658,352 bytes; **v16** added `Progression_State.recipe_unlocked` (recipe unlock tree, +72 B); **v15** swapped the smelter's wood-fuel field for an input buffer. Old saves reset on each bump — backups at `gnipahellir_save.v15.bak` / `.v14.bak`.)
 - **Recent HEAD:** 8004d6d (player-permeable door) + **this session's polish/mechanics pass** (committed): dirt tile art, floating damage/heal numbers, rune-plate notifications, tutorial hints + HUD craft chip, smelter rebuilt (internal ore buffer + auto-pull, no fuel), Q-drop removed, wands are weapon-slot tools mining at all ranges, early-game healing (forage flowers → brew potions). Not yet pushed (Glenn drives git).
 
 ---
@@ -82,6 +82,7 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 
 ## 4. Where the code stands (systems that work)
 
+- **Recipe unlock tree (2026-08-02):** the craft window was a firehose (every bench recipe at once). Now recipes are **hidden until you first hold their gating material** — a paced tech-tree reveal. Keyed by each recipe's (unique) **result item** in `recipe_unlock` (crafting.odin): Plank/Bench known from the start → wood unlocks Tree_Grower/Door → flowers unlock potions/beds → **Iron_Ore** reveals Smelter/Sword/Wand → **Iron_Bar** reveals armor + Forge + Silo → Silver/Gold bars → Cloud_Stone (Rune Altar) → Runic_Sky_Ore (runic tier). Unlock is **sticky** (`Progression_State.recipe_unlocked[Item]`, saved) — stays revealed after the material is spent. `update_recipe_unlocks` (game_update step 5d) polls inventory, flips new unlocks, and pops one **"New recipe: X (+N more)"** note. `visible_recipes` hides locked rows (the player-facing gate); `recipe_craftable` is NOT gated (tests craft directly, and clicks only reach visible rows). **Tune early-game pacing by editing `recipe_unlock`.**
 - **World seed (2026-08-02):** level generation is seeded — `gs.world_seed` is mixed (additively) into the gen hashes for the surface, cave 1, caves 2/3, and sky, so **every New Game gets a fresh world** (seed from `time.now()`). Override with the **`GNIPA_SEED` env var** (a number → reproducible/shareable worlds; used for debugging a specific layout). Seed **0 reproduces the original fixed world** — `game_state_init`'s default, so the boot title screen and all headless tests stay deterministic. The seed is **not saved** (the world grid is saved wholesale; seed only matters at gen time — minor caveat: a level first generated *after* a reload uses the default seed, not the run's original). Dimensions keep their position-derived seed (unchanged). New-game seed is logged to `action.log`.
 - **Full v1 loop is beatable:** Cave 1→Blueprint A→Sky→Sky Altar ritual→cave-2 unlock→…→Garm→Hell_Key→win. Death/win clear the save.
 - **Progression:** blueprints (pickup = activation, never consumed), Sky Altar rituals (A: 8 Cloud Stone + 4 Plank; B: 12 Cloud Stone + 6 Silver **Bar**; C: 20 Cloud Stone + 10 Gold **Bar**), sequential cave gates.
