@@ -32,6 +32,13 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
         return false
     }
 
+    // Barrels keep their contents in a record, so they too need lasting ground
+    // and a free record slot (MAX_BARRELS).
+    if place_tile == .Barrel &&
+       (gs.level_index == LEVEL_DIMENSION || !barrel_slot_free(gs)) {
+        return false
+    }
+
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)     // within reach
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return false
@@ -106,6 +113,14 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
                 notify(gs, "Every silo is spoken for — reclaim one first")
             }
         }
+        // Explain the barrel's two gates.
+        if place_tile == .Barrel {
+            if gs.level_index == LEVEL_DIMENSION {
+                notify(gs, "The barrel needs lasting ground — this world will collapse")
+            } else if !barrel_slot_free(gs) {
+                notify(gs, "Every barrel is spoken for — reclaim one first")
+            }
+        }
         return
     }
 
@@ -137,6 +152,11 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         silo_on_placed(gs, e.tile)
     }
 
+    // A placed Barrel opens its record book entry.
+    if place_tile == .Barrel {
+        barrel_on_placed(gs, e.tile)
+    }
+
     // Raising a Sky Altar on the surface opens the gate to the heavens above it.
     if place_tile == .Sky_Altar && gs.level_index == LEVEL_SURFACE {
         gs.progression.sky_altar_pos = {i32(x), i32(y)}
@@ -144,6 +164,55 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         notify(gs, "The Sky Altar rises — a portal opens to the heavens!")
         spawn_deep_blueprint(gs)
     }
+}
+
+// Dropping a bag stack onto an open ground cell (drag it out of the bag onto
+// the world) — a manual pile for the auto-pull hoppers (smelter ore/fuel, silo
+// vacuum) and future automation pipelines.  The exact cursor cell takes the
+// pile when it is open, in reach, and empty or already holds the same item with
+// room; otherwise the drop is refused and nothing leaves the bag.
+handle_item_drop :: proc(gs: ^Game_State, e: Event) {
+    if gs.player.dead do return
+    slot := int(e.payload.int_val)
+    if slot < 0 || slot >= MAX_INVENTORY do return
+    s := &gs.player.inventory.slots[slot]
+    if s.item == .None || s.count <= 0 do return
+
+    x := int(e.tile.x)
+    y := int(e.tile.y)
+    if !in_bounds(x, y) do return
+
+    pcx := int(gs.player.pos.x + PLAYER_W*0.5)
+    pcy := int(gs.player.pos.y + PLAYER_H*0.5)
+    if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH {
+        notify(gs, "Too far to drop there")
+        return
+    }
+    if is_solid(&gs.world, x, y) {
+        notify(gs, "No room to drop there")
+        return
+    }
+    idx      := grid_idx(x, y)
+    existing := gs.world.items[idx]
+    have     := int(gs.world.item_counts[idx])
+    matches  := existing == s.item && have > 0
+    if existing != .None && have > 0 && !matches {
+        notify(gs, "Something is already lying there")
+        return
+    }
+    room := MAX_STACK - (matches ? have : 0)
+    if room <= 0 {
+        notify(gs, "The pile is full")
+        return
+    }
+    n := min(s.count, room)
+    gs.world.items[idx]       = s.item
+    gs.world.item_counts[idx] = u8((matches ? have : 0) + n)
+    item := s.item
+    s.count -= n
+    if s.count == 0 do s.item = .None
+    audio_play(&gs.audio, .Place)
+    log_action(gs, "Player drops %v x%d at (%d,%d)", item, n, x, y)
 }
 
 tile_overlaps_player :: proc(gs: ^Game_State, x, y: int) -> bool {

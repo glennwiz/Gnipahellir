@@ -10,7 +10,7 @@ game_update :: proc(gs: ^Game_State) {
     // Title, pause menu and settings screens freeze the sim entirely. Only
     // the menu's own requests (New Game / Save and Quit), queued as events
     // by input, still run.
-    if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings || gs.ui.show_book {
+    if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings || gs.ui.show_book {
         process_events(gs)
         eq_clear(&gs.events)
         return

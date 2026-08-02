@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect:
+        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take:
             gs.save_dirty = true
         }
 
@@ -170,6 +170,25 @@ process_events :: proc(gs: ^Game_State) {
         case .Smelter_Collect:
             smelter_collect(gs, e.tile)
 
+        case .Smelter_Withdraw:
+            smelter_withdraw(gs, e.tile)
+
+        case .Barrel_Interact:
+            gs.ui.show_barrel    = true
+            gs.ui.barrel_tile    = e.tile
+            gs.ui.show_inventory = true  // the barrel trades with the bag
+            log_action(gs, "Player opens barrel at (%d,%d)", e.tile.x, e.tile.y)
+
+        case .Barrel_Store:
+            if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
+                barrel_store(gs, b, int(e.payload.int_val))
+            }
+
+        case .Barrel_Take:
+            if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
+                barrel_take(gs, b, int(e.payload.int_val))
+            }
+
         case .Projectile_Fired:
             // damage/impact handled in update_projectiles
             audio_play(&gs.audio, .Fireball, audio_tile_gain(gs, e.tile))
@@ -265,6 +284,9 @@ process_events :: proc(gs: ^Game_State) {
         case .Place_Request:
             handle_place_request(gs, e)
 
+        case .Item_Drop:
+            handle_item_drop(gs, e)
+
         case .Ritual_Request:
             handle_ritual_request(gs)
 
@@ -343,6 +365,17 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         silo_on_mined(gs, e.tile)
     }
 
+    // A loaded barrel refuses the pick — empty it before reclaiming the wood.
+    if old_tile == .Barrel {
+        if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
+            if barrel_total(b) > 0 {
+                notify(gs, "The barrel is full — empty it before you break it")
+                return
+            }
+        }
+        barrel_on_mined(gs, e.tile)
+    }
+
     drop := terrain_table[old_tile].drop_item
     // Chance drops roll a per-tile hash — deterministic per run, so the
     // yield can't be re-rolled by save-scumming.
@@ -411,9 +444,9 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         }
     }
 
-    // A mined smelter spills its tray AND its loaded ore — nothing in the
-    // furnace is lost.  Timers and buffers die with the tile so a future
-    // machine here starts fresh.
+    // A mined smelter spills its tray, its loaded ore AND its wood fuel —
+    // nothing in the furnace is lost.  Timers and buffers die with the tile so
+    // a future machine here starts fresh.
     sd := &gs.world.sim_data[idx]
     if old_tile == .Smelter {
         if sd.store_count > 0 {
@@ -421,6 +454,9 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         }
         if sd.in_count > 0 {
             spawn_ground_item(&gs.world, e.tile, sd.in_item, int(sd.in_count))
+        }
+        if sd.fuel_count > 0 {
+            spawn_ground_item(&gs.world, e.tile, FUEL_ITEM, int(sd.fuel_count))
         }
     }
     sd^ = {}

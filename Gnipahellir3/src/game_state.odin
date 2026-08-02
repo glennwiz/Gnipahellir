@@ -14,6 +14,7 @@ Sim_Tile_Data :: struct {
     store_count:  u8,
     in_item:      Item, // smelter input buffer — ore loaded into the furnace, waiting to smelt
     in_count:     u8,
+    fuel_count:   u8,   // smelter fuel buffer — wood logs stoking the fire (FUEL_PER_BAR per bar)
 }
 
 World_Grid :: struct {
@@ -279,9 +280,11 @@ UI_State :: struct {
     show_crafting:   bool,
     show_blueprint:  bool,
     show_smelter:    bool,   // furnace window; smelter_tile says which furnace
+    show_barrel:     bool,   // barrel window; barrel_tile says which barrel
     show_debug:      bool,
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
-    show_title:      bool,   // boot title screen; any key dismisses it into the menu
+    show_title:      bool,   // boot title screen; any key dismisses it into the character-select
+    show_charselect: bool,   // startup form picker; dismissed by choosing a look
     show_settings:   bool,   // volume sliders + key rebinding screen
     show_book:       bool,   // the ritual's instruction tome overlay (opens on a completed offering)
     book_tier:       int,    // which structure tier's passage the tome describes
@@ -292,10 +295,13 @@ UI_State :: struct {
     drag_item:       Item,    // bag stack being dragged onto the smelter (.None = no drag)
     drag_slot:       int,     // bag slot the drag started from (smelter feed takes from it)
     drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
+    drag_input:      bool,    // the drag holds the smelter's loaded ore (pulling it back out)
+    drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     win_pos:         [UI_Window][2]i32, // top-left of each floating window (draggable)
     win_drag:        int,     // window being dragged by its header, -1 = none
     win_drag_off:    [2]i32,  // cursor offset inside the window at grab
     smelter_tile:    [2]i32,  // furnace the smelter window is looking at
+    barrel_tile:     [2]i32,  // barrel the barrel window is looking at
     active_station:  Station, // station the crafting window was opened at (.None = hand crafting)
     focus_station:   Station, // nearest interactable station in range this frame (.None = none)
     focus_tile:      [2]i32,  // its tile — anchor for the highlight and prompt
@@ -339,6 +345,7 @@ Sim_State :: struct {
     lava_tick_timer: f32,
     tree_tick_timer: f32,
     silos:           [MAX_SILOS]Silo_State,  // wide-count bulk stores (silo.odin)
+    barrels:         [MAX_BARRELS]Barrel_State, // hand-organized 4×4 chests (barrel.odin)
 }
 
 // ─── Audio ────────────────────────────────────────────────────────────────────
@@ -442,6 +449,7 @@ Game_State :: struct {
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
+    player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
@@ -503,6 +511,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.ui.settings_capture = -1
     gs.ui.settings_drag    = -1
     gs.ui.win_drag         = -1
+    gs.ui.drag_barrel      = -1
     gs.ui.win_pos          = default_window_pos
 
     gs.player.hp          = 10

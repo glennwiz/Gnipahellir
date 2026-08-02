@@ -376,6 +376,17 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.None,
 		0,
 	},
+	.Barrel                  = {
+		"Barrel",
+		// A placed chest, mined back for its item like any machine (an empty
+		// one — a loaded barrel refuses the pick, guarded in events.odin).
+		{.Solid, .Placeable, .Mineable},
+		rl.Color{150, 100, 55, 255},
+		0,
+		0,
+		.Barrel,
+		0,
+	},
 	.Dirt                    = {
 		"Dirt",
 		// A building block (like Stone/Grass, not a machine) that obeys gravity:

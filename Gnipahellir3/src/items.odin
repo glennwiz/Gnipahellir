@@ -88,6 +88,7 @@ item_table := [Item]Item_Info{
     .Flower            = { "Flower",            {255, 220, 50,  255}, .Air },
     .Flower_Seed       = { "Flower Seed",       {150, 120, 60,  255}, .Air },
     .Flower_Bed        = { "Flower Bed",        {120, 90,  50,  255}, .Flower_Bed },
+    .Barrel            = { "Barrel",            {150, 100, 55,  255}, .Barrel },
 }
 
 is_blueprint :: proc(it: Item) -> bool {

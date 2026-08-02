@@ -122,6 +122,9 @@ recipe_table := [?]Recipe{
     // Flower farming: sow seeds into a bed (with soil + a plank frame) — it
     // grows 5 flowers you harvest by walking through it.  (Appended.)
     { .Flower_Bed,       1, .Bench, {{.Dirt, 1},           {.Plank, 1},         {.Flower_Seed, 5}} },
+    // Storage: a wooden 4×4 barrel — early overflow for a 24-slot bag.
+    // Cheap on purpose (2 logs' worth of planks).  (Appended.)
+    { .Barrel,           1, .Bench, {{.Plank, 8},          {},                  {}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -137,6 +140,7 @@ recipe_unlock := #partial [Item]Item{
     // Domestic tier — the moment you can work wood / forage
     .Tree_Grower   = .Plank,
     .Door          = .Plank,
+    .Barrel        = .Plank,
     .Sky_Altar     = .Stone_Block,
     .Potion_Health = .Flower,
     .Flower_Bed    = .Flower_Seed,

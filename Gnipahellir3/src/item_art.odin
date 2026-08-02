@@ -227,6 +227,22 @@ DOOR_GRID :: Icon_Grid{
 	"...DDDDDD...",
 }
 
+// Bulging oak staves (B/L) bound by three dark hoops (D).
+BARREL_GRID :: Icon_Grid{
+	"............",
+	"..DBLBLBD...",
+	".DBLBLBLBD..",
+	".DDDDDDDDD..",
+	".BLBLBLBLB..",
+	".BLBLBLBLB..",
+	".DDDDDDDDD..",
+	".BLBLBLBLB..",
+	".BLBLBLBLB..",
+	".DDDDDDDDD..",
+	"..DBLBLBD...",
+	"............",
+}
+
 // Two boards, grain (D) and nails (A).
 PLANK_GRID :: Icon_Grid{
 	"............",
@@ -629,6 +645,8 @@ item_icons := [Item]Item_Icon{
 	.Flower_Seed      = {SEED_GRID, {{176, 146, 84, 255}, {110, 84, 44, 255}, {}, {}, {}}},
 	// Flower bed — reuse the bloom icon (a planted crop)
 	.Flower_Bed       = {FLOWER_GRID, {{210, 120, 30, 255}, {46, 140, 46, 255}, {255, 245, 175, 255}, {255, 220, 50, 255}, {}}},
+	// Oak barrel — staves, highlight, hoops
+	.Barrel           = {BARREL_GRID, {{150, 100, 55, 255}, {92, 60, 32, 255}, {188, 138, 84, 255}, {}, {}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

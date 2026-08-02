@@ -31,12 +31,31 @@ update_input :: proc(gs: ^Game_State) {
     }
     gs.ui.hover_tile = inp.mouse_tile
 
-    // Title screen: any key or click advances to the menu.
+    // Title screen: any key or click advances to the character-select.
     if gs.ui.show_title {
         if rl.GetKeyPressed() != .KEY_NULL ||
            rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT) {
-            gs.ui.show_title = false
-            gs.ui.show_menu  = true
+            gs.ui.show_title      = false
+            gs.ui.show_charselect = true
+        }
+        return
+    }
+
+    // Character-select: click a form card or press its number (1..N) to choose
+    // a look and drop into the world. Nothing else runs while it's up.
+    if gs.ui.show_charselect {
+        chosen := -1
+        if rl.IsMouseButtonPressed(.LEFT) {
+            chosen = charselect_card_at_cursor(gs)
+        }
+        for n in 0 ..< PLAYER_FORM_COUNT {
+            if rl.IsKeyPressed(rl.KeyboardKey(i32(rl.KeyboardKey.ONE) + i32(n))) {
+                chosen = n
+            }
+        }
+        if chosen >= 0 {
+            gs.player_form        = Player_Form(chosen)
+            gs.ui.show_charselect = false
         }
         return
     }
@@ -106,6 +125,10 @@ update_input :: proc(gs: ^Game_State) {
        get_tile(&gs.world, int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y)) != .Smelter {
         gs.ui.show_smelter = false
     }
+    if gs.ui.show_barrel &&
+       get_tile(&gs.world, int(gs.ui.barrel_tile.x), int(gs.ui.barrel_tile.y)) != .Barrel {
+        gs.ui.show_barrel = false
+    }
 
     // Grabbing a floating window's header drags it; the press is eaten so it
     // doesn't also hit slots or the world.  Topmost window under the cursor
@@ -152,19 +175,26 @@ update_input :: proc(gs: ^Game_State) {
             eq_push(&gs.events, Event{type = .Smelter_Interact, tile = inp.mouse_tile})
             inp.mine   = false
             inp.attack = false
+        } else if in_reach && get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y)) == .Barrel {
+            eq_push(&gs.events, Event{type = .Barrel_Interact, tile = inp.mouse_tile})
+            inp.mine   = false
+            inp.attack = false
         }
     }
 
     // UI toggles. TAB with any window open sweeps them all shut (like ESC);
     // otherwise it opens the bag.
     if rl.IsKeyPressed(bind[.Inventory]) {
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel {
             gs.ui.show_inventory = false
             gs.ui.show_crafting  = false
             gs.ui.show_blueprint = false
             gs.ui.show_smelter   = false
+            gs.ui.show_barrel    = false
             gs.ui.drag_item      = .None
             gs.ui.drag_tray      = false
+            gs.ui.drag_input     = false
+            gs.ui.drag_barrel    = -1
         } else {
             gs.ui.show_inventory = true
         }
@@ -189,14 +219,17 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel {
             // First ESC sweeps every window closed; the next one opens the menu.
             gs.ui.show_inventory = false
             gs.ui.show_crafting  = false
             gs.ui.show_blueprint = false
             gs.ui.show_smelter   = false
+            gs.ui.show_barrel    = false
             gs.ui.drag_item      = .None
             gs.ui.drag_tray      = false
+            gs.ui.drag_input     = false
+            gs.ui.drag_barrel    = -1
         } else {
             gs.ui.show_menu = true
         }
@@ -214,12 +247,26 @@ update_input :: proc(gs: ^Game_State) {
                 if is_blueprint(gs.player.inventory.slots[slot].item) {
                     gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
                 }
-                // Grabbing a bag stack starts a drag while the furnace can take it
-                if gs.ui.show_smelter {
-                    s := gs.player.inventory.slots[slot]
+                // Grabbing a bag stack starts a drag: released on a furnace or
+                // barrel window it feeds/stores; released on the open world it
+                // drops a ground pile (for the auto-pull hoppers).
+                s := gs.player.inventory.slots[slot]
+                if s.item != .None && s.count > 0 {
+                    gs.ui.drag_item   = s.item
+                    gs.ui.drag_slot   = slot
+                    gs.ui.drag_barrel = -1   // source is the bag, not a barrel
+                }
+            }
+        }
+        // Grabbing a filled barrel slot starts a drag of that stack toward the bag.
+        if gs.ui.show_barrel && gs.ui.drag_item == .None {
+            if bslot := barrel_slot_at_cursor(gs); bslot >= 0 {
+                if b := barrel_at(gs, gs.level_index, gs.ui.barrel_tile); b != nil {
+                    s := b.slots[bslot]
                     if s.item != .None && s.count > 0 {
-                        gs.ui.drag_item = s.item
-                        gs.ui.drag_slot = slot
+                        gs.ui.drag_item   = s.item
+                        gs.ui.drag_slot   = -1
+                        gs.ui.drag_barrel = bslot
                     }
                 }
             }
@@ -234,6 +281,19 @@ update_input :: proc(gs: ^Game_State) {
                 if sd.store_count > 0 {
                     gs.ui.drag_item = sd.store_item
                     gs.ui.drag_tray = true
+                }
+            }
+        }
+        // Grabbing the smelter INPUT slot starts a drag to pull the ore back out.
+        if gs.ui.show_smelter && gs.ui.drag_item == .None {
+            ix, iy := smelter_input_rect(gs)
+            mx := i32(inp.mouse_screen.x)
+            my := i32(inp.mouse_screen.y)
+            if mx >= ix && mx < ix + SLOT_PX && my >= iy && my < iy + SLOT_PX {
+                sd := gs.world.sim_data[grid_idx(int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))]
+                if sd.in_count > 0 {
+                    gs.ui.drag_item  = sd.in_item
+                    gs.ui.drag_input = true
                 }
             }
         }
@@ -262,10 +322,41 @@ update_input :: proc(gs: ^Game_State) {
                 eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
             }
             gs.ui.drag_tray = false
+        } else if gs.ui.drag_input {
+            // Dropping the INPUT slot on the bag — or a click-in-place — pulls
+            // the loaded ore back out of the furnace.
+            if cursor_in_window(gs, .Inventory) || cursor_in_window(gs, .Smelter) {
+                eq_push(&gs.events, Event{type = .Smelter_Withdraw, tile = gs.ui.smelter_tile})
+            }
+            gs.ui.drag_input = false
+        } else if gs.ui.drag_barrel >= 0 {
+            // Dragging a barrel stack out — drop it on the bag to withdraw it.
+            if cursor_in_window(gs, .Inventory) {
+                eq_push(&gs.events, Event{
+                    type    = .Barrel_Take,
+                    tile    = gs.ui.barrel_tile,
+                    payload = {int_val = i32(gs.ui.drag_barrel)},
+                })
+            }
+            gs.ui.drag_barrel = -1
+        } else if cursor_in_window(gs, .Barrel) {
+            // Dragging a bag stack onto the barrel deposits it.
+            eq_push(&gs.events, Event{
+                type    = .Barrel_Store,
+                tile    = gs.ui.barrel_tile,
+                payload = {int_val = i32(gs.ui.drag_slot)},
+            })
         } else if cursor_in_window(gs, .Smelter) {
             eq_push(&gs.events, Event{
                 type    = .Smelter_Feed,
                 tile    = gs.ui.smelter_tile,
+                payload = {int_val = i32(gs.ui.drag_slot)},
+            })
+        } else if !cursor_over_ui(gs) {
+            // Released over the open world — drop the stack as a ground pile.
+            eq_push(&gs.events, Event{
+                type    = .Item_Drop,
+                tile    = gs.input.mouse_tile,
                 payload = {int_val = i32(gs.ui.drag_slot)},
             })
         }

@@ -13,13 +13,13 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(16)  // v16: Progression_State.recipe_unlocked (recipe unlock tree); v15: smelter input buffer, wood fuel removed
+SAVE_VERSION :: i32(18)  // v18: Sim_Tile_Data.fuel_count (smelter wood fuel); v17: barrels; v16: recipe unlock tree
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 2_658_352
+SAVE_DATA_EXPECTED_SIZE :: 3_160_496
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {
@@ -96,6 +96,7 @@ start_new_game :: proc(gs: ^Game_State) {
     gs.player.hair_color     = rl.ORANGE
     gs.ui.show_menu          = false
     gs.ui.show_title         = false  // game_state_init re-arms the boot title screen
+    gs.ui.show_charselect    = true   // pick a look before the fresh run begins
 }
 
 // Called once at shutdown: live runs persist; dead and won runs clear the

@@ -56,6 +56,14 @@ SMELT_H :: 360
 SMELT_X :: 140 // default position (draggable)
 SMELT_Y :: 180
 
+// Barrel window — a 4×4 grid of bag-style slots.
+BARREL_PAD :: 20
+BARREL_GRID_Y :: 56  // content top, below the title band
+BARREL_W :: BARREL_PAD * 2 + BARREL_COLS * SLOT_PX          // 40 + 176 = 216
+BARREL_H :: BARREL_GRID_Y + BARREL_ROWS * SLOT_PX + 28      // header + grid + footer
+BARREL_X :: 420 // default position (draggable)
+BARREL_Y :: 200
+
 // ─── Floating Windows (draggable) ─────────────────────────────────────────────
 //
 //  Each floating window's top-left lives in UI_State.win_pos (defaults below);
@@ -66,6 +74,7 @@ UI_Window :: enum u8 {
 	Inventory,
 	Crafting,
 	Smelter,
+	Barrel,
 	Blueprint,
 }
 
@@ -76,12 +85,13 @@ default_window_pos := [UI_Window][2]i32 {
 	.Inventory = {INV_PANEL_X, INV_PANEL_Y},
 	.Crafting  = {CRAFT_X, CRAFT_Y},
 	.Smelter   = {SMELT_X, SMELT_Y},
+	.Barrel    = {BARREL_X, BARREL_Y},
 	.Blueprint = {BP_X, BP_Y},
 }
 
 // draw_ui stacks windows in enum order; drag hit-testing walks this top-down.
 @(rodata)
-window_top_down := [4]UI_Window{.Blueprint, .Smelter, .Crafting, .Inventory}
+window_top_down := [5]UI_Window{.Blueprint, .Barrel, .Smelter, .Crafting, .Inventory}
 
 // Outer bounds of a floating window at its current position, and whether it
 // is open.  Crafting's height tracks its recipe list.
@@ -94,6 +104,8 @@ window_rect :: proc(gs: ^Game_State, w: UI_Window) -> (x, y, ww, wh: i32, open: 
 		return p.x, p.y, CRAFT_PANEL_W, CRAFT_PANEL_H, gs.ui.show_crafting
 	case .Smelter:
 		return p.x, p.y, SMELT_W, SMELT_H, gs.ui.show_smelter
+	case .Barrel:
+		return p.x, p.y, BARREL_W, BARREL_H, gs.ui.show_barrel
 	case .Blueprint:
 		return p.x, p.y, BP_W, BP_H, gs.ui.show_blueprint
 	}
@@ -180,6 +192,38 @@ craft_selected_recipe :: proc(gs: ^Game_State) -> int {
 smelter_tray_rect :: proc(gs: ^Game_State) -> (x, y: i32) {
 	p := gs.ui.win_pos[.Smelter]
 	return p.x + 24, p.y + 272
+}
+
+// The smelter INPUT slot (loaded ore) — shared by draw and the pull-out grab.
+smelter_input_rect :: proc(gs: ^Game_State) -> (x, y: i32) {
+	p := gs.ui.win_pos[.Smelter]
+	return p.x + 24, p.y + 68
+}
+
+// The smelter FUEL slot (wood stoking the fire) — shared by draw and hit-test.
+smelter_fuel_rect :: proc(gs: ^Game_State) -> (x, y: i32) {
+	p := gs.ui.win_pos[.Smelter]
+	return p.x + 24, p.y + 186
+}
+
+// Top-left of barrel slot `i` (0-based, row-major in the 4×4 grid).
+barrel_slot_rect :: proc(gs: ^Game_State, i: int) -> (x, y: i32) {
+	p := gs.ui.win_pos[.Barrel]
+	col := i32(i % BARREL_COLS)
+	row := i32(i / BARREL_COLS)
+	return p.x + BARREL_PAD + col * SLOT_PX, p.y + BARREL_GRID_Y + row * SLOT_PX
+}
+
+// Barrel slot index under the cursor, or -1.
+barrel_slot_at_cursor :: proc(gs: ^Game_State) -> int {
+	if !gs.ui.show_barrel do return -1
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	for i in 0 ..< BARREL_SLOTS {
+		x, y := barrel_slot_rect(gs, i)
+		if mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX do return i
+	}
+	return -1
 }
 
 panel_bg :: rl.Color{15, 15, 25, 230}
@@ -325,6 +369,82 @@ draw_title :: proc(gs: ^Game_State) {
 
 	prompt := u8(120 + 135 * (0.5 + 0.5 * math.sin(t * 2.5)))
 	center_text("PRESS ANY KEY", UI_H - 130, 26, rl.Color{255, 240, 180, prompt})
+}
+
+// ─── Character Select (startup form picker) ───────────────────────────────────
+
+CSEL_CARD_W  :: 160
+CSEL_CARD_H  :: 240
+CSEL_GAP     :: 16
+CSEL_TOTAL_W :: PLAYER_FORM_COUNT * CSEL_CARD_W + (PLAYER_FORM_COUNT - 1) * CSEL_GAP
+CSEL_X0      :: (UI_W - CSEL_TOTAL_W) / 2
+CSEL_Y0      :: 230
+
+// Index of the card under the cursor, or -1.
+charselect_card_at_cursor :: proc(gs: ^Game_State) -> int {
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	if my < CSEL_Y0 || my >= CSEL_Y0 + CSEL_CARD_H do return -1
+	for i in 0 ..< PLAYER_FORM_COUNT {
+		x := i32(CSEL_X0 + i * (CSEL_CARD_W + CSEL_GAP))
+		if mx >= x && mx < x + CSEL_CARD_W do return i
+	}
+	return -1
+}
+
+draw_charselect :: proc(gs: ^Game_State) {
+	t := f32(rl.GetTime())
+	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{12, 10, 14, 255})
+
+	center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
+		tw := rl.MeasureText(text, size)
+		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
+	}
+	center_text("CHOOSE YOUR FORM", 110, 48, rl.Color{240, 205, 130, 255})
+	center_text("click a form — or press its number — to begin", 168, 20, text_dim)
+
+	pulse := 0.6 + 0.4 * math.sin(t * 1.5)
+	hover := charselect_card_at_cursor(gs)
+	for i in 0 ..< PLAYER_FORM_COUNT {
+		form := Player_Form(i)
+		x := i32(CSEL_X0 + i * (CSEL_CARD_W + CSEL_GAP))
+		y := i32(CSEL_Y0)
+		hovered := i == hover
+
+		rl.DrawRectangle(x, y, CSEL_CARD_W, CSEL_CARD_H, hovered ? NORSE_ROW_HOT : NORSE_ROW)
+		rl.DrawRectangleLinesEx(
+			{f32(x), f32(y), CSEL_CARD_W, CSEL_CARD_H},
+			hovered ? 3 : 2,
+			hovered ? NORSE_GOLD_HOT : NORSE_BORDER,
+		)
+
+		// Sprite preview, centered in the card's upper area (uses the new-game
+		// default tints so it matches the in-world look).
+		ps := f32(13)
+		sw := f32(FRAME_WIDTH) * ps
+		sx := f32(x) + (CSEL_CARD_W - sw) / 2
+		sy := f32(y) + 36
+		if hovered do sy -= 4 * f32(pulse)  // a little lift on hover
+		draw_form_sprite(form, sx, sy, ps, rl.ORANGE, rl.BLUE)
+
+		// Name plate.
+		name := player_form_names[form]
+		tw := rl.MeasureText(name, 18)
+		rl.DrawText(
+			name,
+			x + (CSEL_CARD_W - tw) / 2,
+			y + CSEL_CARD_H - 44,
+			18,
+			hovered ? NORSE_GOLD_HOT : rl.Color{225, 215, 195, 255},
+		)
+
+		// Number hint under the name.
+		num_buf: [4]u8
+		num := fmt.bprintf(num_buf[:], "%d", i + 1)
+		nt := rl.MeasureText(cstring(raw_data(num_buf[:])), 16)
+		rl.DrawText(cstring(raw_data(num_buf[:])), x + (CSEL_CARD_W - nt) / 2, y + CSEL_CARD_H - 22, 16, text_dim)
+		_ = num
+	}
 }
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
@@ -738,7 +858,7 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	for w in UI_Window {
 		if cursor_in_window(gs, w) do return true
 	}
-	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings {
+	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings {
 		return true // full-screen modals — everything behind them is blocked
 	}
 	return false
@@ -791,6 +911,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	if gs.ui.show_inventory do draw_inventory(gs)
 	if gs.ui.show_crafting do draw_crafting(gs)
 	if gs.ui.show_smelter do draw_smelter(gs)
+	if gs.ui.show_barrel do draw_barrel(gs)
 	if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
 	if gs.ui.drag_item != .None {
 		mx := i32(gs.input.mouse_screen.x)
@@ -807,6 +928,7 @@ draw_ui :: proc(gs: ^Game_State) {
 		if gs.debug.altar_menu do draw_altar_menu(gs)
 	}
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top
+	if gs.ui.show_charselect do draw_charselect(gs)
 	if gs.ui.show_settings do draw_settings(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included
 }
@@ -1438,9 +1560,9 @@ draw_smelter :: proc(gs: ^Game_State) {
 	burning := heat > 0
 
 	// INPUT: ore loaded into the fire (drag from the bag to add; a pile beside
-	// the furnace is auto-pulled in here too).
+	// the furnace is auto-pulled in here too; drag this slot out to pull it back).
 	rl.DrawText("INPUT", px + 24, py + 52, 10, NORSE_GOLD)
-	ix, iy := px + 24, py + 68
+	ix, iy := smelter_input_rect(gs)
 	rl.DrawRectangle(ix, iy, SLOT_PX, SLOT_PX, slot_bg)
 	rl.DrawRectangleLinesEx(
 		{f32(ix), f32(iy), SLOT_PX, SLOT_PX},
@@ -1452,6 +1574,27 @@ draw_smelter :: proc(gs: ^Game_State) {
 		cnt_buf: [8]u8
 		fmt.bprintf(cnt_buf[:7], "%d", sd.in_count)
 		rl.DrawText(cstring(raw_data(cnt_buf[:])), ix + 6, iy + SLOT_PX - 14, 10, rl.WHITE)
+		rl.DrawText("drag out to unload", ix + SLOT_PX + 10, iy + 17, 10, text_dim)
+	}
+
+	// FUEL: wood stoking the fire (drag wood from the bag; a wood pile beside
+	// the furnace is auto-pulled here too).  FUEL_PER_BAR burns per bar.
+	fux, fuy := smelter_fuel_rect(gs)
+	has_fuel := sd.fuel_count >= FUEL_PER_BAR
+	rl.DrawText("FUEL", px + 24, fuy - 14, 10, NORSE_GOLD)
+	rl.DrawRectangle(fux, fuy, SLOT_PX, SLOT_PX, slot_bg)
+	rl.DrawRectangleLinesEx(
+		{f32(fux), f32(fuy), SLOT_PX, SLOT_PX},
+		sd.fuel_count > 0 ? 2 : 1,
+		has_fuel ? rl.Color{255, 150, 40, 255} : (sd.fuel_count > 0 ? NORSE_GOLD_HOT : NORSE_BORDER),
+	)
+	if sd.fuel_count > 0 {
+		draw_item_icon(FUEL_ITEM, fux + 10, fuy + 8, 24)
+		cnt_buf: [8]u8
+		fmt.bprintf(cnt_buf[:7], "%d", sd.fuel_count)
+		rl.DrawText(cstring(raw_data(cnt_buf[:])), fux + 6, fuy + SLOT_PX - 14, 10, rl.WHITE)
+	} else {
+		rl.DrawText("out of wood", fux + SLOT_PX + 10, fuy + 17, 10, text_dim)
 	}
 
 	// The fire, glowing with smelting progress, to the right of the input.
@@ -1474,9 +1617,11 @@ draw_smelter :: proc(gs: ^Game_State) {
 	status := cstring("cold — drag ore into the furnace")
 	switch {
 	case burning:
-		status = "the fire eats the ore"
+		status = "the fire eats ore and wood"
 	case has_ore && int(sd.in_count) < rule.ore_per_bar:
 		status = "not enough ore for a bar"
+	case has_ore && !has_fuel:
+		status = "no fuel — drag wood into the furnace"
 	case has_ore:
 		status = "the tray blocks the cast — take the bars"
 	}
@@ -1500,7 +1645,7 @@ draw_smelter :: proc(gs: ^Game_State) {
 	}
 
 	rl.DrawText(
-		"drag ore from the bag onto this window",
+		"drag ore and wood from the bag onto this window",
 		px + 24,
 		py + SMELT_H - 22,
 		10,
@@ -1509,6 +1654,41 @@ draw_smelter :: proc(gs: ^Game_State) {
 	if !in_reach {
 		rl.DrawText("(too far)", px + SMELT_W - 70, py + SMELT_H - 22, 10, text_dim)
 	}
+}
+
+// The barrel window: a 4×4 grid of slots.  Drag a bag stack onto it to stow,
+// drag a slot onto the open bag to withdraw (input.odin drives the drags).
+draw_barrel :: proc(gs: ^Game_State) {
+	px := gs.ui.win_pos[.Barrel].x
+	py := gs.ui.win_pos[.Barrel].y
+	tile := gs.ui.barrel_tile
+
+	pcx := i32(gs.player.pos.x + PLAYER_W * 0.5)
+	pcy := i32(gs.player.pos.y + PLAYER_H * 0.5)
+	in_reach := max(abs(tile.x - pcx), abs(tile.y - pcy)) <= BENCH_RANGE
+
+	rl.DrawRectangle(px, py, BARREL_W, BARREL_H, NORSE_PANEL)
+	rl.DrawRectangleLinesEx({f32(px), f32(py), BARREL_W, BARREL_H}, 2, NORSE_BORDER)
+	rl.DrawText("BARREL", px + BARREL_PAD, py + 12, 20, in_reach ? NORSE_GOLD_HOT : text_dim)
+	rl.DrawText("[ESC] close", px + BARREL_W - 96, py + 16, 12, NORSE_GOLD)
+	rl.DrawRectangle(px + BARREL_PAD, py + 38, BARREL_W - BARREL_PAD * 2, 2, NORSE_BORDER)
+
+	b := barrel_at(gs, gs.level_index, tile)
+	for i in 0 ..< BARREL_SLOTS {
+		x, y := barrel_slot_rect(gs, i)
+		rl.DrawRectangle(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, slot_bg)
+		rl.DrawRectangleLines(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, NORSE_BORDER)
+		if b == nil do continue
+		s := b.slots[i]
+		if s.item == .None || s.count <= 0 do continue
+		draw_item_icon(s.item, x + 10, y + 8, 24)
+		cnt_buf: [8]u8
+		fmt.bprintf(cnt_buf[:7], "%d", s.count)
+		rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
+	}
+
+	rl.DrawText("drag stacks in from the bag, or a slot out to it",
+		px + BARREL_PAD, py + BARREL_H - 20, 10, text_dim)
 }
 
 // The interactive blueprint overlay (B, or click a blueprint in the bag):

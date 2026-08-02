@@ -23,7 +23,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_portals(gs)
     draw_placement_ghost(gs)
     draw_station_focus(gs)
-    draw_player(&gs.player)
+    draw_player(&gs.player, gs.player_form)
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
     draw_particles(&gs.particles)
@@ -132,6 +132,7 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Dimension_Spawner_Runic = {210, 140, 255, 255}, // runic violet
     .Auto_Miner             = {120, 255, 210, 255}, // the snake's beating heart
     .Silo                   = {200, 210, 225, 255}, // cold iron sheen
+    .Barrel                 = {190, 140, 80,  255}, // warm oak
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
@@ -255,6 +256,23 @@ draw_shaft_mouth :: proc(gs: ^Game_State) {
                 rl.DrawRectangle(wall_x, py, WALL_PX, CELL_SIZE, wall)
                 rl.DrawRectangle(edge_x, py, WALL_PX, CELL_SIZE, wall)
                 if top_mouth do rl.DrawRectangle(edge_x, py, WALL_PX, 2, grass_rim)
+
+                // Detail so the throat reads as living earth, not a flat band:
+                // grit embedded in the walls, and fine roots dangling from the
+                // sheared lip into the shaft for the first couple of rows.
+                hh := whash(u32(x)*2654435761 ~ u32(nx)*40503 ~ u32(y)*668265263)
+                grit := rl.Color{u8(128 - 84*d), u8(104 - 68*d), u8(72 - 48*d), 255}
+                rl.DrawRectangle(wall_x + i32(hh % u32(WALL_PX)),      py + i32((hh>>2) % u32(CELL_SIZE)), 1, 1, grit)
+                rl.DrawRectangle(edge_x + i32((hh>>4) % u32(WALL_PX)), py + i32((hh>>6) % u32(CELL_SIZE)), 1, 1, grit)
+                if y <= SURFACE_Y + 1 {
+                    root   := rl.Color{96, 66, 36, 230}
+                    root_x := dir < 0 ? px + 1 : px + CELL_SIZE - 2
+                    rlen   := i32(3 + hh % 5)
+                    for ry in i32(0) ..< rlen {
+                        wob := i32((hh >> u32(ry)) & 1)
+                        rl.DrawRectangle(root_x + (dir < 0 ? wob : -wob), py + ry, 1, 1, root)
+                    }
+                }
             }
         }
     }
@@ -346,6 +364,12 @@ draw_ritual :: proc(gs: ^Game_State) {
 draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     px := i32(x * CELL_SIZE)
     py := i32(y * CELL_SIZE)
+    // The shaft-cut stratum: cap-band stone that also drops dirt gets a
+    // soil-veined face (the brown apron in draw_shaft_mouth layers over this).
+    if t == .Stone && gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, x, y) {
+        draw_pixel_loam_stone(px, py, x, y)
+        return
+    }
     if gs.assets.loaded {
         if sp, ok := tile_sprite(gs, t, x, y); ok {
             dst := rl.Rectangle{f32(px), f32(py), CELL_SIZE, CELL_SIZE}
@@ -451,6 +475,35 @@ draw_pixel_dirt :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+0, by+6, 1, 1, light)
     rl.DrawRectangle(bx+2, by+7, 1, 1, light)
     rl.DrawRectangle(bx+5, by+8, 1, 1, light)
+}
+
+// ─── Pixel Art: Loam Stone ────────────────────────────────────────────────────
+//
+//  The loose earthen stratum the entrance shaft cuts through: cap-band stone
+//  shot through with packed soil — it's why mining here also yields a dirt clod
+//  (in_shaft_apron), so it should read as soil-veined rock, not plain stone.
+//  Deterministic per cell via a position hash: varied down the band, never
+//  shimmering.  Drawn UNDER the brown scuff apron (draw_shaft_mouth).
+
+draw_pixel_loam_stone :: proc(bx, by: i32, x, y: int) {
+    stone   := rl.Color{112, 110, 116, 255}
+    stone_d := rl.Color{ 82,  80,  88,  255}
+    stone_l := rl.Color{150, 148, 156, 255}
+    soil    := rl.Color{120,  84,  50,  255}
+    soil_d  := rl.Color{ 84,  58,  34,  255}
+
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, stone)
+
+    h := whash(u32(x)*374761393) ~ whash(u32(y)*668265263)
+    // A soil seam packed into a crack, its slant riding the hash.
+    seam := i32(h % 4)
+    rl.DrawRectangle(bx+seam,   by+2, 3, 2, soil)
+    rl.DrawRectangle(bx+seam+2, by+4, 3, 2, soil_d)
+    rl.DrawRectangle(bx+seam+3, by+6, 2, 2, soil)
+    // Embedded pebbles and a lit chip, scattered off the hash.
+    rl.DrawRectangle(bx + i32((h>>3)%7), by + i32((h>>6)%3) + 1, 2, 2, stone_d)
+    rl.DrawRectangle(bx + i32((h>>9)%8), by + 7,                 2, 1, stone_l)
+    rl.DrawRectangle(bx + i32((h>>12)%9), by + i32((h>>14)%4) + 5, 1, 1, soil_d)
 }
 
 // ─── Pixel Art: Flower Bed ────────────────────────────────────────────────────
@@ -755,40 +808,237 @@ draw_builder :: proc(e: ^Enemy) {
     rl.DrawRectangle(px, py,          pw, head_h, head_color)
 }
 
-// ─── Player (pixel-art mage) ────────────────────────────────────────────────
+// ─── Player (pixel-art forms) ───────────────────────────────────────────────
 
-// 8×11 ascii sprite, two walk frames. Legend: Y hair, K face, C clothing
-// (left→right shaded), B boots. Ported from G2; colors come from the Player.
+// Selectable player looks — chosen on the startup character-select screen.
+// Cosmetic only; not saved (re-picked each launch). Wizard is the default
+// (enum zero) so an un-set form matches the original mage.
+Player_Form :: enum u8 {
+    Wizard,
+    Dwarf,
+    Ranger,
+    Viking,
+    Knight,
+    Golem,
+    Plague,
+}
+
+PLAYER_FORM_COUNT :: len(Player_Form)
+
+player_form_names := [Player_Form]cstring{
+    .Wizard = "Wizard",
+    .Dwarf  = "Dwarf",
+    .Ranger = "Ranger",
+    .Viking = "Viking",
+    .Knight = "Knight",
+    .Golem  = "Golem",
+    .Plague = "Plague Dr.",
+}
+
+// 8×11 ascii sprites, two walk frames each. Legend: Y hair, C clothing (both
+// player-tinted, left→right shaded), K face, B boots, M steel, F fur, W bone/
+// horn/mask, '-' visor slit / goggle, S stone, G glowing core. Ported from G2;
+// player-tinted colors come from the Player.
 PLAYER_RENDER_SCALE :: 2  // sprite height in tiles — the one knob for player size
 FRAME_WIDTH  :: 8
 FRAME_HEIGHT :: 11
 
-player_frames := [2][FRAME_HEIGHT][FRAME_WIDTH]rune{
-    { // frame 0 — feet together
-        {' ',' ',' ',' ',' ',' ',' ',' '},
-        {' ',' ','Y','Y',' ',' ',' ',' '},
-        {' ',' ',' ','Y','Y',' ',' ',' '},
-        {' ',' ','Y','Y','Y',' ',' ',' '},
-        {' ','Y','K','K','K','Y',' ',' '},
-        {' ','K','K','K','K','K',' ',' '},
-        {'C','K','K','K','K','C','C',' '},
-        {'C','C','C','C','C','C','C','C'},
-        {'C','C','C','C','C','C','C','C'},
-        {' ','C','C','C','C','C',' ',' '},
-        {' ',' ',' ','B','B','B',' ',' '},
+player_form_frames := [Player_Form][2][FRAME_HEIGHT][FRAME_WIDTH]rune{
+    .Wizard = {
+        { // frame 0 — feet together
+            {' ',' ',' ',' ',' ',' ',' ',' '},
+            {' ',' ','Y','Y',' ',' ',' ',' '},
+            {' ',' ',' ','Y','Y',' ',' ',' '},
+            {' ',' ','Y','Y','Y',' ',' ',' '},
+            {' ','Y','K','K','K','Y',' ',' '},
+            {' ','K','K','K','K','K',' ',' '},
+            {'C','K','K','K','K','C','C',' '},
+            {'C','C','C','C','C','C','C','C'},
+            {'C','C','C','C','C','C','C','C'},
+            {' ','C','C','C','C','C',' ',' '},
+            {' ',' ',' ','B','B','B',' ',' '},
+        },
+        { // frame 1 — mid-stride
+            {' ',' ','Y',' ',' ',' ',' ',' '},
+            {' ',' ',' ','Y',' ',' ',' ',' '},
+            {' ',' ',' ','Y','Y',' ',' ',' '},
+            {' ',' ','Y','Y','Y',' ',' ',' '},
+            {' ','Y','Y','K','Y','Y',' ',' '},
+            {' ','K','K','K','K','K',' ',' '},
+            {'C','K','K','K','K','C','C',' '},
+            {'C','C','C','C','C','C','C','C'},
+            {'C','C','C','C','C','C','C','C'},
+            {' ','C','C','C','C','C',' ',' '},
+            {' ',' ','B','B','B',' ',' ',' '},
+        },
     },
-    { // frame 1 — mid-stride
-        {' ',' ','Y',' ',' ',' ',' ',' '},
-        {' ',' ',' ','Y',' ',' ',' ',' '},
-        {' ',' ',' ','Y','Y',' ',' ',' '},
-        {' ',' ','Y','Y','Y',' ',' ',' '},
-        {' ','Y','Y','K','Y','Y',' ',' '},
-        {' ','K','K','K','K','K',' ',' '},
-        {'C','K','K','K','K','C','C',' '},
-        {'C','C','C','C','C','C','C','C'},
-        {'C','C','C','C','C','C','C','C'},
-        {' ','C','C','C','C','C',' ',' '},
-        {' ',' ','B','B','B',' ',' ',' '},
+    .Dwarf = {
+        {
+            {' ',' ',' ',' ',' ',' ',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ','M','M','M','M','M','M',' '},
+            {' ',' ','Y','K','K','Y',' ',' '},
+            {' ','Y','Y','Y','Y','Y','Y',' '},
+            {' ','Y','Y','Y','Y','Y','Y',' '},
+            {'C','C','Y','Y','Y','Y','C','C'},
+            {'C','C','C','C','C','C','C','C'},
+            {'C','C','C','C','C','C','C','C'},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','B','B',' ',' ','B','B',' '},
+        },
+        {
+            {' ',' ',' ',' ',' ',' ',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ','M','M','M','M','M','M',' '},
+            {' ',' ','Y','K','K','Y',' ',' '},
+            {' ','Y','Y','Y','Y','Y','Y',' '},
+            {' ','Y','Y','Y','Y','Y','Y',' '},
+            {'C','C','Y','Y','Y','Y','C','C'},
+            {'C','C','C','C','C','C','C','C'},
+            {'C','C','C','C','C','C','C','C'},
+            {' ','C','C','C','C','C','C',' '},
+            {' ',' ','B','B',' ',' ','B','B'},
+        },
+    },
+    .Ranger = {
+        {
+            {' ',' ','C','C','C',' ',' ',' '},
+            {' ','C','C','C','C','C',' ',' '},
+            {' ','C','C','K','K','C',' ',' '},
+            {' ',' ','C','K','K','C',' ',' '},
+            {' ',' ','C','C','C','C',' ',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {'C','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C','C'},
+            {' ',' ','C','C','C','C','C',' '},
+            {' ',' ','C','C','C',' ',' ',' '},
+            {' ',' ','B','B',' ','B',' ',' '},
+        },
+        {
+            {' ',' ','C','C','C',' ',' ',' '},
+            {' ','C','C','C','C','C',' ',' '},
+            {' ','C','C','K','K','C',' ',' '},
+            {' ',' ','C','K','K','C',' ',' '},
+            {' ',' ','C','C','C','C',' ',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {'C','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C','C'},
+            {' ',' ','C','C','C','C','C',' '},
+            {' ',' ','C','C','C',' ',' ',' '},
+            {' ','B',' ','B','B',' ',' ',' '},
+        },
+    },
+    .Viking = {
+        {
+            {' ','W',' ',' ',' ',' ','W',' '},
+            {' ','W','M','M','M','M','W',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','K','K','K','K',' ',' '},
+            {' ','Y','K','K','K','K','Y',' '},
+            {'F','F','F','F','F','F','F','F'},
+            {' ','F','C','C','C','C','F',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ',' ','C','C','C','C',' ',' '},
+            {' ','B','B',' ',' ','B','B',' '},
+        },
+        {
+            {' ','W',' ',' ',' ',' ','W',' '},
+            {' ','W','M','M','M','M','W',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','K','K','K','K',' ',' '},
+            {' ','Y','K','K','K','K','Y',' '},
+            {'F','F','F','F','F','F','F','F'},
+            {' ','F','C','C','C','C','F',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ',' ','C','C','C','C',' ',' '},
+            {' ',' ','B','B',' ',' ','B','B'},
+        },
+    },
+    .Knight = {
+        {
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','-','-','M',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {'M','M','M','M','M','M','M','M'},
+            {' ','M','C','C','C','C','M',' '},
+            {' ','M','C','C','C','C','M',' '},
+            {' ','M','C','C','C','C','M',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','M',' ','M','M',' '},
+        },
+        {
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','-','-','M',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {'M','M','M','M','M','M','M','M'},
+            {' ','M','C','C','C','C','M',' '},
+            {' ','M','C','C','C','C','M',' '},
+            {' ','M','C','C','C','C','M',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ',' ','M','M','M','M',' ',' '},
+            {' ','M','M',' ',' ','M','M',' '},
+        },
+    },
+    .Golem = {
+        {
+            {' ',' ','S','S','S','S',' ',' '},
+            {' ','S','S','S','S','S','S',' '},
+            {' ','S','K','S','S','K','S',' '},
+            {' ','S','S','S','S','S','S',' '},
+            {'S','S','S','S','S','S','S','S'},
+            {'S','S','S','G','G','S','S','S'},
+            {'S','S','S','G','G','S','S','S'},
+            {' ','S','S','S','S','S','S',' '},
+            {' ','S','S','S','S','S','S',' '},
+            {' ','S','S',' ',' ','S','S',' '},
+            {' ','S','S',' ',' ','S','S',' '},
+        },
+        {
+            {' ',' ','S','S','S','S',' ',' '},
+            {' ','S','S','S','S','S','S',' '},
+            {' ','S','K','S','S','K','S',' '},
+            {' ','S','S','S','S','S','S',' '},
+            {'S','S','S','S','S','S','S','S'},
+            {'S','S','S','G','G','S','S','S'},
+            {'S','S','S','G','G','S','S','S'},
+            {' ','S','S','S','S','S','S',' '},
+            {' ','S','S','S','S','S','S',' '},
+            {' ',' ','S','S',' ','S','S',' '},
+            {' ',' ','S','S',' ','S','S',' '},
+        },
+    },
+    .Plague = {
+        {
+            {' ',' ',' ',' ',' ',' ',' ',' '},
+            {' ','K','K','K','K','K','K',' '},
+            {' ',' ','K','K','K','K',' ',' '},
+            {' ',' ','-','W','W','W',' ',' '},
+            {' ',' ','W','W','W','W','W',' '},
+            {' ',' ',' ','W','W','W','W',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ',' ','C','C','C','C',' ',' '},
+            {' ',' ','B','B',' ','B',' ',' '},
+        },
+        {
+            {' ',' ',' ',' ',' ',' ',' ',' '},
+            {' ','K','K','K','K','K','K',' '},
+            {' ',' ','K','K','K','K',' ',' '},
+            {' ',' ','-','W','W','W',' ',' '},
+            {' ',' ','W','W','W','W','W',' '},
+            {' ',' ',' ','W','W','W','W',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ','C','C','C','C','C','C',' '},
+            {' ',' ','C','C','C','C',' ',' '},
+            {' ','B',' ','B','B',' ',' ',' '},
+        },
     },
 }
 
@@ -796,21 +1046,31 @@ player_pixel_color :: proc(p: ^Player, ch: rune, shade: f32) -> rl.Color {
     switch ch {
     case 'Y': return p.hair_color
     case 'K': return rl.Color{40, 40, 50, 255}
-    case 'C': return rl.Color{
-        u8(clamp(f32(p.clothing_color.r) * shade, 0, 255)),
-        u8(clamp(f32(p.clothing_color.g) * shade, 0, 255)),
-        u8(clamp(f32(p.clothing_color.b) * shade, 0, 255)),
-        255,
-    }
+    case 'C': return shade_color(p.clothing_color, shade)
     case 'B': return rl.Color{110, 70, 40, 255}
+    case 'M': return shade_color(rl.Color{150, 155, 170, 255}, shade)  // steel
+    case 'F': return shade_color(rl.Color{120, 95, 60, 255}, shade)    // fur
+    case 'W': return rl.Color{230, 222, 195, 255}                      // bone / horn / mask
+    case '-': return rl.Color{18, 18, 26, 255}                         // visor slit / goggle
+    case 'S': return shade_color(rl.Color{112, 110, 120, 255}, shade)  // stone
+    case 'G': return rl.Color{255, 176, 64, 255}                       // glowing core
     case:     return rl.BLANK
     }
 }
 
-draw_player :: proc(p: ^Player) {
+shade_color :: proc(c: rl.Color, s: f32) -> rl.Color {
+    return {
+        u8(clamp(f32(c.r) * s, 0, 255)),
+        u8(clamp(f32(c.g) * s, 0, 255)),
+        u8(clamp(f32(c.b) * s, 0, 255)),
+        255,
+    }
+}
+
+draw_player :: proc(p: ^Player, form: Player_Form) {
     if p.dead { return }
 
-    frame := player_frames[p.anim_frame]
+    frame := player_form_frames[form][p.anim_frame]
 
     // Float world-pixel positions so the sprite glides sub-pixel under the
     // supersampled camera instead of snapping to whole tiles.
@@ -869,6 +1129,24 @@ draw_player :: proc(p: ^Player) {
         } else {  // a wand tier — shaft with a tier-colored tip
             rl.DrawRectangleRec({hand_x, hand_y, ps, ps * 3}, rl.Color{90, 60, 40, 255})
             rl.DrawRectangleRec({hand_x + ps, hand_y - ps, ps, ps}, item_table[held].color)
+        }
+    }
+}
+
+// Draws a form's idle sprite (frame 0) at a UI position for the character-
+// select cards. Same pixel loop as draw_player, minus animation/facing.
+draw_form_sprite :: proc(form: Player_Form, x, y, ps: f32, hair, clothing: rl.Color) {
+    tmp := Player{hair_color = hair, clothing_color = clothing}
+    frame := player_form_frames[form][0]
+    for row in 0 ..< FRAME_HEIGHT {
+        for col in 0 ..< FRAME_WIDTH {
+            ch := frame[row][col]
+            if ch == ' ' { continue }
+            shade := 0.85 + f32(col) / f32(FRAME_WIDTH - 1) * 0.25
+            rl.DrawRectangleRec(
+                {x + f32(col)*ps, y + f32(row)*ps, ps, ps},
+                player_pixel_color(&tmp, ch, shade),
+            )
         }
     }
 }
@@ -992,72 +1270,164 @@ draw_portals :: proc(gs: ^Game_State) {
     }
 }
 
-// Motes streaming inward on a slow elliptical spiral — the "entering the
-// portal" effect.  `seed` offsets phase/angle so stacked colour streams differ.
-draw_portal_inflow :: proc(cx, cy, rw, rh: f32, count: int, frame: u64, seed: f32, col: rl.Color, speed: f32) {
-    for i in 0 ..< count {
-        ph := f32(frame)*speed + f32(i)/f32(count) + seed
-        ph -= math.floor(ph)                            // 0..1, looping
-        ang := f32(i)*2.39996 + ph*2.5 + seed*6.2831853 // golden spread, spiralling in
-        rr  := 1 - ph                                   // rim (ph=0) → center (ph=1)
-        px  := cx + math.cos(ang)*rw*rr
-        py  := cy + math.sin(ang)*rh*rr
-        sz  := 1.5 + rr*2.5
-        a   := u8(f32(col.a) * (0.25 + 0.75*ph))
-        rl.DrawRectangleRec({px - sz*0.5, py - sz*0.5, sz, sz}, rl.Color{col.r, col.g, col.b, a})
+// ─── Portal vortex (layered, procedural) ──────────────────────────────────────
+//
+//  A gate is drawn back-to-front: an additive bloom halo bleeding into the
+//  scene, a dark event-horizon core for depth, spiral swirl arms of soft motes
+//  drawn inward, a bright pulsing rim, expanding shimmer rings and rim glints.
+//  Additive blend does the glow; DrawCircleGradient the soft dots.  Read-only.
+
+portal_mix :: proc(a, b: rl.Color, t: f32) -> rl.Color {
+    return {
+        u8(f32(a.r) + (f32(b.r) - f32(a.r)) * t),
+        u8(f32(a.g) + (f32(b.g) - f32(a.g)) * t),
+        u8(f32(a.b) + (f32(b.b) - f32(a.b)) * t),
+        u8(f32(a.a) + (f32(b.a) - f32(a.a)) * t),
     }
 }
 
-// Tall, bright sky gate: glowing oval, pale core, red/green/blue motes drawn in.
-draw_sky_portal :: proc(cx, cy: f32, frame: u64) {
-    pulse := 0.5 + 0.5*math.sin(f32(frame)*0.05)
-    hw := 2.5 * f32(CELL_SIZE)   // 5 tiles wide
-    hh := 5.0 * f32(CELL_SIZE)   // 10 tiles tall — a tall doorway
-    cw := 1.2 * f32(CELL_SIZE)
-    ch := 2.6 * f32(CELL_SIZE)
-
-    rl.DrawEllipse(i32(cx), i32(cy), cw, ch, rl.Color{90, 150, 230, 150})
-    rl.DrawEllipseLines(i32(cx), i32(cy), cw, ch, rl.Color{220, 240, 255, u8(160 + 60*pulse)})
-    rl.DrawEllipseLines(i32(cx), i32(cy), hw*0.7, hh*0.7, rl.Color{150, 210, 255, u8(45 + 55*pulse)})
-    rl.DrawEllipseLines(i32(cx), i32(cy), hw, hh, rl.Color{120, 200, 255, u8(70 + 70*pulse)})
-
-    N :: 22
-    draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.00, rl.Color{255, 70, 70, 255},  0.010) // red
-    draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.33, rl.Color{70, 255, 110, 255}, 0.011) // green
-    draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.66, rl.Color{90, 130, 255, 255}, 0.012) // blue
+// Soft elliptical bloom faked from stacked low-alpha ellipses (additive): the
+// center is covered by every layer and sums bright, the rim by only the outer.
+portal_bloom :: proc(cx, cy, hw, hh: f32, col: rl.Color, pulse: f32) {
+    LAYERS :: 5
+    for k in 0 ..< LAYERS {
+        rw := hw * (0.7 + f32(k) * 0.34)
+        rh := hh * (0.7 + f32(k) * 0.34)
+        a  := u8(f32(col.a) * 0.16 * (1 - f32(k) / LAYERS) * (0.7 + 0.3 * pulse))
+        rl.DrawEllipse(i32(cx), i32(cy), rw, rh, rl.Color{col.r, col.g, col.b, a})
+    }
 }
 
-// Tall, ominous cave gate: black maw, red ring, green veins, RGB motes when active.
+// The bottomless maw: nested dark ellipses, darkest at the center.
+portal_core :: proc(cx, cy, cw, ch: f32, col: rl.Color) {
+    rl.DrawEllipse(i32(cx), i32(cy), cw, ch, col)
+    rl.DrawEllipse(i32(cx), i32(cy), cw * 0.62, ch * 0.62, rl.Color{0, 0, 0, col.a})
+}
+
+// Logarithmic swirl arms of soft motes spiralling from the rim into the center,
+// fading in at the rim and out at the throat — the "being drawn in" read.
+portal_vortex :: proc(cx, cy, cw, ch: f32, frame: u64, arms: int, rim, throat: rl.Color, speed: f32) {
+    POINTS :: 16
+    TURNS  :: f32(1.4)
+    rot    := f32(frame) * 0.01
+    for m in 0 ..< arms {
+        arm := f32(m) / f32(arms) * math.TAU
+        for j in 0 ..< POINTS {
+            s   := math.mod(f32(j) / POINTS + f32(frame) * speed, 1)  // 0 rim → 1 center, looping
+            rr  := 1 - s
+            ang := arm + s * TURNS * math.TAU + rot
+            px  := cx + math.cos(ang) * cw * rr
+            py  := cy + math.sin(ang) * ch * rr
+            col := portal_mix(rim, throat, s)
+            col.a = u8(f32(col.a) * math.sin(s * math.PI))           // fade in/out
+            rl.DrawCircleGradient({px, py}, (0.7 + rr * 1.8) * 2.2, col, rl.Color{})
+        }
+    }
+}
+
+// Bright rim ring, thickened by two faint offset rings for an additive glow.
+portal_rim :: proc(cx, cy, cw, ch: f32, col: rl.Color, pulse: f32) {
+    rl.DrawEllipseLines(i32(cx), i32(cy), cw, ch, rl.Color{col.r, col.g, col.b, u8(130 + 100 * pulse)})
+    rl.DrawEllipseLines(i32(cx), i32(cy), cw * 1.03, ch * 1.02, rl.Color{col.r, col.g, col.b, u8(50 + 40 * pulse)})
+    rl.DrawEllipseLines(i32(cx), i32(cy), cw * 0.97, ch * 0.98, rl.Color{col.r, col.g, col.b, u8(50 + 40 * pulse)})
+}
+
+// A couple of ripple rings expanding out from the mouth and fading.
+portal_ripples :: proc(cx, cy, hw, hh: f32, frame: u64, col: rl.Color) {
+    RINGS :: 2
+    for k in 0 ..< RINGS {
+        ph := math.mod(f32(frame) * 0.006 + f32(k) / RINGS, 1)
+        rw := hw * (0.5 + ph * 0.8)
+        rh := hh * (0.5 + ph * 0.8)
+        a  := u8(f32(col.a) * (1 - ph) * 0.5)
+        rl.DrawEllipseLines(i32(cx), i32(cy), rw, rh, rl.Color{col.r, col.g, col.b, a})
+    }
+}
+
+// Twinkling cross-glints drifting around the rim.
+portal_glints :: proc(cx, cy, cw, ch: f32, frame: u64, col: rl.Color) {
+    for i in 0 ..< 4 {
+        base := f32(u32(i) * 2654435761 % 628) / 100
+        dir  := i % 2 == 0 ? f32(1) : f32(-1)
+        ang  := base + f32(frame) * 0.004 * dir
+        tw   := 0.5 + 0.5 * math.sin(f32(frame) * 0.08 + f32(i) * 1.7)
+        px   := cx + math.cos(ang) * cw
+        py   := cy + math.sin(ang) * ch
+        r    := 1.5 + 2.5 * tw
+        c    := rl.Color{col.r, col.g, col.b, u8(200 * tw)}
+        rl.DrawLineEx({px - r, py}, {px + r, py}, 1, c)
+        rl.DrawLineEx({px, py - r}, {px, py + r}, 1, c)
+        rl.DrawCircleGradient({px, py}, r, c, rl.Color{})
+    }
+}
+
+// Tall, luminous sky gate: cool aurora vortex whorling into a deep-blue throat.
+draw_sky_portal :: proc(cx, cy: f32, frame: u64) {
+    pulse := 0.5 + 0.5 * math.sin(f32(frame) * 0.05)
+    hw := 2.5 * f32(CELL_SIZE)   // halo reach
+    hh := 5.0 * f32(CELL_SIZE)
+    cw := 1.4 * f32(CELL_SIZE)   // mouth
+    ch := 2.8 * f32(CELL_SIZE)
+    glow := rl.Color{120, 200, 255, 255}
+
+    rl.BeginBlendMode(.ADDITIVE)
+    portal_bloom(cx, cy, hw, hh, glow, pulse)
+    rl.EndBlendMode()
+
+    portal_core(cx, cy, cw, ch, rl.Color{6, 12, 34, 235})
+
+    rl.BeginBlendMode(.ADDITIVE)
+    portal_vortex(cx, cy, cw, ch, frame, 3, rl.Color{190, 240, 255, 255}, rl.Color{90, 140, 255, 220}, 0.006)
+    portal_ripples(cx, cy, hw, hh, frame, rl.Color{150, 210, 255, 200})
+    portal_rim(cx, cy, cw, ch, glow, pulse)
+    portal_glints(cx, cy, cw, ch, frame, rl.Color{220, 245, 255, 255})
+    rl.EndBlendMode()
+}
+
+// Tall, ominous cave gate: an ember whirl in a black maw, green veins clawing
+// the rim.  Dormant (locked) gates are dim and slow, sealed with a faint rune.
 draw_cave_portal :: proc(cx, cy: f32, frame: u64, active: bool) {
-    pulse := 0.5 + 0.5*math.sin(f32(frame)*0.06)
+    pulse := 0.5 + 0.5 * math.sin(f32(frame) * 0.06)
     hw := 2.5 * f32(CELL_SIZE)
     hh := 5.0 * f32(CELL_SIZE)
-    cw := 1.4 * f32(CELL_SIZE)
+    cw := 1.5 * f32(CELL_SIZE)
     ch := 3.0 * f32(CELL_SIZE)
+    life := active ? f32(1) : f32(0.35)
+    red  := rl.Color{210, 45, 45, u8(255 * life)}
 
-    rl.DrawEllipse(i32(cx), i32(cy), cw, ch, rl.Color{12, 0, 12, 230})
-    ring_a := u8(active ? (150 + 90*pulse) : 70)
-    rl.DrawEllipseLines(i32(cx), i32(cy), cw, ch, rl.Color{200, 25, 25, ring_a})
-    rl.DrawEllipseLines(i32(cx), i32(cy), hw, hh, rl.Color{140, 15, 40, u8(active ? 120 : 50)})
+    if active {
+        rl.BeginBlendMode(.ADDITIVE)
+        portal_bloom(cx, cy, hw, hh, red, pulse)
+        rl.EndBlendMode()
+    }
 
-    // Green veins clawing around the maw.
-    green := rl.Color{40, 200, 80, u8(active ? 160 : 80)}
+    portal_core(cx, cy, cw, ch, rl.Color{10, 0, 8, 240})
+
+    // Green veins clawing around the maw, brighter when the gate is alive.
+    green := rl.Color{40, 200, 80, u8(active ? 170 : 70)}
     for i in 0 ..< 9 {
-        ang := f32(i)/9.0 * 6.2831853 + f32(frame)*0.002
-        x0  := cx + math.cos(ang)*cw*1.1
-        y0  := cy + math.sin(ang)*ch*1.1
-        x1  := cx + math.cos(ang + 0.35)*hw*0.8
-        y1  := cy + math.sin(ang + 0.35)*hh*0.8
-        x2  := cx + math.cos(ang)*hw
-        y2  := cy + math.sin(ang)*hh
+        ang := f32(i) / 9.0 * math.TAU + f32(frame) * 0.002
+        x0  := cx + math.cos(ang) * cw * 1.1
+        y0  := cy + math.sin(ang) * ch * 1.1
+        x1  := cx + math.cos(ang + 0.35) * hw * 0.8
+        y1  := cy + math.sin(ang + 0.35) * hh * 0.8
+        x2  := cx + math.cos(ang) * hw
+        y2  := cy + math.sin(ang) * hh
         rl.DrawLineEx({x0, y0}, {x1, y1}, 1.5, green)
         rl.DrawLineEx({x1, y1}, {x2, y2}, 1.5, green)
     }
 
+    rl.BeginBlendMode(.ADDITIVE)
     if active {
-        N :: 20
-        draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.00, rl.Color{240, 40, 30, 255},  0.012) // red
-        draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.33, rl.Color{60, 220, 90, 255},  0.010) // green
-        draw_portal_inflow(cx, cy, hw, hh, N, frame, 0.66, rl.Color{80, 110, 240, 255}, 0.013) // blue
+        portal_vortex(cx, cy, cw, ch, frame, 3, rl.Color{255, 130, 60, 255}, rl.Color{150, 20, 60, 220}, 0.007)
+        portal_ripples(cx, cy, hw, hh, frame, rl.Color{220, 60, 50, 180})
+        portal_glints(cx, cy, cw, ch, frame, rl.Color{255, 170, 120, 255})
+    }
+    portal_rim(cx, cy, cw, ch, red, active ? pulse : pulse * 0.4)
+    rl.EndBlendMode()
+
+    // Sealing rune drawn across a dormant maw — the gate is barred.
+    if !active {
+        draw_title_rune(title_runes[3], cx, cy, f32(CELL_SIZE) * 2.6, 0, rl.Color{150, 40, 50, 130}, 2, 5)
     }
 }

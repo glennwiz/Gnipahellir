@@ -86,6 +86,9 @@ Tile_Type :: enum u8 {
     // Planted flower bed — a crop of 5 flowers, harvested by walking through
     // (appended: terrain is saved as u8, order is frozen)
     Flower_Bed,
+    // Wooden 4×4 storage barrel — hand-organized inventory overflow (barrel.odin)
+    // (appended: terrain is saved as u8, order is frozen)
+    Barrel,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -170,6 +173,8 @@ Item :: enum u8 {
     // (appended: order is frozen)
     Flower_Seed,
     Flower_Bed,
+    // Wooden 4×4 storage barrel (appended: order is frozen)
+    Barrel,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -265,12 +270,17 @@ Event_Type :: enum u8 {
 
     // Items
     Item_Pickup,
+    Item_Drop,        // tile = target cell, int_val = bag slot; drops the stack as a ground pile
     Craft_Request,
     Craft_Complete,
     Station_Interact,
     Smelter_Interact, // tile = the clicked furnace; opens its window
-    Smelter_Feed,     // tile = furnace, int_val = bag slot; lays the stack beside it
+    Smelter_Feed,     // tile = furnace, int_val = bag slot; loads ore into input or wood into fuel
     Smelter_Collect,  // tile = furnace; empties its tray into the bag
+    Smelter_Withdraw, // tile = furnace; pulls the loaded ore back into the bag
+    Barrel_Interact,  // tile = the clicked barrel; opens its window
+    Barrel_Store,     // tile = barrel, int_val = bag slot; deposits that bag stack
+    Barrel_Take,      // tile = barrel, int_val = barrel slot; withdraws it into the bag
 
     // Projectiles
     Projectile_Fired,
