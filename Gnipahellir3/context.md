@@ -82,6 +82,7 @@ MAX_ENEMIES 64 · MAX_PARTICLES 256 · MAX_PROJECTILES 32 · MAX_EVENTS 512
 
 ## 4. Where the code stands (systems that work)
 
+- **World seed (2026-08-02):** level generation is seeded — `gs.world_seed` is mixed (additively) into the gen hashes for the surface, cave 1, caves 2/3, and sky, so **every New Game gets a fresh world** (seed from `time.now()`). Override with the **`GNIPA_SEED` env var** (a number → reproducible/shareable worlds; used for debugging a specific layout). Seed **0 reproduces the original fixed world** — `game_state_init`'s default, so the boot title screen and all headless tests stay deterministic. The seed is **not saved** (the world grid is saved wholesale; seed only matters at gen time — minor caveat: a level first generated *after* a reload uses the default seed, not the run's original). Dimensions keep their position-derived seed (unchanged). New-game seed is logged to `action.log`.
 - **Full v1 loop is beatable:** Cave 1→Blueprint A→Sky→Sky Altar ritual→cave-2 unlock→…→Garm→Hell_Key→win. Death/win clear the save.
 - **Progression:** blueprints (pickup = activation, never consumed), Sky Altar rituals (A: 8 Cloud Stone + 4 Plank; B: 12 Cloud Stone + 6 Silver **Bar**; C: 20 Cloud Stone + 10 Gold **Bar**), sequential cave gates.
 - **Mining:** Pickaxe (adjacent, direction-aimed not tile-aimed, 3 chips, free) → wand ladder Mine(2)→Silver(4)→Gold(8)→Runic(12), 5 mana/shot. **Pickaxe horizontal swing mines the body tile nearer the cursor first.**

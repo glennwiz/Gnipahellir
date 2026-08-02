@@ -525,7 +525,7 @@ carve_ellipse :: proc(w: ^World_Grid, cx, cy, rx, ry: int) {
 
 // Cellular automata cave generation for level 1.
 // Writes Void cells into the already-stone cave region.
-gen_cave_1 :: proc(w: ^World_Grid) {
+gen_cave_1 :: proc(w: ^World_Grid, seed: u32 = 0) {
 	// Two working buffers; true = solid stone
 	buf_a: [GRID_W * GRID_H]bool
 	buf_b: [GRID_W * GRID_H]bool
@@ -534,7 +534,7 @@ gen_cave_1 :: proc(w: ^World_Grid) {
 	// Double-hash each axis independently then XOR for better 2D distribution
 	for y in CAVE_TOP ..< CAVE_BOT {
 		for x in CAVE_LEFT ..< CAVE_RIGHT {
-			h := whash(u32(x) * 374761393) ~ whash(u32(y) * 668265263)
+			h := whash(u32(x) * 374761393 + seed) ~ whash(u32(y) * 668265263 + seed)
 			buf_a[grid_idx(x, y)] = (h % 100) < 45
 		}
 	}
@@ -675,7 +675,7 @@ gen_cave_1 :: proc(w: ^World_Grid) {
 
 // ─── World Init ───────────────────────────────────────────────────────────────
 
-world_init :: proc(w: ^World_Grid) {
+world_init :: proc(w: ^World_Grid, seed: u32 = 0) {
 	// Zero entity map
 	for i in 0 ..< GRID_W * GRID_H {
 		w.terrain[i] = .Void
@@ -705,14 +705,14 @@ world_init :: proc(w: ^World_Grid) {
 	}
 
 	// Cave level 1
-	gen_cave_1(w)
+	gen_cave_1(w, seed)
 
 	// Surface decoration: trees and flowers
 	CHUNK :: 12
 	ent_x := GRID_W / 2
 	for chunk in 0 ..< GRID_W / CHUNK {
-		h1 := whash(u32(chunk) * 31337)
-		h2 := whash(u32(chunk) * 99991)
+		h1 := whash(u32(chunk) * 31337 + seed)
+		h2 := whash(u32(chunk) * 99991 + seed)
 
 		if h1 % 10 < 7 {
 			tx := chunk * CHUNK + int(h1 % u32(CHUNK))
@@ -725,9 +725,9 @@ world_init :: proc(w: ^World_Grid) {
 
 	// A handful of wild flowers for the whole surface — the seed source for
 	// flower farming, deliberately scarce (beds are how you scale up).
-	flower_count := 5 + int(whash(424242) % 4)   // 5–8 across the level
+	flower_count := 5 + int(whash(424242 + seed) % 4)   // 5–8 across the level
 	for i in 0 ..< flower_count {
-		hf := whash(u32(i) * 2654435761 + 101)
+		hf := whash(u32(i) * 2654435761 + 101 + seed)
 		fx := int(hf % u32(GRID_W))
 		fy := SURFACE_Y - 1
 		if in_bounds(fx, fy) && get_tile(w, fx, fy) == .Air {

@@ -2,6 +2,8 @@ package game
 
 import rl "vendor:raylib"
 import "core:time"
+import "core:os"
+import "core:strconv"
 
 // ─── World Grid ───────────────────────────────────────────────────────────────
 
@@ -402,6 +404,7 @@ Game_State :: struct {
     elapsed_time: f32,
     frame:        u64,
     delta_time:   f32,
+    world_seed:   u32,    // seed mixed into level generation; set per run, not saved
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
@@ -432,7 +435,21 @@ default_bindings := [Action]rl.KeyboardKey{
     .Blueprint  = .B,
 }
 
-game_state_init :: proc(gs: ^Game_State) {
+// Seed 0 reproduces the original fixed world — used for the boot title screen
+// and headless tests, so both stay deterministic.  A real New Game passes a
+// random (or overridden) seed via new_game_world_seed.
+DEFAULT_WORLD_SEED :: u32(0)
+
+// The world seed for a fresh run: the GNIPA_SEED env var if it holds a number
+// (reproducible / shareable), otherwise wall-clock time (a new world each game).
+new_game_world_seed :: proc() -> u32 {
+    if s := os.get_env("GNIPA_SEED", context.temp_allocator); s != "" {
+        if n, ok := strconv.parse_u64(s); ok do return u32(n)
+    }
+    return u32(time.now()._nsec)
+}
+
+game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     // Preserved across a reset (audio/assets are live GPU/OS handles set up
     // once in main(); stats and key bindings persist across runs). debug_log
     // is NOT preserved here: it's a 256KB buffer, too large to stack-copy,
@@ -463,10 +480,11 @@ game_state_init :: proc(gs: ^Game_State) {
     gs.player.walk_anim_period = 0.15
     gs.zoom               = 1.0
     gs.loot_rng           = u64(time.now()._nsec)  // fresh drop rolls each run
+    gs.world_seed         = world_seed
     gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu
     // No starting tools — the pickaxe waits on the grass (see world_init).
 
-    world_init(&gs.world)
+    world_init(&gs.world, world_seed)
     spawn_level_1_enemies(gs)
     gs.levels.generated[LEVEL_SURFACE] = true  // lives in gs.world
 }

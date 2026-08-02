@@ -105,17 +105,17 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
         gs.enemies = {}
         switch dest {
         case LEVEL_CAVE2:
-            gen_cave_level(&gs.world, 1)
+            gen_cave_level(&gs.world, 1, gs.world_seed)
             spawn_builder(gs, 40)
             spawn_builder(gs, GRID_W - 40)
             spawn_builder(gs, GRID_W / 2)
         case LEVEL_CAVE3:
-            gen_cave_level(&gs.world, 2)
+            gen_cave_level(&gs.world, 2, gs.world_seed)
             spawn_builder(gs, 40)
             spawn_builder(gs, GRID_W - 40)
             spawn_builder(gs, GRID_W / 2)
         case LEVEL_SKY:
-            gen_sky_level(&gs.world)
+            gen_sky_level(&gs.world, gs.world_seed)
         case LEVEL_DIMENSION:
             gen_dimension(&gs.world, gs.dimension.kind, gs.dimension.seed)
         }
@@ -388,7 +388,7 @@ handle_ritual_request :: proc(gs: ^Game_State) {
 CAVE_LVL_TOP :: 3
 CAVE_LVL_BOT :: GRID_H - 2
 
-gen_cave_level :: proc(w: ^World_Grid, depth_tier: int) {
+gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
     w^ = {}
     for i in 0 ..< GRID_W * GRID_H {
         w.entity_map[i] = INVALID_ENTITY
@@ -403,7 +403,7 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int) {
 
     for y in CAVE_LVL_TOP ..< CAVE_LVL_BOT {
         for x in 1 ..< GRID_W - 1 {
-            h := whash(u32(x) * salt_x) ~ whash(u32(y) * salt_y)
+            h := whash(u32(x) * salt_x + seed) ~ whash(u32(y) * salt_y + seed)
             buf_a[grid_idx(x, y)] = (h % 100) < 45
         }
     }
@@ -545,7 +545,7 @@ carve_box :: proc(w: ^World_Grid, x0, y0, x1, y1: int) {
 // (the base platform sits at row 80; see gen_sky_level).
 SKY_FALL_Y :: 85
 
-gen_sky_level :: proc(w: ^World_Grid) {
+gen_sky_level :: proc(w: ^World_Grid, seed: u32 = 0) {
     w^ = {}
     for i in 0 ..< GRID_W * GRID_H {
         w.entity_map[i] = INVALID_ENTITY
@@ -556,7 +556,7 @@ gen_sky_level :: proc(w: ^World_Grid) {
     band_rows := [5]int{28, 40, 52, 64, 76}
     for row, band in band_rows {
         for seg in 0 ..< 8 {
-            h := whash(u32(band) * 1543 + u32(seg) * 7919)
+            h := whash(u32(band) * 1543 + u32(seg) * 7919 + seed)
             if h % 100 < 70 {
                 x0  := seg * 24 + int(h % 10)
                 len := 8 + int((h >> 8) % 8)

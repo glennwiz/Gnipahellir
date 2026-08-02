@@ -880,6 +880,27 @@ mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
 }
 
 @(test)
+world_seed_varies_and_reproduces :: proc(t: ^testing.T) {
+    w0 := new(World_Grid); defer free(w0)
+    w1 := new(World_Grid); defer free(w1)
+    w2 := new(World_Grid); defer free(w2)
+
+    world_init(w0, 0)
+    world_init(w1, 12345)
+    world_init(w2, 12345)
+
+    // A different seed reshapes the world.
+    diff := 0
+    for i in 0 ..< GRID_W * GRID_H do if w0.terrain[i] != w1.terrain[i] do diff += 1
+    testing.expect(t, diff > 100, "a different seed must change the generated world")
+
+    // The same seed reproduces it byte-for-byte.
+    same := true
+    for i in 0 ..< GRID_W * GRID_H do if w1.terrain[i] != w2.terrain[i] { same = false; break }
+    testing.expect(t, same, "the same seed must reproduce the same world")
+}
+
+@(test)
 flowers_forage_into_the_bag :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
