@@ -347,9 +347,24 @@ Audio_State :: struct {
     music_volume:    f32,
     sounds:          [Sound_ID]rl.Sound,
     loaded:          [Sound_ID]bool,
-    ambience:        rl.Music,
+
+    // Cave ambience is synthesized at runtime (a deep drone + random water
+    // drips) and streamed — no clip, so it never loops or seams.  All DSP
+    // state lives here; the generator is fill_ambience in audio.odin.
+    ambience:        rl.AudioStream,
     ambience_loaded: bool,
-    ambience_gain:   f32,
+    ambience_gain:   f32,               // smoothed output gain (depth × music × master)
+    amb_buf:         [AMBIENCE_BUF]i16, // one stream refill of mono 16-bit samples
+    amb_rng:         u64,               // xorshift state for noise + drip scheduling
+    amb_brown:       f32,               // brown-noise integrator (rumble source)
+    amb_lp1, amb_lp2: f32,              // two-pole lowpass state → deep rumble
+    amb_air:         f32,               // one-pole lowpass state → faint wind hiss
+    amb_lfo:         f32,               // slow swell phase (the cave "breathing")
+    amb_depth:       f32,               // smoothed 0..1 depth (drives drip rate + rumble)
+    drip_timer:      f32,               // seconds until the next drip
+    drip_env:        f32,               // current drip amplitude envelope
+    drip_phase:      f32,               // drip sine phase
+    drip_freq:       f32,               // drip pitch (Hz)
 }
 
 // ─── Progression ──────────────────────────────────────────────────────────────
