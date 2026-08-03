@@ -1,7 +1,7 @@
 # Gnipahellir 3 — Playtest Guide
 
 Build & run: `odin run src` (debug) · `odin build src -define:GAME_DEBUG=false` (release)
-Tests: `odin test src` — headless, 96 tests, runs in about a second.
+Tests: `odin test src` — headless, 144 tests, runs in about two seconds.
 
 ## Controls
 
@@ -9,15 +9,16 @@ Tests: `odin test src` — headless, 96 tests, runs in about a second.
 |---|---|
 | A / D (or arrows) | Move |
 | W / ↑ / Space | Jump |
-| Left-click (hold) | Mine: the **Pickaxe** works the tile in the cursor's rough *direction* — no aiming at tiles; point roughly and hold. Forward carves head+feet height (a walkable tunnel), point down/up to dig those ways. 3 chips per tile, free. A crafted **Mine Wand** keeps precise cursor aim at range 2/4/8 (5 mana per shot) |
-| Left-click on enemy | Weapon swing (needs a weapon **equipped**; 2-tile reach, damage = Attack stat, 0.35 s cooldown) |
-| Right-click | Place selected item (8-tile reach, needs solid neighbour). In the open inventory: right-click a bag item to **equip** it (weapon/armor/charm boxes above the bag), right-click an equip box to take it off |
-| TAB | Inventory (click slot or keys 1–8 to select) |
+| Left-click (hold) | An equipped **Pickaxe** in the dedicated **PICK** slot works the tile in the cursor's rough *direction* — no aiming at tiles; point roughly and hold. Forward carves head+feet height, while pointing down/up digs those ways. 3 chips per tile, free. A Mine Wand in **WPN** takes priority on a valid precise target at range 3/4/8 (5/3/5 mana per shot) |
+| Left-click equipment | Use it; ordinary mining never damages placed equipment |
+| Shift + hold left-click | Reclaim adjacent equipment with an equipped pickaxe after 0.8 s. Moving off or releasing cancels; loaded equipment must be emptied first |
+| Left-click on enemy | Sword swing (needs a sword equipped in **WPN**; 2-tile reach, damage = Attack stat, 0.35 s cooldown) |
+| Right-click | Place selected item (8-tile reach, needs solid neighbour). In the open inventory: right-click gear to equip it; the pickaxe goes to **PICK**, while swords/wands swap through **WPN**. Right-click an equip box to take it off |
+| TAB | Inventory (drag stacks to move/merge/swap; Shift-click a stack to split it) |
 | C | Crafting window (rows green = affordable; click to craft) |
-| E | Interact: portal travel / sky-altar ritual / empty a silo / open a station or smelter window in reach |
+| E | Interact: portal travel / sky-altar ritual / collect from machines / open a station or smelter window in reach |
 | ESC | Close **all** open windows; when none are open, pause menu (Resume / Settings / New Game / Save and Quit) |
 | F11 | Borderless fullscreen |
-| Q | Drop the selected stack two tiles ahead (how you ground-feed a smelter) |
 
 Windows (inventory, crafting, smelter, blueprint) are **draggable** — grab
 the header band and move them anywhere. Clicking a smelter (or pressing E
@@ -27,14 +28,25 @@ to lay stacks beside the furnace — one log's embers fire **three** bars
 (2 ore per bar) and the bars land in the **tray**, never on the ground. Click
 the tray (or drag it onto the bag) to take the bars; mining the furnace
 spills a loaded tray. The **Silo** (Forge: 20 Stone Block + 4 Iron Bar) is
-bulk storage that counts past 99: Q-drop stacks beside it and it vacuums
+bulk storage that counts past 99: drag stacks from the bag onto the ground
+beside it and it vacuums
 them into wide slots; E beside it pours everything back out as 99-stacks.
 A smelter standing NEXT to a silo casts bars straight into it, skipping
 the tray — silo one side, ore+wood pile on the other, and bar production
-runs hands-off. A loaded silo is too heavy to mine (or for enemies to
-smash) — empty it first. Death clears the save (roguelike). Save/log files
+runs hands-off. Placed equipment is protected from ordinary mining: click
+it to use it, or hold Shift+left-click for 0.8 s with an equipped pickaxe to reclaim
+it. Loaded machines must be emptied first. Death clears the save (roguelike). Save/log files
 live in the working directory (`gnipahellir_save.dat`,
 `gnipahellir_stats.dat`, `action.log`).
+
+The charm belt has three independent sockets, **CHM1–CHM3**. Right-clicking a
+charm fills the first open socket; right-click an occupied socket to remove it.
+Duplicate charm types are refused, so their bonuses cannot stack. The **Void
+Charm** is forged at the Dvergr Forge from 4 Silver Bars + 2 Gold Bars + 1
+Emerald. While worn in any charm socket, a purple **VOID** box appears
+below the bag. Drag one bag stack into it to hold it as a recoverable undo
+stack; drag it back onto an empty or compatible bag slot to recover it. Dragging
+a second stack into VOID permanently erases the first and retains the new one.
 
 ## Debug tools (debug builds only)
 
@@ -60,15 +72,18 @@ session. This is how the builder-freeze regression was diagnosed.
    - Tier A: 8 Cloud Stone + 4 Plank → unlocks Deep Cave (cave 2)
    - Tier B: 12 Cloud Stone + 6 Silver Ore → unlocks Gnipahellir (cave 3)
    - Tier C: 20 Cloud Stone + 10 Gold Ore → wakes Garm in cave 3
-5. **Deep caves**: 3 builders each. They compete for ore, build dens (raid
+5. **Cave builders**: cave 1 and both deep caves now have 3 builders each. They compete for ore, build dens (raid
    them for the floor stockpile — the owner shrieks and defends), and hunt
    on sight (~12-tile LOS, 1 dmg/0.8 s bite). Craft a **Sword** at a bench
-   (2 Iron Ore + 1 Plank) — builders die in 3 hits and retaliate when struck.
-6. **The miner's ladder**: you start with a Pickaxe (adjacent only, 3 chips
-   per tile). At a bench: Mine Wand (2 Plank + 4 Iron, range 2) → Silver
+   (2 Iron Bars + 1 Plank) — builders die in 3 hits and retaliate when struck.
+6. **The miner's ladder**: find the Pickaxe on the entrance-shaft ledge and
+   right-click it in the bag to equip it into PICK (adjacent only, 3 chips per tile).
+   At a bench: Mine Wand (2 Plank + 4 Iron, range 3) → Silver
    Wand (wand + 6 Silver, range 4) → Gold Wand (silver + 6 Gold, range 8).
-   Each tier consumes the previous wand; wand shots cost 5 mana (pool 100,
-   regen 5/s — burst ~20 shots, then throttled).
+   Each tier consumes the previous wand; shots cost 5/3/5 mana respectively
+   (pool 100, regen 5/s).
+   The Dvergr Forge also makes the **Void Charm** (4 Silver Bars + 2 Gold Bars
+   + 1 Emerald), adding a one-stack recoverable trash buffer to the inventory.
 7. **Garm** (boss gate = ritual C): awakens in the cave-3 arena. Chases,
    bites (2 dmg), throws fireballs (2 dmg, dodge or break line of sight).
    At 20 hp he raises a center column, at 10 he seals the arena, and when
@@ -87,8 +102,8 @@ a gem** next to the base to permanently raise its speed (emerald ×1.5 → jade
 ×2 → diamond ×3 → hel gem ×5; base rate one block per 3 s ≈ 1.5–2 h to strip
 a world). While a miner works, its dimension is **anchored** — it stops
 regenerating, other spawners refuse to open, and time away is applied in a
-catch-up burst when you return. Mine the base back to release the anchor
-(unclaimed haul is lost with the world). When no ore remains the miner
+catch-up burst when you return. Claim the haul, equip the pickaxe, then
+Shift+hold the base to release the anchor. When no ore remains the miner
 sleeps: "the dimension is played out."
 
 ## Known stubs (deliberate, don't file as bugs)

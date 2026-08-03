@@ -13,13 +13,13 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(18)  // v18: Sim_Tile_Data.fuel_count (smelter wood fuel); v17: barrels; v16: recipe unlock tree
+SAVE_VERSION :: i32(21)  // v21: three charm slots; v20: void slot; v19: pickaxe Tool slot
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 3_160_496
+SAVE_DATA_EXPECTED_SIZE :: 3_160_512
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 Save_Data :: struct {

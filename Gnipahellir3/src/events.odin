@@ -124,11 +124,11 @@ process_events :: proc(gs: ^Game_State) {
             case .Sky_Blueprint:
                 notify(gs, "Sky Blueprint found - raise a Sky Altar to open the way above (B)")
             case .Pickaxe:
-                // First pickaxe: teach the core verb.  One-shot so a dropped-
-                // and-repicked pick doesn't nag.
+                // First pickaxe: teach its dedicated slot and the core verb.
+                // One-shot so a dropped-and-repicked pick doesn't nag.
                 if !gs.pickaxe_hint_shown {
                     gs.pickaxe_hint_shown = true
-                    notify(gs, "Pickaxe in hand - hold left-click by a wall to mine")
+                    notify(gs, "Equip the pickaxe in PICK (right-click it), then hold left-click to mine")
                 }
             case .Wood_Log:
                 // First log: teach hand-crafting — the hidden bootstrap verb
@@ -308,6 +308,30 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Quit_Request:
             gs.quit_requested = true
+
+        case .Inventory_Split:
+            inventory_split_stack(gs, int(e.payload.int_val))
+
+        case .Inventory_Move:
+            inventory_move_stack(gs, int(e.payload.int_val), int(e.tile.x))
+
+        case .Void_Store:
+            void_slot_store(gs, int(e.payload.int_val))
+
+        case .Void_Take:
+            void_slot_take(gs, int(e.tile.x))
+
+        case .Structure_Interact:
+            structure_interact(gs, e.tile)
+
+        case .Structure_Reclaim:
+            // Revalidate at completion in case a machine filled on the last tick.
+            if block := structure_reclaim_block(gs, e.tile); block != .None {
+                notify_reclaim_block(gs, block)
+            } else {
+                handle_tile_mined(gs, Event{type = .Tile_Mined, source = PLAYER_ID, tile = e.tile})
+                gs.save_dirty = true
+            }
 
         case .Game_Won:
             if !gs.game_won {

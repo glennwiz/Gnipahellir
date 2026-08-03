@@ -9,6 +9,11 @@ FLY_SPEED      :: f32(14.0)  // debug fly mode
 PLAYER_W :: f32(0.8)   // tile units
 PLAYER_H :: f32(1.8)   // tile units
 
+// Collision climbs a one-tile ledge immediately so the body never overlaps
+// solid terrain.  Rendering trails that move by this easing rate, turning the
+// collision snap into a short visible climb without changing gameplay physics.
+STEP_VISUAL_EASE :: f32(18.0)
+
 // Melee.  Damage comes from the Attack stat (equipped weapon); the sword's
 // bonus in item_stat_bonus is SWORD_DAMAGE, keeping the old pace:
 // builder hp 6 -> three swings.
@@ -30,6 +35,9 @@ update_player :: proc(gs: ^Game_State) {
         return
     }
     if gs.game_won do return   // the win screen is up — the run is over
+
+    gs.player_step_visual_y *= max(f32(0), 1 - STEP_VISUAL_EASE*dt)
+    if gs.player_step_visual_y < 0.001 do gs.player_step_visual_y = 0
 
     inp := &gs.input
 
@@ -61,9 +69,19 @@ update_player :: proc(gs: ^Game_State) {
     // ── AABB movement + collision (gravity applied inside) ───────
     prev_center   := player_tile(p)
     prev_grounded := p.grounded
+    prev_y        := p.pos.y
 
     move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
-        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded, pass_doors = true)
+        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded, pass_doors = true,
+        step_up = true)
+
+    // Keep the sprite at its pre-step height on the collision frame, then let
+    // the render offset ease to zero. Adding the actual rise preserves visual
+    // continuity even when climbing consecutive stair blocks quickly.
+    step_rise := prev_y - p.pos.y
+    if prev_grounded && step_rise > STEP_HEIGHT*0.5 {
+        gs.player_step_visual_y += step_rise
+    }
 
     entity_map_move(&gs.world, PLAYER_ID, prev_center, player_tile(p))
 
@@ -116,8 +134,7 @@ update_player :: proc(gs: ^Game_State) {
     // ── Melee: click near an enemy swings the equipped weapon (a wand in
     //    the weapon slot is a mining tool, not a melee weapon) ─────
     p.attack_timer -= dt
-    if inp.attack && p.attack_timer <= 0 &&
-       p.equipment[.Weapon] != .None && !is_wand(p.equipment[.Weapon]) {
+    if inp.attack && p.attack_timer <= 0 && is_melee_weapon(p.equipment[.Weapon]) {
         if id, found := enemy_near_tile(gs, gs.input.mouse_tile); found {
             if chebyshev(builder_tile(&gs.enemies.data[id]), player_tile(p)) <= MELEE_REACH {
                 p.attack_timer = SWORD_COOLDOWN

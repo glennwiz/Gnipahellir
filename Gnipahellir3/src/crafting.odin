@@ -56,7 +56,7 @@ recipe_table := [?]Recipe{
     { .Tree_Grower,    1, .Bench, {{.Plank, 2},       {.Leaf, 4},       {}} },
     { .Iron_Bucket,    1, .Bench, {{.Iron_Ore, 3},    {},               {}} },
     { .Sky_Altar,      1, .Bench, {{.Stone_Block, 6}, {.Plank, 4},      {}} },
-    { .Sword,          1, .Bench, {{.Iron_Ore, 2},    {.Plank, 1},      {}} },
+    { .Sword,          1, .Bench, {{.Iron_Bar, 2},    {.Plank, 1},      {}} },
     // The station ladder: forge is smithed at the bench from smelted iron,
     // the altar raised at the forge — its cloud stone means reaching the sky
     // first.  Forge-tier and up runs on bars: the smelter casts them from
@@ -72,11 +72,11 @@ recipe_table := [?]Recipe{
     { .Gold_Sword,     1, .Forge, {{.Silver_Sword, 1}, {.Gold_Bar, 3},   {}} },
     // Armor: forge iron pieces, then upgrade each through silver into gold
     // (right-click a piece in the bag to wear it).
-    { .Iron_Helm,       1, .Bench, {{.Iron_Ore, 3}, {.Plank, 1}, {}} },
-    { .Iron_Chestplate, 1, .Bench, {{.Iron_Ore, 5}, {.Plank, 2}, {}} },
-    { .Iron_Gauntlets,  1, .Bench, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
-    { .Iron_Greaves,    1, .Bench, {{.Iron_Ore, 4}, {.Plank, 1}, {}} },
-    { .Iron_Boots,      1, .Bench, {{.Iron_Ore, 2}, {.Plank, 1}, {}} },
+    { .Iron_Helm,       1, .Bench, {{.Iron_Bar, 3}, {.Plank, 1}, {}} },
+    { .Iron_Chestplate, 1, .Bench, {{.Iron_Bar, 5}, {.Plank, 2}, {}} },
+    { .Iron_Gauntlets,  1, .Bench, {{.Iron_Bar, 2}, {.Plank, 1}, {}} },
+    { .Iron_Greaves,    1, .Bench, {{.Iron_Bar, 4}, {.Plank, 1}, {}} },
+    { .Iron_Boots,      1, .Bench, {{.Iron_Bar, 2}, {.Plank, 1}, {}} },
     { .Silver_Helm,       1, .Forge, {{.Iron_Helm, 1},       {.Silver_Bar, 2}, {}} },
     { .Silver_Chestplate, 1, .Forge, {{.Iron_Chestplate, 1}, {.Silver_Bar, 3}, {}} },
     { .Silver_Gauntlets,  1, .Forge, {{.Iron_Gauntlets, 1},  {.Silver_Bar, 2}, {}} },
@@ -125,6 +125,9 @@ recipe_table := [?]Recipe{
     // Storage: a wooden 4×4 barrel — early overflow for a 24-slot bag.
     // Cheap on purpose (2 logs' worth of planks).  (Appended.)
     { .Barrel,           1, .Bench, {{.Plank, 8},          {},                  {}} },
+    // A recoverable trash buffer: the newest offered stack replaces and
+    // permanently erases the previous one. Forged from all three tier-2 riches.
+    { .Void_Charm,       1, .Forge, {{.Silver_Bar, 4},     {.Gold_Bar, 2},      {.Emerald, 1}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -165,6 +168,7 @@ recipe_unlock := #partial [Item]Item{
     .Rune_Altar = .Cloud_Stone, .Dimension_Spawner = .Cloud_Stone,
     .Aether_Charm = .Aether_Crystal,
     .Auto_Miner = .Emerald,
+    .Void_Charm = .Emerald,
     // Runic endgame
     .Mine_Wand_Runic = .Runic_Sky_Ore, .Runic_Sword = .Runic_Sky_Ore,
     .Runic_Helm = .Runic_Sky_Ore, .Runic_Chestplate = .Runic_Sky_Ore, .Runic_Gauntlets = .Runic_Sky_Ore,

@@ -16,7 +16,7 @@ SLOT_PX :: 44
 // fits beside it on the UI canvas): header, then a paperdoll column of
 // equip slots on the left and the bag grid to its right.
 INV_PANEL_W :: 24 + 100 + 16 + INV_COLS * SLOT_PX + 24
-INV_PANEL_H :: 450
+INV_PANEL_H :: 600
 INV_PANEL_X :: (UI_W - INV_PANEL_W) / 2 - 40 // default position (draggable)
 INV_PANEL_Y :: (UI_H - INV_PANEL_H) / 2
 
@@ -35,14 +35,18 @@ CRAFT_PANEL_H  :: 400
 CRAFT_BTN_W    :: CRAFT_DETAIL_W - 16
 CRAFT_BTN_H    :: 34
 
-// Equipment boxes — the paperdoll column (weapon, armor head→feet, charm).
+// Equipment boxes — weapon, dedicated pick, armor head→feet, then a 3-slot charm belt.
 EQUIP_STEP :: 50
 
 @(rodata)
-equip_slot_order := [7]Equip_Slot{.Weapon, .Head, .Chest, .Hands, .Legs, .Feet, .Charm}
+equip_slot_order := [10]Equip_Slot{
+	.Weapon, .Tool, .Head, .Chest, .Hands, .Legs, .Feet, .Charm, .Charm_2, .Charm_3,
+}
 
 @(rodata)
-equip_slot_labels := [7]cstring{"WPN", "HEAD", "CHEST", "HANDS", "LEGS", "FEET", "CHM"}
+equip_slot_labels := [10]cstring{
+	"WPN", "PICK", "HEAD", "CHEST", "HANDS", "LEGS", "FEET", "CHM1", "CHM2", "CHM3",
+}
 
 // Blueprint overlay — centered panel.
 BP_W :: 540
@@ -920,6 +924,20 @@ slot_at_cursor :: proc(gs: ^Game_State) -> int {
 	return r * INV_COLS + c
 }
 
+// The Void Charm opens one recoverable trash box below the bag grid.
+void_slot_rect :: proc(gs: ^Game_State) -> (x, y: i32) {
+	bx, by := inv_bag_origin(gs)
+	return bx, by + INV_ROWS*SLOT_PX + 34
+}
+
+void_slot_hovered :: proc(gs: ^Game_State) -> bool {
+	if !gs.ui.show_inventory || !void_charm_active(&gs.player) do return false
+	x, y := void_slot_rect(gs)
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	return mx >= x && mx < x + SLOT_PX && my >= y && my < y + SLOT_PX
+}
+
 // ─── Drawing ──────────────────────────────────────────────────────────────────
 
 // "[E] CRAFTING BENCH" while a station is in reach — hidden once the window
@@ -1283,14 +1301,22 @@ draw_hover_label :: proc(gs: ^Game_State) {
 	PAD  :: i32(6)
 	text := cstring(raw_data(terrain_table[t].name))
 	tw := rl.MeasureText(text, FONT)
-	pw := tw + PAD*2
+	equipment := is_structure_tile[t]
+	hint := cstring("click/E use  |  SHIFT+HOLD reclaim")
+	hint_w := i32(0)
+	if equipment do hint_w = rl.MeasureText(hint, FONT)
+	pw := max(tw, hint_w) + PAD*2
 	ph := i32(FONT) + PAD*2
+	if equipment do ph += i32(FONT) + 3
 	x := clamp(i32(gs.input.mouse_screen.x) + 14, 0, i32(UI_W) - pw)
 	y := clamp(i32(gs.input.mouse_screen.y) + 18, 0, i32(UI_H) - ph)
 
 	rl.DrawRectangle(x, y, pw, ph, NORSE_PANEL)
 	rl.DrawRectangleLines(x, y, pw, ph, NORSE_BORDER)
 	rl.DrawText(text, x + PAD, y + PAD, FONT, rl.Color{255, 240, 180, 255})
+	if equipment {
+		rl.DrawText(hint, x + PAD, y + PAD + i32(FONT) + 3, FONT, rl.Color{225, 150, 70, 255})
+	}
 }
 
 draw_hud :: proc(gs: ^Game_State) {
@@ -1449,8 +1475,35 @@ draw_inventory :: proc(gs: ^Game_State) {
 		}
 	}
 
+	// Void Charm buffer: the displayed stack is still recoverable. Dropping a
+	// new bag stack here replaces and permanently deletes the one shown.
+	if void_charm_active(&gs.player) {
+		vx, vy := void_slot_rect(gs)
+		hovered := void_slot_hovered(gs)
+		pulse := u8(95 + 35*(0.5 + 0.5*math.sin(gs.elapsed_time*3)))
+		rl.DrawRectangle(vx + 2, vy + 2, SLOT_PX - 4, SLOT_PX - 4, rl.Color{18, 8, 28, 255})
+		rl.DrawRectangleLinesEx(
+			{f32(vx) + 1, f32(vy) + 1, SLOT_PX - 2, SLOT_PX - 2},
+			hovered ? 2 : 1,
+			hovered ? rl.Color{190, 105, 245, 255} : rl.Color{105, 55, 150, pulse},
+		)
+		rl.DrawText("VOID", vx + SLOT_PX + 10, vy + 5, 12, rl.Color{188, 120, 235, 255})
+		rl.DrawText("replace = erase", vx + SLOT_PX + 10, vy + 23, 10, text_dim)
+
+		s := gs.player.void_slot
+		if s.item != .None && s.count > 0 {
+			draw_item_icon(s.item, vx + 10, vy + 8, 24)
+			cnt_buf: [8]u8
+			fmt.bprintf(cnt_buf[:7], "%d", s.count)
+			rl.DrawText(cstring(raw_data(cnt_buf[:])), vx + 6, vy + SLOT_PX - 14, 10, rl.WHITE)
+		}
+	}
+
 	// Footer: name of whatever is under the cursor (bag item or worn gear).
 	footer_y := py + INV_PANEL_H - 28
+	hint := cstring("[SHIFT+CLICK] split  |  drag to stack")
+	hint_w := rl.MeasureText(hint, 10)
+	rl.DrawText(hint, px + INV_PANEL_W - 24 - hint_w, footer_y, 10, text_dim)
 	if hov := slot_at_cursor(gs); hov >= 0 {
 		s := inv.slots[hov]
 		if s.item != .None && s.count > 0 {
@@ -1465,6 +1518,10 @@ draw_inventory :: proc(gs: ^Game_State) {
 	} else if es := equip_slot_at_cursor(gs); es != .None {
 		if it := gs.player.equipment[es]; it != .None {
 			rl.DrawText(cstring(raw_data(item_table[it].name)), bx, footer_y, 12, NORSE_GOLD_HOT)
+		}
+	} else if void_slot_hovered(gs) {
+		if it := gs.player.void_slot.item; it != .None {
+			rl.DrawText(cstring(raw_data(item_table[it].name)), bx, footer_y, 12, rl.Color{188, 120, 235, 255})
 		}
 	}
 }

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(odin build *)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(Set-Location \"C:\\\\dev\\\\github\\\\Gnipahellir_project\\\\Gnipahellir3\"; [System.IO.File]::WriteAllBytes\\(\"$\\(Get-Location\\)\\\\gnipahellir_save.dat\", \\(New-Object byte[] 1000\\)\\); $p = Start-Process -FilePath \".\\\\game_test.exe\" -WorkingDirectory \\(Get-Location\\) -PassThru; Start-Sleep -Seconds 4; if \\($p.HasExited\\) { \"CRASHED exit=$\\($p.ExitCode\\)\" } else { $null = $p.CloseMainWindow\\(\\); $p.WaitForExit\\(5000\\) | Out-Null; \"Survived corrupt save \\(exit $\\($p.ExitCode\\)\\)\" }; $first = \\(Get-Content enemy_action.log -TotalCount 1\\); \"first log line: $first\")",
+      "PowerShell(Set-Location \"C:\\\\dev\\\\github\\\\Gnipahellir_project\\\\Gnipahellir3\"; $p = Start-Process -FilePath \".\\\\game_test.exe\" -WorkingDirectory \\(Get-Location\\) -PassThru -RedirectStandardOutput rl_out.txt -RedirectStandardError rl_err.txt; Start-Sleep -Seconds 6; $alive = -not $p.HasExited; \"alive after 6s: $alive\"; if \\($alive\\) { $null = $p.CloseMainWindow\\(\\); $p.WaitForExit\\(5000\\) | Out-Null }; \"exited: $\\($p.HasExited\\) code: $\\($p.ExitCode\\)\"; \"out size: $\\(\\(Get-Item rl_out.txt -EA SilentlyContinue\\).Length\\)  err size: $\\(\\(Get-Item rl_err.txt -EA SilentlyContinue\\).Length\\)\")",
+      "PowerShell(odin test *)",
+      "Read(//c/c/dev/github/Gnipahellir_project/Gnipahellir3/**)"
+    ]
+  }
+}

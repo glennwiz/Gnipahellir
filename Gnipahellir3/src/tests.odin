@@ -15,9 +15,9 @@ test_state :: proc() -> ^Game_State {
     gs := new(Game_State)
     game_state_init(gs)
     gs.delta_time = 1.0 / 60.0
-    // Production spawns the pickaxe on the grass to be picked up; tests want a
-    // ready-to-mine player, so hand it over directly (slot 0).
-    inventory_insert(&gs.player.inventory, .Pickaxe, 1)
+    // Production spawns the pickaxe on the grass to be picked up and equipped;
+    // most tests want a ready-to-mine player, so put it in its dedicated slot.
+    gs.player.equipment[.Tool] = .Pickaxe
     return gs
 }
 
@@ -42,6 +42,8 @@ starter_pickaxe_waits_on_the_shaft_ledge :: proc(t: ^testing.T) {
     gs.player.pos = {f32(pick_x), f32(pick_y + 1) - PLAYER_H}
     player_pickup(gs)
     testing.expect(t, inventory_count(&gs.player.inventory, .Pickaxe) >= 1, "pickaxe not collected")
+    testing.expect_value(t, item_equip_slot[.Pickaxe], Equip_Slot.Tool)
+    testing.expect_value(t, gs.player.equipment[.Tool], Item.None)
     testing.expect_value(t, gs.world.items[idx], Item.None)
 }
 
@@ -201,12 +203,90 @@ blueprint_overlay_tracks_the_active_objective :: proc(t: ^testing.T) {
 
 @(test)
 placed_structures_can_be_reclaimed :: proc(t: ^testing.T) {
-    // Anything you place, you can chip back up — it drops its own item.
+    // Anything you place can return through the deliberate reclaim hold.
     for tile in ([]Tile_Type{.Sky_Altar, .Crafting_Bench, .Tree_Grower, .Smelter}) {
         b := terrain_table[tile]
         testing.expect(t, .Mineable in b.flags, "placed structure must be mineable to reclaim")
         testing.expect(t, b.drop_item != .None, "placed structure must drop its item when mined")
     }
+}
+
+@(test)
+ordinary_mining_never_breaks_equipment :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    target := [2]i32{31, i32(SURFACE_Y) - 1}
+    set_tile(&gs.world, int(target.x), int(target.y), .Smelter)
+    gs.input.mine = true
+    gs.input.mouse_tile = target
+    gs.input.mouse_world = {(f32(target.x) + 0.5)*CELL_SIZE, (f32(target.y) + 0.5)*CELL_SIZE}
+
+    for _ in 0 ..< 12 {
+        gs.player.mine_timer = 0
+        player_mine(gs, 1.0/60.0)
+        process_events(gs)
+    }
+    testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Smelter)
+}
+
+@(test)
+equipment_reclaim_requires_one_continuous_hold :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    target := [2]i32{31, i32(SURFACE_Y) - 1}
+    set_tile(&gs.world, int(target.x), int(target.y), .Smelter)
+    gs.input.mouse_tile = target
+    gs.input.reclaim = true
+    gs.delta_time = 0.1
+
+    for _ in 0 ..< 4 do update_reclaim(gs)
+    gs.input.reclaim = false
+    update_reclaim(gs) // releasing cancels all accumulated progress
+    testing.expect(t, !gs.reclaim.active)
+    testing.expect_value(t, gs.reclaim.timer, f32(0))
+
+    gs.input.reclaim = true
+    for _ in 0 ..< 7 do update_reclaim(gs)
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Smelter)
+
+    update_reclaim(gs)
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Air)
+    testing.expect_value(t, gs.world.items[grid_idx(int(target.x), int(target.y))], Item.Smelter)
+}
+
+@(test)
+loaded_auto_miner_refuses_reclaim_and_click_collects :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.level_index = LEVEL_DIMENSION
+    gs.player.pos = {30, 50}
+    target := [2]i32{31, 51}
+    set_tile(&gs.world, int(target.x), int(target.y), .Auto_Miner)
+    gs.dimension.miner.active = true
+    gs.dimension.miner.base = target
+    gs.dimension.miner.head = target
+    gs.dimension.miner.haul[0] = {.Iron_Ore, 12}
+    gs.input.mouse_tile = target
+    gs.input.reclaim = true
+    gs.delta_time = 0.1
+
+    for _ in 0 ..< 12 do update_reclaim(gs)
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Auto_Miner)
+    testing.expect_value(t, miner_haul_total(&gs.dimension.miner), u32(12))
+    testing.expect(t, gs.reclaim.blocked, "loaded miner should block before progress starts")
+
+    // Normal use of the exact machine collects its haul instead of damaging it.
+    structure_interact(gs, target)
+    testing.expect_value(t, miner_haul_total(&gs.dimension.miner), u32(0))
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 12)
 }
 
 @(test)
@@ -437,7 +517,7 @@ placement_validates_and_places :: proc(t: ^testing.T) {
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
     set_tile(&gs.world, 32, SURFACE_Y - 1, .Air)  // clear any gen decoration
     inventory_insert(&gs.player.inventory, .Stone_Block, 5)
-    gs.player.inventory.selected = 1   // slot 0 holds the starting Pickaxe
+    gs.player.inventory.selected = 0
 
     // Valid: air tile on top of grass, within reach
     handle_place_request(gs, Event{tile = {32, i32(SURFACE_Y) - 1}})
@@ -479,6 +559,202 @@ crafting_hand_and_bench :: proc(t: ^testing.T) {
     handle_craft_request(gs, Event{payload = {int_val = 2}})
     testing.expect_value(t, inventory_count(inv, .Smelter), 1)
     testing.expect_value(t, inventory_count(inv, .Stone_Block), 0)
+}
+
+@(test)
+inventory_stack_splits_without_losing_items :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    inv := &gs.player.inventory
+
+    inventory_insert(inv, .Stone_Block, 5)
+    eq_push(&gs.events, Event{type = .Inventory_Split, payload = {int_val = 0}})
+    process_events(gs)
+
+    testing.expect_value(t, inv.slots[0].count, 2)
+    testing.expect_value(t, inv.slots[1].item, Item.Stone_Block)
+    testing.expect_value(t, inv.slots[1].count, 3)
+    testing.expect_value(t, inventory_count(inv, .Stone_Block), 5)
+    testing.expect(t, gs.save_dirty, "splitting a stack should autosave")
+
+    // A full bag refuses the split and preserves the complete stack.
+    for &s in inv.slots do s = {item = .Stone_Block, count = MAX_STACK}
+    inv.slots[0].count = 5
+    gs.notify.count = 0
+    testing.expect(t, !inventory_split_stack(gs, 0))
+    testing.expect_value(t, inv.slots[0].count, 5)
+    testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
+inventory_drag_moves_merges_and_swaps :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    inv := &gs.player.inventory
+
+    // Move a stack into an empty slot; selection follows it.
+    inv.slots[1] = {item = .Stone_Block, count = 30}
+    inv.selected = 1
+    testing.expect(t, inventory_move_stack(gs, 1, 4))
+    testing.expect_value(t, inv.slots[1].item, Item.None)
+    testing.expect_value(t, inv.slots[4].count, 30)
+    testing.expect_value(t, inv.selected, 4)
+
+    // Merge into a matching stack, capped at 99 with the remainder preserved.
+    inv.slots[2] = {item = .Stone_Block, count = 80}
+    testing.expect(t, inventory_move_stack(gs, 4, 2))
+    testing.expect_value(t, inv.slots[2].count, MAX_STACK)
+    testing.expect_value(t, inv.slots[4].count, 11)
+    testing.expect_value(t, inventory_count(inv, .Stone_Block), 110)
+
+    // Unlike stacks exchange slots without losing either one.
+    inv.slots[3] = {item = .Wood_Log, count = 7}
+    testing.expect(t, inventory_move_stack(gs, 3, 4))
+    testing.expect_value(t, inv.slots[3].item, Item.Stone_Block)
+    testing.expect_value(t, inv.slots[3].count, 11)
+    testing.expect_value(t, inv.slots[4].item, Item.Wood_Log)
+    testing.expect_value(t, inv.slots[4].count, 7)
+}
+
+@(test)
+void_charm_recipe_uses_tier_two_riches :: proc(t: ^testing.T) {
+    found := false
+    for r in recipe_table {
+        if r.result != .Void_Charm do continue
+        found = true
+        testing.expect_value(t, r.station, Station.Forge)
+        testing.expect_value(t, r.ingredients[0], Ingredient{.Silver_Bar, 4})
+        testing.expect_value(t, r.ingredients[1], Ingredient{.Gold_Bar, 2})
+        testing.expect_value(t, r.ingredients[2], Ingredient{.Emerald, 1})
+    }
+    testing.expect(t, found, "Void Charm needs a Dvergr Forge recipe")
+    testing.expect_value(t, item_equip_slot[.Void_Charm], Equip_Slot.Charm)
+}
+
+@(test)
+void_slot_replaces_then_recovers_one_stack :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    inv := &gs.player.inventory
+
+    inventory_insert(inv, .Void_Charm, 1)
+    player_equip(gs, 0)
+    testing.expect(t, void_charm_active(&gs.player))
+
+    inventory_insert(inv, .Stone_Block, 12)
+    testing.expect(t, void_slot_store(gs, 0))
+    testing.expect_value(t, gs.player.void_slot, Inventory_Slot{.Stone_Block, 12})
+    testing.expect_value(t, inventory_count(inv, .Stone_Block), 0)
+
+    // A second offered stack is retained; the old stone stack is truly gone.
+    inventory_insert(inv, .Wood_Log, 7)
+    testing.expect(t, void_slot_store(gs, 0))
+    testing.expect_value(t, gs.player.void_slot, Inventory_Slot{.Wood_Log, 7})
+    testing.expect_value(t, inventory_count(inv, .Stone_Block), 0)
+    testing.expect_value(t, gs.notify.count, 1)
+
+    // Until replaced, the displayed stack is an undo buffer and can return.
+    testing.expect(t, void_slot_take(gs, 5))
+    testing.expect_value(t, inv.slots[5], Inventory_Slot{.Wood_Log, 7})
+    testing.expect_value(t, gs.player.void_slot, Inventory_Slot{})
+}
+
+@(test)
+void_slot_refuses_unsafe_or_unpowered_moves :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    inv := &gs.player.inventory
+
+    inventory_insert(inv, .Stone_Block, 8)
+    testing.expect(t, !void_slot_store(gs, 0), "the box stays locked without its charm")
+    testing.expect_value(t, inventory_count(inv, .Stone_Block), 8)
+
+    inventory_insert(inv, .Void_Charm, 1)
+    player_equip(gs, 1)
+    testing.expect(t, void_slot_store(gs, 0))
+    inv.slots[3] = {.Wood_Log, 1}
+    testing.expect(t, !void_slot_take(gs, 3), "recovery must not overwrite a bag stack")
+    testing.expect_value(t, gs.player.void_slot, Inventory_Slot{.Stone_Block, 8})
+    testing.expect_value(t, inv.slots[3], Inventory_Slot{.Wood_Log, 1})
+}
+
+@(test)
+charm_belt_fills_open_slots_and_rejects_duplicates :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    p := &gs.player
+
+    inventory_insert(&p.inventory, .Aether_Charm, 2)
+    player_equip(gs, 0)
+    testing.expect_value(t, p.equipment[.Charm], Item.Aether_Charm)
+    testing.expect_value(t, p.equipment[.Charm_2], Item.None)
+    testing.expect_value(t, inventory_count(&p.inventory, .Aether_Charm), 1)
+
+    // A second copy is refused in place, so its speed bonus cannot stack.
+    player_equip(gs, 0)
+    testing.expect_value(t, inventory_count(&p.inventory, .Aether_Charm), 1)
+    testing.expect_value(t, player_stat(p, .Speed), player_base_stats[.Speed] + 3)
+    testing.expect_value(t, gs.notify.count, 1)
+
+    inventory_insert(&p.inventory, .Void_Charm, 1)
+    void_slot := -1
+    for s, i in p.inventory.slots do if s.item == .Void_Charm { void_slot = i; break }
+    player_equip(gs, void_slot)
+    testing.expect_value(t, p.equipment[.Charm], Item.Aether_Charm)
+    testing.expect_value(t, p.equipment[.Charm_2], Item.Void_Charm)
+    testing.expect_value(t, p.equipment[.Charm_3], Item.None)
+    testing.expect(t, void_charm_active(p), "Void Charm works from any belt socket")
+
+    // Every socket unequips independently; removing CHM1 leaves CHM2 active.
+    player_unequip(gs, .Charm)
+    testing.expect_value(t, p.equipment[.Charm], Item.None)
+    testing.expect_value(t, p.equipment[.Charm_2], Item.Void_Charm)
+    testing.expect(t, void_charm_active(p))
+}
+
+@(test)
+sword_requires_iron_bars :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Plank, 1)
+    inventory_insert(inv, .Iron_Ore, 2)
+
+    // Raw ore cannot be shaped into a sword; it must pass through the smelter.
+    handle_craft_request(gs, Event{payload = {int_val = 6}})
+    testing.expect_value(t, inventory_count(inv, .Sword), 0)
+    testing.expect_value(t, inventory_count(inv, .Iron_Ore), 2)
+
+    inventory_insert(inv, .Iron_Bar, 2)
+    handle_craft_request(gs, Event{payload = {int_val = 6}})
+    testing.expect_value(t, inventory_count(inv, .Sword), 1)
+    testing.expect_value(t, inventory_count(inv, .Iron_Bar), 0)
+    testing.expect_value(t, inventory_count(inv, .Plank), 0)
+}
+
+@(test)
+iron_gear_requires_bars_not_ore :: proc(t: ^testing.T) {
+    gear := [5]Item{.Iron_Helm, .Iron_Chestplate, .Iron_Gauntlets, .Iron_Greaves, .Iron_Boots}
+    bar_cost := [5]int{3, 5, 2, 4, 2}
+
+    for it, i in gear {
+        found := false
+        for r in recipe_table {
+            if r.result != it do continue
+            found = true
+            testing.expect_value(t, r.ingredients[0].item, Item.Iron_Bar)
+            testing.expect_value(t, r.ingredients[0].count, bar_cost[i])
+            for ing in r.ingredients {
+                testing.expect(t, ing.item != .Iron_Ore,
+                    "iron gear recipes must use smelted bars, never raw ore")
+            }
+            break
+        }
+        testing.expect(t, found, "every iron gear piece needs a recipe")
+    }
 }
 
 @(test)
@@ -732,7 +1008,7 @@ building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
     for dx in -2 ..= 2 { set_tile(&gs.world, ax + dx, ay + 2, .Stone) }
     for dx in -1 ..= 1 { set_tile(&gs.world, ax + dx, ay + 1, .Wood) }
     inventory_insert(&gs.player.inventory, .Sky_Altar, 1)
-    gs.player.inventory.selected = 1  // slot 0 is the test pickaxe; Sky_Altar landed in slot 1
+    gs.player.inventory.selected = 0
     gs.player.pos = {f32(ax + 3), f32(ay)}  // beside the altar, within reach, not on it
     handle_place_request(gs, Event{tile = {i32(ax), i32(ay)}})
 
@@ -908,14 +1184,77 @@ pick_chips_by_rough_direction :: proc(t: ^testing.T) {
 }
 
 @(test)
+pickaxe_mines_only_while_equipped :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    target := [2]i32{31, i32(SURFACE_Y)}
+    set_tile(&gs.world, int(target.x), int(target.y), .Stone)
+
+    // A bagged pick is inert, like a bagged sword or wand.
+    gs.player.equipment[.Tool] = .None
+    inventory_insert(&gs.player.inventory, .Pickaxe, 1)
+    for _ in 0 ..< PICK_HITS + 2 do mine_swing(gs, target)
+    testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Stone)
+
+    // Equipping it into the dedicated pick slot enables ordinary mining.
+    player_equip(gs, 0)
+    testing.expect_value(t, gs.player.equipment[.Tool], Item.Pickaxe)
+    for _ in 0 ..< PICK_HITS do mine_swing(gs, target)
+    testing.expect(t, get_tile(&gs.world, int(target.x), int(target.y)) != .Stone,
+        "the equipped pickaxe should mine")
+}
+
+@(test)
+pickaxe_slot_is_independent_from_weapons :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    inventory_insert(&gs.player.inventory, .Sword, 1)
+    player_equip(gs, 0)
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Sword)
+    testing.expect_value(t, gs.player.equipment[.Tool], Item.Pickaxe)
+
+    inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
+    player_equip(gs, 0)
+    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand)
+    testing.expect_value(t, gs.player.equipment[.Tool], Item.Pickaxe)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Sword), 1)
+}
+
+@(test)
+wand_priority_keeps_pickaxe_fallback :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+
+    inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
+    player_equip(gs, 0)
+
+    // A valid adjacent target belongs to the wand even though PICK is filled.
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Stone)
+    mine_swing(gs, {31, i32(SURFACE_Y - 1)})
+    testing.expect(t, gs.mining.active, "a valid wand target should take priority")
+    testing.expect_value(t, gs.player.chip_hits, u8(0))
+
+    // Point beyond wand reach: no spell fires, but the same direction still
+    // lets the independently equipped pick work the adjacent tile.
+    gs.mining = {}
+    gs.player.chip_tile = {-1, -1}
+    for _ in 0 ..< PICK_HITS do mine_swing(gs, {35, i32(SURFACE_Y - 1)})
+    testing.expect(t, !gs.mining.active)
+    testing.expect(t, get_tile(&gs.world, 31, SURFACE_Y - 1) != .Stone,
+        "the pickaxe should remain the close-range fallback")
+}
+
+@(test)
 bare_hands_fell_trees_slower :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // Drop the starter pickaxe: bare hands only.
-    inv := &gs.player.inventory
-    for &s in inv.slots do if s.item == .Pickaxe do s = {}
-    testing.expect_value(t, inventory_count(inv, .Pickaxe), 0)
+    // Put the starter pickaxe away: bare hands only.
+    gs.player.equipment[.Tool] = .None
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
 
@@ -1160,8 +1499,8 @@ wand_mines_at_range_for_mana :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y), Tile_Type.Void)
     testing.expect(t, !gs.mining.active, "the shot is spent")
 
-    // Beyond the basic wand's reach (4 > 3): nothing fires (the swing falls
-    // back to the pick, which finds only the cleared air beside the body)
+    // Beyond the basic wand's reach (4 > 3): nothing fires at range. The pick
+    // remains equipped in its own slot, but finds only cleared air nearby.
     set_tile(&gs.world, 29, SURFACE_Y - 2, .Air)
     set_tile(&gs.world, 29, SURFACE_Y - 1, .Air)
     mana_before := gs.player.mana
@@ -1200,6 +1539,46 @@ wand_does_not_strike_structures :: proc(t: ^testing.T) {
     // Sanity: it still fires at ordinary mineable terrain at the same range.
     mine_swing(gs, {28, i32(SURFACE_Y)})
     testing.expect(t, gs.mining.active, "the wand still mines plain terrain")
+}
+
+@(test)
+wand_target_highlight_matches_mining_rules :: proc(t: ^testing.T) {
+	gs := test_state()
+	defer free(gs)
+
+	gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+	gs.player.equipment[.Weapon] = .Mine_Wand
+
+	set_tile(&gs.world, 33, SURFACE_Y, .Stone)
+	wand, cost, blast, ok := wand_target(gs, {33, SURFACE_Y})
+	testing.expect_value(t, wand, Item.Mine_Wand)
+	testing.expect_value(t, cost, WAND_MANA_COST)
+	testing.expect(t, !blast)
+	testing.expect(t, ok, "a mineable tile in wand range should highlight")
+
+	set_tile(&gs.world, 33, SURFACE_Y, .Smelter)
+	_, _, _, structure_ok := wand_target(gs, {33, SURFACE_Y})
+	testing.expect(t, !structure_ok, "a protected structure must not highlight")
+
+	set_tile(&gs.world, 34, SURFACE_Y, .Stone)
+	_, _, _, distant_ok := wand_target(gs, {34, SURFACE_Y})
+	testing.expect(t, !distant_ok, "a tile beyond wand range must not highlight")
+}
+
+@(test)
+silver_wand_uses_less_mana :: proc(t: ^testing.T) {
+	gs := test_state()
+	defer free(gs)
+
+	gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+	set_tile(&gs.world, 34, SURFACE_Y, .Stone)
+
+	gs.player.equipment[.Weapon] = .Mine_Wand_Silver
+	_, silver_cost, _, silver_ok := wand_target(gs, {34, SURFACE_Y})
+	testing.expect(t, silver_ok)
+	testing.expect_value(t, silver_cost, f32(3))
+	testing.expect(t, silver_cost < WAND_MANA_COST,
+		"the silver upgrade should sustain mining longer than the basic wand")
 }
 
 @(test)
@@ -1549,6 +1928,82 @@ body_blocked_by_wall :: proc(t: ^testing.T) {
 }
 
 @(test)
+body_steps_up_one_block :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Clear a lane on the surface, then a one-tile-high raised ledge the body
+    // must climb onto and keep walking along (long enough it can't walk off).
+    for x in 30 ..= 47 do for y in SURFACE_Y - 4 ..< SURFACE_Y do set_tile(&gs.world, x, y, .Air)
+    for x in 33 ..= 47 do set_tile(&gs.world, x, SURFACE_Y - 1, .Stone)
+
+    pos      := [2]f32{30, f32(SURFACE_Y) - PLAYER_H}
+    vel      := [2]f32{}
+    grounded := true
+    for _ in 0 ..< 90 {
+        vel.x = MOVE_SPEED
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &grounded, step_up = true)
+    }
+    testing.expect(t, pos.x + PLAYER_W > 34.0, "body should step onto and past the 1-high block")
+    testing.expect(t, grounded, "body stays grounded on top of the step")
+    testing.expect(t, abs(pos.y + PLAYER_H - f32(SURFACE_Y - 1)) < 0.05, "feet rest on the step top")
+}
+
+@(test)
+player_step_up_eases_the_sprite :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    for x in 30 ..= 40 do for y in SURFACE_Y - 4 ..< SURFACE_Y do set_tile(&gs.world, x, y, .Air)
+    for x in 33 ..= 40 do set_tile(&gs.world, x, SURFACE_Y - 1, .Stone)
+
+    gs.player.pos      = {30, f32(SURFACE_Y) - PLAYER_H}
+    gs.player.grounded = true
+    gs.input.move_right = true
+    gs.delta_time       = 1.0/60.0
+
+    for _ in 0 ..< 30 {
+        update_player(gs)
+        if gs.player_step_visual_y > 0 do break
+    }
+
+    testing.expect(t, gs.player_step_visual_y > 0.9,
+        "the sprite should remain near its pre-step height on the collision frame")
+    first_offset := gs.player_step_visual_y
+
+    gs.input.move_right = false
+    update_player(gs)
+    testing.expect(t, gs.player_step_visual_y > 0 && gs.player_step_visual_y < first_offset,
+        "the visual step offset should ease upward instead of popping")
+
+    for _ in 0 ..< 30 do update_player(gs)
+    testing.expect_value(t, gs.player_step_visual_y, f32(0))
+}
+
+@(test)
+body_does_not_step_two_blocks :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A 2-high wall is too tall to auto-step: the body stops against it even
+    // with step_up on.
+    for x in 30 ..= 36 do for y in SURFACE_Y - 4 ..< SURFACE_Y do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, 33, SURFACE_Y - 1, .Stone)
+    set_tile(&gs.world, 33, SURFACE_Y - 2, .Stone)
+
+    pos      := [2]f32{30, f32(SURFACE_Y) - PLAYER_H}
+    vel      := [2]f32{}
+    grounded := true
+    for _ in 0 ..< 90 {
+        vel.x = MOVE_SPEED
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &grounded, step_up = true)
+    }
+    testing.expect(t, pos.x + PLAYER_W <= 33.0, "a 2-high wall stops the body")
+}
+
+@(test)
 fast_fall_does_not_tunnel :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -1686,7 +2141,7 @@ builders_do_not_freeze :: proc(t: ^testing.T) {
         }
     }
 
-    // With movement working, both level-0 builders finish their dens well
+    // With movement working, all three level-0 builders finish their dens well
     // within the minute (deterministic world gen + fixed dt).
     for i in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[i] do continue
@@ -1826,7 +2281,7 @@ sword_melee_kills_builders :: proc(t: ^testing.T) {
 
     // First swing wounds and enrages (sword must be equipped, not just bagged)
     inventory_insert(&gs.player.inventory, .Sword, 1)
-    player_equip(gs, 1)   // test_state put the pickaxe in slot 0
+    player_equip(gs, 0)
     testing.expect_value(t, gs.player.equipment[.Weapon], Item.Sword)
     gs.player.attack_timer = 0
     update_player(gs)
@@ -1867,7 +2322,7 @@ sword_respects_reach :: proc(t: ^testing.T) {
     entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
 
     inventory_insert(&gs.player.inventory, .Sword, 1)
-    player_equip(gs, 1)   // test_state put the pickaxe in slot 0
+    player_equip(gs, 0)
     gs.input.attack     = true
     gs.input.mouse_tile = builder_tile(e)
     update_player(gs)
@@ -1883,14 +2338,14 @@ equip_swaps_through_events_and_never_destroys_gear :: proc(t: ^testing.T) {
 
     // Equip via the event route — the same path input.odin pushes.
     inventory_insert(&p.inventory, .Sword, 1)
-    eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = 1}})
+    eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = 0}})
     process_events(gs)
     testing.expect_value(t, p.equipment[.Weapon], Item.Sword)
     testing.expect_value(t, inventory_count(&p.inventory, .Sword), 0)
 
     // Swapping in a silver sword hands the old sword back to the bag.
     inventory_insert(&p.inventory, .Silver_Sword, 1)
-    player_equip(gs, 1)
+    player_equip(gs, 0)
     testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
     testing.expect_value(t, inventory_count(&p.inventory, .Sword), 1)
 
@@ -1913,7 +2368,7 @@ armor_blunts_enemy_blows_but_not_the_world :: proc(t: ^testing.T) {
     defer free(gs)
 
     inventory_insert(&gs.player.inventory, .Iron_Chestplate, 1)
-    player_equip(gs, 1)   // test_state put the pickaxe in slot 0
+    player_equip(gs, 0)
     testing.expect_value(t, gs.player.equipment[.Chest], Item.Iron_Chestplate)
     testing.expect_value(t, player_stat(&gs.player, .Defense), i32(1))
 
@@ -2428,7 +2883,7 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // The real generated surface world with its two cave-1 builders.  Watch
+    // The real generated surface world with its three cave-1 builders. Watch
     // for the livelock signature from the playtest logs: one tile alternately
     // carved and placed in RAPID succession (~8 s apart, 54 cycles at the map
     // edge).  Slow flips are commute churn (mine through a door tile on the
@@ -2614,7 +3069,8 @@ entity_map_tracks_enemies :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // Level 0 spawns 2 builders; each must be registered at its center tile
+    // Level 0 spawns three builders; each must be registered at its center tile.
+    testing.expect_value(t, gs.enemies.count, 3)
     registered := 0
     for i in 0 ..< GRID_W * GRID_H {
         id := gs.world.entity_map[i]
@@ -2668,7 +3124,7 @@ dead_player_cannot_act :: proc(t: ^testing.T) {
     // Place rejected (target itself is valid)
     set_tile(&gs.world, 32, SURFACE_Y - 1, .Air)
     inventory_insert(inv, .Stone_Block, 5)
-    inv.selected = 1   // slot 0 holds the starting Pickaxe
+    inv.selected = 0
     handle_place_request(gs, Event{tile = {32, i32(SURFACE_Y) - 1}})
     testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y - 1), Tile_Type.Air)
     testing.expect_value(t, inventory_count(inv, .Stone_Block), 5)

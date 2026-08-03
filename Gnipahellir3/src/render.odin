@@ -7,6 +7,7 @@ import "core:math"
 // ─── Draw Entry Point ─────────────────────────────────────────────────────────
 
 draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
+    profile_scope("draw_game")
     // The game renders at the fixed virtual resolution...
     rl.BeginTextureMode(target)
     rl.ClearBackground(rl.BLACK)
@@ -22,8 +23,10 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_mining_cracks(gs)
     draw_portals(gs)
     draw_placement_ghost(gs)
+    draw_wand_target(gs)
+    draw_reclaim_target(gs)
     draw_station_focus(gs)
-    draw_player(&gs.player, gs.player_form)
+    draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
     draw_enemies(&gs.enemies)
     draw_projectiles(&gs.projectiles)
     draw_particles(&gs.particles)
@@ -89,6 +92,7 @@ game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
 // teleport) so the view doesn't slide across the cut.
 camera_snap_y :: proc(gs: ^Game_State) {
     gs.cam_y = (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
+    gs.player_step_visual_y = 0
 }
 
 // Advance the Y anchor with a vertical deadzone: it only moves when the player
@@ -757,6 +761,65 @@ draw_mining_cracks :: proc(gs: ^Game_State) {
     }
 }
 
+// A quiet targeting promise around the block an equipped wand will strike.
+// The motes are derived from elapsed time rather than Particle_Store: render
+// stays read-only, and hovering never consumes a slot from real effects.
+draw_wand_target :: proc(gs: ^Game_State) {
+    if gs.player.dead || gs.game_won || gs.ui.show_menu || gs.ui.show_title ||
+       gs.ui.show_charselect || gs.ui.show_settings || gs.ui.show_book ||
+       cursor_over_ui(gs) {
+        return
+    }
+
+    T := gs.ui.hover_tile
+    wand, cost, _, ok := wand_target(gs, T)
+    if !ok || gs.player.mana < cost do return
+
+    bx := f32(T.x * CELL_SIZE)
+    by := f32(T.y * CELL_SIZE)
+    col := item_table[wand].color
+    pulse := 0.5 + 0.5 * math.sin(gs.elapsed_time * 5)
+
+    outline := col
+    outline.a = u8(35 + pulse*35)
+    rl.DrawRectangleLinesEx({bx + 0.5, by + 0.5, CELL_SIZE - 1, CELL_SIZE - 1}, 0.5, outline)
+
+    MOTE_COUNT :: 6
+    edge := f32(CELL_SIZE - 1)
+    for i in 0 ..< MOTE_COUNT {
+        phase := math.mod(gs.elapsed_time*2.2 + f32(i)*4.0/MOTE_COUNT, 4)
+        x, y := f32(0), f32(0)
+        switch {
+        case phase < 1: x = phase*edge
+        case phase < 2: x = edge; y = (phase - 1)*edge
+        case phase < 3: x = (3 - phase)*edge; y = edge
+        case:           y = (4 - phase)*edge
+        }
+
+        twinkle := 0.65 + 0.35*math.sin(gs.elapsed_time*8 + f32(i)*1.7)
+        mote := col
+        mote.a = u8(145 + twinkle*90)
+        rl.DrawCircleV({bx + 0.5 + x, by + 0.5 + y}, 0.55 + twinkle*0.35, mote)
+    }
+}
+
+// Orange dismantle telegraph: the outline pulses while the bottom bar fills.
+// Releasing Shift/click or leaving the target clears it before completion.
+draw_reclaim_target :: proc(gs: ^Game_State) {
+    if !gs.reclaim.active do return
+    r := &gs.reclaim
+    bx := f32(r.target.x * CELL_SIZE)
+    by := f32(r.target.y * CELL_SIZE)
+    progress := clamp(r.timer / RECLAIM_HOLD_TIME, 0, 1)
+    pulse := 0.65 + 0.35*math.sin(gs.elapsed_time*12)
+    edge := rl.Color{255, 125, 35, u8(180 + pulse*75)}
+
+    rl.DrawRectangleRec({bx, by, CELL_SIZE, CELL_SIZE}, rl.Color{180, 45, 20, 30})
+    rl.DrawRectangleLinesEx({bx + 0.5, by + 0.5, CELL_SIZE - 1, CELL_SIZE - 1}, 1, edge)
+    rl.DrawRectangle(i32(bx), i32(by) + CELL_SIZE - 2, CELL_SIZE, 2, rl.Color{35, 15, 10, 220})
+    rl.DrawRectangle(i32(bx), i32(by) + CELL_SIZE - 2, i32(progress*CELL_SIZE), 2, edge)
+}
+
 // ─── Enemies ──────────────────────────────────────────────────────────────────
 
 draw_enemies :: proc(es: ^Enemy_Store) {
@@ -1112,7 +1175,7 @@ shade_color :: proc(c: rl.Color, s: f32) -> rl.Color {
     }
 }
 
-draw_player :: proc(p: ^Player, form: Player_Form) {
+draw_player :: proc(p: ^Player, form: Player_Form, step_visual_y: f32 = 0) {
     if p.dead { return }
 
     frame := player_form_frames[form][p.anim_frame]
@@ -1120,7 +1183,7 @@ draw_player :: proc(p: ^Player, form: Player_Form) {
     // Float world-pixel positions so the sprite glides sub-pixel under the
     // supersampled camera instead of snapping to whole tiles.
     px    := p.pos.x * CELL_SIZE
-    py    := p.pos.y * CELL_SIZE
+    py    := (p.pos.y + step_visual_y) * CELL_SIZE
     pw_px := f32(PLAYER_W * CELL_SIZE)
     ph_px := f32(PLAYER_H * CELL_SIZE)
 
@@ -1154,8 +1217,8 @@ draw_player :: proc(p: ^Player, form: Player_Form) {
         }
     }
 
-    // Tool in hand, on the leading side: the equipped wand (weapon slot) if
-    // one is worn, else the pickaxe once it's picked up.
+    // Equipped mining tool in the leading hand. Only the pickaxe and wands
+    // are drawn by this mining-tool pass.
     held := held_tool(p)
     if held != .None {
         hand_x := origin_x + total_w - ps * 2
@@ -1196,10 +1259,10 @@ draw_form_sprite :: proc(form: Player_Form, x, y, ps: f32, hair, clothing: rl.Co
     }
 }
 
-// The implement the mage visibly holds: the equipped wand, else the pickaxe.
+// The equipped mining implement; bagged tools stay visually and mechanically inert.
 held_tool :: proc(p: ^Player) -> Item {
-    if w := p.equipment[.Weapon]; is_wand(w) do return w
-    if inventory_count(&p.inventory, .Pickaxe) > 0 do return .Pickaxe
+    if wand := p.equipment[.Weapon]; is_wand(wand) do return wand
+    if p.equipment[.Tool] == .Pickaxe do return .Pickaxe
     return .None
 }
 

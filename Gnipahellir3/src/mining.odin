@@ -3,17 +3,16 @@ package game
 // ─── Mining: pick and wand ────────────────────────────────────────────────────
 //
 //  Two-stage tool progression (G2's feel, ported):
-//    - Pickaxe: free, adjacent tiles only (chebyshev 1), PICK_HITS chips per
-//      tile — clicks right in front of you, sparks on every hit.  With NO
-//      pickaxe you can still knock down trees bare-handed (Wood only) at
+//    - Equipped pickaxe: free, adjacent tiles only (chebyshev 1), PICK_HITS
+//      chips per tile — clicks right in front of you, sparks on every hit. With
+//      NO equipped pickaxe you can still knock down trees bare-handed (Wood) at
 //      BARE_HAND_MULT× the hits — no other tile yields to fists.
-//    - Mine wands: crafted tiers reach 2 / 4 / 8 / 12 tiles and drink mana per
+//    - Mine wands: crafted tiers reach 3 / 4 / 8 / 12 tiles and drink mana per
 //      shot.  A shot streams sparks to the tile and mines on impact
 //      (WAND_TRAVEL_TIME later) — the mining lands where the magic lands.
-//  A wand is a WEAPON-SLOT tool: equip it (right-click in the bag) and it
-//  becomes the mining tool at EVERY range, adjacent tiles included — mana is
-//  the cost of the reach.  With a sword or nothing in the weapon slot, mining
-//  falls back to the free pick.
+//  The pickaxe has its own Tool slot; wands and swords share Weapon. A valid
+//  wand target takes priority, while an equipped pick remains the close-range
+//  fallback when the wand cannot fire in the pointed direction.
 
 PICK_RANGE :: i32(1)
 PICK_HITS :: 3
@@ -36,9 +35,44 @@ wand_mine_range := #partial [Item]i32 {
 	.Mine_Wand_Runic  = 12,
 }
 
+// Silver is the first meaningful wand upgrade: alongside the extra reach it
+// is more mana-efficient, so sustained mining does not empty the bar almost
+// immediately. Other tiers retain their existing cost until separately tuned.
+@(rodata)
+wand_mana_cost := #partial [Item]f32 {
+	.Mine_Wand        = WAND_MANA_COST,
+	.Mine_Wand_Silver = 3,
+	.Mine_Wand_Gold   = WAND_MANA_COST,
+	.Mine_Wand_Runic  = WAND_MANA_COST,
+}
+
 // A mining wand (any tier) vs. a sword or ordinary item.
 is_wand :: proc(it: Item) -> bool {
 	return wand_mine_range[it] > 0
+}
+
+// Resolve the wand currently in hand and whether it can strike T. Shared by
+// input and the hover effect so the visual promise exactly matches the shot:
+// range, mineability and structure protection all come from one check.
+wand_target :: proc(gs: ^Game_State, T: [2]i32) -> (wand: Item, cost: f32, blast, ok: bool) {
+	wand = gs.player.equipment[.Weapon]
+	wrange := wand_mine_range[wand]
+	cost = wand_mana_cost[wand]
+	when GAME_DEBUG {
+		if gs.debug.ultra_wand {
+			wand = .Mine_Wand_Gold
+			wrange = ULTRA_WAND_RANGE
+			cost = 0
+			blast = true
+		}
+	}
+
+	if wrange <= 0 || !in_bounds(int(T.x), int(T.y)) {return}
+	t := get_tile(&gs.world, int(T.x), int(T.y))
+	if .Mineable not_in terrain_table[t].flags || is_structure_tile[t] {return}
+	if chebyshev(T, player_tile(&gs.player)) > wrange {return}
+	ok = true
+	return
 }
 
 // The pick doesn't aim at the cursor — the cursor's rough DIRECTION from the
@@ -99,53 +133,34 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	// adjacent included — for mana.  Precise cursor aim (and reach) is what the
 	// weapon slot buys over the pick.
 	T := gs.input.mouse_tile
-	tt := get_tile(&gs.world, int(T.x), int(T.y))
-	d := chebyshev(T, player_tile(p))
-	// A wand never strikes a machine/station/spawner — clicking one with a wand
-	// in hand does nothing (you reclaim a structure with the pick, up close).
-	if in_bounds(int(T.x), int(T.y)) &&
-	   .Mineable in terrain_table[tt].flags &&
-	   !is_structure_tile[tt] {
-		wand := p.equipment[.Weapon]
-		wrange := wand_mine_range[wand]
-		cost := WAND_MANA_COST
-		blast := false
-		when GAME_DEBUG {
-			if gs.debug.ultra_wand {
-				wand = .Mine_Wand_Gold // cheat needs no wand equipped
-				wrange = ULTRA_WAND_RANGE
-				cost = 0
-				blast = true
-			}
-		}
-		if wrange > 0 && d <= wrange {
-			if p.mana < cost {
-				p.mine_timer = 0.6 // rate-limits the reminder while held
-				notify(gs, "Not enough mana!")
-				return
-			}
-			p.mana -= cost
-			p.mine_timer = WAND_COOLDOWN
-			gs.mining = {
-				active = true,
-				blast  = blast,
-				target = T,
-				travel = WAND_TRAVEL_TIME,
-			}
-			spawn_wand_stream(gs, T)
-			eq_push(
-				&gs.events,
-				Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wand_Fire)}},
-			)
+	_, cost, blast, wand_ok := wand_target(gs, T)
+	if wand_ok {
+		if p.mana < cost {
+			p.mine_timer = 0.6 // rate-limits the reminder while held
+			notify(gs, "Not enough mana!")
 			return
 		}
+		p.mana -= cost
+		p.mine_timer = WAND_COOLDOWN
+		gs.mining = {
+			active = true,
+			blast  = blast,
+			target = T,
+			travel = WAND_TRAVEL_TIME,
+		}
+		spawn_wand_stream(gs, T)
+		eq_push(
+			&gs.events,
+			Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wand_Fire)}},
+		)
+		return
 	}
 
 	// Pick / bare hands: no aiming, just a rough direction — chip the first
-	// workable tile.  A pickaxe works any mineable tile in PICK_HITS chips;
+	// workable tile. An equipped pickaxe works any mineable tile in PICK_HITS;
 	// bare-handed you can still knock down TREES (Wood), but it takes
 	// BARE_HAND_MULT× the hits — nothing else yields to fists.
-	has_pick := inventory_count(&p.inventory, .Pickaxe) > 0
+	has_pick := p.equipment[.Tool] == .Pickaxe
 	targets: [2][2]i32
 	n := pick_targets(p, gs.input.mouse_world, &targets)
 	for i in 0 ..< n {
@@ -153,6 +168,7 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 		if !in_bounds(int(C.x), int(C.y)) {continue}
 		tile := get_tile(&gs.world, int(C.x), int(C.y))
 		if .Mineable not_in terrain_table[tile].flags {continue}
+		if is_structure_tile[tile] {continue} // equipment needs Shift+hold reclaim
 		if !has_pick && tile != .Wood {continue} 	// fists fell trees only
 
 		if C.x != i32(p.pos.x + PLAYER_W * 0.5) {

@@ -1,6 +1,7 @@
 package game
 
 game_update :: proc(gs: ^Game_State) {
+    profile_scope("game_update")
     gs.delta_time = clamp(gs.delta_time, 0, 0.05)  // cap at 50ms
     gs.frame     += 1
 
@@ -33,6 +34,10 @@ game_update :: proc(gs: ^Game_State) {
 
     // 5. Wand mining (delayed impact) — pushes Tile_Mined, must precede events
     update_mining(gs)
+
+    // 5a. Equipment reclaim — Shift+hold pickaxe; pushes Structure_Reclaim
+    //      only after a continuous deliberate hold.
+    update_reclaim(gs)
 
     // 5b. Sim — placed machines (smelter, tree grower) tick; pushes
     //     Tree_Grew/Play_Sound, so it must precede process_events

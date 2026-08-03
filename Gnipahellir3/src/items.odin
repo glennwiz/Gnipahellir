@@ -92,6 +92,7 @@ item_table := [Item]Item_Info{
     .Flower_Seed       = { "Flower Seed",       {150, 120, 60,  255}, .Air },
     .Flower_Bed        = { "Flower Bed",        {120, 90,  50,  255}, .Flower_Bed },
     .Barrel            = { "Barrel",            {150, 100, 55,  255}, .Barrel },
+    .Void_Charm        = { "Void Charm",        {105, 55,  150, 255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
@@ -105,22 +106,37 @@ is_blueprint :: proc(it: Item) -> bool {
 
 @(rodata)
 item_equip_slot := #partial [Item]Equip_Slot{
+    .Pickaxe      = .Tool,
     .Sword        = .Weapon,
     .Silver_Sword = .Weapon,
     .Gold_Sword   = .Weapon,
     .Runic_Sword  = .Weapon,
-    // Wands share the weapon slot: hold a wand to mine (all ranges) OR a
-    // sword to fight — not both.  The equipped wand is the active mining tool.
+    // Wands and swords compete for the weapon slot. The pickaxe has its own
+    // Tool slot, so changing combat/ranged gear never puts the pick away.
     .Mine_Wand        = .Weapon,
     .Mine_Wand_Silver = .Weapon,
     .Mine_Wand_Gold   = .Weapon,
     .Mine_Wand_Runic  = .Weapon,
     .Aether_Charm = .Charm,
+    .Void_Charm   = .Charm,
     .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,  .Runic_Helm       = .Head,
     .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest, .Runic_Chestplate = .Chest,
     .Iron_Gauntlets  = .Hands, .Silver_Gauntlets  = .Hands, .Gold_Gauntlets  = .Hands, .Runic_Gauntlets  = .Hands,
     .Iron_Greaves    = .Legs,  .Silver_Greaves    = .Legs,  .Gold_Greaves    = .Legs,  .Runic_Greaves    = .Legs,
     .Iron_Boots      = .Feet,  .Silver_Boots      = .Feet,  .Gold_Boots      = .Feet,  .Runic_Boots      = .Feet,
+}
+
+@(rodata)
+charm_slot_order := [3]Equip_Slot{.Charm, .Charm_2, .Charm_3}
+
+is_charm_slot :: proc(slot: Equip_Slot) -> bool {
+    for charm_slot in charm_slot_order do if slot == charm_slot do return true
+    return false
+}
+
+player_has_charm :: proc(p: ^Player, charm: Item) -> bool {
+    for slot in charm_slot_order do if p.equipment[slot] == charm do return true
+    return false
 }
 
 @(rodata)
@@ -155,6 +171,12 @@ item_stat_bonus := #partial [Item][Stat]i32{
     .Runic_Boots      = #partial {.Speed = 4},
 }
 
+// Only actual weapons may drive melee. This also keeps utility gear from
+// swinging merely because armor contributes Attack to the total damage stat.
+is_melee_weapon :: proc(it: Item) -> bool {
+    return item_equip_slot[it] == .Weapon && item_stat_bonus[it][.Attack] > 0
+}
+
 @(rodata)
 player_base_stats := [Stat]i32{
     .Attack  = 0,   // bare hands swing nothing — a weapon must be equipped
@@ -186,11 +208,30 @@ player_apply_max_hp :: proc(p: ^Player) {
 // refused (nothing lost) when the displaced gear can't fit back in the bag.
 player_equip :: proc(gs: ^Game_State, inv_slot: int) {
     p := &gs.player
+    if inv_slot < 0 || inv_slot >= MAX_INVENTORY do return
     s := &p.inventory.slots[inv_slot]
     eq := item_equip_slot[s.item]
     if eq == .None || s.count <= 0 do return
 
     item := s.item
+    if eq == .Charm {
+        if player_has_charm(p, item) {
+            notify(gs, "That charm is already on the belt")
+            return
+        }
+        eq = .None
+        for slot in charm_slot_order {
+            if p.equipment[slot] == .None {
+                eq = slot
+                break
+            }
+        }
+        if eq == .None {
+            notify(gs, "All three charm slots are full")
+            return
+        }
+    }
+
     prev := p.equipment[eq]
     s.count -= 1
     if s.count == 0 do s.item = .None
@@ -298,5 +339,121 @@ inventory_remove :: proc(inv: ^Inventory, item: Item, count: int) -> bool {
         if s.count == 0 do s.item = .None
         if left == 0 do break
     }
+    return true
+}
+
+// Split a bag stack into the first empty slot. The source keeps the smaller
+// half when the count is odd; a full bag refuses without changing anything.
+// Called through Inventory_Split so input never mutates inventory data.
+inventory_split_stack :: proc(gs: ^Game_State, source: int) -> bool {
+    if source < 0 || source >= MAX_INVENTORY do return false
+    inv := &gs.player.inventory
+    src := &inv.slots[source]
+    if src.item == .None || src.count <= 1 do return false
+
+    dest := -1
+    for s, i in inv.slots {
+        if i != source && (s.item == .None || s.count == 0) {
+            dest = i
+            break
+        }
+    }
+    if dest < 0 {
+        notify(gs, "No empty slot to split the stack")
+        return false
+    }
+
+    moved := (src.count + 1) / 2
+    inv.slots[dest] = {item = src.item, count = moved}
+    src.count -= moved
+    gs.save_dirty = true
+    return true
+}
+
+// Resolve a bag-to-bag drag. Matching stacks consolidate up to MAX_STACK,
+// empty targets receive the stack, and unlike items swap places. Selection
+// follows a stack that leaves its old slot.
+inventory_move_stack :: proc(gs: ^Game_State, source, target: int) -> bool {
+    if source < 0 || source >= MAX_INVENTORY ||
+       target < 0 || target >= MAX_INVENTORY || source == target {
+        return false
+    }
+
+    inv := &gs.player.inventory
+    src := &inv.slots[source]
+    dst := &inv.slots[target]
+    if src.item == .None || src.count <= 0 do return false
+
+    if dst.item == .None || dst.count <= 0 {
+        dst^ = src^
+        src^ = {}
+        if inv.selected == source do inv.selected = target
+    } else if dst.item == src.item {
+        moved := min(src.count, MAX_STACK - dst.count)
+        if moved <= 0 do return false
+        dst.count += moved
+        src.count -= moved
+        if src.count == 0 {
+            src.item = .None
+            if inv.selected == source do inv.selected = target
+        }
+    } else {
+        src^, dst^ = dst^, src^
+        if inv.selected == source {
+            inv.selected = target
+        } else if inv.selected == target {
+            inv.selected = source
+        }
+    }
+
+    gs.save_dirty = true
+    return true
+}
+
+void_charm_active :: proc(p: ^Player) -> bool {
+    return player_has_charm(p, .Void_Charm)
+}
+
+// Move a whole bag stack into the charm's recoverable buffer. The previous
+// buffer is the only destructive part: replacing it erases it permanently.
+void_slot_store :: proc(gs: ^Game_State, source: int) -> bool {
+    p := &gs.player
+    if !void_charm_active(p) || source < 0 || source >= MAX_INVENTORY do return false
+    src := &p.inventory.slots[source]
+    if src.item == .None || src.count <= 0 do return false
+
+    old := p.void_slot
+    p.void_slot = src^
+    src^ = {}
+    if p.inventory.selected == source do p.inventory.selected = -1
+    gs.save_dirty = true
+
+    if old.item != .None && old.count > 0 {
+        notify(gs, "%s x%d vanishes into the void", item_table[old.item].name, old.count)
+        log_action(gs, "Void Charm erases %s x%d", item_table[old.item].name, old.count)
+    }
+    return true
+}
+
+// Recover the buffered stack into the exact bag slot it was dragged onto.
+// Refuse rather than partially moving: the undo stack always stays intact.
+void_slot_take :: proc(gs: ^Game_State, target: int) -> bool {
+    p := &gs.player
+    if !void_charm_active(p) || target < 0 || target >= MAX_INVENTORY do return false
+    src := &p.void_slot
+    if src.item == .None || src.count <= 0 do return false
+    dst := &p.inventory.slots[target]
+
+    if dst.item == .None || dst.count <= 0 {
+        dst^ = src^
+    } else if dst.item == src.item && dst.count + src.count <= MAX_STACK {
+        dst.count += src.count
+    } else {
+        notify(gs, "That bag slot cannot hold the void stack")
+        return false
+    }
+
+    src^ = {}
+    gs.save_dirty = true
     return true
 }

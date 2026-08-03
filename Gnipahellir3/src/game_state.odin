@@ -157,6 +157,7 @@ Player :: struct {
     walk_anim_period: f32,
     clothing_color:   rl.Color,
     hair_color:       rl.Color,
+    void_slot:        Inventory_Slot, // saved last-chance stack held by the Void Charm
 }
 
 // ─── Wand Mining (delayed impact) ─────────────────────────────────────────────
@@ -264,6 +265,7 @@ Input_State :: struct {
     jump:         bool,
     mine:         bool,
     attack:       bool,   // discrete press — sword swing
+    reclaim:      bool,   // Shift + held mine button — deliberate structure removal
     interact:     bool,
     fly_up:       bool,   // debug fly mode only (W/S held)
     fly_down:     bool,
@@ -297,6 +299,7 @@ UI_State :: struct {
     drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
     drag_input:      bool,    // the drag holds the smelter's loaded ore (pulling it back out)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
+    drag_void:       bool,    // drag source is Player.void_slot, not the bag
     win_pos:         [UI_Window][2]i32, // top-left of each floating window (draggable)
     win_moved:       [UI_Window]bool,   // player has hand-dragged this window; auto-layout leaves it alone
     win_drag:        int,     // window being dragged by its header, -1 = none
@@ -403,6 +406,15 @@ Ritual_State :: struct {
     altar:  [2]i32,  // the Sky_Altar tile the offering plays over
 }
 
+// Deliberate removal of player equipment. Transient: cancelling, travelling or
+// reloading simply drops the hold progress; no structure changes until complete.
+Reclaim_State :: struct {
+    active:  bool,
+    blocked: bool,
+    target:  [2]i32,
+    timer:   f32,
+}
+
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
 Persistent_Stats :: struct {
@@ -427,6 +439,7 @@ Game_State :: struct {
     floating_text: Floating_Text_Store,   // damage numbers (floating_text.odin)
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     ritual:      Ritual_State,    // the Sky Altar offering animation (levels.odin); transient, not saved
+    reclaim:     Reclaim_State,   // Shift+hold pickaxe dismantle; transient, not saved
     ambience_timer: f32,   // countdown to the next ambient-mote probe pass
     mining:      Mining_Action,
     events:      Event_Queue,
@@ -451,6 +464,7 @@ Game_State :: struct {
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom (1.0 = whole level); not saved
     cam_y:        f32,    // camera Y anchor (world px); a deadzone keeps jumps from bobbing the view — not saved
+    player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved

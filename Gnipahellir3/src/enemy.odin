@@ -700,8 +700,11 @@ despawn_enemy :: proc(gs: ^Game_State, i: int) {
 }
 
 spawn_level_1_enemies :: proc(gs: ^Game_State) {
-    spawn_builder(gs, CAVE_LEFT  + 20)
+    // Spawn order feeds each builder's deterministic job seed; this ordering
+    // keeps three territories productive without cave-edge bridge ping-pong.
     spawn_builder(gs, CAVE_RIGHT - 20)
+    spawn_builder(gs, CAVE_LEFT  + 20)
+    spawn_builder(gs, GRID_W / 2)
 }
 
 // ─── Builder Path Actions (mine / place) ──────────────────────────────────────

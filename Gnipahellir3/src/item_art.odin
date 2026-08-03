@@ -650,6 +650,8 @@ item_icons := [Item]Item_Icon{
 	.Flower_Bed       = {FLOWER_GRID, {{210, 120, 30, 255}, {46, 140, 46, 255}, {255, 245, 175, 255}, {255, 220, 50, 255}, {}}},
 	// Oak barrel — staves, highlight, hoops
 	.Barrel           = {BARREL_GRID, {{150, 100, 55, 255}, {92, 60, 32, 255}, {188, 138, 84, 255}, {}, {}}},
+	// Void charm — amethyst shell around an emerald-lit abyss
+	.Void_Charm       = {CHARM_GRID, {{}, {}, {188, 120, 235, 255}, {72, 18, 105, 255}, {45, 220, 135, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

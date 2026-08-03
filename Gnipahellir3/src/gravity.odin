@@ -142,6 +142,7 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
 // where it came to rest — a felled tree crumbles into a pile of logs and leaves
 // for the player to gather, rather than re-settling as solid tiles.
 update_gravity :: proc(gs: ^Game_State) {
+    profile_scope("update_gravity")
     w  := &gs.world
     dt := gs.delta_time
 

@@ -175,6 +175,8 @@ Item :: enum u8 {
     Flower_Bed,
     // Wooden 4×4 storage barrel (appended: order is frozen)
     Barrel,
+    // Recoverable one-stack trash buffer, unlocked by an equipped charm
+    Void_Charm,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -200,6 +202,9 @@ Equip_Slot :: enum u8 {
     Legs,
     Feet,
     Charm,
+    Tool,      // append-only: dedicated pickaxe slot; save v19
+    Charm_2,   // append-only: extra charm belt sockets; save v21
+    Charm_3,
 }
 
 // ─── Rebindable Actions ───────────────────────────────────────────────────────
@@ -317,6 +322,14 @@ Event_Type :: enum u8 {
     // Menu
     New_Game_Request,   // "New Game" clicked — wipes the save and resets state
     Quit_Request,       // "Save and Quit" clicked — the run is saved on shutdown
+
+    // Inventory (appended so existing event values stay stable)
+    Inventory_Split,    // int_val = bag slot; moves half into the first empty slot
+    Inventory_Move,     // int_val = source slot, tile.x = target slot; move/merge/swap
+    Structure_Interact, // tile = exact player-built equipment clicked
+    Structure_Reclaim,  // tile = equipment whose deliberate hold completed
+    Void_Store,         // int_val = bag slot; replaces (deletes) the prior void stack
+    Void_Take,          // tile.x = target bag slot; recovers the current void stack
 }
 
 Event_Payload :: struct #raw_union {

@@ -41,6 +41,9 @@ main :: proc() {
     target := rl.LoadRenderTexture(SCREEN_W * SS_SCALE, SCREEN_H * SS_SCALE)
     rl.SetTextureFilter(target.texture, .BILINEAR)
 
+    profile_init()
+    defer profile_shutdown()
+
     gs := new(Game_State)
     defer free(gs)
     game_state_init(gs)
@@ -58,6 +61,7 @@ main :: proc() {
     load_settings(gs)  // after audio_init: overrides its default volumes
 
     for !rl.WindowShouldClose() && !gs.quit_requested {
+        profile_scope("frame")
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
         game_update(gs)

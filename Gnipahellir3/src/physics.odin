@@ -26,6 +26,11 @@ package game
 BODY_EPS    :: f32(0.001)
 BODY_MARGIN :: f32(0.003)
 
+// Auto step-up: a grounded body whose horizontal move is blocked will try to
+// climb a step this tall (in tiles) rather than stop — walk up a single block
+// without jumping.  Opt-in per body via move_body's `step_up` (player only).
+STEP_HEIGHT :: f32(1.0)
+
 // A door is solid rock to every body EXCEPT the player, who always walks
 // through it (Glenn's design: no open/close, just permeable to the player and a
 // wall to enemies).  move_body's `pass_doors` selects which side of that a body
@@ -37,12 +42,35 @@ blocks_body :: proc(w: ^World_Grid, x, y: int, pass_doors: bool) -> bool {
     return is_solid(w, x, y)
 }
 
+// True if a body of `size` at `pos` would overlap any tile that blocks it.
+// Used by the step-up probe: lift the body a tile and ask whether the raised
+// position is clear (obstacle cleared AND headroom above).
+@(private = "file")
+body_blocked :: proc(w: ^World_Grid, pos, size: [2]f32, pass_doors: bool) -> bool {
+    left  := int(pos.x + BODY_MARGIN)
+    right := int(pos.x + size.x - BODY_MARGIN)
+    top   := int(pos.y + BODY_MARGIN)
+    bot   := int(pos.y + size.y - BODY_MARGIN)
+    for y in top ..= bot {
+        for x in left ..= right {
+            if blocks_body(w, x, y, pass_doors) do return true
+        }
+    }
+    return false
+}
+
 // Integrates gravity (0 = none, e.g. debug fly mode) and moves the body,
 // resolving against solid tiles.  `grounded` is written only when the body
 // moves vertically: true on landing, false while airborne.  `pass_doors` lets
 // the player phase through door tiles (enemies leave it false — doors wall them).
 move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
-                  dt, gravity, max_fall: f32, grounded: ^bool, pass_doors := false) {
+                  dt, gravity, max_fall: f32, grounded: ^bool, pass_doors := false,
+                  step_up := false) {
+    // Step-up is only for a grounded, gravity-bound body (never in fly mode).
+    // `grounded^` still holds last frame's value here — the Y sweep is what
+    // rewrites it, and that runs after X.
+    can_step := step_up && grounded^ && gravity != 0
+
     if gravity != 0 {
         vel.y += gravity * dt
         if vel.y > max_fall do vel.y = max_fall
@@ -55,12 +83,25 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
         bot   := int(pos.y + size.y - BODY_MARGIN)
         new_x := pos.x + dx
 
+        // Raising the body one step and finding the intended destination clear
+        // means the obstacle is a single block with headroom above: climb it.
+        try_step :: proc(w: ^World_Grid, pos: ^[2]f32, size: [2]f32,
+                         dest_x: f32, pass_doors, can_step: bool) -> bool {
+            if !can_step do return false
+            step_y := pos.y - STEP_HEIGHT
+            if body_blocked(w, {dest_x, step_y}, size, pass_doors) do return false
+            pos.y = step_y
+            return true
+        }
+
         if dx > 0 {
             sweep_r: for c in int(pos.x + size.x - BODY_MARGIN) + 1 ..= int(new_x + size.x - BODY_MARGIN) {
                 for r in top ..= bot {
                     if blocks_body(w, c, r, pass_doors) {
-                        new_x = f32(c) - size.x - BODY_EPS
-                        vel.x = 0
+                        if !try_step(w, pos, size, pos.x + dx, pass_doors, can_step) {
+                            new_x = f32(c) - size.x - BODY_EPS
+                            vel.x = 0
+                        }
                         break sweep_r
                     }
                 }
@@ -69,8 +110,10 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
             sweep_l: for c := int(pos.x + BODY_MARGIN) - 1; c >= int(new_x + BODY_MARGIN); c -= 1 {
                 for r in top ..= bot {
                     if blocks_body(w, c, r, pass_doors) {
-                        new_x = f32(c + 1) + BODY_EPS
-                        vel.x = 0
+                        if !try_step(w, pos, size, pos.x + dx, pass_doors, can_step) {
+                            new_x = f32(c + 1) + BODY_EPS
+                            vel.x = 0
+                        }
                         break sweep_l
                     }
                 }

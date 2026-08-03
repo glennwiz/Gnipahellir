@@ -112,12 +112,23 @@ update_input :: proc(gs: ^Game_State) {
     // Rebindable keys come from the bindings table (settings screen); arrows
     // and space stay as fixed movement/jump alternates.
     bind := gs.bindings
+    shift_down := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+    world_mouse := !cursor_over_ui(gs) && gs.ui.drag_item == .None
     inp.move_left  = rl.IsKeyDown(bind[.Move_Left])  || rl.IsKeyDown(.LEFT)
     inp.move_right = rl.IsKeyDown(bind[.Move_Right]) || rl.IsKeyDown(.RIGHT)
     inp.jump       = rl.IsKeyPressed(bind[.Jump]) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
-    inp.mine       = rl.IsMouseButtonDown(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None
-    inp.attack     = rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None
+    inp.mine       = rl.IsMouseButtonDown(.LEFT) && world_mouse && !shift_down
+    inp.attack     = rl.IsMouseButtonPressed(.LEFT) && world_mouse && !shift_down
+    inp.reclaim    = rl.IsMouseButtonDown(.LEFT) && world_mouse && shift_down
     inp.interact   = rl.IsKeyPressed(bind[.Interact])
+
+    // Player-built equipment always wins over mining. Normal click uses it;
+    // Shift+hold is handled separately by update_reclaim.
+    hover_t := get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y))
+    if is_structure_tile[hover_t] {
+        inp.mine = false
+        inp.attack = false
+    }
 
     // The smelter window follows its furnace: if that tile stops being a
     // smelter (mined out), the window closes.
@@ -169,25 +180,10 @@ update_input :: proc(gs: ^Game_State) {
         if gs.ui.show_inventory && !gs.ui.show_crafting do place_bag_centered(gs)
     }
 
-    // Clicking a station or smelter tile in reach opens its window instead of
-    // striking it (the press is eaten so it doesn't also mine/attack).
-    if rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None {
-        px := i32(gs.player.pos.x + PLAYER_W*0.5)
-        py := i32(gs.player.pos.y + PLAYER_H*0.5)
-        in_reach := max(abs(inp.mouse_tile.x - px), abs(inp.mouse_tile.y - py)) <= BENCH_RANGE
-        if st := station_at_tile(&gs.world, inp.mouse_tile.x, inp.mouse_tile.y); st != .None && in_reach {
-            eq_push(&gs.events, Event{type = .Station_Interact, payload = {int_val = i32(st)}})
-            inp.mine   = false
-            inp.attack = false
-        } else if in_reach && get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y)) == .Smelter {
-            eq_push(&gs.events, Event{type = .Smelter_Interact, tile = inp.mouse_tile})
-            inp.mine   = false
-            inp.attack = false
-        } else if in_reach && get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y)) == .Barrel {
-            eq_push(&gs.events, Event{type = .Barrel_Interact, tile = inp.mouse_tile})
-            inp.mine   = false
-            inp.attack = false
-        }
+    // A normal click uses the exact equipment under the cursor. Shift reserves
+    // the press for the deliberate reclaim hold instead.
+    if rl.IsMouseButtonPressed(.LEFT) && world_mouse && !shift_down && is_structure_tile[hover_t] {
+        eq_push(&gs.events, Event{type = .Structure_Interact, tile = inp.mouse_tile})
     }
 
     // UI toggles. TAB with any window open sweeps them all shut (like ESC);
@@ -203,6 +199,7 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.drag_tray      = false
             gs.ui.drag_input     = false
             gs.ui.drag_barrel    = -1
+            gs.ui.drag_void      = false
         } else {
             gs.ui.show_inventory = true
             place_bag_centered(gs)
@@ -240,6 +237,7 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.drag_tray      = false
             gs.ui.drag_input     = false
             gs.ui.drag_barrel    = -1
+            gs.ui.drag_void      = false
         } else {
             gs.ui.show_menu = true
         }
@@ -262,10 +260,29 @@ update_input :: proc(gs: ^Game_State) {
                 // drops a ground pile (for the auto-pull hoppers).
                 s := gs.player.inventory.slots[slot]
                 if s.item != .None && s.count > 0 {
-                    gs.ui.drag_item   = s.item
-                    gs.ui.drag_slot   = slot
-                    gs.ui.drag_barrel = -1   // source is the bag, not a barrel
+                    shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+                    if shift && s.count > 1 {
+                        eq_push(&gs.events, Event{
+                            type    = .Inventory_Split,
+                            payload = {int_val = i32(slot)},
+                        })
+                    } else {
+                        gs.ui.drag_item   = s.item
+                        gs.ui.drag_slot   = slot
+                        gs.ui.drag_barrel = -1   // source is the bag, not a barrel
+                        gs.ui.drag_void   = false
+                    }
                 }
+            }
+        }
+        // The last voided stack is an undo buffer: drag it back onto a bag
+        // slot before replacing it if it should be kept.
+        if gs.ui.show_inventory && gs.ui.drag_item == .None && void_slot_hovered(gs) {
+            s := gs.player.void_slot
+            if s.item != .None && s.count > 0 {
+                gs.ui.drag_item = s.item
+                gs.ui.drag_slot = -1
+                gs.ui.drag_void = true
             }
         }
         // Grabbing a filled barrel slot starts a drag of that stack toward the bag.
@@ -325,7 +342,14 @@ update_input :: proc(gs: ^Game_State) {
     // Dropping onto the smelter window feeds the furnace instead — that one
     // really moves the stack out of the bag onto a cell beside the fire.
     if rl.IsMouseButtonReleased(.LEFT) && gs.ui.drag_item != .None {
-        if gs.ui.drag_tray {
+        if gs.ui.drag_void {
+            // Recover only onto a real bag cell. Elsewhere the stack remains
+            // safely buffered, including a click-and-release on the VOID box.
+            if target := slot_at_cursor(gs); target >= 0 {
+                eq_push(&gs.events, Event{type = .Void_Take, tile = {i32(target), 0}})
+            }
+            gs.ui.drag_void = false
+        } else if gs.ui.drag_tray {
             // Dropping the tray on the bag — or a click-in-place on the tray
             // itself — empties it into the inventory.
             if cursor_in_window(gs, .Inventory) || cursor_in_window(gs, .Smelter) {
@@ -349,6 +373,23 @@ update_input :: proc(gs: ^Game_State) {
                 })
             }
             gs.ui.drag_barrel = -1
+        } else if void_slot_hovered(gs) {
+            // This is the deliberate destructive edge: the handler moves the
+            // bag stack in and erases whatever the buffer previously showed.
+            eq_push(&gs.events, Event{
+                type    = .Void_Store,
+                payload = {int_val = i32(gs.ui.drag_slot)},
+            })
+        } else if cursor_in_window(gs, .Inventory) {
+            // Bag-to-bag drag: move to an empty slot, consolidate a matching
+            // stack, or swap unlike items. Releasing on the source is a no-op.
+            if target := slot_at_cursor(gs); target >= 0 && target != gs.ui.drag_slot {
+                eq_push(&gs.events, Event{
+                    type    = .Inventory_Move,
+                    tile    = {i32(target), 0},
+                    payload = {int_val = i32(gs.ui.drag_slot)},
+                })
+            }
         } else if cursor_in_window(gs, .Barrel) {
             // Dragging a bag stack onto the barrel deposits it.
             eq_push(&gs.events, Event{
@@ -371,6 +412,7 @@ update_input :: proc(gs: ^Game_State) {
             })
         }
         gs.ui.drag_item = .None
+        gs.ui.drag_void = false
     }
 
     // Right-click in the open bag equips the item; on an equip box, unequips.
