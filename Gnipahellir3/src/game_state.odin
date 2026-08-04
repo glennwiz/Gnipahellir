@@ -462,7 +462,8 @@ Game_State :: struct {
     world_seed:   u32,    // seed mixed into level generation; set per run, not saved
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     game_won:     bool,   // run complete — not saved; a won run ends like a death
-    zoom:         f32,    // view zoom (1.0 = whole level); not saved
+    zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
+    zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved
     cam_y:        f32,    // camera Y anchor (world px); a deadzone keeps jumps from bobbing the view — not saved
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
@@ -538,6 +539,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.player.facing      = 1
     gs.player.walk_anim_period = 0.15
     gs.zoom               = 1.0
+    gs.zoom_target        = 1.0
     gs.loot_rng           = u64(time.now()._nsec)  // fresh drop rolls each run
     gs.world_seed         = world_seed
     gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu

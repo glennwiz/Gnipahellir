@@ -66,6 +66,11 @@ ZOOM_MAX  :: f32(4.0)
 // bob the view.  A little wider than a full jump so the whole arc is swallowed.
 CAM_DEADZONE_Y :: f32(3.5 * CELL_SIZE)
 
+// Zoom easing rate (1/s): higher = snappier. gs.zoom chases gs.zoom_target with
+// frame-rate-independent exponential decay so a wheel notch glides in ~0.1-0.2 s
+// instead of popping — which also feathers the clamp-release Y pan (see below).
+ZOOM_EASE :: f32(18.0)
+
 // Player-centered camera, clamped so we never show past the level edges.  At
 // zoom 1.0 the clamp pins it to level-center → the whole level, as before.
 // Shared by render and input so both agree on the world↔screen mapping.
@@ -101,6 +106,11 @@ camera_snap_y :: proc(gs: ^Game_State) {
 // player moves.  At zoom 1.0 game_camera clamps Y to level-center anyway, so
 // this is only felt when zoomed in.
 update_camera :: proc(gs: ^Game_State) {
+    // Ease the live zoom toward the wheel-set target. Because half_w/half_h (and
+    // thus the edge clamp) are derived from zoom, gliding zoom also glides the
+    // Y lurch you'd otherwise get when the clamp releases on the first notch.
+    gs.zoom += (gs.zoom_target - gs.zoom) * (1 - math.exp(-ZOOM_EASE * gs.delta_time))
+
     py := (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
     if py < gs.cam_y - CAM_DEADZONE_Y do gs.cam_y = py + CAM_DEADZONE_Y
     if py > gs.cam_y + CAM_DEADZONE_Y do gs.cam_y = py - CAM_DEADZONE_Y

@@ -14,9 +14,10 @@ update_input :: proc(gs: ^Game_State) {
     vy := (mouse.y - offset.y) / scale
     inp.mouse_screen = {vx / UI_SCALE, vy / UI_SCALE}
 
-    // Mouse wheel zooms toward the player (game_camera stays clamped to bounds).
+    // Mouse wheel sets the zoom target; update_camera eases gs.zoom toward it so
+    // the scale and the clamp-release pan glide instead of popping per notch.
     if wheel := rl.GetMouseWheelMove(); wheel != 0 {
-        gs.zoom = clamp(gs.zoom + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+        gs.zoom_target = clamp(gs.zoom_target + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
     }
 
     // World-space mouse: invert the (same) game camera.
