@@ -134,6 +134,7 @@ Draw_Style :: enum u8 {
     Pixel_Door,
     Pixel_Dirt,
     Pixel_Flower_Bed,
+    Pixel_Blueprint_Chest,
 }
 
 @(rodata)
@@ -150,6 +151,10 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Door        = .Pixel_Door,
     .Dirt        = .Pixel_Dirt,
     .Flower_Bed  = .Pixel_Flower_Bed,
+    .Sky_Blueprint_Chest = .Pixel_Blueprint_Chest,
+    .Blueprint_Chest_A   = .Pixel_Blueprint_Chest,
+    .Blueprint_Chest_B   = .Pixel_Blueprint_Chest,
+    .Blueprint_Chest_C   = .Pixel_Blueprint_Chest,
     // all others default to .Solid (zero value)
 }
 
@@ -236,6 +241,9 @@ draw_world :: proc(gs: ^Game_State) {
             }
         }
     }
+    // Blueprint chests deliberately spill beyond one 10px terrain cell.  Draw
+    // them after the grid so neighboring backdrop cells cannot crop the coffer.
+    draw_blueprint_chests(gs)
     // The surface descent shaft breaks the grass line as a raw Void slot —
     // dress its lip into a proper cave mouth (surface level only).
     if gs.level_index == LEVEL_SURFACE do draw_shaft_mouth(gs)
@@ -443,6 +451,9 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Door:       draw_pixel_door(gs, px, py, x, y)
     case .Pixel_Dirt:       draw_pixel_dirt(px, py)
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
+    case .Pixel_Blueprint_Chest:
+        bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
+        rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
     case .Pixel_Cloud:
         // Sky backdrop only — the puffs paint in draw_cloud_layer, a
         // second pass, so their bulges can spill over neighbor cells
@@ -451,6 +462,73 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Solid:
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
     }
+}
+
+// ─── Pixel Art: Blueprint Chest ───────────────────────────────────────────────
+//
+// A compact 16×11 Norse coffer translated from sprites/blueprint_chests_concept:
+// arched oak lid, three iron straps, corner rivets, and a tier-colored rune
+// lock.  Its collision remains one cell; the broad silhouette is render-only.
+
+draw_blueprint_chests :: proc(gs: ^Game_State) {
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            t := get_tile(&gs.world, x, y)
+            if is_blueprint_chest(t) {
+                draw_pixel_blueprint_chest(gs, i32(x*CELL_SIZE), i32(y*CELL_SIZE), t, x, y)
+            }
+        }
+    }
+}
+
+draw_pixel_blueprint_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x, y: int) {
+    ox, oy := bx - 3, by - 1
+    outline := rl.Color{24, 20, 24, 255}
+    iron    := rl.Color{54, 56, 64, 255}
+    iron_hi := rl.Color{108, 112, 122, 255}
+    wood_d  := rl.Color{74, 39, 24, 255}
+    wood    := rl.Color{126, 68, 36, 255}
+    wood_hi := rl.Color{174, 102, 54, 255}
+    accent  := terrain_table[t].color
+    pulse   := (math.sin(gs.elapsed_time*3.6 + f32(x*3 + y*5)) + 1) * 0.5
+    glow    := accent
+    glow.a   = u8(55 + pulse*80)
+
+    // A restrained colored aura makes the reward legible in black caves.
+    rl.DrawRectangle(ox + 2, oy + 1, 12, 8, glow)
+
+    // Black stepped silhouette: arched lid over a wider box and two feet.
+    rl.DrawRectangle(ox + 2, oy,     12, 1, outline)
+    rl.DrawRectangle(ox + 1, oy + 1, 14, 3, outline)
+    rl.DrawRectangle(ox,     oy + 4, 16, 6, outline)
+    rl.DrawRectangle(ox + 1, oy + 10, 3, 1, outline)
+    rl.DrawRectangle(ox + 12, oy + 10, 3, 1, outline)
+
+    // Warm oak panels and the curved lid highlight.
+    rl.DrawRectangle(ox + 2, oy + 1, 12, 1, wood_hi)
+    rl.DrawRectangle(ox + 1, oy + 2, 14, 2, wood)
+    rl.DrawRectangle(ox + 1, oy + 4, 14, 5, wood)
+    rl.DrawRectangle(ox + 1, oy + 6, 14, 1, wood_hi)
+    rl.DrawRectangle(ox + 1, oy + 8, 14, 1, wood_d)
+    rl.DrawRectangle(ox + 3, oy + 3, 10, 1, wood_d)
+
+    // Heavy iron belt and three vertical straps, kept chunky at game scale.
+    rl.DrawRectangle(ox + 1,  oy + 4, 14, 2, iron)
+    rl.DrawRectangle(ox + 1,  oy + 4, 14, 1, iron_hi)
+    for sx in ([3]i32{2, 7, 12}) {
+        rl.DrawRectangle(ox + sx, oy + 1, 2, 8, iron)
+        rl.DrawRectangle(ox + sx, oy + 2, 1, 6, iron_hi)
+    }
+
+    // Corner rivets and the bright rune-lock: the only tier-specific color.
+    rl.DrawRectangle(ox + 2,  oy + 5, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 13, oy + 5, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 2,  oy + 8, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 13, oy + 8, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 6, oy + 4, 4, 4, outline)
+    rl.DrawRectangle(ox + 7, oy + 5, 2, 2, accent)
+    rl.DrawRectangle(ox + 6, oy + 6, 4, 1, accent)
+    rl.DrawRectangle(ox + 8, oy + 5, 1, 1, rl.WHITE)
 }
 
 // Working machines show it (read-only: sim_data progress → overlay).  A

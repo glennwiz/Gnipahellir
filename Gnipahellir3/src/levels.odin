@@ -168,6 +168,10 @@ player_interact :: proc(gs: ^Game_State) {
     cx := int(gs.player.pos.x + PLAYER_W*0.5)
     cy := int(gs.player.pos.y + PLAYER_H*0.5)
 
+    // Blueprint coffers get first claim on the broad interaction key: they are
+    // permanent progression finds, not mineable storage furniture.
+    if open_nearby_blueprint_chest(gs, cx, cy) do return
+
     // Standing in a dimension's return gate: step back home.
     if gs.level_index == LEVEL_DIMENSION && get_tile(&gs.world, cx, cy) == .Dimension_Gate {
         dimension_exit(gs)
@@ -297,9 +301,9 @@ blueprint_places := [MAX_PROGRESSION_TIERS]string{
 spawn_deep_blueprint :: proc(gs: ^Game_State) {
     if gs.progression.blueprint_found[0] do return
     idx := grid_idx(141, 94)
+    if is_blueprint_chest(gs.world.terrain[idx]) do return
     if gs.world.items[idx] != .None do return
-    gs.world.items[idx]       = .Blueprint_A
-    gs.world.item_counts[idx] = 1
+    if !place_blueprint_chest(&gs.world, 141, 94, .Blueprint_A) do return
     notify(gs, "Something stirs deep below - seek the sealed chamber")
 }
 
@@ -589,9 +593,7 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
     carve_box(w, 8, 96, 16, 101)
     for x in 8 ..= 16 do set_tile(w, x, 102, .Stone)
     bp: Item = depth_tier == 1 ? .Blueprint_B : .Blueprint_C
-    idx := grid_idx(12, 101)
-    w.items[idx]       = bp
-    w.item_counts[idx] = 1
+    place_blueprint_chest(w, 12, 101, bp)
 }
 
 carve_box :: proc(w: ^World_Grid, x0, y0, x1, y1: int) {
@@ -682,13 +684,11 @@ carve_level0_portals :: proc(w: ^World_Grid) {
     // the Sky Altar stands (spawn_deep_blueprint), so new players face one
     // blueprint at a time.
 
-    // Sky Blueprint rests on the grass near spawn — it reveals the Sky Altar
-    // that, once built, opens the gate to the heavens.
+    // The Sky Blueprint waits in a rune-locked coffer near spawn.  It reveals
+    // the Sky Altar that, once built, opens the gate to the heavens.
     sbp_x := GRID_W/2 - 12
     set_tile(w, sbp_x, SURFACE_Y - 1, .Air)  // clear any decoration
-    sbp := grid_idx(sbp_x, SURFACE_Y - 1)
-    w.items[sbp]       = .Sky_Blueprint
-    w.item_counts[sbp] = 1
+    place_blueprint_chest(w, sbp_x, SURFACE_Y - 1, .Sky_Blueprint)
 }
 
 debug_add_all_structures :: proc(gs: ^Game_State) {

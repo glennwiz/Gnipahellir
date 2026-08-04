@@ -79,6 +79,13 @@ load_game :: proc(gs: ^Game_State) -> bool {
     gs.elapsed_time = sd.elapsed_time
     gs.frame        = sd.frame
 
+    // v21 previously stored progression blueprints as loose world items.
+    // Seal both the active grid and every already-generated stashed grid.
+    seal_loose_blueprints(&gs.world)
+    for i in 0 ..< len(gs.levels.worlds) {
+        if gs.levels.generated[i] do seal_loose_blueprints(&gs.levels.worlds[i])
+    }
+
     log_action(gs, "run continued from save")
     return true
 }

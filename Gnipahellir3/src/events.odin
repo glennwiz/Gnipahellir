@@ -175,10 +175,14 @@ process_events :: proc(gs: ^Game_State) {
             smelter_withdraw(gs, e.tile)
 
         case .Barrel_Interact:
-            gs.ui.show_barrel    = true
-            gs.ui.barrel_tile    = e.tile
-            gs.ui.show_inventory = true  // the barrel trades with the bag
-            log_action(gs, "Player opens barrel at (%d,%d)", e.tile.x, e.tile.y)
+            if is_blueprint_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) {
+                open_blueprint_chest(gs, e.tile)
+            } else {
+                gs.ui.show_barrel    = true
+                gs.ui.barrel_tile    = e.tile
+                gs.ui.show_inventory = true  // the barrel trades with the bag
+                log_action(gs, "Player opens barrel at (%d,%d)", e.tile.x, e.tile.y)
+            }
 
         case .Barrel_Store:
             if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
@@ -187,7 +191,13 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Barrel_Take:
             if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
-                barrel_take(gs, b, int(e.payload.int_val))
+                slot := int(e.payload.int_val)
+                if is_blueprint_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) &&
+                   slot >= 0 && slot < BARREL_SLOTS && is_blueprint(b.slots[slot].item) {
+                    blueprint_chest_take(gs, b, slot)
+                } else {
+                    barrel_take(gs, b, slot)
+                }
             }
 
         case .Projectile_Fired:

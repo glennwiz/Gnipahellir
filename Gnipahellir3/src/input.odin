@@ -126,7 +126,7 @@ update_input :: proc(gs: ^Game_State) {
     // Player-built equipment always wins over mining. Normal click uses it;
     // Shift+hold is handled separately by update_reclaim.
     hover_t := get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y))
-    if is_structure_tile[hover_t] {
+    if is_structure_tile[hover_t] || is_blueprint_chest(hover_t) {
         inp.mine = false
         inp.attack = false
     }
@@ -137,9 +137,11 @@ update_input :: proc(gs: ^Game_State) {
        get_tile(&gs.world, int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y)) != .Smelter {
         gs.ui.show_smelter = false
     }
-    if gs.ui.show_barrel &&
-       get_tile(&gs.world, int(gs.ui.barrel_tile.x), int(gs.ui.barrel_tile.y)) != .Barrel {
-        gs.ui.show_barrel = false
+    if gs.ui.show_barrel {
+        container_t := get_tile(&gs.world, int(gs.ui.barrel_tile.x), int(gs.ui.barrel_tile.y))
+        if container_t != .Barrel && !is_blueprint_chest(container_t) {
+            gs.ui.show_barrel = false
+        }
     }
 
     // Grabbing a floating window's header drags it; the press is eaten so it
@@ -183,8 +185,14 @@ update_input :: proc(gs: ^Game_State) {
 
     // A normal click uses the exact equipment under the cursor. Shift reserves
     // the press for the deliberate reclaim hold instead.
-    if rl.IsMouseButtonPressed(.LEFT) && world_mouse && !shift_down && is_structure_tile[hover_t] {
-        eq_push(&gs.events, Event{type = .Structure_Interact, tile = inp.mouse_tile})
+    if rl.IsMouseButtonPressed(.LEFT) && world_mouse && !shift_down {
+        if is_blueprint_chest(hover_t) {
+            // Queue this like barrel interaction so the newly opened window
+            // cannot consume the same mouse press that clicked the world chest.
+            eq_push(&gs.events, Event{type = .Barrel_Interact, tile = inp.mouse_tile})
+        } else if is_structure_tile[hover_t] {
+            eq_push(&gs.events, Event{type = .Structure_Interact, tile = inp.mouse_tile})
+        }
     }
 
     // UI toggles. TAB with any window open sweeps them all shut (like ESC);
@@ -365,7 +373,7 @@ update_input :: proc(gs: ^Game_State) {
             }
             gs.ui.drag_input = false
         } else if gs.ui.drag_barrel >= 0 {
-            // Dragging a barrel stack out — drop it on the bag to withdraw it.
+            // Dragging a container item out — drop it on the bag to withdraw it.
             if cursor_in_window(gs, .Inventory) {
                 eq_push(&gs.events, Event{
                     type    = .Barrel_Take,

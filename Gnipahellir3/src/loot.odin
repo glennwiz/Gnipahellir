@@ -57,6 +57,18 @@ rand_range :: proc(gs: ^Game_State, lo, hi: int) -> int {
 // is claimed outright: a guaranteed drop (the Hell Key) can never be lost.
 spawn_ground_item :: proc(w: ^World_Grid, tile: [2]i32, item: Item, count: int) {
     if item == .None || count <= 0 do return
+    // Progression knowledge always lands protected in a coffer, never as a
+    // generic glowing ground pile.
+    if is_blueprint(item) {
+        for r in i32(0) ..= 2 {
+            for dy in -r ..= r do for dx in -r ..= r {
+                if max(abs(dx), abs(dy)) != r do continue
+                x, y := int(tile.x + dx), int(tile.y + dy)
+                if place_blueprint_chest(w, x, y, item) do return
+            }
+        }
+        return
+    }
     n := u8(min(count, MAX_STACK))
     for r in i32(0) ..= 2 {
         for dy in -r ..= r do for dx in -r ..= r {

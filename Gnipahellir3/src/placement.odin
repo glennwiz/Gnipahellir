@@ -192,6 +192,28 @@ handle_item_drop :: proc(gs: ^Game_State, e: Event) {
         notify(gs, "No room to drop there")
         return
     }
+    // Blueprints re-seal themselves when deliberately dropped.  They remain
+    // unique progression objects instead of joining automation item piles.
+    if is_blueprint(s.item) {
+        if tile_overlaps_player(gs, x, y) {
+            notify(gs, "Step aside before sealing the blueprint there")
+            return
+        }
+        if gs.world.items[grid_idx(x, y)] != .None {
+            notify(gs, "Something is already lying there")
+            return
+        }
+        item := s.item
+        if !place_blueprint_chest(&gs.world, x, y, item) {
+            notify(gs, "The blueprint chest needs clear ground")
+            return
+        }
+        s.count -= 1
+        if s.count == 0 do s.item = .None
+        audio_play(&gs.audio, .Place)
+        log_action(gs, "Player seals %v in a chest at (%d,%d)", item, x, y)
+        return
+    }
     idx      := grid_idx(x, y)
     existing := gs.world.items[idx]
     have     := int(gs.world.item_counts[idx])

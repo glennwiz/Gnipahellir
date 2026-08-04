@@ -89,6 +89,12 @@ Tile_Type :: enum u8 {
     // Wooden 4×4 storage barrel — hand-organized inventory overflow (barrel.odin)
     // (appended: terrain is saved as u8, order is frozen)
     Barrel,
+    // Permanent progression/storage coffers.  Each variant starts with the
+    // named blueprint; appended because terrain enum ordinals are serialized.
+    Sky_Blueprint_Chest,
+    Blueprint_Chest_A,
+    Blueprint_Chest_B,
+    Blueprint_Chest_C,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────

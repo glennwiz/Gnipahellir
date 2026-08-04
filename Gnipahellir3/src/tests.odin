@@ -494,19 +494,90 @@ pickup_collects_world_drops :: proc(t: ^testing.T) {
 }
 
 @(test)
-blueprint_pickup_sets_progression :: proc(t: ^testing.T) {
+blueprint_chest_opens_container_then_claims :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     gs.player.pos = {10, 40}
-    idx := grid_idx(10, 41)
-    gs.world.items[idx]       = .Blueprint_A
-    gs.world.item_counts[idx] = 1
+    set_tile(&gs.world, 11, 41, .Blueprint_Chest_A)
 
-    player_pickup(gs)
+    testing.expect(t, open_blueprint_chest(gs, {11, 41}), "chest should be recognized")
+    testing.expect(t, gs.ui.show_barrel, "chest should open the shared container window")
+    testing.expect(t, gs.ui.show_inventory, "bag should open beside the chest")
+    testing.expect(t, !gs.progression.blueprint_found[0], "opening alone must not claim the blueprint")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Blueprint_A), 0)
+    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Blueprint_Chest_A)
+    chest_store := barrel_at(gs, gs.level_index, {11, 41})
+    testing.expect(t, chest_store != nil, "opening should create ordinary 4x4 storage")
+    testing.expect_value(t, chest_store.slots[BLUEPRINT_CHEST_SLOT].item, Item.Blueprint_A)
+
+    eq_push(&gs.events, Event{
+        type    = .Barrel_Take,
+        tile    = {11, 41},
+        payload = {int_val = BLUEPRINT_CHEST_SLOT},
+    })
     process_events(gs)
 
     testing.expect(t, gs.progression.blueprint_found[0], "blueprint A should set tier 0")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Blueprint_A), 1)
+    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Blueprint_Chest_A)
+    testing.expect(t, gs.ui.show_barrel, "permanent chest window should stay open")
+
+    // The same chest is immediately reusable as ordinary storage.
+    gs.player.inventory.slots[1] = {.Stone_Block, 3}
+    eq_push(&gs.events, Event{
+        type    = .Barrel_Store,
+        tile    = {11, 41},
+        payload = {int_val = 1},
+    })
+    process_events(gs)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 0)
+    testing.expect_value(t, barrel_total(chest_store), 3)
+}
+
+@(test)
+blueprint_stays_inside_open_chest_when_bag_is_full :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {10, 40}
+    for i in 0 ..< MAX_INVENTORY {
+        gs.player.inventory.slots[i] = {.Stone_Block, MAX_STACK}
+    }
+    set_tile(&gs.world, 11, 41, .Blueprint_Chest_A)
+
+    testing.expect(t, open_blueprint_chest(gs, {11, 41}), "chest should be recognized")
+    testing.expect(t, gs.ui.show_barrel, "full bag must not prevent the chest window opening")
+    eq_push(&gs.events, Event{
+        type    = .Barrel_Take,
+        tile    = {11, 41},
+        payload = {int_val = BLUEPRINT_CHEST_SLOT},
+    })
+    process_events(gs)
+
+    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Blueprint_Chest_A)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Blueprint_A), 0)
+    testing.expect(t, gs.ui.show_barrel, "open chest should remain visible after a refused take")
+    chest_store := barrel_at(gs, gs.level_index, {11, 41})
+    testing.expect(t, chest_store != nil, "full bag must not remove chest storage")
+    testing.expect_value(t, chest_store.slots[BLUEPRINT_CHEST_SLOT].item, Item.Blueprint_A)
+}
+
+@(test)
+loose_blueprints_are_sealed_for_save_compatibility :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := grid_idx(20, 80)
+    set_tile(&gs.world, 20, 80, .Void)
+    gs.world.items[idx]       = .Blueprint_C
+    gs.world.item_counts[idx] = 1
+
+    seal_loose_blueprints(&gs.world)
+
+    testing.expect_value(t, get_tile(&gs.world, 20, 80), Tile_Type.Blueprint_Chest_C)
+    testing.expect_value(t, gs.world.items[idx], Item.None)
+    testing.expect_value(t, gs.world.item_counts[idx], 0)
 }
 
 @(test)
@@ -1129,7 +1200,8 @@ cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     testing.expect(t, iron > 50, "cave 2 should have iron")
     testing.expect(t, silver > 20, "cave 2 should have silver")
     testing.expect(t, voids > 2000, "cave 2 should be substantially open")
-    testing.expect_value(t, w.items[grid_idx(12, 101)], Item.Blueprint_B)
+    testing.expect_value(t, get_tile(w, 12, 101), Tile_Type.Blueprint_Chest_B)
+    testing.expect_value(t, w.items[grid_idx(12, 101)], Item.None)
     testing.expect_value(t, get_tile(w, 6, 14), Tile_Type.Cave_Entrance)
 }
 
@@ -2091,22 +2163,21 @@ deep_blueprint_waits_for_the_altar :: proc(t: ^testing.T) {
     defer free(gs)
 
     idx := grid_idx(141, 94)
-    testing.expect(t, gs.world.items[idx] == .None, "Blueprint A must not exist at world gen")
+    testing.expect(t, !is_blueprint_chest(gs.world.terrain[idx]), "Blueprint A chest must not exist at world gen")
 
     spawn_deep_blueprint(gs)
-    testing.expect(t, gs.world.items[idx] == .Blueprint_A, "altar raise reveals Blueprint A in the chamber")
-    testing.expect_value(t, gs.world.item_counts[idx], 1)
+    testing.expect_value(t, gs.world.terrain[idx], Tile_Type.Blueprint_Chest_A)
+    testing.expect_value(t, gs.world.items[idx], Item.None)
 
-    // Idempotent: a second raise doesn't stack another copy
+    // Idempotent: a second raise keeps the same single chest.
     spawn_deep_blueprint(gs)
-    testing.expect_value(t, gs.world.item_counts[idx], 1)
+    testing.expect_value(t, gs.world.terrain[idx], Tile_Type.Blueprint_Chest_A)
 
     // Already found: never respawns
-    gs.world.items[idx]       = .None
-    gs.world.item_counts[idx] = 0
+    set_tile(&gs.world, 141, 94, .Void)
     gs.progression.blueprint_found[0] = true
     spawn_deep_blueprint(gs)
-    testing.expect(t, gs.world.items[idx] == .None, "found blueprint must not respawn")
+    testing.expect(t, !is_blueprint_chest(gs.world.terrain[idx]), "found blueprint chest must not respawn")
 }
 
 @(test)
@@ -3000,11 +3071,11 @@ builder_soak_cave2_economy :: proc(t: ^testing.T) {
     testing.expectf(t, dens_done_window >= 0 && dens_done_window <= 10,
         "all dens should stand within 10 minutes (done at %d)", dens_done_window)
 
-    // The deposit loop must have produced raidable loot (builder deposits are
-    // the only world items in this cave besides the generated blueprint).
+    // The deposit loop must have produced raidable loot (blueprints are tiles,
+    // so every world item here was deposited by a builder).
     loot := 0
     for i in 0 ..< GRID_W * GRID_H {
-        if gs.world.items[i] != .None && gs.world.items[i] != .Blueprint_B {
+        if gs.world.items[i] != .None {
             loot += int(gs.world.item_counts[i])
         }
     }

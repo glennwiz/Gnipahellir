@@ -1302,19 +1302,21 @@ draw_hover_label :: proc(gs: ^Game_State) {
 	text := cstring(raw_data(terrain_table[t].name))
 	tw := rl.MeasureText(text, FONT)
 	equipment := is_structure_tile[t]
+	blueprint_chest := is_blueprint_chest(t)
 	hint := cstring("click/E use  |  SHIFT+HOLD reclaim")
+	if blueprint_chest do hint = cstring("click/E open")
 	hint_w := i32(0)
-	if equipment do hint_w = rl.MeasureText(hint, FONT)
+	if equipment || blueprint_chest do hint_w = rl.MeasureText(hint, FONT)
 	pw := max(tw, hint_w) + PAD*2
 	ph := i32(FONT) + PAD*2
-	if equipment do ph += i32(FONT) + 3
+	if equipment || blueprint_chest do ph += i32(FONT) + 3
 	x := clamp(i32(gs.input.mouse_screen.x) + 14, 0, i32(UI_W) - pw)
 	y := clamp(i32(gs.input.mouse_screen.y) + 18, 0, i32(UI_H) - ph)
 
 	rl.DrawRectangle(x, y, pw, ph, NORSE_PANEL)
 	rl.DrawRectangleLines(x, y, pw, ph, NORSE_BORDER)
 	rl.DrawText(text, x + PAD, y + PAD, FONT, rl.Color{255, 240, 180, 255})
-	if equipment {
+	if equipment || blueprint_chest {
 		rl.DrawText(hint, x + PAD, y + PAD + i32(FONT) + 3, FONT, rl.Color{225, 150, 70, 255})
 	}
 }
@@ -1778,12 +1780,14 @@ draw_smelter :: proc(gs: ^Game_State) {
 	}
 }
 
-// The barrel window: a 4×4 grid of slots.  Drag a bag stack onto it to stow,
-// drag a slot onto the open bag to withdraw (input.odin drives the drags).
+// Shared normal-storage window: barrels and blueprint chests both expose the
+// same 4×4 inventory.  A fresh chest simply starts with its blueprint in slot 5.
 draw_barrel :: proc(gs: ^Game_State) {
 	px := gs.ui.win_pos[.Barrel].x
 	py := gs.ui.win_pos[.Barrel].y
 	tile := gs.ui.barrel_tile
+	container_t := get_tile(&gs.world, int(tile.x), int(tile.y))
+	is_chest := is_blueprint_chest(container_t)
 
 	pcx := i32(gs.player.pos.x + PLAYER_W * 0.5)
 	pcy := i32(gs.player.pos.y + PLAYER_H * 0.5)
@@ -1791,7 +1795,9 @@ draw_barrel :: proc(gs: ^Game_State) {
 
 	rl.DrawRectangle(px, py, BARREL_W, BARREL_H, NORSE_PANEL)
 	rl.DrawRectangleLinesEx({f32(px), f32(py), BARREL_W, BARREL_H}, 2, NORSE_BORDER)
-	rl.DrawText("BARREL", px + BARREL_PAD, py + 12, 20, in_reach ? NORSE_GOLD_HOT : text_dim)
+	title := cstring("BARREL")
+	if is_chest do title = cstring("CHEST")
+	rl.DrawText(title, px + BARREL_PAD, py + 12, 20, in_reach ? NORSE_GOLD_HOT : text_dim)
 	rl.DrawText("[ESC] close", px + BARREL_W - 96, py + 16, 12, NORSE_GOLD)
 	rl.DrawRectangle(px + BARREL_PAD, py + 38, BARREL_W - BARREL_PAD * 2, 2, NORSE_BORDER)
 
@@ -1809,8 +1815,8 @@ draw_barrel :: proc(gs: ^Game_State) {
 		rl.DrawText(cstring(raw_data(cnt_buf[:])), x + 6, y + SLOT_PX - 14, 10, rl.WHITE)
 	}
 
-	rl.DrawText("drag stacks in from the bag, or a slot out to it",
-		px + BARREL_PAD, py + BARREL_H - 20, 10, text_dim)
+	footer := cstring("drag stacks in from the bag, or a slot out to it")
+	rl.DrawText(footer, px + BARREL_PAD, py + BARREL_H - 20, 10, text_dim)
 }
 
 // The interactive blueprint overlay (B, or click a blueprint in the bag):
@@ -1861,7 +1867,7 @@ draw_blueprint :: proc(gs: ^Game_State) {
 		rl.DrawText("BLUEPRINT", x + 20, y + 18, 24, accent)
 		rl.DrawText("You carry no blueprint yet.", x + 20, y + 64, 18, text_dim)
 		rl.DrawText(
-			"Delve the caves - a sky blueprint waits in each.",
+			"Delve the caves - each blueprint waits in a sealed chest.",
 			x + 20,
 			y + 92,
 			16,
