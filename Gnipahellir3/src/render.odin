@@ -241,6 +241,9 @@ draw_world :: proc(gs: ^Game_State) {
             }
         }
     }
+    // Connected natural trees are a render-only overlay; putting them here also
+    // hides the debug grid inside their crown and trunk silhouette.
+    draw_tree_layer(gs)
     // Blueprint chests deliberately spill beyond one 10px terrain cell.  Draw
     // them after the grid so neighboring backdrop cells cannot crop the coffer.
     draw_blueprint_chests(gs)
@@ -424,6 +427,13 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         draw_pixel_loam_stone(px, py, x, y)
         return
     }
+    // Natural Wood/Leaves are painted as one connected tree in a second pass.
+    // Clearing their cells to sky first lets the trunk taper and the crown make
+    // an irregular silhouette without changing the underlying collision grid.
+    if (t == .Wood || t == .Leaves) && .Placed not_in gs.world.tile_flags[grid_idx(x, y)] {
+        rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[.Air].color)
+        return
+    }
     if gs.assets.loaded {
         if sp, ok := tile_sprite(gs, t, x, y); ok {
             dst := rl.Rectangle{f32(px), f32(py), CELL_SIZE, CELL_SIZE}
@@ -576,6 +586,115 @@ draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
 //
 //  x: 0 1 2 3 4 5 6 7 8 9
 //     L D . . . L D . . .   (L=light, D=dark, .=base brown)
+
+// Natural trees keep square collision cells but render as connected silhouettes.
+// Player-placed and falling Wood/Leaves retain their useful block-shaped art.
+natural_tree_cell :: proc(w: ^World_Grid, x, y: int, t: Tile_Type) -> bool {
+    if !in_bounds(x, y) do return false
+    idx := grid_idx(x, y)
+    return w.terrain[idx] == t && .Placed not_in w.tile_flags[idx]
+}
+
+draw_tree_layer :: proc(gs: ^Game_State) {
+    w := &gs.world
+
+    // Bark first, so the crown naturally hides branch ends.
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if natural_tree_cell(w, x, y, .Wood) do draw_pixel_tree_trunk(w, x, y)
+        }
+    }
+
+    // Lay down all crown shadows before any fill so neighboring clumps merge
+    // instead of showing a dark seam at every tile edge.
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if natural_tree_cell(w, x, y, .Leaves) do draw_pixel_tree_leaf_shadow(x, y)
+        }
+    }
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if natural_tree_cell(w, x, y, .Leaves) do draw_pixel_tree_leaf_fill(x, y)
+        }
+    }
+}
+
+draw_pixel_tree_trunk :: proc(w: ^World_Grid, x, y: int) {
+    bx, by := i32(x*CELL_SIZE), i32(y*CELL_SIZE)
+    h      := whash(u32(x)*2246822519)
+    sway   := i32(h%3) - 1
+    tx     := bx + 2 + sway
+    outline := rl.Color{45, 27, 20, 255}
+    bark_d  := rl.Color{82, 45, 24, 255}
+    bark    := rl.Color{132, 75, 35, 255}
+    bark_hi := rl.Color{190, 119, 54, 255}
+
+    // Narrow dark-edged trunk with a warm facet.  Every segment in a column
+    // shares one sway value, so stacked cells join without horizontal seams.
+    rl.DrawRectangle(tx,     by, 6, CELL_SIZE, outline)
+    rl.DrawRectangle(tx + 1, by, 4, CELL_SIZE, bark)
+    rl.DrawRectangle(tx + 1, by + 1, 1, 8, bark_hi)
+    rl.DrawRectangle(tx + 4, by + 1, 1, 8, bark_d)
+
+    grain := whash(u32(x)*374761393 ~ u32(y)*668265263)
+    gy := by + 2 + i32(grain%6)
+    rl.DrawRectangle(tx + 2, gy,     2, 1, bark_d)
+    rl.DrawRectangle(tx + 2, gy + 1, 1, 1, bark_hi)
+
+    if !natural_tree_cell(w, x, y - 1, .Wood) {
+        // Forks spread under the crown; foliage drawn later trims their ends.
+        rl.DrawRectangle(tx - 3, by + 1, 5, 3, outline)
+        rl.DrawRectangle(tx - 2, by + 2, 4, 1, bark)
+        rl.DrawRectangle(tx + 4, by,     5, 3, outline)
+        rl.DrawRectangle(tx + 4, by + 1, 4, 1, bark_hi)
+    }
+    if !natural_tree_cell(w, x, y + 1, .Wood) {
+        // Stepped roots make the tree sit on the grass instead of ending as a post.
+        rl.DrawRectangle(bx,     by + 8, 5, 2, outline)
+        rl.DrawRectangle(bx + 5, by + 7, 5, 3, outline)
+        rl.DrawRectangle(bx + 1, by + 8, 4, 1, bark_hi)
+        rl.DrawRectangle(bx + 5, by + 8, 4, 1, bark)
+    }
+}
+
+tree_leaf_center :: proc(x, y: int) -> (i32, i32, u32) {
+    h := whash(u32(x)*374761393 ~ u32(y)*668265263)
+    bx, by := i32(x*CELL_SIZE), i32(y*CELL_SIZE)
+    return bx + 5 + i32(h%3) - 1, by + 5 + i32((h>>3)%3) - 1, h
+}
+
+draw_pixel_tree_leaf_shadow :: proc(x, y: int) {
+    cx, cy, _ := tree_leaf_center(x, y)
+    outline := rl.Color{20, 48, 24, 255}
+    // A stepped puff which overlaps its neighbors into one bumpy round crown.
+    rl.DrawRectangle(cx - 5, cy - 4, 11, 9, outline)
+    rl.DrawRectangle(cx - 4, cy - 5, 9, 11, outline)
+    rl.DrawRectangle(cx - 6, cy - 2, 13, 5, outline)
+}
+
+draw_pixel_tree_leaf_fill :: proc(x, y: int) {
+    cx, cy, h := tree_leaf_center(x, y)
+    deep  := rl.Color{27, 92, 38, 255}
+    mid   := rl.Color{43, 137, 47, 255}
+    light := rl.Color{112, 181, 55, 255}
+    glow  := rl.Color{166, 203, 69, 255}
+
+    rl.DrawRectangle(cx - 4, cy - 3, 9, 7, mid)
+    rl.DrawRectangle(cx - 3, cy - 4, 7, 9, mid)
+    rl.DrawRectangle(cx - 5, cy - 1, 11, 3, mid)
+
+    // Mossy upper light, forest under-shadow, and one amber-green glint give
+    // each clump the same strong material definition as the rune chest.
+    rl.DrawRectangle(cx - 3, cy - 3, 4, 2, light)
+    rl.DrawRectangle(cx - 4, cy - 1, 2, 2, light)
+    rl.DrawRectangle(cx + 1, cy + 2, 4, 2, deep)
+    rl.DrawRectangle(cx + 3, cy,     2, 2, deep)
+    if h&1 == 0 {
+        rl.DrawRectangle(cx - 1, cy - 3, 2, 1, glow)
+    } else {
+        rl.DrawRectangle(cx - 3, cy, 1, 2, glow)
+    }
+}
 
 draw_pixel_wood :: proc(bx, by: i32) {
     base  := rl.Color{139, 90,  43, 255}
