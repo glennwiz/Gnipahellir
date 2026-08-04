@@ -237,10 +237,12 @@ Floating_Text_Store :: struct {
 //  save caught mid-fall drops the airborne blocks (a rare, cosmetic loss).
 
 Falling_Block :: struct {
-    tile:   Tile_Type,
-    x:      i32,   // column (never changes — blocks fall straight down)
-    y:      f32,   // tile-space top; fractional while sliding
-    active: bool,
+    tile:     Tile_Type,
+    x:        i32,   // column (never changes — blocks fall straight down)
+    y:        f32,   // tile-space top; fractional while sliding
+    source_x: i32,   // original grid cell; preserves the static texture variant
+    source_y: i32,   // while live Y moves through fractional rows
+    active:   bool,
 }
 
 Gravity_State :: struct {

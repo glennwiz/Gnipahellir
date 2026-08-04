@@ -241,6 +241,9 @@ draw_world :: proc(gs: ^Game_State) {
             }
         }
     }
+    // The workbench, like the blueprint chest, is wider than its one-cell
+    // collision footprint and needs a clean overlay pass after the grid.
+    draw_crafting_benches(gs)
     // Blueprint chests deliberately spill beyond one 10px terrain cell.  Draw
     // them after the grid so neighboring backdrop cells cannot crop the coffer.
     draw_blueprint_chests(gs)
@@ -356,6 +359,8 @@ draw_cloud_layer :: proc(gs: ^Game_State) {
 }
 
 // Blocks cut loose from their anchor, mid-slide toward the ground (gravity.odin).
+// A falling Wood cell reuses the exact atlas variant selected at its original
+// static coordinate; without this, the trunk visibly changed texture mid-fall.
 // Read-only: the pool is advanced in update_gravity, never here.
 draw_falling_blocks :: proc(gs: ^Game_State) {
     for b in gs.gravity.blocks {
@@ -363,7 +368,15 @@ draw_falling_blocks :: proc(gs: ^Game_State) {
         bx := b.x * CELL_SIZE
         by := i32(b.y * CELL_SIZE)
         #partial switch b.tile {
-        case .Wood:   draw_pixel_wood(bx, by)
+        case .Wood:
+            if gs.assets.loaded {
+                sp  := wood_variant(int(b.source_x), int(b.source_y))
+                src := tile_atlas_rect(sp)
+                dst := rl.Rectangle{f32(bx), f32(by), CELL_SIZE, CELL_SIZE}
+                rl.DrawTexturePro(gs.assets.tile_atlas, src, dst, {0, 0}, 0, rl.WHITE)
+            } else {
+                draw_pixel_wood(bx, by)
+            }
         case .Leaves: draw_pixel_leaves(bx, by)
         case:         rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[b.tile].color)
         }
@@ -431,6 +444,13 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
             if t == .Stone do rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, STONE_TINT)
             return
         }
+    }
+    if t == .Crafting_Bench {
+        // Backdrop only.  The full 20x14 bench is painted after the terrain loop
+        // so adjacent cells cannot crop its vise, mallet, legs, or thick top.
+        bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
+        rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
+        return
     }
     if glow := station_glow[t]; glow.a != 0 {
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, rl.Color{24, 22, 30, 255})
@@ -529,6 +549,109 @@ draw_pixel_blueprint_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x
     rl.DrawRectangle(ox + 7, oy + 5, 2, 2, accent)
     rl.DrawRectangle(ox + 6, oy + 6, 4, 1, accent)
     rl.DrawRectangle(ox + 8, oy + 5, 1, 1, rl.WHITE)
+}
+
+// ─── Pixel Art: Crafting Bench ────────────────────────────────────────────────
+//
+// A compact 20x14 Norse workbench translated from
+// sprites/crafting_bench_concept.png: thick oak slab, braced legs, iron caps,
+// vise, mallet, rivets, and one restrained rune boss.  Collision stays one cell;
+// this is a read-only overlay, just like the blueprint chest.
+
+draw_crafting_benches :: proc(gs: ^Game_State) {
+    for y in 0 ..< GRID_H {
+        for x in 0 ..< GRID_W {
+            if get_tile(&gs.world, x, y) == .Crafting_Bench {
+                draw_pixel_crafting_bench(gs, i32(x*CELL_SIZE), i32(y*CELL_SIZE), x, y)
+            }
+        }
+    }
+}
+
+draw_pixel_crafting_bench :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+    ox, oy := bx - 5, by - 4
+    outline := rl.Color{24, 20, 24, 255}
+    iron_d  := rl.Color{42, 43, 49, 255}
+    iron    := rl.Color{65, 67, 75, 255}
+    iron_hi := rl.Color{122, 126, 136, 255}
+    wood_d  := rl.Color{74, 39, 24, 255}
+    wood    := rl.Color{126, 68, 36, 255}
+    wood_hi := rl.Color{174, 102, 54, 255}
+    brass_d := rl.Color{124, 76, 24, 255}
+    pulse   := (math.sin(gs.elapsed_time*2.4 + f32(x*7 + y*13)) + 1) * 0.5
+    brass   := rl.Color{u8(194 + pulse*40), u8(130 + pulse*42), u8(38 + pulse*22), 255}
+    hot     := rl.Color{255, u8(198 + pulse*38), u8(72 + pulse*28), 255}
+
+    // A small warm breath behind the station; the physical bench remains solid
+    // and material-led rather than washed in the old full-tile magic glow.
+    halo := station_glow[.Crafting_Bench]
+    halo.a = u8(18 + pulse*24)
+    rl.DrawRectangle(ox + 3, oy + 3, 14, 9, halo)
+
+    // One joined silhouette: slab/apron, legs, feet, and low cross-brace.
+    rl.DrawRectangle(ox,      oy + 3, 20, 5, outline)
+    rl.DrawRectangle(ox + 2,  oy + 7, 16, 4, outline)
+    rl.DrawRectangle(ox + 2,  oy + 8, 5, 6, outline)
+    rl.DrawRectangle(ox + 13, oy + 8, 5, 6, outline)
+    rl.DrawRectangle(ox + 5,  oy + 11, 10, 3, outline)
+
+    // Thick oak top: bright worn edge, two panel seams, dark underside.
+    rl.DrawRectangle(ox + 1, oy + 4, 18, 3, wood)
+    rl.DrawRectangle(ox + 2, oy + 4, 16, 1, wood_hi)
+    rl.DrawRectangle(ox + 1, oy + 6, 18, 1, wood_d)
+    rl.DrawRectangle(ox + 6, oy + 4, 1, 2, wood_d)
+    rl.DrawRectangle(ox + 14, oy + 4, 1, 2, wood_d)
+    rl.DrawRectangle(ox + 8, oy + 5, 4, 1, wood_hi)
+
+    // Front apron and stout braced legs.
+    rl.DrawRectangle(ox + 3,  oy + 7, 14, 3, wood_d)
+    rl.DrawRectangle(ox + 4,  oy + 7, 12, 1, wood)
+    rl.DrawRectangle(ox + 3,  oy + 9, 4, 4, wood)
+    rl.DrawRectangle(ox + 14, oy + 9, 3, 4, wood)
+    rl.DrawRectangle(ox + 4,  oy + 9, 1, 3, wood_hi)
+    rl.DrawRectangle(ox + 16, oy + 9, 1, 3, wood_d)
+    rl.DrawRectangle(ox + 6,  oy + 12, 8, 1, wood)
+    rl.DrawRectangle(ox + 6,  oy + 13, 8, 1, wood_d)
+
+    // Iron corner caps and foot shoes, with chest-style rivet glints.
+    rl.DrawRectangle(ox,      oy + 3, 3, 4, iron)
+    rl.DrawRectangle(ox + 17, oy + 3, 3, 4, iron)
+    rl.DrawRectangle(ox + 1,  oy + 3, 2, 1, iron_hi)
+    rl.DrawRectangle(ox + 17, oy + 3, 2, 1, iron_hi)
+    rl.DrawRectangle(ox + 2,  oy + 12, 5, 2, iron_d)
+    rl.DrawRectangle(ox + 13, oy + 12, 5, 2, iron_d)
+    rl.DrawRectangle(ox + 3,  oy + 12, 3, 1, iron_hi)
+    rl.DrawRectangle(ox + 14, oy + 12, 3, 1, iron_hi)
+    rl.DrawRectangle(ox + 1,  oy + 5, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 18, oy + 5, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 4,  oy + 12, 1, 1, iron_hi)
+    rl.DrawRectangle(ox + 15, oy + 12, 1, 1, iron_hi)
+
+    // Compact vise on the left: fixed jaw, sliding jaw, and screw handle.
+    rl.DrawRectangle(ox,     oy + 1, 6, 3, outline)
+    rl.DrawRectangle(ox + 1, oy + 1, 4, 2, iron)
+    rl.DrawRectangle(ox + 1, oy + 1, 3, 1, iron_hi)
+    rl.DrawRectangle(ox,     oy + 2, 2, 5, outline)
+    rl.DrawRectangle(ox + 1, oy + 3, 1, 3, iron)
+    rl.DrawRectangle(ox,     oy + 5, 4, 1, iron_d)
+    rl.DrawRectangle(ox,     oy + 4, 1, 3, iron_hi)
+
+    // Mallet resting on the slab: oak head, iron pin, tapered warm handle.
+    rl.DrawRectangle(ox + 10, oy,     5, 4, outline)
+    rl.DrawRectangle(ox + 11, oy + 1, 3, 2, wood)
+    rl.DrawRectangle(ox + 11, oy + 1, 2, 1, wood_hi)
+    rl.DrawRectangle(ox + 13, oy + 1, 1, 2, wood_d)
+    rl.DrawRectangle(ox + 10, oy + 1, 1, 2, iron)
+    rl.DrawRectangle(ox + 14, oy + 2, 5, 2, outline)
+    rl.DrawRectangle(ox + 14, oy + 2, 4, 1, wood_hi)
+    rl.DrawRectangle(ox + 15, oy + 3, 4, 1, wood_d)
+
+    // Brass rune boss on the apron: the only magical focal point.
+    rl.DrawRectangle(ox + 8, oy + 6, 5, 5, outline)
+    rl.DrawRectangle(ox + 9, oy + 7, 3, 3, brass_d)
+    rl.DrawRectangle(ox + 9, oy + 8, 3, 1, brass)
+    rl.DrawRectangle(ox + 10, oy + 7, 1, 3, hot)
+    rl.DrawRectangle(ox + 11, oy + 7, 1, 1, hot)
 }
 
 // Working machines show it (read-only: sim_data progress → overlay).  A
@@ -987,21 +1110,155 @@ draw_enemy_scan :: proc(e: ^Enemy, w: ^World_Grid) {
     }
 }
 
-// Builder: grey body, darker head, small shovel indicator when carrying
+// Builder dvergr: a compact chest-style sprite translated from
+// sprites/builder_concept.png. The broad art spills a couple of pixels beyond
+// the 0.8x1-tile physics body, but collision and AI remain unchanged.
+BUILDER_FRAME_W :: 12
+BUILDER_FRAME_H :: 14
+
+@(rodata)
+builder_frames := [2][BUILDER_FRAME_H]string{
+    { // planted stance
+        "   OOOOOO   ",
+        "  OIiiiiIO  ",
+        "  OOOOOOOO  ",
+        "  ObKKKKbO  ",
+        "  ObEBBEbO  ",
+        "  ObRRRRbO  ",
+        "  OObBBbOO  ",
+        " OOLLLLLLOO ",
+        " OIOLLLLOIO ",
+        "  OLLLLLLO  ",
+        "  OILLLLIO  ",
+        "  OII  IIO  ",
+        "  OII  IIO  ",
+        "  OOO  OOO  ",
+    },
+    { // broad mid-stride
+        "   OOOOOO   ",
+        "  OIiiiiIO  ",
+        "  OOOOOOOO  ",
+        "  ObKKKKbO  ",
+        "  ObEBBEbO  ",
+        "  ObRRRRbO  ",
+        "  OObBBbOO  ",
+        " OOLLLLLLOO ",
+        " OIOLLLLOIO ",
+        "  OLLLLLLO  ",
+        "  OILLLLIO  ",
+        " OII    IIO ",
+        "OOO      IIO",
+        "OOO      OOO",
+    },
+}
+
+builder_pixel_color :: proc(ch: u8, hunting: bool) -> rl.Color {
+    switch ch {
+    case 'O': return rl.Color{24, 20, 24, 255}       // heavy chest outline
+    case 'I': return rl.Color{65, 67, 75, 255}       // dark iron
+    case 'i': return rl.Color{132, 136, 146, 255}    // iron edge glint
+    case 'L': return rl.Color{112, 65, 38, 255}      // worn leather
+    case 'l': return rl.Color{68, 38, 27, 255}       // leather seam
+    case 'B': return rl.Color{150, 57, 27, 255}      // rust-red beard
+    case 'b': return rl.Color{86, 33, 23, 255}       // beard shadow
+    case 'R': return rl.Color{201, 78, 33, 255}      // beard firelight
+    case 'K': return rl.Color{164, 101, 65, 255}     // cave-worn skin
+    case 'E':
+        return rl.Color{255, 82, 28, 255} if hunting else rl.Color{238, 174, 50, 255}
+    }
+    return {}
+}
+
+// Pixel-aligned local rectangle which mirrors with the character. Coordinates
+// may spill outside the 12px frame for the pick head and carried block.
+draw_builder_rect :: proc(ox, oy: f32, facing, x, y, w, h: int, col: rl.Color) {
+    dx := x
+    if facing < 0 do dx = BUILDER_FRAME_W - x - w
+    rl.DrawRectangleRec({ox + f32(dx), oy + f32(y), f32(w), f32(h)}, col)
+}
+
+draw_builder_tool :: proc(ox, oy: f32, facing: int, raised: bool) {
+    outline := rl.Color{24, 20, 24, 255}
+    iron    := rl.Color{65, 67, 75, 255}
+    iron_hi := rl.Color{132, 136, 146, 255}
+    wood_d  := rl.Color{74, 39, 24, 255}
+    wood    := rl.Color{145, 78, 40, 255}
+
+    if raised {
+        // Pick head above the leading shoulder; the stepped handle stays crisp.
+        draw_builder_rect(ox, oy, facing, 8, -2, 5, 3, outline)
+        draw_builder_rect(ox, oy, facing, 9, -1, 4, 1, iron_hi)
+        draw_builder_rect(ox, oy, facing, 8,  0, 4, 1, iron)
+        for p in ([][2]int{{10, 1}, {10, 2}, {9, 3}, {9, 4}, {8, 5}, {8, 6}}) {
+            draw_builder_rect(ox, oy, facing, p.x, p.y, 2, 2, outline)
+            draw_builder_rect(ox, oy, facing, p.x, p.y, 1, 1, wood)
+        }
+        draw_builder_rect(ox, oy, facing, 9, 4, 1, 2, wood_d)
+    } else {
+        // Tool carried low at the leading hand while walking or standing.
+        draw_builder_rect(ox, oy, facing, 10, 5, 2, 8, outline)
+        draw_builder_rect(ox, oy, facing, 10, 6, 1, 6, wood)
+        draw_builder_rect(ox, oy, facing, 8,  4, 5, 3, outline)
+        draw_builder_rect(ox, oy, facing, 9,  4, 4, 1, iron_hi)
+        draw_builder_rect(ox, oy, facing, 8,  5, 4, 1, iron)
+    }
+}
+
+draw_builder_carry :: proc(e: ^Enemy, ox, oy: f32) {
+    outline := rl.Color{24, 20, 24, 255}
+    base    := terrain_table[e.builder.carry].color
+    dark    := shade_color(base, 0.55)
+    light   := shade_color(base, 1.35)
+
+    // A six-pixel mineral block locked against the leading shoulder.
+    draw_builder_rect(ox, oy, e.facing, 7, -3, 7, 6, outline)
+    draw_builder_rect(ox, oy, e.facing, 8, -2, 5, 4, base)
+    draw_builder_rect(ox, oy, e.facing, 8, -2, 4, 1, light)
+    draw_builder_rect(ox, oy, e.facing, 12, -1, 1, 3, dark)
+    draw_builder_rect(ox, oy, e.facing, 9,  0, 2, 1, dark)
+    // Bracer and fist holding the load up.
+    draw_builder_rect(ox, oy, e.facing, 8, 2, 3, 3, outline)
+    draw_builder_rect(ox, oy, e.facing, 9, 2, 2, 2, rl.Color{65, 67, 75, 255})
+    draw_builder_rect(ox, oy, e.facing, 9, 2, 1, 1, rl.Color{132, 136, 146, 255})
+}
+
 draw_builder :: proc(e: ^Enemy) {
-    px := i32(e.pos.x * CELL_SIZE)
-    py := i32(e.pos.y * CELL_SIZE)
-    pw := i32(BUILDER_W * CELL_SIZE)
-    ph := i32(BUILDER_H * CELL_SIZE)
+    moving  := abs(e.vel.x) > 0.2
+    frame_i := 0
+    if moving do frame_i = int(abs(e.pos.x)*4) % 2
+    hunting := e.builder.goal == .Hunt
+    raised  := hunting || e.builder.escaping || e.nav.mine_timer > 0
 
-    head_h := i32(CELL_SIZE / 2)
-    body_h := ph - head_h
+    px := e.pos.x * CELL_SIZE
+    py := e.pos.y * CELL_SIZE
+    pw := BUILDER_W * CELL_SIZE
+    ph := BUILDER_H * CELL_SIZE
+    ox := px + (pw - BUILDER_FRAME_W) * 0.5
+    oy := py + ph - BUILDER_FRAME_H
+    if moving && frame_i == 1 do oy -= 1
 
-    body_color := rl.Color{120, 100, 80, 255}
-    head_color := rl.Color{ 80,  60, 40, 255}
+    frame := builder_frames[frame_i]
+    for row in 0 ..< BUILDER_FRAME_H {
+        for col in 0 ..< BUILDER_FRAME_W {
+            ch := frame[row][col]
+            if ch == ' ' do continue
+            draw_col := col
+            if e.facing < 0 do draw_col = BUILDER_FRAME_W - 1 - col
+            rl.DrawRectangleRec(
+                {ox + f32(draw_col), oy + f32(row), 1, 1},
+                builder_pixel_color(ch, hunting),
+            )
+        }
+    }
 
-    rl.DrawRectangle(px, py + head_h, pw, body_h, body_color)
-    rl.DrawRectangle(px, py,          pw, head_h, head_color)
+    if e.builder.carry != .Air {
+        draw_builder_carry(e, ox, oy)
+    } else {
+        draw_builder_tool(ox, oy, e.facing, raised)
+    }
+
+    // The hunt face opens into a tiny black shout under ember-bright eyes.
+    if hunting do draw_builder_rect(ox, oy, e.facing, 5, 5, 2, 1, rl.Color{24, 20, 24, 255})
 }
 
 // ─── Player (pixel-art forms) ───────────────────────────────────────────────

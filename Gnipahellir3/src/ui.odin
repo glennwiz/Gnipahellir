@@ -955,7 +955,6 @@ draw_ui :: proc(gs: ^Game_State) {
 	draw_hud(gs)
 	draw_hover_label(gs)
 	draw_objective(gs)
-	draw_notifications(gs)
 	draw_station_prompt(gs)
 	if gs.ui.show_inventory do draw_inventory(gs)
 	if gs.ui.show_crafting do draw_crafting(gs)
@@ -980,6 +979,10 @@ draw_ui :: proc(gs: ^Game_State) {
 	if gs.ui.show_charselect do draw_charselect(gs)
 	if gs.ui.show_settings do draw_settings(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included
+	// Notifications are the final UI layer.  Blueprint pickup messages and other
+	// important feedback must stay readable over inventory/storage windows,
+	// tooltips, dragged icons, books, menus, and every full-screen modal.
+	draw_notifications(gs)
 }
 
 // ─── Ritual Instruction Tome ──────────────────────────────────────────────────

@@ -72,9 +72,17 @@ gravity_free_slots :: proc(gs: ^Game_State) -> int {
 gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
     for &b in gs.gravity.blocks {
         if b.active do continue
-        b = Falling_Block{tile = t, x = x, y = f32(y), active = true}
+        idx := grid_idx(int(x), int(y))
+        b = Falling_Block{
+            tile = t,
+            x = x,
+            y = f32(y),
+            source_x = x,
+            source_y = y,
+            active = true,
+        }
         set_tile(&gs.world, int(x), int(y), gravity_open_tile(gs, int(y)))
-        gs.world.tile_flags[grid_idx(int(x), int(y))] -= {.Placed}  // the block left this cell
+        gs.world.tile_flags[idx] -= {.Placed}  // the block left this cell
         return
     }
 }

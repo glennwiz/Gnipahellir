@@ -4113,6 +4113,13 @@ gravity_tree_falls_when_base_cut :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, x, gy - 2), Tile_Type.Void)
     testing.expect_value(t, get_tile(&gs.world, x, gy - 3), Tile_Type.Void)
     testing.expect_value(t, gravity_count_active(gs), 2)
+    // The original cell stays attached to each airborne block so render can
+    // reuse the exact standing Wood atlas variant throughout the fall.
+    for b in gs.gravity.blocks {
+        if !b.active do continue
+        testing.expect_value(t, b.x, b.source_x)
+        testing.expect_value(t, b.y, f32(b.source_y))
+    }
 
     // Let them settle: each lands as a collectible drop, none re-settle as solid.
     for _ in 0 ..< 400 do update_gravity(gs)
