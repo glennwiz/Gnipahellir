@@ -2,6 +2,22 @@ package game
 
 import rl "vendor:raylib"
 
+// Wheel zoom request. Capture the world point beneath the cursor so
+// update_camera can preserve it throughout the eased zoom.
+request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32) {
+    next := clamp(gs.zoom_target + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+    if next == gs.zoom_target do return
+
+    cam := game_camera(gs)
+    gs.zoom_anchor_screen = cursor
+    gs.zoom_anchor_world = {
+        (cursor.x - cam.offset.x)/cam.zoom + cam.target.x,
+        (cursor.y - cam.offset.y)/cam.zoom + cam.target.y,
+    }
+    gs.zoom_cursor_active = true
+    gs.zoom_target = next
+}
+
 update_input :: proc(gs: ^Game_State) {
     inp := &gs.input
 
@@ -14,10 +30,10 @@ update_input :: proc(gs: ^Game_State) {
     vy := (mouse.y - offset.y) / scale
     inp.mouse_screen = {vx / UI_SCALE, vy / UI_SCALE}
 
-    // Mouse wheel sets the zoom target; update_camera eases gs.zoom toward it so
-    // the scale and the clamp-release pan glide instead of popping per notch.
+    // Mouse wheel captures the exact world point beneath the pointer and eases
+    // toward/away from it. Shift remains free for deliberate structure reclaim.
     if wheel := rl.GetMouseWheelMove(); wheel != 0 {
-        gs.zoom_target = clamp(gs.zoom_target + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+        request_zoom(gs, wheel, {vx, vy})
     }
 
     // World-space mouse: invert the (same) game camera.

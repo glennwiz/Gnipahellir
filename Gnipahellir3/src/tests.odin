@@ -459,6 +459,47 @@ camera_clamps_to_level_bounds :: proc(t: ^testing.T) {
 }
 
 @(test)
+wheel_zoom_keeps_world_point_under_cursor :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Stay clear of every level edge so this measures cursor anchoring rather
+    // than the intentional camera clamp taking priority.
+    gs.player.pos = {90, 50}
+    gs.zoom = 2
+    gs.zoom_target = 2
+    camera_snap_y(gs)
+    cursor := [2]f32{1200, 400}
+
+    before := game_camera(gs)
+    anchor := [2]f32{
+        (cursor.x - before.offset.x)/before.zoom + before.target.x,
+        (cursor.y - before.offset.y)/before.zoom + before.target.y,
+    }
+
+    request_zoom(gs, 1, cursor)
+    gs.delta_time = 1.0/60.0
+    for _ in 0 ..< 120 do update_camera(gs)
+
+    after := game_camera(gs)
+    under_cursor := [2]f32{
+        (cursor.x - after.offset.x)/after.zoom + after.target.x,
+        (cursor.y - after.offset.y)/after.zoom + after.target.y,
+    }
+    testing.expect(t, abs(under_cursor.x - anchor.x) < 0.01, "wheel zoom preserves cursor world X")
+    testing.expect(t, abs(under_cursor.y - anchor.y) < 0.01, "wheel zoom preserves cursor world Y")
+    testing.expect(t, gs.cam_pan.x != 0 || gs.cam_pan.y != 0, "cursor zoom offsets the player-centered camera")
+
+    // Starting to move gently recenters; it must shrink rather than snap away.
+    pan_before := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
+    gs.player.vel.x = 1
+    update_camera(gs)
+    pan_after := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
+    testing.expect(t, pan_after > 0, "movement recenter is gradual")
+    testing.expect(t, pan_after < pan_before, "movement pulls cursor pan back toward the player")
+}
+
+@(test)
 player_actions_mark_autosave :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

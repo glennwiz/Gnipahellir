@@ -467,6 +467,10 @@ Game_State :: struct {
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved
     cam_y:        f32,    // camera Y anchor (world px); a deadzone keeps jumps from bobbing the view — not saved
+    cam_pan:      [2]f32, // world-pixel offset created by cursor zoom; eases home while the player moves; not saved
+    zoom_anchor_world:  [2]f32, // world point kept beneath zoom_anchor_screen while easing; not saved
+    zoom_anchor_screen: [2]f32, // virtual-screen cursor captured by wheel zoom; not saved
+    zoom_cursor_active: bool,   // true while the live zoom is easing around that cursor anchor; not saved
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
