@@ -1075,7 +1075,9 @@ draw_enemy :: proc(e: ^Enemy) {
         draw_builder(e)
     case .Garm:
         draw_garm(e)
-    case .Undead, .Fire_Sprite:
+    case .Undead:
+        draw_draugr(e)
+    case .Fire_Sprite:
         px := i32(e.pos.x * CELL_SIZE)
         py := i32(e.pos.y * CELL_SIZE)
         rl.DrawRectangle(px, py, i32(BUILDER_W * CELL_SIZE), i32(BUILDER_H * CELL_SIZE), rl.RED)
@@ -1288,6 +1290,64 @@ draw_builder :: proc(e: ^Enemy) {
 
     // The hunt face opens into a tiny black shout under ember-bright eyes.
     if hunting do draw_builder_rect(ox, oy, e.facing, 5, 5, 2, 1, rl.Color{24, 20, 24, 255})
+}
+
+// The draugr wears the dead builder's frame recolored to the grave: corpse-pale
+// skin, rotted leather, bone-grey beard, and cold ghost-fire eyes. It always
+// carries its pick raised — a relentless risen miner.
+draugr_pixel_color :: proc(ch: u8) -> rl.Color {
+    switch ch {
+    case 'O': return rl.Color{16, 20, 18, 255}       // near-black grave outline
+    case 'I': return rl.Color{60, 66, 58, 255}       // corroded iron
+    case 'i': return rl.Color{116, 126, 112, 255}    // dull iron glint
+    case 'L': return rl.Color{66, 72, 52, 255}        // mossy rotted leather
+    case 'l': return rl.Color{40, 46, 34, 255}        // leather seam
+    case 'B': return rl.Color{150, 156, 138, 255}     // bone-grey beard
+    case 'b': return rl.Color{86, 92, 82, 255}        // beard shadow
+    case 'R': return rl.Color{120, 128, 110, 255}     // pallid highlight
+    case 'K': return rl.Color{150, 164, 142, 255}     // corpse-pale skin
+    case 'E': return rl.Color{120, 255, 220, 255}     // cold ghost-fire eyes
+    }
+    return {}
+}
+
+draw_draugr :: proc(e: ^Enemy) {
+    moving  := abs(e.vel.x) > 0.2
+    frame_i := 0
+    if moving do frame_i = int(abs(e.pos.x)*4) % 2
+
+    px := e.pos.x * CELL_SIZE
+    py := e.pos.y * CELL_SIZE
+    pw := BUILDER_W * CELL_SIZE
+    ph := BUILDER_H * CELL_SIZE
+    ox := px + (pw - BUILDER_FRAME_W) * 0.5
+    oy := py + ph - BUILDER_FRAME_H
+    if moving && frame_i == 1 do oy -= 1
+
+    frame := builder_frames[frame_i]
+    for row in 0 ..< BUILDER_FRAME_H {
+        for col in 0 ..< BUILDER_FRAME_W {
+            ch := frame[row][col]
+            if ch == ' ' do continue
+            draw_col := col
+            if e.facing < 0 do draw_col = BUILDER_FRAME_W - 1 - col
+            rl.DrawRectangleRec(
+                {ox + f32(draw_col), oy + f32(row), 1, 1},
+                draugr_pixel_color(ch),
+            )
+        }
+    }
+
+    // Pick always raised, mouth agape — a risen thing with one purpose.
+    draw_builder_tool(ox, oy, e.facing, true)
+    draw_builder_rect(ox, oy, e.facing, 5, 5, 2, 1, rl.Color{16, 20, 18, 255})
+
+    // HP bar in grave-green.
+    if e.hp < e.hp_max {
+        w := i32(f32(pw) * f32(e.hp) / f32(e.hp_max))
+        rl.DrawRectangle(i32(px), i32(py) - 5, i32(pw), 3, rl.Color{20, 40, 24, 255})
+        rl.DrawRectangle(i32(px), i32(py) - 5, w,       3, rl.Color{120, 220, 150, 255})
+    }
 }
 
 // ─── Player (pixel-art forms) ───────────────────────────────────────────────

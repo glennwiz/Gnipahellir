@@ -202,7 +202,8 @@ enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
 // Ground speed by kind — the boss must outpace a walking builder.
 enemy_speed :: proc(kind: Enemy_Kind) -> f32 {
     #partial switch kind {
-    case .Garm: return GARM_SPEED
+    case .Garm:   return GARM_SPEED
+    case .Undead: return DRAUGR_SPEED
     }
     return BUILDER_SPEED
 }
@@ -1003,7 +1004,9 @@ builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
     if b.stuck_count >= MAX_STRIKES {
         b.stuck_count = 0
         builder_dig_free(e, id, gs)
-        if e.kind == .Garm { return }   // the boss has no goals to shuffle — replan and keep hunting
+        // Only builders shuffle goals on a strikeout; the boss and the draugr
+        // have a single fixed purpose — dig free and keep hunting.
+        if e.kind != .Builder { return }
         #partial switch b.goal {
         case .Build_Den:
             log_action(gs, "Builder#%d abandons den site (%d,%d)", id, b.anchor.x, b.anchor.y)
@@ -1502,7 +1505,11 @@ update_enemies :: proc(gs: ^Game_State) {
             move_body(&gs.world, &e.pos, &e.vel, {GARM_W, GARM_H}, dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_garm(e, i, gs, dt)
-        case .Undead, .Fire_Sprite:
+        case .Undead:
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
+            update_undead(e, i, gs, dt)
+        case .Fire_Sprite:
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }

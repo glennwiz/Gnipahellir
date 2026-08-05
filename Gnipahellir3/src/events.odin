@@ -364,12 +364,18 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
         gs.stats.runs_played += 1
         _ = save_stats(&gs.stats)  // persist immediately — a crash after death shouldn't lose the run
     } else {
-        audio_play(&gs.audio, .Kill)
-        gs.stats.total_kills += 1
         i := entity_id_to_enemy_index(e.source)
         if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
             en := &gs.enemies.data[i]
-            T  := builder_tile(en)
+            // A felled builder does not die — it claws back up as a draugr.
+            // The kill (count, drops, sound) is deferred to the draugr's death.
+            if en.kind == .Builder {
+                rise_draugr(gs, i)
+                return
+            }
+            T := builder_tile(en)
+            audio_play(&gs.audio, .Kill)
+            gs.stats.total_kills += 1
             roll_enemy_drops(gs, en.kind, T)   // loot lands where they fell
             if en.kind == .Garm {
                 log_action(gs, "GARM slain - Hell Key drops at (%d,%d)", T.x, T.y)

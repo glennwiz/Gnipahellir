@@ -23,8 +23,9 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     .Garm        = {{.Hell_Key, 1, 1, 1.0}, {}, {}},
     // Builders carry their trade: stone always, a sliver of silver sometimes.
     .Builder     = {{.Stone_Block, 1, 2, 1.0}, {.Silver_Ore, 1, 2, 0.35}, {}},
-    // Not spawned by any level yet — rows land when their AI does.
-    .Undead      = {},
+    // A draugr is a re-killed builder: the trade-goods the rise deferred spill
+    // when it finally stays down.
+    .Undead      = {{.Stone_Block, 1, 2, 1.0}, {.Silver_Ore, 1, 2, 0.35}, {}},
     .Fire_Sprite = {},
 }
 

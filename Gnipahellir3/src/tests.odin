@@ -1940,14 +1940,18 @@ enemy_drop_tables :: proc(t: ^testing.T) {
     testing.expect(t, bi >= 0, "builder should have spawned")
     T := builder_tile(&gs.enemies.data[bi])
 
-    eq_push(&gs.events, Event{
-        type    = .Damage_Dealt,
-        source  = PLAYER_ID,
-        target  = enemy_entity_id(bi),
-        payload = {int_val = 99},
-    })
-    process_events(gs)
-    eq_clear(&gs.events)
+    // First blow fells the builder — it rises as a draugr, so kill it twice to
+    // reach true death and spill the trade-goods.
+    for _ in 0 ..< 2 {
+        eq_push(&gs.events, Event{
+            type    = .Damage_Dealt,
+            source  = PLAYER_ID,
+            target  = enemy_entity_id(bi),
+            payload = {int_val = 99},
+        })
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
 
     testing.expect(t, !gs.enemies.active[bi], "builder should be dead")
     stone := 0
@@ -2406,14 +2410,93 @@ sword_melee_kills_builders :: proc(t: ^testing.T) {
     process_events(gs)
     testing.expect_value(t, e.hp, 4)
 
-    // Two more swings kill: slot freed, kill counted
+    // Two more swings fell the builder (6 hp, sword bites 2) — but a slain
+    // builder rises as a draugr, not a corpse: same slot, new purpose.
     for _ in 0 ..< 2 {
         gs.player.attack_timer = 0
         update_player(gs)
         process_events(gs)
     }
-    testing.expect(t, !gs.enemies.active[idx], "three sword hits kill a builder")
+    testing.expect(t, gs.enemies.active[idx], "a felled builder rises, not dies")
+    testing.expect_value(t, e.kind, Enemy_Kind.Undead)
+    testing.expect_value(t, e.hp, DRAUGR_HP)
+    testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+    testing.expect_value(t, gs.stats.total_kills, 0)   // the rise defers the kill
+
+    // Put the draugr down for good (DRAUGR_HP = 4, sword bites 2 → two hits):
+    // now the slot frees and the kill counts.
+    for _ in 0 ..< 2 {
+        gs.player.attack_timer = 0
+        update_player(gs)
+        process_events(gs)
+    }
+    testing.expect(t, !gs.enemies.active[idx], "a re-killed draugr stays down")
     testing.expect_value(t, gs.stats.total_kills, 1)
+}
+
+@(test)
+draugr_rises_and_hunts :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+
+    // Fell the builder outright — it rises as a draugr in the same slot,
+    // locked to the hunt, with no kill yet counted.
+    e.hp = 0
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(idx)})
+    process_events(gs)
+    testing.expect(t, gs.enemies.active[idx], "a felled builder rises")
+    testing.expect_value(t, e.kind, Enemy_Kind.Undead)
+    testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+    testing.expect_value(t, gs.stats.total_kills, 0)
+
+    // Park the draugr on the player's tile and let the enemy update run: the
+    // relentless thing claws the player.
+    gs.delta_time = 1.0 / 60.0
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    prev := builder_tile(e)
+    e.pos = {30.5, f32(SURFACE_Y) - BUILDER_H}
+    entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
+    e.builder.attack_timer = 0
+
+    // One claw costs half the player's max health — two land and you're dead.
+    hp_before := gs.player.hp
+    update_enemies(gs)
+    process_events(gs)
+    testing.expect_value(t, gs.player.hp, hp_before - (gs.player.hp_max + 1) / 2)
+}
+
+@(test)
+draugr_respawns_at_its_den :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    spawn_builder(gs, 40)
+    bi := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] && gs.enemies.data[i].kind == .Builder do bi = i
+    }
+    testing.expect(t, bi >= 0, "builder should have spawned")
+    e := &gs.enemies.data[bi]
+
+    // Give it a home den at a standable cave floor away from its body, then
+    // fell it — the draugr rises at the den, not where it died.
+    hx, hy, ok := find_cave_floor(&gs.world, 90, 3)
+    testing.expect(t, ok, "a cave floor for the den")
+    e.builder.anchor    = {i32(hx), i32(hy)}
+    e.builder.den_built = true
+
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(bi)})
+    process_events(gs)
+
+    testing.expect_value(t, e.kind, Enemy_Kind.Undead)
+    testing.expect_value(t, builder_tile(e), [2]i32{i32(hx), i32(hy)})
 }
 
 @(test)
@@ -3214,8 +3297,12 @@ enemy_death_despawns_and_clears_map :: proc(t: ^testing.T) {
     before := gs.enemies.count
     tile   := builder_tile(&gs.enemies.data[idx])
 
-    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(idx)})
-    process_events(gs)
+    // A builder rises as a draugr on the first death; the second death is the
+    // real one that frees the slot and counts the kill.
+    for _ in 0 ..< 2 {
+        eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(idx)})
+        process_events(gs)
+    }
 
     testing.expect(t, !gs.enemies.active[idx], "enemy slot freed on death")
     testing.expect_value(t, gs.enemies.count, before - 1)

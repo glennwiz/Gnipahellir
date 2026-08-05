@@ -179,6 +179,11 @@ E interact (portal/ritual/blueprint chest/empty silo/open station/open barrel) �
 
 ## 5. What's queued (open work)
 
+> **Raw idea backlog: `gnipa_project/ideas.md`** — unscoped design ideas parked
+> before they're lost (2026-08-05: persistent altar rune-halo → 1-min Fly buff in
+> range; cave glowing-berry moss → 20-sec Leaf-Fall in cave 1). Graduate them here
+> when picked up.
+
 ### Gravity follow-ups (priority-ish)
 1. **Place-anywhere ANCHOR block** — Glenn's stated endgame: a placeable tile that anchors structures in mid-air. Hook `is_anchor_cell` now cell-aware and live; `.Placed` tracking exists — so this is newly within easy reach.
 2. **Placed GRASS falling** — placed **Stone** now falls sand-style (via `.Falls_Placed` + `.Placed` cell bit + `.Settles`); **Grass is the only leftover** — deliberately left surgical. Trivial add: `.Falls_Placed, .Settles` on the `Grass` terrain row. *(Placed-stone/grass falling was the old §5.2 — now mostly closed.)*
