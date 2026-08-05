@@ -2465,11 +2465,11 @@ draugr_rises_and_hunts :: proc(t: ^testing.T) {
     entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
     e.builder.attack_timer = 0
 
-    // One claw costs half the player's max health — two land and you're dead.
+    // One claw costs a quarter of the player's max health — four land and you're dead.
     hp_before := gs.player.hp
     update_enemies(gs)
     process_events(gs)
-    testing.expect_value(t, gs.player.hp, hp_before - (gs.player.hp_max + 1) / 2)
+    testing.expect_value(t, gs.player.hp, hp_before - (gs.player.hp_max + 3) / 4)
 }
 
 @(test)

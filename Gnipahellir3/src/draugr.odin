@@ -83,9 +83,9 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         e.facing = 1 if pt.x >= bt.x else -1
         if b.attack_timer <= 0 {
             b.attack_timer = DRAUGR_ATTACK_TIME
-            // A killing claw: half the player's max health per hit, so two
+            // A claw costs a quarter of the player's max health, so four
             // clean strikes fell them from full (before armor blunts it).
-            dmg := (gs.player.hp_max + 1) / 2
+            dmg := (gs.player.hp_max + 3) / 4
             eq_push(&gs.events, Event{
                 type    = .Damage_Dealt,
                 source  = enemy_entity_id(id),
