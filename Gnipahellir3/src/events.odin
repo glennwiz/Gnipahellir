@@ -135,7 +135,7 @@ process_events :: proc(gs: ^Game_State) {
                 // (logs → planks → your first bench).  One-shot.
                 if !gs.craft_hint_shown {
                     gs.craft_hint_shown = true
-                    notify(gs, "Press [%v] to craft - turn logs into planks", gs.bindings[.Crafting])
+                    notify(gs, "Press [%v] to open your bag and craft - turn logs into planks", gs.bindings[.Inventory])
                 }
             }
 

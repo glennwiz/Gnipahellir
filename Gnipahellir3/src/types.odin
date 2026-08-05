@@ -223,8 +223,7 @@ Action :: enum u8 {
     Move_Right,
     Jump,
     Interact,
-    Inventory,
-    Crafting,
+    Inventory,   // opens the bag + crafting panel together (crafting has no key of its own)
     Blueprint,
 }
 

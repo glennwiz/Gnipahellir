@@ -212,7 +212,9 @@ update_input :: proc(gs: ^Game_State) {
     }
 
     // UI toggles. TAB with any window open sweeps them all shut (like ESC);
-    // otherwise it opens the bag.
+    // otherwise it opens your inventory + crafting together. Factorio-style:
+    // crafting has no key of its own — it's the panel beside the bag, and the
+    // recipe list grows to whatever station is in range.
     if rl.IsKeyPressed(bind[.Inventory]) {
         if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel {
             gs.ui.show_inventory = false
@@ -226,16 +228,12 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.drag_barrel    = -1
             gs.ui.drag_void      = false
         } else {
+            // Standing at a station? Its recipes fill the panel; otherwise hand
+            // crafting. Scanned fresh here — input runs before station-focus.
+            gs.ui.active_station, _ = nearest_station(gs)
             gs.ui.show_inventory = true
-            place_bag_centered(gs)
-        }
-    }
-    if rl.IsKeyPressed(bind[.Crafting]) {
-        gs.ui.show_crafting = !gs.ui.show_crafting
-        if gs.ui.show_crafting {
-            gs.ui.active_station = .None  // the hotkey is hand crafting only
-            gs.ui.show_inventory = true   // the anvil drags from the bag
-            place_craft_pair(gs)          // center the pair so nothing spills off-screen
+            gs.ui.show_crafting  = true
+            place_craft_pair(gs)   // center the bag+craft pair so nothing spills
         }
     }
     if rl.IsKeyPressed(bind[.Blueprint]) {

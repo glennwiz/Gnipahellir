@@ -125,7 +125,7 @@ save_on_quit :: proc(gs: ^Game_State) {
 //  Saved when the settings screen closes / a binding changes, and on quit.
 
 SETTINGS_FILE    :: "gnipahellir_settings.dat"
-SETTINGS_VERSION :: i32(1)
+SETTINGS_VERSION :: i32(2)   // v2: retired the Crafting bind (TAB opens bag+craft)
 
 Settings_Data :: struct {
     version:  i32,

@@ -590,7 +590,6 @@ action_labels := [Action]cstring {
 	.Jump       = "Jump",
 	.Interact   = "Interact",
 	.Inventory  = "Inventory",
-	.Crafting   = "Crafting",
 	.Blueprint  = "Blueprint",
 }
 
@@ -1367,10 +1366,10 @@ draw_hud :: proc(gs: ^Game_State) {
 		}
 	}
 
-	// Control hints, bottom-left: the two menu keys a new hand needs — hand
-	// crafting has no world anchor, so it lives here as a standing reminder.
+	// Control hint, bottom-left: one key opens the bag + crafting together, so
+	// a new hand always knows where crafting lives.
 	hint_buf: [48]u8
-	fmt.bprintf(hint_buf[:47], "[%v] Craft   [%v] Bag", gs.bindings[.Crafting], gs.bindings[.Inventory])
+	fmt.bprintf(hint_buf[:47], "[%v] Bag / Craft", gs.bindings[.Inventory])
 	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
 
 	draw_sel_chip(gs)
