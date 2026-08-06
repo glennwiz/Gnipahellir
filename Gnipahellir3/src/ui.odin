@@ -697,7 +697,7 @@ DBG_MENU_X :: 24
 DBG_MENU_Y :: 80
 DBG_MENU_W :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS :: 13 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life
+DBG_MENU_ROWS :: 14 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -806,6 +806,15 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 		life_col,
 	)
 
+	pe_col := gs.ui.show_pixel_editor ? rl.GREEN : rl.YELLOW
+	rl.DrawText(
+		"Pixel Art Editor >",
+		DBG_MENU_X,
+		DBG_MENU_Y + 13 * DBG_MENU_ROW_H + 7,
+		10,
+		pe_col,
+	)
+
 	if r := debug_menu_row_at_cursor(gs); r >= 0 {
 		rl.DrawRectangleLines(
 			DBG_MENU_X - 2,
@@ -881,6 +890,160 @@ draw_altar_menu :: proc(gs: ^Game_State) {
 	}
 }
 
+// ─── Pixel Art Editor (F1 debug menu, debug builds only) ──────────────────────
+//
+//  Paints editable structure sprites (pixel_art.odin) using the shared
+//  game_palette. A fixed centered modal, not a draggable UI_Window — this is
+//  a debug/dev tool, not a player-facing panel.
+
+PXED_CELL       :: i32(16) // on-screen px per grid cell
+PXED_PAD        :: i32(16)
+PXED_HEADER_H   :: i32(40)
+PXED_FOOTER_H   :: i32(60)
+PXED_CANVAS_W   :: i32(PIXEL_GRID_MAX_W) * PXED_CELL
+PXED_CANVAS_H   :: i32(PIXEL_GRID_MAX_H) * PXED_CELL
+// Palette swatches, laid out in a compact grid. Slot 0 is the eraser — same
+// size, same click handling as every color, "just another swatch to pick".
+PXED_SWATCH     :: i32(16)
+PXED_SWATCH_GAP :: i32(3)
+PXED_PAL_COLS   :: i32(2)
+PXED_PAL_COL_W  :: PXED_PAL_COLS * (PXED_SWATCH + PXED_SWATCH_GAP)
+PXED_W          :: PXED_PAD * 2 + PXED_CANVAS_W + 16 + PXED_PAL_COL_W
+PXED_H          :: PXED_PAD * 2 + PXED_HEADER_H + PXED_CANVAS_H + PXED_FOOTER_H
+PXED_X          :: (UI_W - PXED_W) / 2
+PXED_Y          :: (UI_H - PXED_H) / 2
+PXED_BTN_W      :: i32(100)
+PXED_BTN_H      :: i32(28)
+PXED_BTN_GAP    :: i32(12)
+
+pxed_button_labels := [4]cstring{"< PREV", "NEXT >", "SAVE", "CLEAR"}
+
+// Top-left of the canvas (where grid cell (0,0) is drawn).
+pixel_editor_canvas_origin :: proc() -> (x, y: i32) {
+	return PXED_X + PXED_PAD, PXED_Y + PXED_PAD + PXED_HEADER_H
+}
+
+pixel_cell_rect :: proc(col, row: int) -> (x, y: i32) {
+	ox, oy := pixel_editor_canvas_origin()
+	return ox + i32(col) * PXED_CELL, oy + i32(row) * PXED_CELL
+}
+
+// Grid cell under the cursor, bounded by the current sprite's real w×h.
+pixel_cell_at_cursor :: proc(gs: ^Game_State) -> (col, row: int, ok: bool) {
+	if !gs.ui.show_pixel_editor do return 0, 0, false
+	info := pixel_sprite_table[gs.ui.pixel_editor_target]
+	ox, oy := pixel_editor_canvas_origin()
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	if mx < ox || my < oy do return 0, 0, false
+	c := int((mx - ox) / PXED_CELL)
+	r := int((my - oy) / PXED_CELL)
+	if c < 0 || c >= int(info.w) || r < 0 || r >= int(info.h) do return 0, 0, false
+	return c, r, true
+}
+
+// Slot 0 = eraser (pixel_editor_color 0), slots 1..PALETTE_SIZE = game_palette[i-1].
+palette_swatch_rect :: proc(i: int) -> (x, y: i32) {
+	ox := PXED_X + PXED_PAD + PXED_CANVAS_W + 16
+	oy := PXED_Y + PXED_PAD + PXED_HEADER_H
+	col := i32(i) % PXED_PAL_COLS
+	row := i32(i) / PXED_PAL_COLS
+	return ox + col * (PXED_SWATCH + PXED_SWATCH_GAP), oy + row * (PXED_SWATCH + PXED_SWATCH_GAP)
+}
+
+// Palette slot under the cursor (0 = eraser, 1..PALETTE_SIZE = a color), or -1.
+// The value returned IS the pixel_editor_color to select — no special-casing.
+palette_swatch_at_cursor :: proc(gs: ^Game_State) -> int {
+	if !gs.ui.show_pixel_editor do return -1
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	for i in 0 ..= PALETTE_SIZE {
+		x, y := palette_swatch_rect(i)
+		if mx >= x && mx < x + PXED_SWATCH && my >= y && my < y + PXED_SWATCH do return i
+	}
+	return -1
+}
+
+pixel_editor_button_rect :: proc(i: int) -> (x, y, w, h: i32) {
+	by := PXED_Y + PXED_H - PXED_FOOTER_H + 16
+	bx := PXED_X + PXED_PAD + i32(i) * (PXED_BTN_W + PXED_BTN_GAP)
+	return bx, by, PXED_BTN_W, PXED_BTN_H
+}
+
+// Footer button index under the cursor (0 Prev, 1 Next, 2 Save, 3 Clear), or -1.
+pixel_editor_button_at_cursor :: proc(gs: ^Game_State) -> int {
+	if !gs.ui.show_pixel_editor do return -1
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	for i in 0 ..< 4 {
+		x, y, w, h := pixel_editor_button_rect(i)
+		if mx >= x && mx < x + w && my >= y && my < y + h do return i
+	}
+	return -1
+}
+
+draw_pixel_editor :: proc(gs: ^Game_State) {
+	rl.DrawRectangle(PXED_X, PXED_Y, PXED_W, PXED_H, panel_bg)
+	rl.DrawRectangleLines(PXED_X, PXED_Y, PXED_W, PXED_H, panel_border)
+
+	info := pixel_sprite_table[gs.ui.pixel_editor_target]
+	header: [80]u8
+	n := len(fmt.bprintf(header[:], "PIXEL ART EDITOR - %s (%dx%d)", info.name, info.w, info.h))
+	rl.DrawText(cstring(raw_data(header[:n])), PXED_X + PXED_PAD, PXED_Y + 12, 16, rl.YELLOW)
+	rl.DrawText("[ESC] close", PXED_X + PXED_W - 96, PXED_Y + 14, 12, NORSE_GOLD)
+
+	// Canvas: an empty cell shows a faint checkerboard so "transparent" reads.
+	// A sprite with no saved edit previews its real original look (seeded,
+	// read-only) instead of opening blank — see seed_pixel_grid.
+	data := &gs.pixel_art.sprites[gs.ui.pixel_editor_target]
+	preview := data.has_data ? data.grid : seed_pixel_grid(gs.ui.pixel_editor_target)
+	for row in 0 ..< int(info.h) {
+		for col in 0 ..< int(info.w) {
+			x, y := pixel_cell_rect(col, row)
+			v := preview[row][col]
+			if v == 0 {
+				checker := (row + col) % 2 == 0 ? rl.Color{40, 40, 48, 255} : rl.Color{52, 52, 62, 255}
+				rl.DrawRectangle(x, y, PXED_CELL, PXED_CELL, checker)
+			} else {
+				rl.DrawRectangle(x, y, PXED_CELL, PXED_CELL, game_palette[v - 1])
+			}
+			rl.DrawRectangleLines(x, y, PXED_CELL, PXED_CELL, rl.Color{0, 0, 0, 60})
+		}
+	}
+	if c, r, ok := pixel_cell_at_cursor(gs); ok {
+		x, y := pixel_cell_rect(c, r)
+		rl.DrawRectangleLines(x, y, PXED_CELL, PXED_CELL, rl.YELLOW)
+	}
+
+	// Palette grid: slot 0 is the eraser (a checkerboard swatch, deletes a
+	// cell just like picking a color paints one), slots 1..PALETTE_SIZE are
+	// game_palette colors.
+	for i in 0 ..= PALETTE_SIZE {
+		x, y := palette_swatch_rect(i)
+		if i == 0 {
+			rl.DrawRectangle(x, y, PXED_SWATCH, PXED_SWATCH, rl.Color{40, 40, 48, 255})
+			rl.DrawRectangle(x, y, PXED_SWATCH / 2, PXED_SWATCH / 2, rl.Color{52, 52, 62, 255})
+			rl.DrawRectangle(x + PXED_SWATCH / 2, y + PXED_SWATCH / 2, PXED_SWATCH / 2, PXED_SWATCH / 2, rl.Color{52, 52, 62, 255})
+		} else {
+			rl.DrawRectangle(x, y, PXED_SWATCH, PXED_SWATCH, game_palette[i - 1])
+		}
+		selected := i == int(gs.ui.pixel_editor_color)
+		border := selected ? rl.YELLOW : panel_border
+		thick := selected ? f32(2) : f32(1)
+		rl.DrawRectangleLinesEx({f32(x), f32(y), f32(PXED_SWATCH), f32(PXED_SWATCH)}, thick, border)
+	}
+
+	// Footer buttons.
+	for label, i in pxed_button_labels {
+		x, y, w, h := pixel_editor_button_rect(i)
+		hover := pixel_editor_button_at_cursor(gs) == i
+		rl.DrawRectangle(x, y, w, h, hover ? rl.Color{70, 70, 90, 255} : slot_bg)
+		rl.DrawRectangleLines(x, y, w, h, panel_border)
+		tw := rl.MeasureText(label, 12)
+		rl.DrawText(label, x + (w - tw) / 2, y + 8, 12, rl.WHITE)
+	}
+}
+
 // True when the cursor is over an open UI panel (blocks mining/placing).
 cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	mx := i32(gs.input.mouse_screen.x)
@@ -898,6 +1061,11 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 		   mx < ALT_MENU_X + ALT_MENU_W + 6 &&
 		   my >= ALT_MENU_Y - 26 &&
 		   my < ALT_MENU_Y + ALT_MENU_ROWS * DBG_MENU_ROW_H + 8 {
+			return true
+		}
+		if gs.ui.show_pixel_editor &&
+		   mx >= PXED_X && mx < PXED_X + PXED_W &&
+		   my >= PXED_Y && my < PXED_Y + PXED_H {
 			return true
 		}
 	}
@@ -1011,6 +1179,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	when GAME_DEBUG {
 		if gs.debug.menu_open do draw_debug_menu(gs)
 		if gs.debug.altar_menu do draw_altar_menu(gs)
+		if gs.ui.show_pixel_editor do draw_pixel_editor(gs)
 	}
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top
 	if gs.ui.show_charselect do draw_charselect(gs)

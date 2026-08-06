@@ -3,6 +3,7 @@ package game
 import "core:testing"
 import "core:strings"
 import "core:log"
+import "core:os"
 
 // ─── Phase 3 system tests ─────────────────────────────────────────────────────
 //
@@ -5348,6 +5349,33 @@ golem_quick_clay_dissolves_once_worker_moves_away :: proc(t:^testing.T) {
 }
 
 @(test)
+golem_sweep_clears_quick_clay_orphaned_by_a_load :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	g := &gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20,60-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+	golem_place_quick_clay(gs,g,0,{20,60})
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Quick_Clay)
+
+	// Golem_Quick_Clay_State is deliberately not part of Save_Data (it was
+	// never "real") — a load wipes the pool exactly like this, leaving the
+	// .Quick_Clay world tile (which IS saved) with no tracked owner.
+	gs.golem_quick_clay = {}
+	golem_sweep_orphan_quick_clay(gs)
+	testing.expect(t,get_tile(&gs.world,20,60)!=Tile_Type.Quick_Clay,"an orphaned tile must not linger forever")
+}
+
+@(test)
+golem_sweep_leaves_actively_tracked_quick_clay_alone :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	g := &gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20,60-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+	golem_place_quick_clay(gs,g,0,{20,60})
+
+	golem_sweep_orphan_quick_clay(gs)
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Quick_Clay)
+}
+
+@(test)
 golem_depot_feeds_and_collects_smelter_output :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	dt := [2]i32{90,i32(SURFACE_Y-1)}
@@ -5446,6 +5474,86 @@ world_anchor_preserves_a_deployed_dimension_crew :: proc(t: ^testing.T) {
 	testing.expect(t,!dimension_world_anchored(gs),"a loose crew does not anchor an ephemeral world")
 	set_tile(&gs.world,20,20,.World_Anchor)
 	testing.expect(t,dimension_world_anchored(gs),"the monument should anchor the active dimension")
+}
+
+// ─── Pixel Art Editor (pixel_art.odin) ─────────────────────────────────────────
+
+@(test)
+fresh_game_has_no_pixel_art_edits :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	// Every sprite must start has_data == false, or draw_pixel_grid_sprite
+	// would replace the original procedural art on a clean checkout.
+	for id in Pixel_Sprite_ID {
+		testing.expect(t, !gs.pixel_art.sprites[id].has_data, "fresh state should have no saved pixel art")
+	}
+}
+
+@(test)
+pixel_sprite_dims_fit_the_fixed_grid :: proc(t: ^testing.T) {
+	for id in Pixel_Sprite_ID {
+		info := pixel_sprite_table[id]
+		testing.expect(t, int(info.w) <= PIXEL_GRID_MAX_W, "sprite width exceeds PIXEL_GRID_MAX_W")
+		testing.expect(t, int(info.h) <= PIXEL_GRID_MAX_H, "sprite height exceeds PIXEL_GRID_MAX_H")
+	}
+}
+
+@(test)
+pixel_art_save_and_load_round_trips :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	path :: "pixel_art_test_scratch.dat"
+	defer os.remove(path)
+
+	data := &gs.pixel_art.sprites[.Blueprint_Chest]
+	data.has_data = true
+	data.grid[0][0] = 5
+	data.grid[10][15] = 16
+
+	testing.expect(t, save_pixel_art_to(gs, path), "save should succeed")
+
+	loaded := new(Game_State); defer free(loaded)
+	testing.expect(t, load_pixel_art_from(loaded, path), "load should succeed")
+	ld := &loaded.pixel_art.sprites[.Blueprint_Chest]
+	testing.expect(t, ld.has_data, "loaded sprite should carry has_data through")
+	testing.expect_value(t, ld.grid[0][0], u8(5))
+	testing.expect_value(t, ld.grid[10][15], u8(16))
+	testing.expect(t, !loaded.pixel_art.sprites[.Crafting_Bench].has_data, "untouched sprite stays unpainted")
+}
+
+@(test)
+pixel_art_seed_previews_cover_the_sprite :: proc(t: ^testing.T) {
+	// Regression guard for the hand-transcribed seed_*_grid / shell rect
+	// tables (pixel_art.odin, render.odin): a coordinate-transform bug would
+	// clip most of the art out of the declared w×h bounds silently.
+	for id in Pixel_Sprite_ID {
+		info := pixel_sprite_table[id]
+		grid := seed_pixel_grid(id)
+		painted := 0
+		for row in 0 ..< int(info.h) {
+			for col in 0 ..< int(info.w) {
+				v := grid[row][col]
+				if v == 0 do continue
+				painted += 1
+				testing.expect(t, int(v) <= PALETTE_SIZE, "seed painted a palette index out of range")
+			}
+		}
+		area := int(info.w) * int(info.h)
+		testing.expect(t, painted > area/3, "seeded preview should cover a meaningful fraction of the sprite")
+	}
+}
+
+@(test)
+pixel_art_load_rejects_missing_or_bad_file :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	testing.expect(t, !load_pixel_art_from(gs, "pixel_art_test_does_not_exist.dat"), "missing file should fail load")
+
+	path :: "pixel_art_test_garbage.dat"
+	defer os.remove(path)
+	garbage := []u8{1, 2, 3, 4}
+	_ = os.write_entire_file(path, garbage)
+	testing.expect(t, !load_pixel_art_from(gs, path), "wrong-size file should fail load")
+	for id in Pixel_Sprite_ID {
+		testing.expect(t, !gs.pixel_art.sprites[id].has_data, "a rejected load must not touch pixel_art")
+	}
 }
 
 

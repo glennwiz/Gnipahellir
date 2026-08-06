@@ -353,13 +353,14 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_pixel_editor {
             // First ESC sweeps every window closed; the next one opens the menu.
-            gs.ui.show_inventory = false
-            gs.ui.show_crafting  = false
-            gs.ui.show_blueprint = false
-            gs.ui.show_smelter   = false
-            gs.ui.show_barrel    = false
+            gs.ui.show_inventory    = false
+            gs.ui.show_crafting     = false
+            gs.ui.show_blueprint    = false
+            gs.ui.show_smelter      = false
+            gs.ui.show_barrel       = false
+            gs.ui.show_pixel_editor = false
             gs.ui.drag_item      = .None
             gs.ui.drag_tray      = false
             gs.ui.drag_input     = false
@@ -656,6 +657,41 @@ update_input :: proc(gs: ^Game_State) {
                     notify(gs, "The world stirs - Conway wakes")
                 } else {
                     notify(gs, "The world settles after %d generations", gs.debug.life_gen)
+                }
+            case 13:
+                gs.ui.show_pixel_editor = !gs.ui.show_pixel_editor
+                gs.debug.menu_open      = false
+            }
+        }
+
+        // Pixel Art Editor: paint/erase/cycle-sprite/save/clear. Debug-only
+        // direct mutation of gs.pixel_art, same exception the menu above uses.
+        if gs.ui.show_pixel_editor {
+            if rl.IsMouseButtonDown(.LEFT) {
+                if sw := palette_swatch_at_cursor(gs); sw >= 0 {
+                    gs.ui.pixel_editor_color = u8(sw) // slot 0 = eraser, N = color N
+                } else if c, r, ok := pixel_cell_at_cursor(gs); ok {
+                    data := &gs.pixel_art.sprites[gs.ui.pixel_editor_target]
+                    if !data.has_data {
+                        // First stroke: start from the real original look, not blank.
+                        data.grid = seed_pixel_grid(gs.ui.pixel_editor_target)
+                    }
+                    data.grid[r][c] = gs.ui.pixel_editor_color
+                    data.has_data   = true
+                }
+            }
+            if rl.IsMouseButtonPressed(.LEFT) {
+                switch pixel_editor_button_at_cursor(gs) {
+                case 0: // Prev
+                    n := len(Pixel_Sprite_ID)
+                    gs.ui.pixel_editor_target = Pixel_Sprite_ID((int(gs.ui.pixel_editor_target) + n - 1) % n)
+                case 1: // Next
+                    n := len(Pixel_Sprite_ID)
+                    gs.ui.pixel_editor_target = Pixel_Sprite_ID((int(gs.ui.pixel_editor_target) + 1) % n)
+                case 2: // Save
+                    eq_push(&gs.events, Event{type = .Pixel_Art_Save})
+                case 3: // Clear
+                    gs.pixel_art.sprites[gs.ui.pixel_editor_target] = {}
                 }
             }
         }

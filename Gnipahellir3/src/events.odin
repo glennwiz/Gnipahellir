@@ -369,6 +369,13 @@ process_events :: proc(gs: ^Game_State) {
         case .Golem_Unmark:
             golem_set_block_mark(gs,e.tile,false)
 
+        case .Pixel_Art_Save:
+            if save_pixel_art(gs) {
+                notify(gs, "Pixel art saved")
+            } else {
+                notify(gs, "Pixel art save failed")
+            }
+
         case .Structure_Interact:
             structure_interact(gs, e.tile)
 

@@ -1141,6 +1141,32 @@ golem_tick_quick_clay :: proc(gs: ^Game_State) {
 	}
 }
 
+// The Quick Clay pool is deliberately not saved (Golem_Quick_Clay_State
+// comment, game_state.odin) — but the .Quick_Clay world tile IS, being part
+// of World_Grid. A save/load wipes the pool, so nothing is left to ever
+// dissolve a tile that was mid-lingering at save time: it would otherwise
+// sit as permanent fake terrain. Called once whenever gs.world becomes the
+// active level for a level with no live memory of its pool (right after
+// load_game, and on every level_transition) — a plain grid scan, cheap and
+// idempotent, and a no-op on a level with no orphaned Quick Clay.
+golem_sweep_orphan_quick_clay :: proc(gs: ^Game_State) {
+	for y in 0 ..< GRID_H {
+		for x in 0 ..< GRID_W {
+			if get_tile(&gs.world, x, y) != .Quick_Clay do continue
+			tracked := false
+			for slot in gs.golem_quick_clay.blocks {
+				if slot.active && slot.level == gs.level_index && slot.tile == {i32(x), i32(y)} {
+					tracked = true
+					break
+				}
+			}
+			if !tracked {
+				set_tile(&gs.world, x, y, gravity_open_tile(gs, y))
+			}
+		}
+	}
+}
+
 golem_exec_path_bridge :: proc(gs: ^Game_State, g: ^Golem, id: int) -> bool {
 	if g.mine_timer > 0 {g.vel.x=0; return true}
 	if g.path.cursor >= g.path.len do return false

@@ -49,12 +49,15 @@ main :: proc() {
     game_state_init(gs)
     audio_init(&gs.audio)
     assets_init(&gs.assets)
+    load_pixel_art(gs) // missing/invalid file leaves every sprite's has_data false (procedural fallback)
 
     if !load_game(gs) {
         // Fresh run: spawn player on the surface, a few tiles left of the cave entrance
         gs.player.pos            = {f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H}
         gs.player.clothing_color = rl.BLUE
         gs.player.hair_color     = rl.ORANGE
+    } else {
+        golem_sweep_orphan_quick_clay(gs) // the pool isn't saved; clear any Quick Clay it left orphaned
     }
     camera_snap_y(gs)  // start the view centered on the player, wherever they spawned/loaded
     load_stats(&gs.stats)

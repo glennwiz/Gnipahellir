@@ -132,6 +132,7 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
     }
 
     gs.level_index = dest
+    golem_sweep_orphan_quick_clay(gs) // clear any Quick Clay left orphaned by a save/load while this level was stashed
     gs.player.pos  = dest_pos
     gs.player.vel  = {}
     camera_snap_y(gs)  // cut the view to the new spot, don't slide across levels

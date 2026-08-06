@@ -427,6 +427,10 @@ UI_State :: struct {
     golem_zone_drag:  bool,
     golem_zone_start: [2]i32,
 	golem_zone_press_screen: [2]f32,
+
+    show_pixel_editor:   bool,           // F1 debug tool: paint editable structure sprites (pixel_art.odin)
+    pixel_editor_target:  Pixel_Sprite_ID, // sprite currently open in the editor
+    pixel_editor_color:  u8,             // selected palette index (game_palette), 1-based; 0 = eraser
 }
 
 // ─── Notifications (timed on-screen popups) ───────────────────────────────────
@@ -573,6 +577,7 @@ Game_State :: struct {
     sim:         Sim_State,
     audio:       Audio_State,
     assets:      Assets,
+    pixel_art:   Pixel_Art_Store,  // editable structure sprites (pixel_art.odin); loaded/saved separately from Save_Data
     progression: Progression_State,
     dimension:   Dimension_State,
     stats:       Persistent_Stats,

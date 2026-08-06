@@ -374,6 +374,7 @@ Event_Type :: enum u8 {
     Golem_Damaged,      // tile.x = golem slot, int_val = damage
     Golem_Mark,         // Shift+left wand paint: explicit excavation tile
     Golem_Unmark,       // Shift+right wand paint: erase excavation tile
+    Pixel_Art_Save,     // debug Pixel Art Editor "SAVE" button: writes gs.pixel_art to disk
 }
 
 Event_Payload :: struct #raw_union {

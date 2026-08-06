@@ -570,7 +570,12 @@ draw_blueprint_chests :: proc(gs: ^Game_State) {
         for x in 0 ..< GRID_W {
             t := get_tile(&gs.world, x, y)
             if is_blueprint_chest(t) {
-                draw_pixel_blueprint_chest(gs, i32(x*CELL_SIZE), i32(y*CELL_SIZE), t, x, y)
+                bx, by := i32(x*CELL_SIZE), i32(y*CELL_SIZE)
+                if gs.pixel_art.sprites[.Blueprint_Chest].has_data {
+                    draw_pixel_grid_sprite(gs, .Blueprint_Chest, bx, by)
+                } else {
+                    draw_pixel_blueprint_chest(gs, bx, by, t, x, y)
+                }
             }
         }
     }
@@ -637,7 +642,12 @@ draw_crafting_benches :: proc(gs: ^Game_State) {
     for y in 0 ..< GRID_H {
         for x in 0 ..< GRID_W {
             if get_tile(&gs.world, x, y) == .Crafting_Bench {
-                draw_pixel_crafting_bench(gs, i32(x*CELL_SIZE), i32(y*CELL_SIZE), x, y)
+                bx, by := i32(x*CELL_SIZE), i32(y*CELL_SIZE)
+                if gs.pixel_art.sprites[.Crafting_Bench].has_data {
+                    draw_pixel_grid_sprite(gs, .Crafting_Bench, bx, by)
+                } else {
+                    draw_pixel_crafting_bench(gs, bx, by, x, y)
+                }
             }
         }
     }
@@ -734,23 +744,52 @@ draw_pixel_crafting_bench :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
 draw_smelters :: proc(gs:^Game_State) {
 	for y in 0..<GRID_H do for x in 0..<GRID_W {
 		if get_tile(&gs.world,x,y)==.Smelter {
-			draw_pixel_smelter(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
+			bx, by := i32(x*CELL_SIZE), i32(y*CELL_SIZE)
+			if gs.pixel_art.sprites[.Smelter].has_data {
+				draw_pixel_grid_sprite(gs, .Smelter, bx, by)
+			} else {
+				draw_pixel_smelter_shell(bx, by)
+			}
+			draw_pixel_smelter_dynamic(gs,bx,by,x,y)
 		}
 	}
 }
 
-draw_pixel_smelter :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
+// Static furnace body — chimney, firebrick courses, firebox frame, fuel rack
+// and casting tray frames, progress-bar frame, rivets. Grid-editable (see
+// pixel_sprite_table[.Smelter]); this proc is only the procedural fallback
+// when no edit has been saved. Coordinates and palette indices are listed in
+// smelter_shell_rects, which seed_pixel_grid also reads for the editor preview.
+draw_pixel_smelter_shell :: proc(bx, by: i32) {
+	info := pixel_sprite_table[.Smelter]
+	ox := bx + i32(info.ox_off)
+	oy := by + i32(info.oy_off)
+	draw_shell_rects(smelter_shell_rects, ox, oy)
+}
+
+@(rodata)
+smelter_shell_rects := []Shell_Rect{
+	{8, 0, 8, 10, 19},   {7, 7, 10, 4, 19},   {4, 9, 16, 3, 19},   {2, 12, 20, 12, 19},
+	{3, 24, 5, 2, 19},   {16, 24, 5, 2, 19},  {9, 1, 6, 9, 20},    {8, 0, 8, 2, 23},
+	{9, 0, 6, 1, 24},    {10, 3, 4, 1, 19},   {5, 10, 14, 3, 21},  {3, 13, 18, 10, 20},
+	{4, 14, 16, 8, 21},  {5, 10, 12, 1, 22},  {4, 17, 16, 2, 23},  {5, 17, 14, 1, 24},
+	{4, 22, 5, 1, 22},   {15, 22, 5, 1, 22},  {4, 14, 1, 3, 22},   {19, 19, 1, 3, 20},
+	{7, 12, 10, 3, 19},  {6, 14, 12, 9, 19},  {8, 13, 8, 2, 25},   {7, 15, 10, 7, 25},
+	{0, 16, 3, 8, 19},   {1, 17, 2, 6, 23},   {21, 18, 5, 2, 19},  {21, 19, 5, 1, 24},
+	{4, 25, 16, 2, 19},  {4, 17, 1, 1, 24},   {19, 17, 1, 1, 24},  {2, 17, 1, 1, 24},
+	{21, 17, 1, 1, 24},
+}
+
+// Everything driven by live Sim_Tile_Data: furnace breath, smoke, fire/cold
+// coals, fuel pile, cast output, ore glints, progress fill. Always drawn on
+// top of the shell (grid-edited or procedural) so this feedback never goes
+// away, even once the shell has been customized.
+draw_pixel_smelter_dynamic :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
 	cx,bottom:=bx+CELL_SIZE/2,by+CELL_SIZE
 	sd:=&gs.world.sim_data[grid_idx(x,y)]
 	p:=clamp(sd.growth_timer/SMELT_TIME,0,1)
 	tick:=int(gs.frame/5)+x*3+y*7
 	working:=p>0
-	outline:=rl.Color{22,20,22,255}
-	brick_d:=rl.Color{55,50,53,255}
-	brick:=rl.Color{91,82,82,255}
-	brick_hi:=rl.Color{132,120,113,255}
-	iron:=rl.Color{47,49,56,255}
-	iron_hi:=rl.Color{105,110,120,255}
 	ember:=rl.Color{225,75,22,255}
 	flame:=rl.Color{255,145,35,255}
 	hot:=rl.Color{255,220,85,255}
@@ -763,18 +802,6 @@ draw_pixel_smelter :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
 		rl.EndBlendMode()
 	}
 
-	// Chimney, stepped shoulders, broad furnace body and stout feet.
-	rl.DrawRectangle(cx-4,bottom-24,8,10,outline)
-	rl.DrawRectangle(cx-5,bottom-17,10,4,outline)
-	rl.DrawRectangle(cx-8,bottom-15,16,3,outline)
-	rl.DrawRectangle(cx-10,bottom-12,20,12,outline)
-	rl.DrawRectangle(cx-9,bottom,5,2,outline); rl.DrawRectangle(cx+4,bottom,5,2,outline)
-
-	// Soot-dark chimney with an iron cap and travelling smoke squares.
-	rl.DrawRectangle(cx-3,bottom-23,6,9,brick_d)
-	rl.DrawRectangle(cx-4,bottom-24,8,2,iron)
-	rl.DrawRectangle(cx-3,bottom-24,6,1,iron_hi)
-	rl.DrawRectangle(cx-2,bottom-21,4,1,rl.Color{37,34,37,255})
 	if working {
 		for i in 0..<3 {
 			ii:=i32(i)
@@ -785,21 +812,7 @@ draw_pixel_smelter :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
 		}
 	}
 
-	// Firebrick shell: alternating courses, chipped corners, iron waist band.
-	rl.DrawRectangle(cx-7,bottom-14,14,3,brick)
-	rl.DrawRectangle(cx-9,bottom-11,18,10,brick_d)
-	rl.DrawRectangle(cx-8,bottom-10,16,8,brick)
-	rl.DrawRectangle(cx-7,bottom-14,12,1,brick_hi)
-	rl.DrawRectangle(cx-8,bottom-7,16,2,iron)
-	rl.DrawRectangle(cx-7,bottom-7,14,1,iron_hi)
-	rl.DrawRectangle(cx-8,bottom-2,5,1,brick_hi); rl.DrawRectangle(cx+3,bottom-2,5,1,brick_hi)
-	rl.DrawRectangle(cx-8,bottom-10,1,3,brick_hi); rl.DrawRectangle(cx+7,bottom-5,1,3,brick_d)
-
-	// Arched firebox, with a hard black opening and discrete flame frames.
-	rl.DrawRectangle(cx-5,bottom-12,10,3,outline)
-	rl.DrawRectangle(cx-6,bottom-10,12,9,outline)
-	rl.DrawRectangle(cx-4,bottom-11,8,2,rl.Color{18,15,17,255})
-	rl.DrawRectangle(cx-5,bottom-9,10,7,rl.Color{14,10,11,255})
+	// Discrete flame frames over the shell's cold firebox opening.
 	if working || sd.fuel_count>0 {
 		rl.DrawRectangle(cx-4,bottom-5,8,3,ember)
 		rl.DrawRectangle(cx-3,bottom-7,3,4,flame)
@@ -811,18 +824,15 @@ draw_pixel_smelter :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
 		rl.DrawRectangle(cx+1,bottom-4,3,2,rl.Color{61,34,29,255})
 	}
 
-	// Left fuel rack and right casting tray expose real machine buffers.
-	rl.DrawRectangle(cx-12,bottom-8,3,8,outline)
-	rl.DrawRectangle(cx-11,bottom-7,2,6,iron)
+	// Fuel pile in the rack.
 	if sd.fuel_count>0 {
 		rl.DrawRectangle(cx-13,bottom-6,4,2,rl.Color{112,66,36,255})
 		rl.DrawRectangle(cx-12,bottom-6,3,1,rl.Color{174,108,61,255})
 	}
-	rl.DrawRectangle(cx+9,bottom-6,5,2,outline)
-	rl.DrawRectangle(cx+9,bottom-5,5,1,iron_hi)
+	// Cast output resting in the tray.
 	if sd.store_count>0 {
 		bar_col:=item_table[sd.store_item].color
-		rl.DrawRectangle(cx+10,bottom-8,4,3,outline)
+		rl.DrawRectangle(cx+10,bottom-8,4,3,rl.Color{22,20,22,255})
 		rl.DrawRectangle(cx+10,bottom-7,3,1,bar_col)
 		rl.DrawRectangle(cx+11,bottom-6,3,1,rl.Color{225,220,205,255})
 	}
@@ -833,11 +843,7 @@ draw_pixel_smelter :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
 		rl.DrawRectangle(cx-2,bottom-13,2,2,ore_col)
 		rl.DrawRectangle(cx+2,bottom-12,1,1,ore_col)
 	}
-	rl.DrawRectangle(cx-8,bottom+1,16,2,outline)
 	if p>0 do rl.DrawRectangle(cx-7,bottom+1,i32(14*p),1,hot)
-
-	// Chest-style rivets finish the material language.
-	for rx in ([4]i32{cx-8,cx+7,cx-10,cx+9}) do rl.DrawRectangle(rx,bottom-7,1,1,iron_hi)
 }
 
 // ─── Pixel Art: Sky Altar ────────────────────────────────────────────────────
