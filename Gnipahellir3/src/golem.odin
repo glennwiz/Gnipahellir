@@ -20,11 +20,11 @@ GOLEM_TRANSFER_REACH :: i32(3)
 GOLEM_ZONE_MAX_W :: i32(32)
 GOLEM_ZONE_MAX_H :: i32(24)
 GOLEM_STOCKPILE_MARGIN :: i32(4)
-GOLEM_RECOVERY_MINE_REACH :: i32(8)
 GOLEM_STUCK_TIME :: f32(3.0)
 GOLEM_NAV_CLEANUP_PENALTY :: i32(512)
 GOLEM_PLAYER_CLEANUP_PENALTY :: i32(768)
 GOLEM_BLOCK_GRACE_TIME :: f32(3.0)
+GOLEM_QUICK_CLAY_LINGER :: i32(2) // chebyshev tiles a worker may stray before its old foothold dissolves
 
 Golem_Build_Cell :: struct {
 	off:  [2]i32,
@@ -139,76 +139,6 @@ golem_pack_pop :: proc(g: ^Golem) -> Item {
 golem_pack_peek :: proc(g: ^Golem) -> Item {
 	for slot in g.pack do if slot != .None do return slot
 	return .None
-}
-
-// Item → the terrain tile a golem lays when it spends this as a nav block
-// (bridge/pillar). Unlisted items default to the zero value (.Air), read as
-// "not a nav block" via the ok bool.
-golem_nav_tile_table := #partial [Item]Tile_Type{
-	.Grass_Turf     = .Grass,
-	.Dirt           = .Dirt,
-	.Stone_Block    = .Stone,
-	.Clay           = .Clay,
-	.Wood_Log       = .Wood,
-	.Plank          = .Wood,
-	.Iron_Ore       = .Iron_Ore,
-	.Silver_Ore     = .Silver_Ore,
-	.Gold_Ore       = .Gold_Ore,
-	.Gold_Rare_Ore  = .Gold_Rare_Ore,
-	.Emerald        = .Emerald_Ore,
-	.Jade           = .Jade_Ore,
-	.Diamond        = .Diamond_Ore,
-	.Hel_Gem        = .Hel_Gem_Ore,
-	.Runic_Sky_Ore  = .Runic_Sky_Ore,
-	.Aether_Crystal = .Aether_Ore,
-}
-
-golem_nav_tile :: proc(item: Item) -> (Tile_Type, bool) {
-	t := golem_nav_tile_table[item]
-	return t, t != .Air
-}
-
-golem_nav_block_count :: proc(g: ^Golem) -> (n: int) {
-	for item in g.pack do if _, ok := golem_nav_tile(item); ok do n += 1
-	return
-}
-
-golem_take_nav_block :: proc(g: ^Golem) -> (Tile_Type, bool) {
-	// Spend loose earth before durable/value-bearing materials.
-	for wanted in ([6]Item{.Grass_Turf,.Dirt,.Stone_Block,.Clay,.Wood_Log,.Plank}) {
-		if golem_pack_take(g, wanted) {
-			tile, _ := golem_nav_tile(wanted)
-			return tile, true
-		}
-	}
-	for &item in g.pack do if item!=.None {
-		if tile,ok:=golem_nav_tile(item); ok {item=.None; return tile,true}
-	}
-	return .Air, false
-}
-
-golem_recovery_scavenge :: proc(gs: ^Game_State, g: ^Golem) {
-	if !golem_pack_has_room(g) do return
-	origin:=golem_tile(g)
-	for r in i32(0)..=8 do for dy in -r..=r do for dx in -r..=r {
-		if max(abs(dx),abs(dy))!=r do continue
-		x,y:=int(origin.x+dx),int(origin.y+dy)
-		if !in_bounds(x,y) do continue
-		idx:=grid_idx(x,y)
-		item:=gs.world.items[idx]
-		if gs.world.item_counts[idx]==0 do continue
-		if _,ok:=golem_nav_tile(item); !ok do continue
-		took:=false
-		for gs.world.item_counts[idx]>0 && golem_pack_has_room(g) {
-			_ = golem_pack_add(g,item)
-			gs.world.item_counts[idx]-=1
-			took=true
-		}
-		if took do spawn_item_transfer_motes(gs,tile_center({i32(x),i32(y)}),golem_center(g),item)
-		if gs.world.item_counts[idx]==0 do gs.world.items[idx]=.None
-		gs.save_dirty=true
-		if !golem_pack_has_room(g) do return
-	}
 }
 
 golem_deployed_count :: proc(gs: ^Game_State, level: int) -> (n: int) {
@@ -1016,7 +946,10 @@ golem_set_target :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, vertical_reco
 	g.replan_timer = 0
 	stop_within := golem_job_reach(g)
 	can_mine_path := golem_pack_has_room(g)
-	bridge_budget := golem_nav_block_count(g)
+	// Bridging is free Quick Clay, not real material — budget it by path
+	// length instead of pack contents (a path can never use more bridge moves
+	// than it has waypoints).
+	bridge_budget := MAX_NAV_PATH
 	complete := false
 	if !astar_dig(gs, golem_tile(g), tile, stop_within, bridge_budget, &g.path,
 		allow_mining = can_mine_path, complete = &complete, protect_placed = true) {
@@ -1115,16 +1048,21 @@ golem_assign_gather :: proc(gs:^Game_State, id:int) {
 	w:=gs.golems.work[gs.level_index]
 	T:=golem_tile(g)
 	// Once a fall leaves a worker below its marked job site, climb back before
-	// selecting another faraway resource or storage route.
+	// selecting another faraway resource or storage route. But a worker can
+	// also legitimately be this far below the rectangle on purpose, chasing a
+	// Golem_Marked block — those are explicit permission to work anywhere, not
+	// just inside the zone — so don't yank it away from one it can still reach.
 	if w.active && T.y>w.max.y+2 {
-		g.job=.Seek
-		g.target={clamp(T.x,w.min.x,w.max.x),w.min.y}
-		g.has_target=true
-		g.recovering=true
-		g.recover_from=T.y
-		g.path={}
-		g.replan_timer=0
-		return
+		if _, marked := golem_find_marked_resource(gs, id, nil); !marked {
+			g.job=.Seek
+			g.target={clamp(T.x,w.min.x,w.max.x),w.min.y}
+			g.has_target=true
+			g.recovering=true
+			g.recover_from=T.y
+			g.path={}
+			g.replan_timer=0
+			return
+		}
 	}
 	if g.carry!=.None {
 		_ = golem_start_delivery(gs,g)
@@ -1161,6 +1099,48 @@ golem_follow_path :: proc(g: ^Golem, w: ^World_Grid) {
 	}
 }
 
+// ─── Quick Clay ───────────────────────────────────────────────────────────────
+//
+//  A worker's own free, instant foothold for bridging a gap or pillaring up
+//  during vertical recovery — never real material, never mineable, never
+//  reclaimed. It just dissolves once its worker has moved on.
+
+golem_dissolve_quick_clay :: proc(gs: ^Game_State, slot: ^Golem_Quick_Clay) {
+	if get_tile(&gs.world, int(slot.tile.x), int(slot.tile.y)) == .Quick_Clay {
+		set_tile(&gs.world, int(slot.tile.x), int(slot.tile.y), gravity_open_tile(gs, int(slot.tile.y)))
+		spawn_clay_drip(gs, slot.tile)
+	}
+	slot.active = false
+}
+
+golem_place_quick_clay :: proc(gs: ^Game_State, g: ^Golem, id: int, tile: [2]i32) {
+	set_tile(&gs.world, int(tile.x), int(tile.y), .Quick_Clay)
+	pool := &gs.golem_quick_clay
+	for &slot in pool.blocks do if !slot.active {
+		slot = {active = true, tile = tile, level = gs.level_index, owner = i16(id)}
+		return
+	}
+	// Pool exhausted (unusual: a very long unbroken climb or bridge). Reclaim
+	// this worker's own oldest foothold rather than leaving an untracked,
+	// permanent Quick Clay block behind — it must always succeed.
+	for &slot in pool.blocks do if slot.active && slot.level == gs.level_index && slot.owner == i16(id) {
+		golem_dissolve_quick_clay(gs, &slot)
+		slot = {active = true, tile = tile, level = gs.level_index, owner = i16(id)}
+		return
+	}
+}
+
+golem_tick_quick_clay :: proc(gs: ^Game_State) {
+	for &slot in gs.golem_quick_clay.blocks {
+		if !slot.active || slot.level != gs.level_index do continue
+		g := &gs.golems.data[slot.owner]
+		if g.status != .Deployed || g.level != gs.level_index ||
+		   chebyshev(golem_tile(g), slot.tile) > GOLEM_QUICK_CLAY_LINGER {
+			golem_dissolve_quick_clay(gs, &slot)
+		}
+	}
+}
+
 golem_exec_path_bridge :: proc(gs: ^Game_State, g: ^Golem, id: int) -> bool {
 	if g.mine_timer > 0 {g.vel.x=0; return true}
 	if g.path.cursor >= g.path.len do return false
@@ -1168,17 +1148,7 @@ golem_exec_path_bridge :: proc(gs: ^Game_State, g: ^Golem, id: int) -> bool {
 	bt := golem_tile(g)
 	x, y := int(T.x), int(T.y)
 	if T.y < bt.y || !in_bounds(x,y+1) || is_solid(&gs.world,x,y+1) do return false
-	tile, ok := golem_take_nav_block(g)
-	if !ok {
-		g.path = {}
-		g.vel.x = 0
-		return true
-	}
-	set_tile(&gs.world,x,y+1,tile)
-	gs.world.tile_flags[grid_idx(x,y+1)] += {.Placed,.Golem_Placed}
-	placed:=[2]i32{i32(x),i32(y+1)}
-	golem_register_block_grace(gs,id,placed)
-	spawn_item_transfer_motes(gs,golem_center(g),tile_center(placed),terrain_table[tile].drop_item)
+	golem_place_quick_clay(gs, g, id, {i32(x), i32(y+1)})
 	g.mine_timer = GOLEM_MINE_TIME
 	g.vel.x = 0
 	gs.save_dirty = true
@@ -1194,21 +1164,21 @@ golem_end_recovery :: proc(g: ^Golem) {
 	g.replan_timer = 0
 }
 
-// Vertical self-rescue: mine a real block into the pack, hop, and spend that
-// block beneath the body. Repeats until ordinary A* can take over near the
-// objective; no material is conjured.
+// Vertical self-rescue: carve headroom when blocked, then hop up onto a free
+// Quick Clay foothold. Repeats until ordinary A* can take over near the
+// objective. Headroom is still real terrain (its drops still bank to the
+// pack), but the footing itself costs nothing and needs no material.
 golem_update_recovery :: proc(gs: ^Game_State, g: ^Golem, id: int) {
 	bt := golem_tile(g)
 	if bt.y <= g.target.y+golem_job_reach(g) {golem_end_recovery(g); return}
 	g.vel.x = 0
 	if g.mine_timer > 0 do return
 	x,y := int(bt.x),int(bt.y)
-	if golem_nav_block_count(g)==0 do golem_recovery_scavenge(gs,g)
 
 	if !g.grounded do return
 
-	// Carve headroom first. If the shaft is already open but the pack is empty,
-	// take one natural side block to use as the next foothold.
+	// Carve headroom first. Quick Clay only ever supplies footing, not a way
+	// through solid rock overhead.
 	for c in ([2][2]i32{{i32(x),i32(y-1)},{i32(x),i32(y-2)}}) {
 		if is_solid(&gs.world,int(c.x),int(c.y)) {
 			if !golem_pack_has_room(g) {
@@ -1220,49 +1190,12 @@ golem_update_recovery :: proc(gs: ^Game_State, g: ^Golem, id: int) {
 			return
 		}
 	}
-	if golem_nav_block_count(g)==0 {
-		if !golem_pack_has_room(g) {
-			cached:=golem_pack_pop(g)
-			spawn_ground_item(&gs.world,bt,cached,1)
-			gs.save_dirty=true
-		}
-		for dx in ([2]int{-1,1}) {
-			c:=[2]i32{i32(x+dx),i32(y)}
-			ci:=grid_idx(int(c.x),int(c.y))
-			// An adjacent worker may be standing on this recovery pillar. Side
-			// scavenging consumes natural terrain only; placed headroom can still
-			// be cleared above when it genuinely blocks this worker's body.
-			if .Placed not_in gs.world.tile_flags[ci] && is_solid(&gs.world,int(c.x),int(c.y)) &&
-			   golem_mine_tile(gs,g,c,true,id) {return}
-		}
-		for dx in ([2]int{-1,1}) {
-			c:=[2]i32{i32(x+dx),i32(y+1)}
-			ci:=grid_idx(int(c.x),int(c.y))
-			above_i:=grid_idx(int(c.x),int(c.y-1))
-			if .Placed not_in gs.world.tile_flags[ci] && .Placed not_in gs.world.tile_flags[above_i] &&
-			   is_solid(&gs.world,int(c.x),int(c.y)) &&
-			   golem_mine_tile(gs,g,c,true,id) {return}
-		}
-		for r in i32(2)..=GOLEM_RECOVERY_MINE_REACH do for dy in -r..=r do for dx in -r..=r {
-			if max(abs(dx),abs(dy))!=r do continue
-			c:=[2]i32{i32(x)+dx,i32(y)+dy}
-			if !in_bounds(int(c.x),int(c.y)) do continue
-			ci:=grid_idx(int(c.x),int(c.y))
-			if .Placed not_in gs.world.tile_flags[ci] && is_solid(&gs.world,int(c.x),int(c.y)) &&
-			   golem_mine_tile(gs,g,c,true,id) {return}
-		}
-		golem_end_recovery(g)
-		return
-	}
-	if tile,ok:=golem_take_nav_block(g); ok && !is_solid(&gs.world,x,y) {
-		// Raise the body first, then occupy its old cell with the real foothold.
-		// This deterministic one-cell mantle avoids jump arcs fighting newly
-		// placed collision while preserving the visible pillar and material cost.
+	if !is_solid(&gs.world,x,y) {
+		// Raise the body first, then plug its old cell with an instant, free
+		// Quick Clay foothold — no material spent, no scavenging needed; it
+		// dissolves in a dripping blob once the worker has moved on.
 		g.pos.y-=1
-		set_tile(&gs.world,x,y,tile)
-		gs.world.tile_flags[grid_idx(x,y)] += {.Placed,.Golem_Placed}
-		golem_register_block_grace(gs,id,{i32(x),i32(y)})
-		spawn_item_transfer_motes(gs,golem_center(g),tile_center({i32(x),i32(y)}),terrain_table[tile].drop_item)
+		golem_place_quick_clay(gs, g, id, {i32(x), i32(y)})
 		g.vel={}
 		g.grounded=true
 		g.mine_timer=GOLEM_MINE_TIME
@@ -1367,6 +1300,14 @@ golem_pick_resource :: proc(gs: ^Game_State, g: ^Golem, id: int) {
 	} else {
 		_ = golem_mine_tile(gs, g, g.target, false, id)
 	}
+	// A failed attempt (mine_timer still cooling down, a full pack, ...) is
+	// fine to abandon here: the very next assignment tick re-evaluates from
+	// scratch, and a full pack correctly triggers a delivery trip instead of
+	// a re-pick. That reassignment used to be hijacked by golem_assign_gather's
+	// zone-distance heuristic (see its comment) whenever the target sat below
+	// the work-zone rectangle, forcing a pointless climb that looped forever
+	// on a resource it could never actually reach again. That heuristic is
+	// the real fix; this reset is deliberately unconditional.
 	g.job = .Idle
 	g.has_target = false
 	g.path = {}
@@ -1612,6 +1553,7 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 
 update_golems :: proc(gs: ^Game_State) {
 	for i in 0 ..< MAX_GOLEMS do golem_update_one(gs, i)
+	golem_tick_quick_clay(gs)
 }
 
 // ─── Hearth, repair and upgrades ─────────────────────────────────────────────

@@ -5,8 +5,10 @@ package game
 //  A door is two stacked .Door tiles.  It is solid rock to everything —
 //  gravity anchors on it, falling blocks rest on it, enemies are walled by it,
 //  it never falls — with ONE exception: the player always walks straight
-//  through it (move_body's `pass_doors`, physics.odin).  No open/close state,
-//  no button.  Crafted at the bench (4 Plank), placed as a 1×2 pair.
+//  through it (move_body's `is_player`, physics.odin — the player also phases
+//  through structures the same way, see is_structure_tile in world.odin).
+//  No open/close state, no button.  Crafted at the bench (4 Plank), placed as
+//  a 1×2 pair.
 
 is_door :: proc(w: ^World_Grid, x, y: int) -> bool {
     return in_bounds(x, y) && w.terrain[grid_idx(x, y)] == .Door

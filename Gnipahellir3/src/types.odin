@@ -109,6 +109,10 @@ Tile_Type :: enum u8 {
     Clay_Hearth,
     Golem_Depot,
     World_Anchor,
+    // Free, instant, self-dissolving foothold a golem conjures for its own
+    // vertical movement (golem.odin Quick Clay) — never mineable, never
+    // placed by a player. (appended: terrain ordinals are serialized)
+    Quick_Clay,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────

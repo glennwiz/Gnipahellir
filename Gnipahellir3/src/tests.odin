@@ -316,6 +316,17 @@ sky_altar_requires_its_template :: proc(t: ^testing.T) {
 }
 
 @(test)
+stone_wood_altar_pixel_skin_requires_complete_foundation :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	ax,ay:=70,30
+	for dx in -2..=2 do set_tile(&gs.world,ax+dx,ay+2,.Stone)
+	for dx in -1..=1 do set_tile(&gs.world,ax+dx,ay+1,.Wood)
+	testing.expect(t,sky_altar_has_stone_wood_foundation(&gs.world,ax,ay),"complete five-stone/three-wood base should receive the connected skin")
+	set_tile(&gs.world,ax+1,ay+1,.Air)
+	testing.expect(t,!sky_altar_has_stone_wood_foundation(&gs.world,ax,ay),"an incomplete base must keep ordinary block art")
+}
+
+@(test)
 each_tier_raises_a_distinct_altar :: proc(t: ^testing.T) {
     // Every progression tier has its own template, and the deeper ones call for
     // silver and gold — so each blueprint reads differently.
@@ -383,7 +394,7 @@ door_crafts_places_anchors_and_mines :: proc(t: ^testing.T) {
 @(test)
 door_passes_player_blocks_enemies :: proc(t: ^testing.T) {
     // A door is always open to the player and always shut to everyone else:
-    // move_body's pass_doors is the only difference.
+    // move_body's is_player is the only difference.
     gs := test_state()
     defer free(gs)
     w := &gs.world
@@ -394,17 +405,92 @@ door_passes_player_blocks_enemies :: proc(t: ^testing.T) {
 
     grounded: bool
 
-    // Player (pass_doors) walks straight through, ending past the door column.
+    // Player (is_player) walks straight through, ending past the door column.
     ppos := [2]f32{98, 49}
     pvel := [2]f32{50, 0}
-    move_body(w, &ppos, &pvel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded, pass_doors = true)
+    move_body(w, &ppos, &pvel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded, is_player = true)
     testing.expect(t, ppos.x > 100, "the player phases through a door")
 
-    // An enemy (pass_doors defaults false) is stopped short of the door.
+    // An enemy (is_player defaults false) is stopped short of the door.
     epos := [2]f32{98, 49}
     evel := [2]f32{50, 0}
     move_body(w, &epos, &evel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded)
     testing.expect(t, epos.x < 100, "a door walls other entities out")
+}
+
+@(test)
+player_passes_through_structures_enemies_blocked :: proc(t: ^testing.T) {
+    // Same is_player exception extended to player-built structures: a bench
+    // (or any is_structure_tile row) is solid rock to everyone but the player,
+    // and only sideways for the player — its top still catches a landing.
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+
+    for yy in 40 ..= 52 do for xx in 96 ..= 104 do set_tile(w, xx, yy, .Air)
+    set_tile(w, 100, 50, .Crafting_Bench)
+    testing.expect(t, is_solid(w, 100, 50), "a structure is solid rock")
+
+    grounded: bool
+
+    ppos := [2]f32{98, 50}
+    pvel := [2]f32{50, 0}
+    move_body(w, &ppos, &pvel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded, is_player = true)
+    testing.expect(t, ppos.x > 100, "the player phases through a structure sideways")
+
+    epos := [2]f32{98, 50}
+    evel := [2]f32{50, 0}
+    move_body(w, &epos, &evel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded)
+    testing.expect(t, epos.x < 100, "a structure walls other entities out")
+
+    // Jump/fall onto the bench from above: the player still lands and stands
+    // on its top like solid ground, even though its sides are walk-through.
+    dpos := [2]f32{100, 44}
+    dvel := [2]f32{}
+    dgrounded := false
+    for _ in 0 ..< 120 {
+        move_body(w, &dpos, &dvel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &dgrounded, is_player = true)
+    }
+    testing.expect(t, dgrounded, "the player lands on top of a structure")
+    testing.expect(t, abs(dpos.y + PLAYER_H - 50) < 0.01, "feet rest exactly on the structure's top")
+}
+
+@(test)
+player_passes_through_blueprint_chests_sideways_only :: proc(t: ^testing.T) {
+    // Blueprint chests aren't in is_structure_tile (they gate their own
+    // separate reclaim/mining rules via is_blueprint_chest), so the
+    // walk-through exception is wired to them independently in physics.odin
+    // — verify it actually took.
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+
+    for yy in 40 ..= 52 do for xx in 96 ..= 104 do set_tile(w, xx, yy, .Air)
+    set_tile(w, 100, 50, .Blueprint_Chest_A)
+    testing.expect(t, is_solid(w, 100, 50), "a blueprint chest is solid rock")
+
+    grounded: bool
+
+    ppos := [2]f32{98, 50}
+    pvel := [2]f32{50, 0}
+    move_body(w, &ppos, &pvel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded, is_player = true)
+    testing.expect(t, ppos.x > 100, "the player phases through a blueprint chest sideways")
+
+    epos := [2]f32{98, 50}
+    evel := [2]f32{50, 0}
+    move_body(w, &epos, &evel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded)
+    testing.expect(t, epos.x < 100, "a blueprint chest walls other entities out")
+
+    dpos := [2]f32{100, 44}
+    dvel := [2]f32{}
+    dgrounded := false
+    for _ in 0 ..< 120 {
+        move_body(w, &dpos, &dvel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
+            GRAVITY, MAX_FALL_SPEED, &dgrounded, is_player = true)
+    }
+    testing.expect(t, dgrounded, "the player lands on top of a blueprint chest")
+    testing.expect(t, abs(dpos.y + PLAYER_H - 50) < 0.01, "feet rest exactly on the chest's top")
 }
 
 @(test)
@@ -4552,6 +4638,47 @@ hearth_upgrades_one_to_five_to_fifteen_slots :: proc(t: ^testing.T) {
 }
 
 @(test)
+gather_zone_climb_back_yields_to_a_reachable_marked_resource :: proc(t: ^testing.T) {
+	// Regression: a golem legitimately working a Golem_Marked block far below
+	// its (tiny) work-zone rectangle used to get yanked into a pointless
+	// climb-back every time it finished a job there, forever re-picking the
+	// same still-marked target and never making progress. golem_assign_gather
+	// must not treat "below the zone" as "must have fallen" when a marked
+	// resource explains exactly why the worker is there.
+	gs:=test_state(); defer free(gs)
+	for y in 60..=70 do for x in 18..=24 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=24 do set_tile(&gs.world,x,70,.Stone)
+	marked:=[2]i32{21,68}
+	set_tile(&gs.world,int(marked.x),int(marked.y),.Stone)
+	testing.expect(t,golem_set_block_mark(gs,marked,true),"fixture needs a marked resource below the zone")
+	gs.golems.work[gs.level_index]={active=true,min={18,60},max={24,61}}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={21.2,69-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+	testing.expect(t,golem_tile(g).y>gs.golems.work[gs.level_index].max.y+2,"fixture needs the worker well below the zone")
+
+	golem_assign_gather(gs,0)
+	testing.expect_value(t,g.job,Golem_Job.Mine)
+	testing.expect_value(t,g.target,marked)
+	testing.expect(t,!g.recovering,"a legitimate marked-resource trip must not trigger the climb-back safety net")
+}
+
+@(test)
+gather_zone_climb_back_still_fires_without_a_marked_resource :: proc(t: ^testing.T) {
+	// The climb-back safety net itself must still work for its real case: a
+	// worker with nothing below it to justify the depth (an actual fall).
+	gs:=test_state(); defer free(gs)
+	for y in 60..=70 do for x in 18..=24 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=24 do set_tile(&gs.world,x,70,.Stone)
+	gs.golems.work[gs.level_index]={active=true,min={18,60},max={24,61}}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={21.2,69-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+
+	golem_assign_gather(gs,0)
+	testing.expect_value(t,g.job,Golem_Job.Seek)
+	testing.expect(t,g.recovering,"an unexplained drop below the zone should still climb back")
+}
+
+@(test)
 gather_zone_is_normalized_and_capped :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	golem_set_zone(gs,{80,80},{150,20})
@@ -4849,23 +4976,24 @@ loaded_gatherer_does_not_jump_loop_on_a_mining_route :: proc(t: ^testing.T) {
 }
 
 @(test)
-golem_bridge_spends_a_real_pack_block :: proc(t: ^testing.T) {
+golem_bridge_places_free_quick_clay :: proc(t: ^testing.T) {
+	// Bridging a gap no longer spends real pack material — it always
+	// succeeds via a free, temporary Quick Clay foothold instead.
 	gs:=test_state(); defer free(gs)
 	g:=&gs.golems.data[0]
 	g^={status=.Deployed,level=gs.level_index,pos={20,f32(60)-GOLEM_H},hp=GOLEM_HP,
 		mode=.Gather,job=.Mine,grounded=true,project_cell=-1}
 	for y in 56..=60 do for x in 18..=23 do set_tile(&gs.world,x,y,.Air)
 	set_tile(&gs.world,20,60,.Stone)
-	_ = golem_pack_add(g,.Stone_Block)
 	g.path={len=1,cursor=0}; g.path.tiles[0]={21,59}
 	testing.expect(t,golem_exec_path_bridge(gs,g,0),"the gap waypoint should trigger a bridge action")
-	testing.expect_value(t,get_tile(&gs.world,21,60),Tile_Type.Stone)
-	testing.expect(t,.Placed in gs.world.tile_flags[grid_idx(21,60)],"navigation masonry remains a real placed block")
-	testing.expect(t,.Golem_Placed in gs.world.tile_flags[grid_idx(21,60)],"navigation masonry is reclaimable by its worker")
-	testing.expect(t,gs.particles.count>=5,"placing a navigation block should stream cargo from the worker")
-	testing.expect_value(t,gs.particles.data[0].pos,golem_center(g))
-	testing.expect_value(t,gs.particles.data[0].target,tile_center({21,60}))
-	testing.expect_value(t,golem_pack_count(g),0)
+	testing.expect_value(t,get_tile(&gs.world,21,60),Tile_Type.Quick_Clay)
+	testing.expect(t,is_solid(&gs.world,21,60),"the bridge tile is solid to stand on")
+	testing.expect(t,.Placed not_in gs.world.tile_flags[grid_idx(21,60)],"Quick Clay is not tracked as real placed masonry")
+	testing.expect_value(t,golem_pack_count(g),0) // never carried anything, never needed to
+	found:=false
+	for slot in gs.golem_quick_clay.blocks do if slot.active && slot.tile=={21,60} && slot.owner==0 do found=true
+	testing.expect(t,found,"the foothold should be tracked for later despawn")
 }
 
 @(test)
@@ -5118,7 +5246,12 @@ golem_recovery_punches_through_a_den_shell_instead_of_aborting :: proc(t:^testin
 }
 
 @(test)
-golem_internal_pack_pillars_out_of_a_deep_pocket :: proc(t: ^testing.T) {
+golem_quick_clay_pillars_out_of_a_deep_pocket :: proc(t: ^testing.T) {
+	// Same deep-pocket fixture as before, but now the pillar itself is free:
+	// the golem starts with an EMPTY pack (no pre-supplied material at all)
+	// and must still climb out, using Quick Clay for every footing step.
+	// Headroom it digs through along the way still banks real drops, so
+	// total Stone is still conserved across terrain + pack/carry + ground.
 	gs:=test_state(); defer free(gs)
 	gs.delta_time=.05
 	for &tile in gs.world.terrain do tile=.Stone
@@ -5132,22 +5265,25 @@ golem_internal_pack_pillars_out_of_a_deep_pocket :: proc(t: ^testing.T) {
 		recovering=true,recover_from=99}
 	gs.golems.work[gs.level_index]={active=true,min={27,82},max={33,86}}
 	start_y:=golem_tile(g).y
+	saw_quick_clay:=false
 	for _ in 0..<5000 {
 		update_golems(gs)
+		bt:=golem_tile(g)
+		if get_tile(&gs.world,int(bt.x),int(bt.y)+1)==.Quick_Clay do saw_quick_clay=true
 		if !g.recovering do break
 	}
 	rise:=start_y-golem_tile(g).y
 	testing.expect(t,!g.recovering,"vertical recovery should hand control back to the objective")
-	testing.expect(t,rise>=12,"the golem should pillar from the bottom pocket back toward its target")
-	placed:=0
-	for flags in gs.world.tile_flags do if .Placed in flags do placed+=1
-	testing.expect(t,placed>0,"the climb should leave visible foothold blocks")
+	testing.expect(t,rise>=12,"the golem should climb from the bottom pocket back toward its target with no material at all")
+	testing.expect(t,saw_quick_clay,"the climb should use a free Quick Clay foothold at some point")
 	stone_after:=0
 	for tile in gs.world.terrain do if tile==.Stone do stone_after+=1
 	stone_carried:=0
 	for item in g.pack do if item==.Stone_Block do stone_carried+=1
 	if g.carry==.Stone_Block do stone_carried+=1
-	testing.expect_value(t,stone_after+stone_carried,stone_before)
+	stone_dropped:=0
+	for i in 0..<GRID_W*GRID_H do if gs.world.items[i]==.Stone_Block do stone_dropped+=int(gs.world.item_counts[i])
+	testing.expect_value(t,stone_after+stone_carried+stone_dropped,stone_before)
 }
 
 @(test)
@@ -5167,7 +5303,12 @@ golem_recovery_closes_the_two_tile_seek_handoff :: proc(t:^testing.T) {
 }
 
 @(test)
-adjacent_recovering_golems_do_not_mine_each_others_pillars :: proc(t:^testing.T) {
+quick_clay_footing_is_never_mineable_by_anyone :: proc(t:^testing.T) {
+	// The old real-material foothold needed a 3-second ownership grace so a
+	// neighboring worker wouldn't mine it out from under the first. Quick
+	// Clay needs no such arbitration: it structurally can't be mined at all,
+	// not even by its own placer, so two adjacent recovering workers each
+	// building their own column can never disturb one another's footing.
 	gs:=test_state(); defer free(gs)
 	for y in 54..=60 do for x in 18..=23 do set_tile(&gs.world,x,y,.Air)
 	for x in 18..=23 do set_tile(&gs.world,x,61,.Stone)
@@ -5176,12 +5317,34 @@ adjacent_recovering_golems_do_not_mine_each_others_pillars :: proc(t:^testing.T)
 		job=.Seek,target={20,50},has_target=true,recovering=true,grounded=true,project_cell=-1}
 	right^={status=.Deployed,level=gs.level_index,pos={21.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
 		job=.Seek,target={21,50},has_target=true,recovering=true,grounded=true,project_cell=-1}
-	_ = golem_pack_add(left,.Stone_Block)
 	golem_update_recovery(gs,left,0)
-	testing.expect(t,.Golem_Placed in gs.world.tile_flags[grid_idx(20,60)],"left worker should create its foothold")
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Quick_Clay)
+	testing.expect(t,!golem_mine_tile(gs,left,{20,60},true,0),"not even its own placer can mine Quick Clay")
 	golem_update_recovery(gs,right,1)
-	testing.expect(t,is_solid(&gs.world,20,60),"the neighboring worker must preserve that foothold")
-	testing.expect(t,.Golem_Placed in gs.world.tile_flags[grid_idx(20,60)],"the neighboring worker must preserve ownership marking")
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Quick_Clay)
+	testing.expect(t,is_solid(&gs.world,20,60),"the foothold remains solid to stand on")
+}
+
+@(test)
+golem_quick_clay_dissolves_once_worker_moves_away :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20,60-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+	golem_place_quick_clay(gs,g,0,{20,60})
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Quick_Clay)
+
+	// Still close: a tick must not dissolve it early.
+	golem_tick_quick_clay(gs)
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Quick_Clay)
+
+	// Move the worker well away, then tick: it dissolves in a drip and frees its slot.
+	g.pos = {40, 60-GOLEM_H}
+	golem_tick_quick_clay(gs)
+	testing.expect(t,get_tile(&gs.world,20,60)!=Tile_Type.Quick_Clay,"the foothold should dissolve once its worker moves away")
+	testing.expect(t,gs.particles.count>=1,"dissolving should spawn a drip effect")
+	found:=false
+	for slot in gs.golem_quick_clay.blocks do if slot.active && slot.tile=={20,60} do found=true
+	testing.expect(t,!found,"the pool slot should be freed")
 }
 
 @(test)

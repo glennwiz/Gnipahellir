@@ -192,6 +192,18 @@ spawn_ritual_flash :: proc(gs: ^Game_State, altar: [2]i32) {
     }
 }
 
+// A worker's temporary Quick Clay foothold dissolving after use: a few damp
+// motes sag downward and fade, reading as melting away rather than breaking.
+spawn_clay_drip :: proc(gs: ^Game_State, T: [2]i32) {
+    center := [2]f32{f32(T.x) + 0.5, f32(T.y) + 0.5}
+    for i in 0 ..< 6 {
+        seed := u32(gs.frame)*37 + u32(i)*821
+        vel  := [2]f32{jitter(seed, 0.6), 1.2 + jitter(seed + 1, 0.6)}
+        spawn_particle(&gs.particles, center, vel,
+            rl.Color{190, 150, 115, 220}, 0.5 + jitter(seed + 3, 0.15), f32(i) * 0.04)
+    }
+}
+
 // ─── Ambience ─────────────────────────────────────────────────────────────────
 //
 //  Stray motes of magic drifting up through each level's air, and station

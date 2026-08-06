@@ -85,3 +85,45 @@ flying movement mode (sky predator), a faction/allegiance field (rival clan,
 draugr-vs-builder), and an "attack nearest machine/pile" targeting goal
 (anti-machine). None break the fat-struct / event-driven / table-driven laws —
 new `Enemy_Kind` rows + new goal procs.
+
+---
+
+## 2026-08-06 — time-rewind brainstorm (Glenn) — NOT SOLD YET, parked for review
+
+Sparked by noticing `save_game`/`load_game` round-trip nearly all of `Game_State`
+as one POD `mem.copy` (`save.odin`), which makes "snapshot now, restore later"
+cheap to build in principle. Glenn's opening idea: **a wearable ring that lets
+time run backwards.** Nothing here is scoped — capturing the spread before it's
+lost.
+
+1. **Ring of the Norns (personal rewind)** — active ability, rewinds just the
+   player (pos/vel/hp) a few seconds back. Cheap: sample only `Player` into a
+   short ring buffer every frame, not the full 3.17MB `Save_Data`. Panic button
+   for lava/fall/Garm-combo deaths. Cost should mirror the reward (mana drain,
+   or a charge that only refills at a shrine/altar) per the design north star.
+
+2. **Thread-snip (golem rewind)** — same trick scoped to one `Golem` — rewind a
+   worker that wandered into lava or got buried, without touching the world.
+   Very cheap (one small struct), and doubles as in-fiction cover for exactly
+   the kind of stuck-golem recovery already being hand-tested this session.
+
+3. **Hel's Hourglass (checkpoint item)** — rare consumable: drink to set a
+   checkpoint, drink a second later to snap back to it. Full `Save_Data` cost,
+   so scarce/craftable by design, one active checkpoint at a time (not a
+   buffer).
+
+4. **World-undo (dig-mistake insurance)** — periodic full checkpoints as a
+   late-game machine/altar ritual: "undo the last 30 seconds of terrain
+   change." Expensive and rare on purpose — fits the automation endgame more
+   than an early ring.
+
+5. **Echo/decoy** — not a rewind at all: record the last N seconds of player
+   movement and spawn a replaying ghost as a combat/misdirection tool. Reuses
+   the cheap position-buffer from #1 but for offense, not safety.
+
+**Open fork:** early defensive tool (cheap, personal, frequent — #1/#2) vs.
+rare/late "undo the world" item (expensive, scarce — #3/#4) — decides whether
+this is a small per-frame buffer or a periodic full-state checkpoint. Also
+worth deciding before building: none of these rewind transient state (camera,
+particles, gravity falling-block pool, notifications, ritual swirl) since it
+isn't in `Save_Data` — a restore reads as a jump-cut, not a smooth rewind.

@@ -32,28 +32,40 @@ BODY_MARGIN :: f32(0.003)
 STEP_HEIGHT :: f32(1.0)
 
 // A door is solid rock to every body EXCEPT the player, who always walks
-// through it (Glenn's design: no open/close, just permeable to the player and a
-// wall to enemies).  move_body's `pass_doors` selects which side of that a body
-// is on.  Everything else — anchoring, falling blocks, placement — reads plain
-// is_solid, so a door is always a stable anchor like rock.
+// through it in every direction (Glenn's design: no open/close, just a
+// passageway).  A structure — machines/stations/spawners/altars
+// (is_structure_tile) or a blueprint chest (is_blueprint_chest) — is similar
+// but only sideways: the player walks through its sides, yet still lands and
+// stands on its top like solid ground.  Raw material tiles (Stone/Dirt/Grass/
+// ore/Clay/...) are NOT included here on purpose — those stay solid to the
+// player from every side, only built/placed fixtures are walk-through.
+// `horizontal` distinguishes the two axes (true for the X sweep and the
+// step-up probe, false for the Y sweep) so only sideways movement waives it.
+// Everything else — anchoring, falling blocks, placement — reads plain
+// is_solid, so a door or structure is always a stable anchor like rock.
 @(private = "file")
-blocks_body :: proc(w: ^World_Grid, x, y: int, pass_doors: bool) -> bool {
-    if pass_doors && is_door(w, x, y) do return false
+blocks_body :: proc(w: ^World_Grid, x, y: int, is_player, horizontal: bool) -> bool {
+    if is_player {
+        t := get_tile(w, x, y)
+        if t == .Door do return false
+        if horizontal && (is_structure_tile[t] || is_blueprint_chest(t)) do return false
+    }
     return is_solid(w, x, y)
 }
 
 // True if a body of `size` at `pos` would overlap any tile that blocks it.
 // Used by the step-up probe: lift the body a tile and ask whether the raised
-// position is clear (obstacle cleared AND headroom above).
+// position is clear (obstacle cleared AND headroom above). Only ever called
+// while resolving horizontal movement, so structures waive like the X sweep.
 @(private = "file")
-body_blocked :: proc(w: ^World_Grid, pos, size: [2]f32, pass_doors: bool) -> bool {
+body_blocked :: proc(w: ^World_Grid, pos, size: [2]f32, is_player: bool) -> bool {
     left  := int(pos.x + BODY_MARGIN)
     right := int(pos.x + size.x - BODY_MARGIN)
     top   := int(pos.y + BODY_MARGIN)
     bot   := int(pos.y + size.y - BODY_MARGIN)
     for y in top ..= bot {
         for x in left ..= right {
-            if blocks_body(w, x, y, pass_doors) do return true
+            if blocks_body(w, x, y, is_player, true) do return true
         }
     }
     return false
@@ -61,10 +73,11 @@ body_blocked :: proc(w: ^World_Grid, pos, size: [2]f32, pass_doors: bool) -> boo
 
 // Integrates gravity (0 = none, e.g. debug fly mode) and moves the body,
 // resolving against solid tiles.  `grounded` is written only when the body
-// moves vertically: true on landing, false while airborne.  `pass_doors` lets
-// the player phase through door tiles (enemies leave it false — doors wall them).
+// moves vertically: true on landing, false while airborne.  `is_player` lets
+// the player phase through door/structure tiles (enemies leave it false —
+// doors and structures wall them).
 move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
-                  dt, gravity, max_fall: f32, grounded: ^bool, pass_doors := false,
+                  dt, gravity, max_fall: f32, grounded: ^bool, is_player := false,
                   step_up := false) {
     // Step-up is only for a grounded, gravity-bound body (never in fly mode).
     // `grounded^` still holds last frame's value here — the Y sweep is what
@@ -86,10 +99,10 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
         // Raising the body one step and finding the intended destination clear
         // means the obstacle is a single block with headroom above: climb it.
         try_step :: proc(w: ^World_Grid, pos: ^[2]f32, size: [2]f32,
-                         dest_x: f32, pass_doors, can_step: bool) -> bool {
+                         dest_x: f32, is_player, can_step: bool) -> bool {
             if !can_step do return false
             step_y := pos.y - STEP_HEIGHT
-            if body_blocked(w, {dest_x, step_y}, size, pass_doors) do return false
+            if body_blocked(w, {dest_x, step_y}, size, is_player) do return false
             pos.y = step_y
             return true
         }
@@ -97,8 +110,8 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
         if dx > 0 {
             sweep_r: for c in int(pos.x + size.x - BODY_MARGIN) + 1 ..= int(new_x + size.x - BODY_MARGIN) {
                 for r in top ..= bot {
-                    if blocks_body(w, c, r, pass_doors) {
-                        if !try_step(w, pos, size, pos.x + dx, pass_doors, can_step) {
+                    if blocks_body(w, c, r, is_player, true) {
+                        if !try_step(w, pos, size, pos.x + dx, is_player, can_step) {
                             new_x = f32(c) - size.x - BODY_EPS
                             vel.x = 0
                         }
@@ -109,8 +122,8 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
         } else {
             sweep_l: for c := int(pos.x + BODY_MARGIN) - 1; c >= int(new_x + BODY_MARGIN); c -= 1 {
                 for r in top ..= bot {
-                    if blocks_body(w, c, r, pass_doors) {
-                        if !try_step(w, pos, size, pos.x + dx, pass_doors, can_step) {
+                    if blocks_body(w, c, r, is_player, true) {
+                        if !try_step(w, pos, size, pos.x + dx, is_player, can_step) {
                             new_x = f32(c + 1) + BODY_EPS
                             vel.x = 0
                         }
@@ -133,7 +146,7 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
             grounded^ = false
             sweep_d: for r in int(pos.y + size.y - BODY_MARGIN) + 1 ..= int(new_y + size.y - BODY_MARGIN) {
                 for c in left ..= right {
-                    if blocks_body(w, c, r, pass_doors) {
+                    if blocks_body(w, c, r, is_player, false) {
                         new_y = f32(r) - size.y - BODY_EPS
                         vel.y = 0
                         grounded^ = true
@@ -145,7 +158,7 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
             grounded^ = false
             sweep_u: for r := int(pos.y + BODY_MARGIN) - 1; r >= int(new_y + BODY_MARGIN); r -= 1 {
                 for c in left ..= right {
-                    if blocks_body(w, c, r, pass_doors) {
+                    if blocks_body(w, c, r, is_player, false) {
                         new_y = f32(r + 1) + BODY_EPS
                         vel.y = 0
                         break sweep_u

@@ -453,6 +453,12 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	.World_Anchor            = {
 		"World Anchor", {.Solid}, rl.Color{145, 78, 190, 255}, 0, 0, .None, 0,
 	},
+	// Solid to everyone, but deliberately NOT .Mineable — it never yields
+	// material and is never reclaimed by mining. It only ever disappears via
+	// golem.odin's own despawn sweep (golem_dissolve_quick_clay).
+	.Quick_Clay              = {
+		"Quick Clay", {.Solid}, rl.Color{196, 150, 118, 255}, 0, 0, .None, 0,
+	},
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact

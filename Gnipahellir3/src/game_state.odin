@@ -127,6 +127,7 @@ MAX_GOLEM_DEPOTS     :: 8
 GOLEM_DEPOT_SLOTS    :: 12
 GOLEM_PACK_CAP       :: 8
 GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
+GOLEM_QUICK_CLAY_CAP  :: MAX_GOLEMS * 4
 
 Golem :: struct {
     status:       Golem_Status,
@@ -192,6 +193,22 @@ Golem_Block_Grace :: struct {
 
 Golem_Grace_State :: struct {
     blocks: [GOLEM_BLOCK_GRACE_CAP]Golem_Block_Grace,
+}
+
+// Free, instant, self-dissolving footing a worker conjures for its own
+// vertical movement (bridging a gap, pillaring up during recovery) — no
+// material spent, unlike navigation masonry. Transient coordination state,
+// not save data, for the same reason as Golem_Grace_State: a fresh load
+// simply has none lingering, which is correct since it was never "real."
+Golem_Quick_Clay :: struct {
+    active: bool,
+    tile:   [2]i32,
+    level:  int,
+    owner:  i16,
+}
+
+Golem_Quick_Clay_State :: struct {
+    blocks: [GOLEM_QUICK_CLAY_CAP]Golem_Quick_Clay,
 }
 
 // Transient acceleration index over saved Tile_Flag.Golem_Marked cells. It is
@@ -536,6 +553,7 @@ Game_State :: struct {
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,
     golem_marks: Golem_Mark_Index,
+    golem_quick_clay: Golem_Quick_Clay_State,
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,

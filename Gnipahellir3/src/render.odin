@@ -187,6 +187,7 @@ draw_world :: proc(gs: ^Game_State) {
     // The workbench, like the blueprint chest, is wider than its one-cell
     // collision footprint and needs a clean overlay pass after the grid.
     draw_crafting_benches(gs)
+    draw_smelters(gs)
     // Blueprint chests deliberately spill beyond one 10px terrain cell.  Draw
     // them after the grid so neighboring backdrop cells cannot crop the coffer.
     draw_blueprint_chests(gs)
@@ -518,7 +519,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
             return
         }
     }
-    if t == .Crafting_Bench || t == .Sky_Altar {
+    if t == .Crafting_Bench || t == .Sky_Altar || t == .Smelter {
         // Backdrop only. These stations receive a larger pixel-art silhouette
         // after the terrain loop so neighboring cells cannot crop their art.
         bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
@@ -728,6 +729,117 @@ draw_pixel_crafting_bench :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
     rl.DrawRectangle(ox + 11, oy + 7, 1, 1, hot)
 }
 
+// ─── Pixel Art: Smelter ──────────────────────────────────────────────────────
+
+draw_smelters :: proc(gs:^Game_State) {
+	for y in 0..<GRID_H do for x in 0..<GRID_W {
+		if get_tile(&gs.world,x,y)==.Smelter {
+			draw_pixel_smelter(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
+		}
+	}
+}
+
+draw_pixel_smelter :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
+	cx,bottom:=bx+CELL_SIZE/2,by+CELL_SIZE
+	sd:=&gs.world.sim_data[grid_idx(x,y)]
+	p:=clamp(sd.growth_timer/SMELT_TIME,0,1)
+	tick:=int(gs.frame/5)+x*3+y*7
+	working:=p>0
+	outline:=rl.Color{22,20,22,255}
+	brick_d:=rl.Color{55,50,53,255}
+	brick:=rl.Color{91,82,82,255}
+	brick_hi:=rl.Color{132,120,113,255}
+	iron:=rl.Color{47,49,56,255}
+	iron_hi:=rl.Color{105,110,120,255}
+	ember:=rl.Color{225,75,22,255}
+	flame:=rl.Color{255,145,35,255}
+	hot:=rl.Color{255,220,85,255}
+
+	// Restrained furnace breath, still rectangular and pixel-snapped.
+	if working {
+		rl.BeginBlendMode(.ADDITIVE)
+		rl.DrawRectangle(cx-8,bottom-14,16,13,rl.Color{255,75,20,25})
+		rl.DrawRectangle(cx-5,bottom-11,10,9,rl.Color{255,145,35,28})
+		rl.EndBlendMode()
+	}
+
+	// Chimney, stepped shoulders, broad furnace body and stout feet.
+	rl.DrawRectangle(cx-4,bottom-24,8,10,outline)
+	rl.DrawRectangle(cx-5,bottom-17,10,4,outline)
+	rl.DrawRectangle(cx-8,bottom-15,16,3,outline)
+	rl.DrawRectangle(cx-10,bottom-12,20,12,outline)
+	rl.DrawRectangle(cx-9,bottom,5,2,outline); rl.DrawRectangle(cx+4,bottom,5,2,outline)
+
+	// Soot-dark chimney with an iron cap and travelling smoke squares.
+	rl.DrawRectangle(cx-3,bottom-23,6,9,brick_d)
+	rl.DrawRectangle(cx-4,bottom-24,8,2,iron)
+	rl.DrawRectangle(cx-3,bottom-24,6,1,iron_hi)
+	rl.DrawRectangle(cx-2,bottom-21,4,1,rl.Color{37,34,37,255})
+	if working {
+		for i in 0..<3 {
+			ii:=i32(i)
+			sx:=cx-3+(ii*4+i32(tick))%7
+			sy:=bottom-27-ii*4-i32(tick%3)
+			smoke:=rl.Color{75,70,76,u8(150-i*35)}
+			rl.DrawRectangle(sx,sy,2,2,smoke)
+		}
+	}
+
+	// Firebrick shell: alternating courses, chipped corners, iron waist band.
+	rl.DrawRectangle(cx-7,bottom-14,14,3,brick)
+	rl.DrawRectangle(cx-9,bottom-11,18,10,brick_d)
+	rl.DrawRectangle(cx-8,bottom-10,16,8,brick)
+	rl.DrawRectangle(cx-7,bottom-14,12,1,brick_hi)
+	rl.DrawRectangle(cx-8,bottom-7,16,2,iron)
+	rl.DrawRectangle(cx-7,bottom-7,14,1,iron_hi)
+	rl.DrawRectangle(cx-8,bottom-2,5,1,brick_hi); rl.DrawRectangle(cx+3,bottom-2,5,1,brick_hi)
+	rl.DrawRectangle(cx-8,bottom-10,1,3,brick_hi); rl.DrawRectangle(cx+7,bottom-5,1,3,brick_d)
+
+	// Arched firebox, with a hard black opening and discrete flame frames.
+	rl.DrawRectangle(cx-5,bottom-12,10,3,outline)
+	rl.DrawRectangle(cx-6,bottom-10,12,9,outline)
+	rl.DrawRectangle(cx-4,bottom-11,8,2,rl.Color{18,15,17,255})
+	rl.DrawRectangle(cx-5,bottom-9,10,7,rl.Color{14,10,11,255})
+	if working || sd.fuel_count>0 {
+		rl.DrawRectangle(cx-4,bottom-5,8,3,ember)
+		rl.DrawRectangle(cx-3,bottom-7,3,4,flame)
+		rl.DrawRectangle(cx+1,bottom-8+i32(tick%2),3,5-i32(tick%2),flame)
+		rl.DrawRectangle(cx-1,bottom-6,2,4,hot)
+		rl.DrawRectangle(cx+2,bottom-5,1,2,hot)
+	} else {
+		rl.DrawRectangle(cx-4,bottom-4,3,2,rl.Color{61,34,29,255})
+		rl.DrawRectangle(cx+1,bottom-4,3,2,rl.Color{61,34,29,255})
+	}
+
+	// Left fuel rack and right casting tray expose real machine buffers.
+	rl.DrawRectangle(cx-12,bottom-8,3,8,outline)
+	rl.DrawRectangle(cx-11,bottom-7,2,6,iron)
+	if sd.fuel_count>0 {
+		rl.DrawRectangle(cx-13,bottom-6,4,2,rl.Color{112,66,36,255})
+		rl.DrawRectangle(cx-12,bottom-6,3,1,rl.Color{174,108,61,255})
+	}
+	rl.DrawRectangle(cx+9,bottom-6,5,2,outline)
+	rl.DrawRectangle(cx+9,bottom-5,5,1,iron_hi)
+	if sd.store_count>0 {
+		bar_col:=item_table[sd.store_item].color
+		rl.DrawRectangle(cx+10,bottom-8,4,3,outline)
+		rl.DrawRectangle(cx+10,bottom-7,3,1,bar_col)
+		rl.DrawRectangle(cx+11,bottom-6,3,1,rl.Color{225,220,205,255})
+	}
+
+	// Ore glints in the throat; the integrated ember bar fills as the cast runs.
+	if sd.in_count>0 && sd.in_item!=.None {
+		ore_col:=item_table[sd.in_item].color
+		rl.DrawRectangle(cx-2,bottom-13,2,2,ore_col)
+		rl.DrawRectangle(cx+2,bottom-12,1,1,ore_col)
+	}
+	rl.DrawRectangle(cx-8,bottom+1,16,2,outline)
+	if p>0 do rl.DrawRectangle(cx-7,bottom+1,i32(14*p),1,hot)
+
+	// Chest-style rivets finish the material language.
+	for rx in ([4]i32{cx-8,cx+7,cx-10,cx+9}) do rl.DrawRectangle(rx,bottom-7,1,1,iron_hi)
+}
+
 // ─── Pixel Art: Sky Altar ────────────────────────────────────────────────────
 //
 // A one-cell capstone rendered as a broad 26x27 shrine: stepped cloud-stone,
@@ -737,8 +849,88 @@ draw_pixel_crafting_bench :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
 draw_sky_altars :: proc(gs:^Game_State) {
 	for y in 0..<GRID_H do for x in 0..<GRID_W {
 		if get_tile(&gs.world,x,y)==.Sky_Altar {
+			if sky_altar_has_stone_wood_foundation(&gs.world,x,y) {
+				draw_pixel_stone_wood_altar_base(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
+			}
 			draw_pixel_sky_altar(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
 		}
+	}
+}
+
+sky_altar_has_stone_wood_foundation :: proc(w:^World_Grid,x,y:int) -> bool {
+	for dx in -2..=2 do if get_tile(w,x+dx,y+2)!=.Stone do return false
+	for dx in -1..=1 do if get_tile(w,x+dx,y+1)!=.Wood do return false
+	return true
+}
+
+// Tier-A's five Stone and three Wood cells become one continuous shrine facade
+// once the capstone is present. Terrain and collision remain eight real blocks;
+// this foreground skin only joins their seams, braces and central rune spine.
+draw_pixel_stone_wood_altar_base :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
+	cx:=bx+CELL_SIZE/2
+	wood_y:=by+CELL_SIZE
+	stone_y:=by+CELL_SIZE*2
+	tick:=int(gs.frame/8)+x+y
+	outline:=rl.Color{22,24,32,255}
+	stone_d:=rl.Color{67,76,98,255}
+	stone:=rl.Color{112,129,158,255}
+	stone_hi:=rl.Color{174,193,217,255}
+	wood_d:=rl.Color{67,38,28,255}
+	wood:=rl.Color{121,70,42,255}
+	wood_hi:=rl.Color{174,108,61,255}
+	iron:=rl.Color{57,63,76,255}
+	iron_hi:=rl.Color{112,124,143,255}
+	rune:=rl.Color{90,215,255,255}
+	if tick%4<2 do rune=rl.Color{135,240,255,255}
+
+	// One broad foundation silhouette with small end feet.
+	rl.DrawRectangle(cx-26,stone_y-1,52,11,outline)
+	rl.DrawRectangle(cx-24,stone_y+9,7,2,outline); rl.DrawRectangle(cx+17,stone_y+9,7,2,outline)
+	rl.DrawRectangle(cx-16,wood_y-1,32,11,outline)
+
+	// Five dressed stones retain individual joints but share a continuous cap.
+	rl.DrawRectangle(cx-25,stone_y,50,9,stone_d)
+	rl.DrawRectangle(cx-24,stone_y,48,2,stone_hi)
+	for i in 0..<5 {
+		sx:=cx-25+i32(i)*10
+		rl.DrawRectangle(sx+1,stone_y+2,8,6,stone)
+		rl.DrawRectangle(sx+1,stone_y+2,7,1,stone_hi)
+		if i<4 do rl.DrawRectangle(sx+9,stone_y+1,1,8,outline)
+		// Alternating one-pixel chips stop the course looking machine-perfect.
+		if (i+tick)%2==0 do rl.DrawRectangle(sx+2,stone_y+6,2,1,stone_d)
+	}
+	rl.DrawRectangle(cx-23,stone_y+9,6,1,stone); rl.DrawRectangle(cx+17,stone_y+9,6,1,stone)
+
+	// Three oak panels form a single bound beam. Stepped braces visually carry
+	// the narrower altar down into the wide stone course.
+	rl.DrawRectangle(cx-15,wood_y,30,9,wood_d)
+	rl.DrawRectangle(cx-14,wood_y+1,28,7,wood)
+	rl.DrawRectangle(cx-14,wood_y+1,28,1,wood_hi)
+	for seam in ([2]i32{cx-5,cx+5}) do rl.DrawRectangle(seam,wood_y+1,1,7,outline)
+	rl.DrawRectangle(cx-14,wood_y+7,28,1,wood_d)
+	for step in 0..<4 {
+		s:=i32(step)
+		rl.DrawRectangle(cx-17-s*2,wood_y+6+s,4,2,outline)
+		rl.DrawRectangle(cx+13+s*2,wood_y+6+s,4,2,outline)
+		rl.DrawRectangle(cx-16-s*2,wood_y+6+s,3,1,wood_hi)
+		rl.DrawRectangle(cx+13+s*2,wood_y+6+s,3,1,wood_hi)
+	}
+
+	// Iron collars and a luminous spine connect directly to the rune plate on
+	// the capstone above, making all three material rows read as one machine.
+	rl.DrawRectangle(cx-16,wood_y,3,9,iron); rl.DrawRectangle(cx+13,wood_y,3,9,iron)
+	rl.DrawRectangle(cx-15,wood_y+1,1,6,iron_hi); rl.DrawRectangle(cx+13,wood_y+1,1,6,iron_hi)
+	rl.DrawRectangle(cx-3,wood_y-1,6,11,outline)
+	rl.DrawRectangle(cx-2,wood_y,4,9,iron)
+	rl.DrawRectangle(cx-1,wood_y,2,9,rune)
+	rl.DrawRectangle(cx-4,stone_y+1,8,7,outline)
+	rl.DrawRectangle(cx-3,stone_y+2,6,5,iron)
+	draw_pixel_rune_mark(cx-2,stone_y+2,rune,tick/3)
+
+	// Small matching rune studs across the outer foundation echo the altar top.
+	for rx in ([2]i32{cx-19,cx+16}) {
+		rl.DrawRectangle(rx,stone_y+3,4,4,stone_d)
+		draw_pixel_rune_mark(rx,stone_y+3,rune,tick/5+int(rx&1))
 	}
 }
 

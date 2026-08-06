@@ -72,7 +72,7 @@ update_player :: proc(gs: ^Game_State) {
     prev_y        := p.pos.y
 
     move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
-        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded, pass_doors = true,
+        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded, is_player = true,
         step_up = true)
 
     // Keep the sprite at its pre-step height on the collision frame, then let
