@@ -98,6 +98,7 @@ item_table := [Item]Item_Info{
     .Command_Wand_Emerald = { "Emerald Command Wand", {70, 220, 135, 255}, .Air },
     .Command_Wand_Hel  = { "Hel Command Wand",  {225, 55,  85,  255}, .Air },
     .Clay_Golem        = { "Clay Golem",        {178, 116, 78,  255}, .Air },
+    .Jade_Ring         = { "Jade Ring",         {150, 210, 165, 255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
@@ -125,8 +126,9 @@ item_equip_slot := #partial [Item]Equip_Slot{
     .Command_Wand         = .Weapon,
     .Command_Wand_Emerald = .Weapon,
     .Command_Wand_Hel     = .Weapon,
-    .Aether_Charm = .Charm,
-    .Void_Charm   = .Charm,
+    .Aether_Charm  = .Charm,
+    .Void_Charm    = .Charm,
+    .Jade_Ring     = .Charm,
     .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,  .Runic_Helm       = .Head,
     .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest, .Runic_Chestplate = .Chest,
     .Iron_Gauntlets  = .Hands, .Silver_Gauntlets  = .Hands, .Gold_Gauntlets  = .Hands, .Runic_Gauntlets  = .Hands,
@@ -262,7 +264,7 @@ FLOWER_SEED_MIN   :: 2
 FLOWER_SEED_MAX   :: 5
 FLOWER_BED_BLOOMS :: 5
 
-// A consumable is used (drunk/eaten) from the bag rather than equipped.
+// A consumable is used (drunk) from the bag rather than equipped.
 item_is_consumable :: proc(it: Item) -> bool {
     return it == .Potion_Health
 }
@@ -287,6 +289,33 @@ player_consume :: proc(gs: ^Game_State, inv_slot: int) {
     audio_play(&gs.audio, .Pickup)
     gs.save_dirty = true
     log_action(gs, "Player drinks a Health Potion (+%d hp)", heal)
+}
+
+// Worn, not spent: while a Jade Ring sits in any charm slot, the bag's
+// "Return to Surface" button is live.
+jade_ring_active :: proc(p: ^Player) -> bool {
+    return player_has_charm(p, .Jade_Ring)
+}
+
+// The Jade Ring's effect: an early, cheap recall straight to the surface
+// spawn, usable as often as it's worn.  Refused when the ring isn't equipped,
+// when already home, or (matching the dimension gate's own rule) when
+// leaving an unanchored dimension would strand a deployed golem crew.
+player_warp_home :: proc(gs: ^Game_State) -> bool {
+    if !jade_ring_active(&gs.player) do return false
+    if gs.level_index == LEVEL_SURFACE {
+        notify(gs, "Already on the surface")
+        return false
+    }
+    if gs.level_index == LEVEL_DIMENSION && golem_deployed_count(gs, LEVEL_DIMENSION) > 0 && !dimension_world_anchored(gs) {
+        notify(gs, "Recall the clay crew or build a World Anchor before leaving")
+        return false
+    }
+    p := Portal{dest_level = LEVEL_SURFACE, dest_pos = SURFACE_HOME_POS, gate_tier = -1}
+    level_transition(gs, &p)
+    audio_play(&gs.audio, .Pickup)
+    log_action(gs, "Player uses the Jade Ring, warps to the surface")
+    return true
 }
 
 // Unequip back into the bag; refused when the bag can't hold the item.

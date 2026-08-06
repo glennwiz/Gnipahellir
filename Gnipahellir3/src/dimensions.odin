@@ -62,9 +62,10 @@ Dimension_State :: struct {
     miner:        Miner_State,  // an active miner anchors the dimension (miner.odin)
 }
 
-// The return gate carved into every dimension's spawn chamber.
-DIM_GATE_TILES :: [2][2]i32{{6, 14}, {7, 14}}
-DIM_SPAWN_POS  :: [2]f32{8, 15 - PLAYER_H}
+// The return gate carved into every dimension's spawn chamber (mid-map, not
+// the corner, so a fresh entry doesn't dump the player at the map edge).
+DIM_GATE_TILES :: [2][2]i32{{93, 26}, {94, 26}}
+DIM_SPAWN_POS  :: [2]f32{95, 27 - PLAYER_H}
 
 // ─── Enter / Exit ─────────────────────────────────────────────────────────────
 
@@ -205,9 +206,9 @@ gen_dimension :: proc(w: ^World_Grid, kind: Dimension_Kind, seed: u32) {
         }
     }
 
-    // Spawn chamber (top-left) with the return gate
-    carve_box(w, 4, 8, 14, 14)
-    for x in 4 ..= 14 do set_tile(w, x, 15, .Stone)
+    // Spawn chamber (mid-map) with the return gate
+    carve_box(w, 91, 20, 101, 26)
+    for x in 91 ..= 101 do set_tile(w, x, 27, .Stone)
     gate := DIM_GATE_TILES
     set_tile(w, int(gate[0].x), int(gate[0].y), .Dimension_Gate)
     set_tile(w, int(gate[1].x), int(gate[1].y), .Dimension_Gate)

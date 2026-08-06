@@ -153,6 +153,16 @@ cursor_in_window :: proc(gs: ^Game_State, w: UI_Window) -> bool {
 	return mx >= x && mx < x + ww && my >= y && my < y + wh
 }
 
+// The topmost open window whose bounds contain the cursor, honoring the same
+// stacking order window-header drags use — where two windows' rects overlap
+// (e.g. a chest drawn over the bag), the one drawn on top claims the point.
+window_at_cursor :: proc(gs: ^Game_State) -> (w: UI_Window, ok: bool) {
+	for win in window_top_down {
+		if cursor_in_window(gs, win) do return win, true
+	}
+	return {}, false
+}
+
 // Runtime content origins, derived from the window position.
 inv_bag_origin :: proc(gs: ^Game_State) -> (x, y: i32) {
 	p := gs.ui.win_pos[.Inventory]
@@ -1116,6 +1126,31 @@ equip_slot_at_cursor :: proc(gs: ^Game_State) -> Equip_Slot {
 	return .None
 }
 
+WARP_BTN_W :: 64
+WARP_BTN_H :: 18
+
+// The "Return to Surface" button beside the charm slot currently holding a
+// Jade Ring — live only while it's worn (charm_slot_order / player_has_charm).
+warp_button_rect :: proc(gs: ^Game_State) -> (x, y: i32, ok: bool) {
+	for s, i in equip_slot_order {
+		if gs.player.equipment[s] != .Jade_Ring do continue
+		ex, ey := equip_origin(gs)
+		x = ex + SLOT_PX + 6
+		y = ey + i32(i * EQUIP_STEP) + (SLOT_PX - WARP_BTN_H) / 2
+		return x, y, true
+	}
+	return 0, 0, false
+}
+
+warp_button_hovered :: proc(gs: ^Game_State) -> bool {
+	if !gs.ui.show_inventory do return false
+	x, y, ok := warp_button_rect(gs)
+	if !ok do return false
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	return mx >= x && mx < x + WARP_BTN_W && my >= y && my < y + WARP_BTN_H
+}
+
 // Inventory slot under the cursor, or -1.
 slot_at_cursor :: proc(gs: ^Game_State) -> int {
 	bx, by := inv_bag_origin(gs)
@@ -1693,8 +1728,20 @@ draw_inventory :: proc(gs: ^Game_State) {
 			hovered ? 2 : 1,
 			hovered ? NORSE_GOLD_HOT : NORSE_BORDER,
 		)
-		rl.DrawText(equip_slot_labels[i], x + SLOT_PX + 6, y + 17, 10, text_dim)
-		if it := gs.player.equipment[s]; it != .None {
+		it := gs.player.equipment[s]
+		if it == .Jade_Ring {
+			// Worn, not spent: this button is the ring's only effect.
+			bx, by, _ := warp_button_rect(gs)
+			whov := warp_button_hovered(gs)
+			rl.DrawRectangle(bx, by, WARP_BTN_W, WARP_BTN_H, whov ? rl.Color{70, 52, 26, 255} : NORSE_ROW)
+			rl.DrawRectangleLinesEx({f32(bx), f32(by), WARP_BTN_W, WARP_BTN_H}, 1, whov ? NORSE_GOLD_HOT : NORSE_GOLD)
+			label := cstring("HOME")
+			lw := rl.MeasureText(label, 10)
+			rl.DrawText(label, bx + (WARP_BTN_W - lw) / 2, by + 4, 10, whov ? NORSE_GOLD_HOT : NORSE_GOLD)
+		} else {
+			rl.DrawText(equip_slot_labels[i], x + SLOT_PX + 6, y + 17, 10, text_dim)
+		}
+		if it != .None {
 			draw_item_icon(it, x + 10, y + 10, 24)
 		}
 	}

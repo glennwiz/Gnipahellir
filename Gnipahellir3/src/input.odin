@@ -403,6 +403,10 @@ update_input :: proc(gs: ^Game_State) {
                 }
             }
         }
+        // The Jade Ring's button: click (not drag) to warp to the surface.
+        if gs.ui.show_inventory && gs.ui.drag_item == .None && warp_button_hovered(gs) {
+            eq_push(&gs.events, Event{type = .Warp_Home_Request})
+        }
         // The last voided stack is an undo buffer: drag it back onto a bag
         // slot before replacing it if it should be kept.
         if gs.ui.show_inventory && gs.ui.drag_item == .None && void_slot_hovered(gs) {
@@ -508,29 +512,35 @@ update_input :: proc(gs: ^Game_State) {
                 type    = .Void_Store,
                 payload = {int_val = i32(gs.ui.drag_slot)},
             })
-        } else if cursor_in_window(gs, .Inventory) {
-            // Bag-to-bag drag: move to an empty slot, consolidate a matching
-            // stack, or swap unlike items. Releasing on the source is a no-op.
-            if target := slot_at_cursor(gs); target >= 0 && target != gs.ui.drag_slot {
+        } else if win, at_win := window_at_cursor(gs); at_win {
+            // Whichever window is topmost at the cursor claims the drop — a
+            // window drawn over the bag (e.g. a chest) must win even though
+            // the bag's own rect also contains this point.
+            #partial switch win {
+            case .Inventory:
+                // Bag-to-bag drag: move to an empty slot, consolidate a matching
+                // stack, or swap unlike items. Releasing on the source is a no-op.
+                if target := slot_at_cursor(gs); target >= 0 && target != gs.ui.drag_slot {
+                    eq_push(&gs.events, Event{
+                        type    = .Inventory_Move,
+                        tile    = {i32(target), 0},
+                        payload = {int_val = i32(gs.ui.drag_slot)},
+                    })
+                }
+            case .Barrel:
+                // Dragging a bag stack onto the barrel deposits it.
                 eq_push(&gs.events, Event{
-                    type    = .Inventory_Move,
-                    tile    = {i32(target), 0},
+                    type    = .Barrel_Store,
+                    tile    = gs.ui.barrel_tile,
+                    payload = {int_val = i32(gs.ui.drag_slot)},
+                })
+            case .Smelter:
+                eq_push(&gs.events, Event{
+                    type    = .Smelter_Feed,
+                    tile    = gs.ui.smelter_tile,
                     payload = {int_val = i32(gs.ui.drag_slot)},
                 })
             }
-        } else if cursor_in_window(gs, .Barrel) {
-            // Dragging a bag stack onto the barrel deposits it.
-            eq_push(&gs.events, Event{
-                type    = .Barrel_Store,
-                tile    = gs.ui.barrel_tile,
-                payload = {int_val = i32(gs.ui.drag_slot)},
-            })
-        } else if cursor_in_window(gs, .Smelter) {
-            eq_push(&gs.events, Event{
-                type    = .Smelter_Feed,
-                tile    = gs.ui.smelter_tile,
-                payload = {int_val = i32(gs.ui.drag_slot)},
-            })
         } else if !cursor_over_ui(gs) {
             // Released over the open world — drop the stack as a ground pile.
             eq_push(&gs.events, Event{

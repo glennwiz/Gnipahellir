@@ -35,22 +35,27 @@ Portal :: struct {
 
 MAX_LEVEL_PORTALS :: 2
 
+// The cave spawn/return chamber (gen_cave_level) sits mid-map instead of the
+// top-left corner, so a fresh descent doesn't dump the player at the map edge.
+CAVE_GATE_TILES :: [2][2]i32{{93, 26}, {94, 26}}
+CAVE_SPAWN_POS  :: [2]f32{95, 27 - PLAYER_H}
+
 @(rodata)
 level_portals := [NUM_LEVELS][MAX_LEVEL_PORTALS]Portal{
     LEVEL_SURFACE = {
         // Deep in cave 1 → cave 2 (locked behind sky structure A)
-        { {{143, 94}, {144, 94}},  LEVEL_CAVE2,   {8, 15 - PLAYER_H},    0 },
+        { {{143, 94}, {144, 94}},  LEVEL_CAVE2,   CAVE_SPAWN_POS,        0 },
         {},  // the sky gate is dynamic now — raised by a surface Sky Altar (sky_gate_portal)
     },
     LEVEL_CAVE2 = {
         // Spawn chamber → back to cave 1's portal chamber
-        { {{6, 14}, {7, 14}},      LEVEL_SURFACE, {143, 95 - PLAYER_H}, -1 },
+        { CAVE_GATE_TILES,         LEVEL_SURFACE, {143, 95 - PLAYER_H}, -1 },
         // Bottom-right → cave 3 (locked behind sky structure B)
-        { {{180, 102}, {181, 102}}, LEVEL_CAVE3,  {8, 15 - PLAYER_H},    1 },
+        { {{180, 102}, {181, 102}}, LEVEL_CAVE3,  CAVE_SPAWN_POS,        1 },
     },
     LEVEL_CAVE3 = {
         // Spawn chamber → back to cave 2's deep portal chamber
-        { {{6, 14}, {7, 14}},      LEVEL_CAVE2,   {178, 103 - PLAYER_H}, -1 },
+        { CAVE_GATE_TILES,         LEVEL_CAVE2,   {178, 103 - PLAYER_H}, -1 },
         {},
     },
     LEVEL_SKY = {
@@ -569,11 +574,11 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
         }
     }
 
-    // Spawn chamber (top-left) with the return portal
-    carve_box(w, 4, 8, 14, 14)
-    for x in 4 ..= 14 do set_tile(w, x, 15, .Stone)
-    set_tile(w, 6, 14, .Cave_Entrance)
-    set_tile(w, 7, 14, .Cave_Entrance)
+    // Spawn chamber (mid-map) with the return portal
+    carve_box(w, 91, 20, 101, 26)
+    for x in 91 ..= 101 do set_tile(w, x, 27, .Stone)
+    set_tile(w, 93, 26, .Cave_Entrance)
+    set_tile(w, 94, 26, .Cave_Entrance)
 
     // Deep portal chamber (bottom-right) — cave 2 only: gateway to cave 3
     if depth_tier == 1 {

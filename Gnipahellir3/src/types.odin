@@ -207,6 +207,9 @@ Item :: enum u8 {
     Command_Wand_Emerald,
     Command_Wand_Hel,
     Clay_Golem,
+    // Cheap early recall: warps the player back to the surface. (appended:
+    // item ordinals are serialized)
+    Jade_Ring,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -375,6 +378,7 @@ Event_Type :: enum u8 {
     Golem_Mark,         // Shift+left wand paint: explicit excavation tile
     Golem_Unmark,       // Shift+right wand paint: erase excavation tile
     Pixel_Art_Save,     // debug Pixel Art Editor "SAVE" button: writes gs.pixel_art to disk
+    Warp_Home_Request,  // inventory "Return to Surface" button (Jade Ring worn)
 }
 
 Event_Payload :: struct #raw_union {

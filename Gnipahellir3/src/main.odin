@@ -53,7 +53,7 @@ main :: proc() {
 
     if !load_game(gs) {
         // Fresh run: spawn player on the surface, a few tiles left of the cave entrance
-        gs.player.pos            = {f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H}
+        gs.player.pos            = SURFACE_HOME_POS
         gs.player.clothing_color = rl.BLUE
         gs.player.hair_color     = rl.ORANGE
     } else {

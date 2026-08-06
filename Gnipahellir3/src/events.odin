@@ -316,6 +316,9 @@ process_events :: proc(gs: ^Game_State) {
         case .Unequip_Request:
             player_unequip(gs, Equip_Slot(e.payload.int_val))
 
+        case .Warp_Home_Request:
+            player_warp_home(gs)
+
         case .New_Game_Request:
             start_new_game(gs)
 

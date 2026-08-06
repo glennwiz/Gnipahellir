@@ -579,6 +579,7 @@ place_tree :: proc(w: ^World_Grid, x, surface_y, height: int) {
 
 SURFACE_Y :: 54
 CAVE_TOP :: SURFACE_Y + 6 // solid stone cap between surface and cave
+SURFACE_HOME_POS :: [2]f32{f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H} // new-game spawn; also the Jade Ring's destination
 SHAFT_APRON_REACH :: 4 // tiles of scuffed earth each side of the descent shaft;
 // shared by render (the brown apron) and mining (the rock+dirt yield) so the
 // loot lines up exactly with the dressed lip.

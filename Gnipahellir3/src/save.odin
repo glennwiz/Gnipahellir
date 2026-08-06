@@ -179,7 +179,7 @@ start_new_game :: proc(gs: ^Game_State) {
     seed := new_game_world_seed()   // random per run, or GNIPA_SEED override
     game_state_init(gs, seed)
     log_action(gs, "New game - world seed %d", seed)
-    gs.player.pos            = {f32(GRID_W/2) - 8, SURFACE_Y - PLAYER_H}
+    gs.player.pos            = SURFACE_HOME_POS
     gs.player.clothing_color = rl.BLUE
     gs.player.hair_color     = rl.ORANGE
     camera_snap_y(gs)

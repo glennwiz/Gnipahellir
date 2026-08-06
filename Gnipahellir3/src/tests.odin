@@ -1330,7 +1330,7 @@ cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     testing.expect(t, voids > 2000, "cave 2 should be substantially open")
     testing.expect_value(t, get_tile(w, 12, 101), Tile_Type.Blueprint_Chest_B)
     testing.expect_value(t, w.items[grid_idx(12, 101)], Item.None)
-    testing.expect_value(t, get_tile(w, 6, 14), Tile_Type.Cave_Entrance)
+    testing.expect_value(t, get_tile(w, 93, 26), Tile_Type.Cave_Entrance)
 }
 
 // One pick swing / wand attempt pointing at the tile; the pick only reads
@@ -1658,6 +1658,46 @@ drinking_a_health_potion_heals :: proc(t: ^testing.T) {
     gs.player.hp = gs.player.hp_max
     player_consume(gs, pslot)
     testing.expect_value(t, inventory_count(inv, .Potion_Health), 1)
+}
+
+@(test)
+jade_ring_recipe_and_warp_home :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 31, SURFACE_Y - 1, .Crafting_Bench)
+    inv := &gs.player.inventory
+    inventory_insert(inv, .Iron_Bar, 1)
+    inventory_insert(inv, .Jade, 1)
+
+    idx := -1
+    for r, i in recipe_table do if r.result == .Jade_Ring { idx = i; break }
+    testing.expect(t, idx >= 0, "jade ring recipe must exist")
+    handle_craft_request(gs, Event{payload = {int_val = i32(idx)}})
+    testing.expect_value(t, inventory_count(inv, .Jade_Ring), 1)
+
+    // Warping without the ring worn does nothing.
+    testing.expect(t, !player_warp_home(gs), "ring must be equipped to warp")
+
+    rslot := -1
+    for s, i in inv.slots do if s.item == .Jade_Ring { rslot = i; break }
+    player_equip(gs, rslot)
+    testing.expect(t, player_has_charm(&gs.player, .Jade_Ring), "ring should be worn")
+    testing.expect_value(t, inventory_count(inv, .Jade_Ring), 0)  // worn, not in the bag
+
+    // On the surface it's refused — no level change.
+    testing.expect(t, !player_warp_home(gs), "already home")
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+
+    // From a lower level it warps straight home, and the ring stays worn —
+    // usable again as many times as needed.
+    level_transition(gs, &level_portals[LEVEL_SURFACE][0])
+    testing.expect_value(t, gs.level_index, LEVEL_CAVE2)
+    testing.expect(t, player_warp_home(gs), "ring should warp home")
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+    testing.expect_value(t, gs.player.pos, SURFACE_HOME_POS)
+    testing.expect(t, player_has_charm(&gs.player, .Jade_Ring), "ring is not consumed")
 }
 
 @(test)
@@ -3953,7 +3993,7 @@ conway_blinker_oscillates :: proc(t: ^testing.T) {
 @(private = "file")
 miner_test_setup :: proc(gs: ^Game_State) -> (base: [2]i32) {
     dimension_test_enter(gs)
-    base = {11, 14}  // chamber floor spot, solid stone below (row 15)
+    base = {98, 26}  // chamber floor spot, solid stone below (row 27)
     set_tile(&gs.world, int(base.x), int(base.y), .Auto_Miner)
     miner_on_placed(gs, base)
     return
@@ -3976,10 +4016,10 @@ miner_placement_gated_to_dimensions :: proc(t: ^testing.T) {
     // Inside a dimension the same call passes; a second miner is refused.
     dimension_test_enter(gs)
     testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
-    testing.expect(t, placement_ok(gs, .Auto_Miner, 11, 14),
+    testing.expect(t, placement_ok(gs, .Auto_Miner, 98, 26),
         "miner should place in the spawn chamber")
-    miner_on_placed(gs, {11, 14})
-    testing.expect(t, !placement_ok(gs, .Auto_Miner, 12, 14),
+    miner_on_placed(gs, {98, 26})
+    testing.expect(t, !placement_ok(gs, .Auto_Miner, 99, 26),
         "one miner per expedition")
 }
 
@@ -4030,15 +4070,15 @@ miner_boxed_in_gnaws_through_its_own_trail :: proc(t: ^testing.T) {
     // dead-end ore; the branch ore above is then reachable ONLY back through
     // its own body trail — the boxed-in case that used to put it to sleep.
     //
-    //        . I .           I ore   S stone   base at (11,14)
+    //        . I .           I ore   S stone   base at (98,26)
     //        . S .
     //   base S O .           O dead-end ore, everything else sealed
     for &tile in gs.world.terrain do tile = .Grass
     set_tile(&gs.world, int(base.x), int(base.y), .Auto_Miner)
-    set_tile(&gs.world, 12, 14, .Stone)
-    set_tile(&gs.world, 13, 14, .Iron_Ore)   // eaten first (dead end)
-    set_tile(&gs.world, 12, 13, .Stone)
-    set_tile(&gs.world, 12, 12, .Iron_Ore)   // only reachable through the trail
+    set_tile(&gs.world, int(base.x)+1, int(base.y),   .Stone)
+    set_tile(&gs.world, int(base.x)+2, int(base.y),   .Iron_Ore)   // eaten first (dead end)
+    set_tile(&gs.world, int(base.x)+1, int(base.y)-1, .Stone)
+    set_tile(&gs.world, int(base.x)+1, int(base.y)-2, .Iron_Ore)   // only reachable through the trail
 
     // ~8 steps is plenty for both ores at 3 s each.
     for _ in 0 ..< 30 * 60 {
@@ -4049,7 +4089,7 @@ miner_boxed_in_gnaws_through_its_own_trail :: proc(t: ^testing.T) {
     iron: u32 = 0
     for h in m.haul do if h.item == .Iron_Ore do iron += h.count
     testing.expect_value(t, iron, u32(2))
-    testing.expect_value(t, get_tile(&gs.world, 12, 12), Tile_Type.Miner_Body)
+    testing.expect_value(t, get_tile(&gs.world, int(base.x)+1, int(base.y)-2), Tile_Type.Miner_Body)
     testing.expect(t, m.asleep, "with every ore eaten the miner sleeps for real")
 }
 
@@ -4289,7 +4329,7 @@ silo_placement_gates :: proc(t: ^testing.T) {
     // Never in a dimension — the record would outlive the ephemeral world.
     dimension_test_enter(gs)
     testing.expect_value(t, gs.level_index, LEVEL_DIMENSION)
-    testing.expect(t, !placement_ok(gs, .Silo, 11, 14), "no silos in ephemeral worlds")
+    testing.expect(t, !placement_ok(gs, .Silo, 98, 26), "no silos in ephemeral worlds")
 }
 
 // ─── Structural gravity (gravity.odin) ────────────────────────────────────────

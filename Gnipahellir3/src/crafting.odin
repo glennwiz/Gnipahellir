@@ -137,6 +137,10 @@ recipe_table := [?]Recipe{
     // material investment; the Hearth upgrades the wand itself later.
     { .Command_Wand,     1, .Bench, {{.Clay, 2}, {.Plank, 2}, {.Iron_Bar, 1}} },
     { .Clay_Golem,       1, .Bench, {{.Clay, 4}, {.Iron_Bar, 1}, {}} },
+    // A cheap early recall charm: forged at the bench with an iron bar and
+    // a jade.  Worn in a charm slot, not spent — while equipped, the
+    // inventory's "Return to Surface" button warps straight home.
+    { .Jade_Ring,        1, .Bench, {{.Iron_Bar, 1}, {.Jade, 1}, {}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -180,6 +184,7 @@ recipe_unlock := #partial [Item]Item{
     .Void_Charm = .Emerald,
     .Command_Wand = .Clay,
     .Clay_Golem   = .Command_Wand,
+    .Jade_Ring    = .Jade,
     // Runic endgame
     .Mine_Wand_Runic = .Runic_Sky_Ore, .Runic_Sword = .Runic_Sky_Ore,
     .Runic_Helm = .Runic_Sky_Ore, .Runic_Chestplate = .Runic_Sky_Ore, .Runic_Gauntlets = .Runic_Sky_Ore,
