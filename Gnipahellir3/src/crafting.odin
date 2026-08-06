@@ -11,6 +11,11 @@ package game
 
 BENCH_RANGE :: 3  // tiles, chebyshev
 
+// Not itself saved (only lives in transient UI_State), but keep it
+// append-only anyway: it indexes station_tile/station_title below and
+// world.odin's terrain_table keys off individual Tile_Type values that
+// mirror this list — reordering would desync those lookups even without
+// touching the save format.
 Station :: enum u8 {
     None,        // craftable by hand, anywhere
     Bench,
@@ -128,6 +133,10 @@ recipe_table := [?]Recipe{
     // A recoverable trash buffer: the newest offered stack replaces and
     // permanently erases the previous one. Forged from all three tier-2 riches.
     { .Void_Charm,       1, .Forge, {{.Silver_Bar, 4},     {.Gold_Bar, 2},      {.Emerald, 1}} },
+    // Clay automation begins after the first cast iron.  Each worker is a
+    // material investment; the Hearth upgrades the wand itself later.
+    { .Command_Wand,     1, .Bench, {{.Clay, 2}, {.Plank, 2}, {.Iron_Bar, 1}} },
+    { .Clay_Golem,       1, .Bench, {{.Clay, 4}, {.Iron_Bar, 1}, {}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -169,6 +178,8 @@ recipe_unlock := #partial [Item]Item{
     .Aether_Charm = .Aether_Crystal,
     .Auto_Miner = .Emerald,
     .Void_Charm = .Emerald,
+    .Command_Wand = .Clay,
+    .Clay_Golem   = .Command_Wand,
     // Runic endgame
     .Mine_Wand_Runic = .Runic_Sky_Ore, .Runic_Sword = .Runic_Sky_Ore,
     .Runic_Helm = .Runic_Sky_Ore, .Runic_Chestplate = .Runic_Sky_Ore, .Runic_Gauntlets = .Runic_Sky_Ore,

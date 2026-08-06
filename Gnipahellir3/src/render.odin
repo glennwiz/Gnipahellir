@@ -26,8 +26,10 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_wand_target(gs)
     draw_reclaim_target(gs)
     draw_station_focus(gs)
+    draw_golem_orders(gs)
     draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
     draw_enemies(&gs.enemies)
+    draw_golems(gs)
     draw_projectiles(&gs.projectiles)
     draw_particles(&gs.particles)
     draw_ritual(gs)
@@ -55,96 +57,6 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     rl.EndDrawing()
 }
 
-// ─── Zoom Camera ──────────────────────────────────────────────────────────────
-
-ZOOM_STEP :: f32(0.15)   // per mouse-wheel notch
-ZOOM_MIN  :: f32(1.0)    // 1.0 = whole level (the level is exactly SCREEN_W×SCREEN_H)
-ZOOM_MAX  :: f32(4.0)
-
-// Vertical camera deadzone (world px): the Y anchor only moves once the player
-// leaves this band around it, so a jump arc (~3 tiles) stays inside and doesn't
-// bob the view.  A little wider than a full jump so the whole arc is swallowed.
-CAM_DEADZONE_Y :: f32(3.5 * CELL_SIZE)
-
-// Zoom easing rate (1/s): higher = snappier. gs.zoom chases gs.zoom_target with
-// frame-rate-independent exponential decay so a wheel notch glides in ~0.1-0.2 s
-// instead of popping — which also feathers the clamp-release Y pan (see below).
-ZOOM_EASE :: f32(18.0)
-// Once the player moves, a cursor-shifted view gently returns to the normal
-// player-centered camera. Low enough to preserve the inspected area briefly.
-CAM_RECENTER_EASE :: f32(3.5)
-
-// Player-centered camera, plus the temporary offset made by cursor zoom.
-// Clamped so we never show past the level edges. At
-// zoom 1.0 the clamp pins it to level-center → the whole level, as before.
-// Shared by render and input so both agree on the world↔screen mapping.
-game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
-    zoom   := max(gs.zoom, ZOOM_MIN)
-    half_w := f32(SCREEN_W) * 0.5 / zoom
-    half_h := f32(SCREEN_H) * 0.5 / zoom
-    // Exact float player center — the supersampled texture + float sprite draw
-    // let both glide sub-pixel, so no integer snapping is needed here.
-    px := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE + gs.cam_pan.x
-    // X follows the player exactly; Y tracks the deadzoned anchor (update_camera)
-    // so jumping doesn't slide the view up and down.
-    py := gs.cam_y + gs.cam_pan.y
-    return rl.Camera2D{
-        target   = {clamp(px, half_w, f32(SCREEN_W) - half_w),
-                    clamp(py, half_h, f32(SCREEN_H) - half_h)},
-        offset   = {f32(SCREEN_W)*0.5, f32(SCREEN_H)*0.5},
-        rotation = 0,
-        zoom     = zoom,
-    }
-}
-
-// The camera Y anchor: snap it straight to the player (level entry, spawn,
-// teleport) so the view doesn't slide across the cut.
-camera_snap_y :: proc(gs: ^Game_State) {
-    gs.cam_y = (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
-    gs.cam_pan = {}
-    gs.zoom_cursor_active = false
-    gs.player_step_visual_y = 0
-}
-
-// Advance the Y anchor with a vertical deadzone: it only moves when the player
-// leaves the band, so a jump (arc inside the band) leaves the view still, while
-// falling or climbing past the band drags it along.  Run each frame after the
-// player moves.  At zoom 1.0 game_camera clamps Y to level-center anyway, so
-// this is only felt when zoomed in.
-update_camera :: proc(gs: ^Game_State) {
-    py := (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
-    if py < gs.cam_y - CAM_DEADZONE_Y do gs.cam_y = py + CAM_DEADZONE_Y
-    if py > gs.cam_y + CAM_DEADZONE_Y do gs.cam_y = py - CAM_DEADZONE_Y
-
-    // Ease the live zoom toward the wheel-set target. Because half_w/half_h (and
-    // thus the edge clamp) are derived from zoom, gliding zoom also glides the
-    // Y lurch you'd otherwise get when the clamp releases on the first notch.
-    next_zoom := gs.zoom + (gs.zoom_target - gs.zoom) * (1 - math.exp(-ZOOM_EASE * gs.delta_time))
-    if abs(gs.zoom_target - next_zoom) < 0.0001 do next_zoom = gs.zoom_target
-
-    if gs.zoom_cursor_active {
-        // target = anchor_world - cursor displacement / zoom. Recomputing this
-        // every eased frame keeps the same world pixel under the pointer rather
-        // than merely aiming the final notch there.
-        base_x := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE
-        gs.cam_pan = {
-            gs.zoom_anchor_world.x -
-                (gs.zoom_anchor_screen.x - f32(SCREEN_W)*0.5)/next_zoom - base_x,
-            gs.zoom_anchor_world.y -
-                (gs.zoom_anchor_screen.y - f32(SCREEN_H)*0.5)/next_zoom - gs.cam_y,
-        }
-        if next_zoom == gs.zoom_target do gs.zoom_cursor_active = false
-    } else if abs(gs.player.vel.x) > 0.05 || abs(gs.player.vel.y) > 0.05 {
-        // Looking around should not permanently detach the view from the hero.
-        // Movement is the player's implicit "take me home" camera command.
-        decay := math.exp(-CAM_RECENTER_EASE * gs.delta_time)
-        gs.cam_pan *= decay
-        if abs(gs.cam_pan.x) < 0.01 do gs.cam_pan.x = 0
-        if abs(gs.cam_pan.y) < 0.01 do gs.cam_pan.y = 0
-    }
-    gs.zoom = next_zoom
-}
-
 // ─── Tile Draw Style ──────────────────────────────────────────────────────────
 //
 // Static/background tiles use a solid DrawRectangle (fast, simple).
@@ -162,6 +74,7 @@ Draw_Style :: enum u8 {
     Pixel_Cloud,
     Pixel_Door,
     Pixel_Dirt,
+    Pixel_Clay,
     Pixel_Flower_Bed,
     Pixel_Blueprint_Chest,
 }
@@ -179,6 +92,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Cloud       = .Pixel_Cloud,
     .Door        = .Pixel_Door,
     .Dirt        = .Pixel_Dirt,
+    .Clay        = .Pixel_Clay,
     .Flower_Bed  = .Pixel_Flower_Bed,
     .Sky_Blueprint_Chest = .Pixel_Blueprint_Chest,
     .Blueprint_Chest_A   = .Pixel_Blueprint_Chest,
@@ -276,12 +190,143 @@ draw_world :: proc(gs: ^Game_State) {
     // Blueprint chests deliberately spill beyond one 10px terrain cell.  Draw
     // them after the grid so neighboring backdrop cells cannot crop the coffer.
     draw_blueprint_chests(gs)
+    draw_golem_monuments(gs)
     // The surface descent shaft breaks the grass line as a raw Void slot —
     // dress its lip into a proper cave mouth (surface level only).
     if gs.level_index == LEVEL_SURFACE do draw_shaft_mouth(gs)
     // Cloud puffs go over everything tile-drawn so their round bulges merge
     // across cells instead of being clipped by neighboring Air rects.
     if gs.level_index == LEVEL_SKY do draw_cloud_layer(gs)
+    // The altar is a foreground station: on the sky level it must sit over the
+    // neighboring cloud puffs rather than disappear into their broad bulges.
+    draw_sky_altars(gs)
+}
+
+// ─── Clay-golem automation visuals ───────────────────────────────────────────
+
+draw_golem_orders :: proc(gs: ^Game_State) {
+	if equipped_command_wand(gs) == .None do return
+	pulse:=u8(100+45*(math.sin(gs.elapsed_time*5)+1)*.5)
+	for y in 0..<GRID_H do for x in 0..<GRID_W {
+		if .Golem_Marked not_in gs.world.tile_flags[grid_idx(x,y)] do continue
+		px,py:=i32(x*CELL_SIZE),i32(y*CELL_SIZE)
+		col:=rl.Color{70,245,180,pulse}
+		rl.DrawRectangle(px+1,py+1,CELL_SIZE-2,CELL_SIZE-2,rl.Color{35,180,125,45})
+		rl.DrawRectangleLines(px,py,CELL_SIZE,CELL_SIZE,col)
+		rl.DrawLine(px+2,py+2,px+CELL_SIZE-3,py+CELL_SIZE-3,col)
+		rl.DrawLine(px+CELL_SIZE-3,py+2,px+2,py+CELL_SIZE-3,col)
+	}
+	w := gs.golems.work[gs.level_index]
+	if w.active {
+		x := f32(w.min.x*CELL_SIZE); y := f32(w.min.y*CELL_SIZE)
+		ww := f32((w.max.x-w.min.x+1)*CELL_SIZE)
+		hh := f32((w.max.y-w.min.y+1)*CELL_SIZE)
+		zone_pulse := u8(105 + 55*(math.sin(gs.elapsed_time*4)+1)*0.5)
+		rl.DrawRectangleLinesEx({x,y,ww,hh}, 1.5/max(gs.zoom,1), rl.Color{90,225,145,zone_pulse})
+	}
+	if gs.ui.golem_zone_drag {
+		a, b := gs.ui.golem_zone_start, gs.input.mouse_tile
+		lo := [2]i32{min(a.x,b.x),min(a.y,b.y)}
+		hi := [2]i32{max(a.x,b.x),max(a.y,b.y)}
+		hi.x = min(hi.x,lo.x+GOLEM_ZONE_MAX_W-1); hi.y=min(hi.y,lo.y+GOLEM_ZONE_MAX_H-1)
+		rl.DrawRectangleLinesEx({f32(lo.x*CELL_SIZE),f32(lo.y*CELL_SIZE),f32((hi.x-lo.x+1)*CELL_SIZE),f32((hi.y-lo.y+1)*CELL_SIZE)},
+			2/max(gs.zoom,1), rl.Color{140,255,180,220})
+	}
+
+	draw_plan := proc(gs: ^Game_State, plan: Golem_Plan, anchor: [2]i32, placed: bool) {
+		if plan == .None do return
+		info := &golem_plan_table[plan]
+		for c in info.cells {
+			T := anchor+c.off
+			if !in_bounds(int(T.x),int(T.y)) do continue
+			done := get_tile(&gs.world,int(T.x),int(T.y)) == c.tile
+			if done && !placed do continue
+			col := item_table[c.item].color
+			col.a = 55 if !done else 110
+			rl.DrawRectangle(T.x*CELL_SIZE,T.y*CELL_SIZE,CELL_SIZE,CELL_SIZE,col)
+			rl.DrawRectangleLines(T.x*CELL_SIZE,T.y*CELL_SIZE,CELL_SIZE,CELL_SIZE,
+				rl.Color{220,190,120,170})
+		}
+	}
+	p := gs.golems.projects[gs.level_index]
+	if p.active && !p.complete do draw_plan(gs,p.plan,p.anchor,true)
+	if gs.ui.golem_plan != .None do draw_plan(gs,gs.ui.golem_plan,gs.input.mouse_tile,false)
+}
+
+draw_golems :: proc(gs: ^Game_State) {
+	hovered:=-1
+	if equipped_command_wand(gs)!=.None do hovered=golem_at_world_point(gs,gs.input.mouse_world)
+	for &g, i in gs.golems.data {
+		if (g.status != .Deployed && g.status != .Broken) || g.level != gs.level_index do continue
+		x := i32((g.pos.x-0.05)*CELL_SIZE)
+		y := i32((g.pos.y-0.10)*CELL_SIZE)
+		clay := rl.Color{178,116,78,255}; dark := rl.Color{82,48,34,255}
+		glow := rl.Color{75,235,145,255}
+		if g.status == .Broken {
+			rl.DrawRectangle(x+1,y+5,6,3,dark)
+			rl.DrawRectangle(x+2,y+4,2,2,clay)
+			rl.DrawLine(x+3,y+4,x+5,y+7,rl.Color{25,18,16,255})
+			continue
+		}
+		bob := i32(0)
+		if abs(g.vel.x)>0.1 do bob=i32((math.sin(gs.elapsed_time*16+f32(i))*0.5+0.5))
+		// Oversized head, compact body and swinging pebble feet: deliberately
+		// smaller and rounder than the cave builders.
+		rl.DrawRectangle(x+1,y+bob,6,4,dark)
+		rl.DrawRectangle(x+2,y+1+bob,4,3,clay)
+		rl.DrawRectangle(x+2,y+4+bob,4,3,dark)
+		rl.DrawRectangle(x+3,y+4+bob,2,2,clay)
+		rl.DrawRectangle(x+2,y+2+bob,1,1,glow)
+		rl.DrawRectangle(x+5,y+2+bob,1,1,glow)
+		step := i32(1) if math.sin(gs.elapsed_time*16+f32(i))>0 else i32(0)
+		rl.DrawRectangle(x+1+step,y+7,2,1,dark)
+		rl.DrawRectangle(x+5-step,y+7,2,1,dark)
+		shown := g.carry
+		if shown == .None do shown = golem_pack_peek(&g)
+		cargo_n := golem_pack_count(&g) + (1 if g.carry!=.None else 0)
+		if shown != .None {
+			draw_item_icon(shown,x-1,y-7+bob,10)
+			rl.DrawLine(x+2,y,x+1,y-2,clay); rl.DrawLine(x+5,y,x+6,y-2,clay)
+			if cargo_n>1 {
+				buf:[8]u8; fmt.bprintf(buf[:7],"%d",cargo_n)
+				rl.DrawText(cstring(raw_data(buf[:])),x+7,y-7+bob,5,rl.WHITE)
+			}
+		}
+		if equipped_command_wand(gs) != .None {
+			mc := rl.Color{75,235,145,160} if g.mode==.Gather else rl.Color{235,180,75,180}
+			rl.DrawRectangleLines(x,y-1,8,10,mc)
+			if hovered==i {
+				hot:=rl.Color{135,255,185,255} if g.mode==.Gather else rl.Color{255,215,95,255}
+				rl.DrawRectangleLinesEx({f32(x-2),f32(y-3),12,14},1.5,hot)
+			}
+		}
+	}
+}
+
+draw_golem_monuments :: proc(gs: ^Game_State) {
+	for y in 0..<GRID_H do for x in 0..<GRID_W {
+		t := get_tile(&gs.world,x,y)
+		if t != .Clay_Hearth && t != .Golem_Depot && t != .World_Anchor do continue
+		px,py := i32(x*CELL_SIZE),i32(y*CELL_SIZE)
+		pulse := (math.sin(gs.elapsed_time*3+f32(x))+1)*0.5
+		#partial switch t {
+		case .Clay_Hearth:
+			rl.DrawRectangle(px-5,py-8,20,15,rl.Color{82,48,34,255})
+			rl.DrawRectangle(px-3,py-6,16,11,rl.Color{170,98,58,255})
+			rl.DrawRectangle(px+2,py-4,6,7,rl.Color{40,22,18,255})
+			rl.DrawRectangle(px+3,py-3,4,4,rl.Color{255,120,u8(35+pulse*55),255})
+		case .Golem_Depot:
+			rl.DrawRectangle(px-8,py-10,26,18,rl.Color{48,42,38,255})
+			rl.DrawRectangle(px-6,py-8,22,14,rl.Color{92,72,52,255})
+			rl.DrawRectangleLines(px-6,py-8,22,14,rl.Color{80,225,145,220})
+			for k in 0..<3 do rl.DrawRectangle(px-3+i32(k)*6,py-4,4,5,rl.Color{145,98,62,255})
+		case .World_Anchor:
+			rl.DrawCircle(px+5,py-5,9,rl.Color{40,24,55,220})
+			rl.DrawCircleLines(px+5,py-5,8,rl.Color{180,105,235,u8(150+pulse*100)})
+			rl.DrawLine(px+5,py-13,px+5,py+5,rl.Color{225,190,255,255})
+		case:
+		}
+	}
 }
 
 // ─── Surface descent shaft: the cave mouth ────────────────────────────────────
@@ -420,16 +465,16 @@ draw_ritual :: proc(gs: ^Game_State) {
     r    := &gs.ritual
     t    := r.timer
     prog := clamp(t / RITUAL_DURATION, 0, 1)
-    cx   := f32(r.altar.x) * CELL_SIZE + CELL_SIZE*0.5
-    cy   := (f32(r.altar.y) - 1.5) * CELL_SIZE + CELL_SIZE*0.5
+    cx   := i32(r.altar.x*CELL_SIZE)+CELL_SIZE/2
+    cy   := i32((r.altar.y-2)*CELL_SIZE)
+    tick := int(t*12)
 
-    // A glow that swells and pulses as the offering nears completion.
-    glow := (0.6 + prog*1.4) * CELL_SIZE
-    pulse := 0.6 + 0.4 * math.sin(t * 9)
-    for k := 3; k >= 1; k -= 1 {
-        a := u8(38 * f32(k) / 3 * pulse)
-        rl.DrawCircleV({cx, cy}, glow * f32(k), rl.Color{255, 240, 185, a})
-    }
+    // A stepped square bloom grows in whole pixels instead of a soft circle.
+    grow:=i32(prog*8)
+    rl.BeginBlendMode(.ADDITIVE)
+    rl.DrawRectangle(cx-6-grow,cy-5-grow,12+grow*2,10+grow*2,rl.Color{255,210,105,22})
+    rl.DrawRectangle(cx-4-grow/2,cy-3-grow/2,8+grow,6+grow,rl.Color{255,240,185,42})
+    rl.EndBlendMode()
 
     // Ingredient icons orbiting, spiralling inward toward the glow.
     orbit := (2.6 - prog*1.4) * CELL_SIZE
@@ -437,23 +482,22 @@ draw_ritual :: proc(gs: ^Game_State) {
     for ing, i in ings {
         ang := t*3.0 + f32(i) * (2*math.PI / f32(len(ings)))
         sz  := i32(f32(CELL_SIZE) * 1.4)
-        ix  := i32(cx + math.cos(ang)*orbit) - sz/2
-        iy  := i32(cy + math.sin(ang)*orbit) - sz/2
+        ix  := cx + i32(math.cos(ang)*orbit) - sz/2
+        iy  := cy + i32(math.sin(ang)*orbit) - sz/2
         draw_item_icon(ing.item, ix, iy, sz)
     }
 
-    // A counter-rotating ring of runes, each cycling the rainbow.
+    // Six tiny rune tiles counter-rotate in snapped positions.
     rune_r := (3.4 - prog*1.0) * CELL_SIZE
     RUNES  :: 6
     for i in 0 ..< RUNES {
         ang := -t*2.0 + f32(i) * (2*math.PI / RUNES)
-        rx  := cx + math.cos(ang)*rune_r
-        ry  := cy + math.sin(ang)*rune_r
-        hue := f32(math.mod(f64(t*120 + f32(i)*60), 360))
-        col := rl.ColorFromHSV(hue, 0.7, 1.0)
-        col.a = u8(200 * (0.4 + 0.6*prog))
-        draw_title_rune(title_runes[(i*2) % len(title_runes)], rx, ry,
-            f32(CELL_SIZE)*1.3, ang + math.PI/2, col, 1.5, 4)
+        rx  := cx+i32(math.cos(ang)*rune_r)-3
+        ry  := cy+i32(math.sin(ang)*rune_r)-3
+        cols:=[3]rl.Color{{100,220,255,220},{255,205,90,220},{210,120,255,220}}
+        col:=cols[(i+tick/3)%len(cols)]
+        rl.DrawRectangle(rx,ry,6,6,rl.Color{18,22,34,210})
+        draw_pixel_rune_mark(rx+1,ry+1,col,i+tick/5)
     }
 }
 
@@ -474,9 +518,9 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
             return
         }
     }
-    if t == .Crafting_Bench {
-        // Backdrop only.  The full 20x14 bench is painted after the terrain loop
-        // so adjacent cells cannot crop its vise, mallet, legs, or thick top.
+    if t == .Crafting_Bench || t == .Sky_Altar {
+        // Backdrop only. These stations receive a larger pixel-art silhouette
+        // after the terrain loop so neighboring cells cannot crop their art.
         bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
         return
@@ -499,6 +543,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Miner_Body: draw_pixel_miner_body(gs, px, py, x, y)
     case .Pixel_Door:       draw_pixel_door(gs, px, py, x, y)
     case .Pixel_Dirt:       draw_pixel_dirt(px, py)
+    case .Pixel_Clay:       draw_pixel_clay(px, py, x, y)
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
     case .Pixel_Blueprint_Chest:
         bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
@@ -683,6 +728,103 @@ draw_pixel_crafting_bench :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
     rl.DrawRectangle(ox + 11, oy + 7, 1, 1, hot)
 }
 
+// ─── Pixel Art: Sky Altar ────────────────────────────────────────────────────
+//
+// A one-cell capstone rendered as a broad 26x27 shrine: stepped cloud-stone,
+// forked rune uprights, metal bindings and a hovering faceted aether crystal.
+// Animation advances in whole-pixel beats so it shares the chest/bench cadence.
+
+draw_sky_altars :: proc(gs:^Game_State) {
+	for y in 0..<GRID_H do for x in 0..<GRID_W {
+		if get_tile(&gs.world,x,y)==.Sky_Altar {
+			draw_pixel_sky_altar(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
+		}
+	}
+}
+
+draw_pixel_rune_mark :: proc(x,y:i32,col:rl.Color,variant:int) {
+	switch variant%4 {
+	case 0: // angular Ansuz-like spark
+		rl.DrawRectangle(x+1,y,1,5,col); rl.DrawRectangle(x+2,y+1,2,1,col); rl.DrawRectangle(x+2,y+3,2,1,col)
+	case 1: // diamond
+		rl.DrawRectangle(x+1,y,2,1,col); rl.DrawRectangle(x,y+1,1,2,col)
+		rl.DrawRectangle(x+3,y+1,1,2,col); rl.DrawRectangle(x+1,y+3,2,1,col)
+	case 2: // fork
+		rl.DrawRectangle(x+1,y+1,1,4,col); rl.DrawRectangle(x,y,1,2,col); rl.DrawRectangle(x+2,y,1,2,col)
+	case 3: // stepped lightning
+		rl.DrawRectangle(x+2,y,2,1,col); rl.DrawRectangle(x+1,y+1,2,2,col); rl.DrawRectangle(x,y+3,2,1,col)
+	case:
+	}
+}
+
+draw_pixel_sky_altar :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
+	cx,bottom:=bx+CELL_SIZE/2,by+CELL_SIZE
+	tick:=int(gs.frame/7)+x*3+y*5
+	awake:=gs.level_index==LEVEL_SURFACE && gs.progression.sky_altar_pos==[2]i32{i32(x),i32(y)}
+	outline:=rl.Color{22,24,35,255}
+	stone_d:=rl.Color{72,82,112,255}
+	stone:=rl.Color{126,145,181,255}
+	stone_hi:=rl.Color{194,211,234,255}
+	metal:=rl.Color{64,72,92,255}
+	rune:=rl.Color{82,205,255,255}
+	hot:=rl.Color{225,250,255,255}
+	if awake && tick%4<2 do rune=rl.Color{110,235,255,255}
+
+	// Rectangular, restrained aura behind the physical shrine.
+	rl.BeginBlendMode(.ADDITIVE)
+	rl.DrawRectangle(cx-9,bottom-24,18,20,rl.Color{65,175,255,u8(awake ? 38 : 18)})
+	rl.DrawRectangle(cx-6,bottom-22,12,17,rl.Color{120,220,255,u8(awake ? 42 : 20)})
+	rl.EndBlendMode()
+
+	// Joined black silhouette: three-step plinth, feet and forked uprights.
+	rl.DrawRectangle(cx-13,bottom-4,26,4,outline)
+	rl.DrawRectangle(cx-10,bottom-8,20,5,outline)
+	rl.DrawRectangle(cx-7,bottom-12,14,5,outline)
+	rl.DrawRectangle(cx-11,bottom-18,5,10,outline); rl.DrawRectangle(cx+6,bottom-18,5,10,outline)
+	rl.DrawRectangle(cx-13,bottom-22,5,6,outline); rl.DrawRectangle(cx+8,bottom-22,5,6,outline)
+
+	// Pale block courses; dark seams keep each chunky stone readable.
+	rl.DrawRectangle(cx-12,bottom-3,24,2,stone_d)
+	rl.DrawRectangle(cx-9,bottom-7,18,3,stone)
+	rl.DrawRectangle(cx-8,bottom-7,16,1,stone_hi)
+	rl.DrawRectangle(cx-6,bottom-11,12,3,stone_d)
+	rl.DrawRectangle(cx-5,bottom-10,10,1,stone)
+	rl.DrawRectangle(cx-11,bottom-2,7,1,stone); rl.DrawRectangle(cx-2,bottom-2,5,1,stone)
+	rl.DrawRectangle(cx+5,bottom-2,7,1,stone)
+
+	// Forks point toward the portal; iron collars tie them to the plinth.
+	rl.DrawRectangle(cx-10,bottom-17,3,9,stone)
+	rl.DrawRectangle(cx-9,bottom-17,2,8,stone_hi)
+	rl.DrawRectangle(cx-12,bottom-21,3,5,stone_d); rl.DrawRectangle(cx-11,bottom-21,2,4,stone_hi)
+	rl.DrawRectangle(cx+7,bottom-17,3,9,stone)
+	rl.DrawRectangle(cx+7,bottom-17,1,8,stone_hi)
+	rl.DrawRectangle(cx+9,bottom-21,3,5,stone_d); rl.DrawRectangle(cx+9,bottom-21,2,4,stone_hi)
+	rl.DrawRectangle(cx-10,bottom-10,3,2,metal); rl.DrawRectangle(cx+7,bottom-10,3,2,metal)
+
+	// Rune plates echo the chest lock: magic is concentrated, not a full wash.
+	rl.DrawRectangle(cx-5,bottom-8,10,5,outline)
+	rl.DrawRectangle(cx-4,bottom-7,8,3,metal)
+	draw_pixel_rune_mark(cx-2,bottom-7,rune,tick/3)
+	rl.DrawRectangle(cx-9,bottom-15,1,2,rune); rl.DrawRectangle(cx+8,bottom-15,1,2,rune)
+
+	// Hovering five-row crystal. Its one-pixel bob and travelling white facet
+	// provide the motion while preserving a hard sprite silhouette.
+	bob:=i32(1) if tick%6>=3 else i32(0)
+	cy:=bottom-27-bob
+	rl.DrawRectangle(cx-1,cy,2,1,outline)
+	rl.DrawRectangle(cx-3,cy+1,6,2,outline)
+	rl.DrawRectangle(cx-4,cy+3,8,4,outline)
+	rl.DrawRectangle(cx-2,cy+7,4,2,outline)
+	rl.DrawRectangle(cx-1,cy+9,2,1,outline)
+	rl.DrawRectangle(cx-1,cy+1,2,1,hot)
+	rl.DrawRectangle(cx-2,cy+2,4,2,stone_hi)
+	rl.DrawRectangle(cx-3,cy+4,6,2,rune)
+	rl.DrawRectangle(cx-1,cy+3,2,5,hot)
+	rl.DrawRectangle(cx+2,cy+4,1,3,stone_d)
+	if tick%4==0 do rl.DrawRectangle(cx-5,cy+2,1,1,hot)
+	if tick%4==2 do rl.DrawRectangle(cx+5,cy+6,1,1,hot)
+}
+
 // Working machines show it (read-only: sim_data progress → overlay).  A
 // smelting furnace burns hotter and fills an ember bar; a grower's sapling
 // climbs out of the planter as the growth timer fills.
@@ -764,6 +906,22 @@ draw_pixel_dirt :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+0, by+6, 1, 1, light)
     rl.DrawRectangle(bx+2, by+7, 1, 1, light)
     rl.DrawRectangle(bx+5, by+8, 1, 1, light)
+}
+
+// Damp terracotta seam: smooth clay bands with cool water-darkened pockets,
+// visually distinct from the granular brown Dirt building block.
+draw_pixel_clay :: proc(bx, by: i32, tx, ty: int) {
+	base := rl.Color{166,105,72,255}
+	dark := rl.Color{105,62,48,255}
+	light := rl.Color{205,145,105,255}
+	wet := rl.Color{92,112,126,220}
+	rl.DrawRectangle(bx,by,CELL_SIZE,CELL_SIZE,base)
+	h := whash(u32(tx)*2654435761 ~ u32(ty)*668265263)
+	rl.DrawRectangle(bx,by+2,10,1,light)
+	rl.DrawRectangle(bx,by+7,10,1,dark)
+	rl.DrawRectangle(bx+i32(h%6),by+4,4,1,dark)
+	rl.DrawRectangle(bx+i32((h>>5)%7),by+8,3,1,light)
+	rl.DrawRectangle(bx+i32((h>>9)%8),by+1,2,1,wet)
 }
 
 // ─── Pixel Art: Loam Stone ────────────────────────────────────────────────────
@@ -1791,24 +1949,27 @@ draw_placement_ghost :: proc(gs: ^Game_State) {
 draw_portals :: proc(gs: ^Game_State) {
     for &p in level_portals[gs.level_index] {
         if !portal_valid(&p) do continue
-        // Pixel center of the two-tile-wide gate.
-        cx := (f32(p.tiles[0].x) + f32(p.tiles[1].x) + 1) * 0.5 * CELL_SIZE
-        cy := (f32(p.tiles[0].y) + 0.5) * CELL_SIZE
+        // Pixel center and ground line of the two-tile-wide gate. Anchoring to
+        // the floor fixes the old ellipse extending several tiles underground.
+        cx := i32((p.tiles[0].x+p.tiles[1].x+1)*CELL_SIZE/2)
+        base_y := i32((p.tiles[0].y+1)*CELL_SIZE)
 
         sky    := p.dest_level == LEVEL_SKY || gs.level_index == LEVEL_SKY
         locked := p.gate_tier >= 0 && !gs.progression.cave_unlocked[p.gate_tier]
 
         if sky {
-            draw_sky_portal(cx, cy, gs.frame)
+            draw_pixel_sky_gate(cx,base_y,gs.frame)
         } else {
-            draw_cave_portal(cx, cy, gs.frame, !locked)
+            draw_pixel_cave_gate(cx,base_y,gs.frame,!locked)
         }
     }
 
     // The dynamic sky gate a surface altar raised — blooms above the altar.
     if gs.level_index == LEVEL_SURFACE && gs.progression.sky_altar_pos != {0, 0} {
         ap := gs.progression.sky_altar_pos
-        draw_sky_portal((f32(ap.x) + 0.5) * CELL_SIZE, (f32(ap.y) - 2.5) * CELL_SIZE, gs.frame)
+        // Entrance is a circular sky-well; the Low Sky return remains the
+        // floor-anchored doorway drawn from level_portals above.
+        draw_pixel_round_sky_portal(i32(ap.x*CELL_SIZE)+CELL_SIZE/2,i32(ap.y*CELL_SIZE)-39,gs.frame)
     }
 }
 
@@ -1972,4 +2133,217 @@ draw_cave_portal :: proc(cx, cy: f32, frame: u64, active: bool) {
     if !active {
         draw_title_rune(title_runes[3], cx, cy, f32(CELL_SIZE) * 2.6, 0, rl.Color{150, 40, 50, 130}, 2, 5)
     }
+}
+
+// ─── Pixel gates ─────────────────────────────────────────────────────────────
+//
+// The live portal pass uses these hard-edged gates. The older smooth helpers
+// above remain isolated for now, but no draw path calls them: no ellipses,
+// gradients or sub-pixel spirals are involved in the in-world result.
+
+draw_pixel_gate_mouth :: proc(cx,base:i32,frame:u64,sky,active:bool) {
+	tick:=i32(frame/6)
+	void:=rl.Color{7,9,18,245} if sky else rl.Color{12,5,9,245}
+	dark:=rl.Color{16,35,62,255} if sky else rl.Color{45,8,14,255}
+	mid:=rl.Color{40,126,190,235} if sky else rl.Color{128,24,30,235}
+	hot:=rl.Color{155,235,255,255} if sky else rl.Color{255,105,45,255}
+	if !active {dark=rl.Color{20,16,24,255}; mid=rl.Color{48,30,38,220}; hot=rl.Color{105,48,55,180}}
+
+	// Stepped top and straight throat make a readable sprite silhouette.
+	rl.DrawRectangle(cx-5,base-42,10,2,void)
+	rl.DrawRectangle(cx-8,base-40,16,3,void)
+	rl.DrawRectangle(cx-10,base-37,20,37,void)
+	rl.DrawRectangle(cx-8,base-38,16,2,dark)
+
+	if active {
+		// Six travelling bands, deliberately snapped to integer rows. Short dark
+		// cuts and bright facets suggest depth without smooth rotation.
+		for i in 0..<7 {
+			ii:=i32(i)
+			y:=base-35+ii*5
+			shift:=(tick+ii*3)%6
+			col:=mid if (ii+tick/2)%3!=0 else dark
+			rl.DrawRectangle(cx-9+shift/2,y,18-shift,2,col)
+			if (ii+tick)%2==0 do rl.DrawRectangle(cx-7+shift,y-1,4,1,hot)
+		}
+		if sky {
+			rl.DrawRectangle(cx-1,base-35,2,30,rl.Color{85,185,235,150})
+			rl.DrawRectangle(cx,base-32+(tick%5),1,8,rl.Color{220,250,255,220})
+		} else {
+			for i in 0..<5 {
+				ii:=i32(i)
+				x:=cx-8+(ii*7+tick*2)%16
+				y:=base-33+(ii*11+tick*3)%28
+				rl.DrawRectangle(x,y,2,2,hot)
+			}
+		}
+	} else {
+		// Iron crossbars and a square rune seal make the locked state unmistakable.
+		for i in 0..<3 do rl.DrawRectangle(cx-9,base-31+i32(i)*11,18,2,rl.Color{56,49,56,255})
+		rl.DrawRectangle(cx-1,base-37,2,34,rl.Color{75,66,72,255})
+		rl.DrawRectangle(cx-4,base-23,8,8,rl.Color{24,18,23,255})
+		rl.DrawRectangle(cx-3,base-22,6,6,rl.Color{92,34,42,255})
+		draw_pixel_rune_mark(cx-2,base-22,rl.Color{190,58,66,220},int(tick/4))
+	}
+}
+
+draw_pixel_gate_frame :: proc(cx,base:i32,frame:u64,sky,active,framed:bool) {
+	tick:=i32(frame/7)
+	outline:=rl.Color{20,22,30,255}
+	stone_d:=rl.Color{68,78,102,255} if sky else rl.Color{48,44,48,255}
+	stone:=rl.Color{120,143,174,255} if sky else rl.Color{82,73,72,255}
+	stone_hi:=rl.Color{190,211,232,255} if sky else rl.Color{128,112,102,255}
+	rune:=rl.Color{95,220,255,255} if sky else rl.Color{55,190,92,u8(active ? 245 : 100)}
+	glow:=rl.Color{80,195,255,28} if sky else rl.Color{235,48,28,u8(active ? 25 : 8)}
+
+	// Square bloom and drifting square sparks are the only spill outside the
+	// silhouette. Additive color remains restrained and never softens edges.
+	rl.BeginBlendMode(.ADDITIVE)
+	rl.DrawRectangle(cx-15,base-44,30,42,glow)
+	rl.DrawRectangle(cx-12,base-42,24,39,rl.Color{glow.r,glow.g,glow.b,u8(glow.a+10)})
+	if active {
+		for i in 0..<7 {
+			ii:=i32(i)
+			x:=cx-20+(ii*13+tick*3)%41
+			y:=base-43+(ii*17+tick*2)%39
+			sz:=i32(1+(ii+tick)%2)
+			rl.DrawRectangle(x,y,sz,sz,rl.Color{rune.r,rune.g,rune.b,u8(90+(i%3)*45)})
+		}
+	}
+	rl.EndBlendMode()
+
+	draw_pixel_gate_mouth(cx,base,frame,sky,active)
+
+	if !framed {
+		// A surface altar projects four floating rune brackets rather than a
+		// second heavy stone monument above the physical shrine.
+		for i in 0..<4 {
+			ii:=i32(i)
+			rx:=cx-16+ii*10
+			ry:=base-35+((ii+tick/4)%3)*8
+			rl.DrawRectangle(rx,ry,6,6,outline)
+			draw_pixel_rune_mark(rx+1,ry+1,rune,i+int(tick/5))
+		}
+		return
+	}
+
+	// Joined black arch silhouette, built at the same 1–5px scale as chest
+	// straps and bench braces.
+	rl.DrawRectangle(cx-16,base-5,7,5,outline); rl.DrawRectangle(cx+9,base-5,7,5,outline)
+	rl.DrawRectangle(cx-15,base-36,6,33,outline); rl.DrawRectangle(cx+9,base-36,6,33,outline)
+	rl.DrawRectangle(cx-13,base-41,5,7,outline); rl.DrawRectangle(cx+8,base-41,5,7,outline)
+	rl.DrawRectangle(cx-9,base-45,18,7,outline)
+
+	// Block courses and chipped highlights.
+	rl.DrawRectangle(cx-14,base-34,4,29,stone)
+	rl.DrawRectangle(cx-13,base-34,1,27,stone_hi)
+	rl.DrawRectangle(cx+10,base-34,4,29,stone_d)
+	rl.DrawRectangle(cx+10,base-33,1,26,stone_hi)
+	rl.DrawRectangle(cx-12,base-40,4,6,stone_d); rl.DrawRectangle(cx+8,base-40,4,6,stone)
+	rl.DrawRectangle(cx-8,base-44,16,5,stone)
+	rl.DrawRectangle(cx-6,base-43,12,1,stone_hi)
+	rl.DrawRectangle(cx-15,base-4,6,3,stone_d); rl.DrawRectangle(cx+9,base-4,6,3,stone_d)
+	for i in 0..<3 {
+		y:=base-29+i32(i)*10
+		rl.DrawRectangle(cx-14,y,4,1,outline); rl.DrawRectangle(cx+10,y+4,4,1,outline)
+	}
+
+	// Three inset rune stones animate by palette, not geometry.
+	for i in 0..<3 {
+		rx:=cx-13 if i<2 else cx+10
+		ry:=base-31+i32(i)*10
+		if i==2 do ry=base-26
+		rl.DrawRectangle(rx,ry,3,5,stone_d)
+		draw_pixel_rune_mark(rx,ry,rune,i+int(tick/6))
+	}
+	// Keystone with a bright single-pixel crown.
+	rl.DrawRectangle(cx-3,base-44,6,5,stone_d)
+	draw_pixel_rune_mark(cx-2,base-44,rune,int(tick/5))
+	if active && tick%4==0 do rl.DrawRectangle(cx,base-46,1,1,stone_hi)
+}
+
+draw_pixel_sky_gate :: proc(cx,base:i32,frame:u64,framed:=true) {
+	draw_pixel_gate_frame(cx,base,frame,true,true,framed)
+}
+
+draw_pixel_cave_gate :: proc(cx,base:i32,frame:u64,active:bool) {
+	draw_pixel_gate_frame(cx,base,frame,false,active,true)
+}
+
+// The altar projects a round aperture rather than a door. Its circle is a
+// deliberately stepped 36x36 sprite: dark sky-well, rotating block bands,
+// four rune clasps and a broken cyan/stone rim.
+draw_pixel_round_sky_portal :: proc(cx,cy:i32,frame:u64) {
+	tick:=i32(frame/6)
+	outline:=rl.Color{18,22,35,255}
+	void:=rl.Color{5,10,28,245}
+	deep:=rl.Color{15,48,86,245}
+	blue:=rl.Color{42,145,205,240}
+	rune:=rl.Color{105,225,255,255}
+	hot:=rl.Color{225,250,255,255}
+	stone:=rl.Color{128,153,188,255}
+	stone_hi:=rl.Color{196,216,236,255}
+
+	// Square additive breath and orbiting pixels keep the effect magical while
+	// every visible edge remains aligned to the pixel grid.
+	rl.BeginBlendMode(.ADDITIVE)
+	rl.DrawRectangle(cx-18,cy-18,36,36,rl.Color{55,175,245,24})
+	rl.DrawRectangle(cx-14,cy-14,28,28,rl.Color{100,220,255,32})
+	for i in 0..<8 {
+		ii:=i32(i)
+		x:=cx-21+(ii*11+tick*3)%43
+		y:=cy-21+(ii*17+tick*2)%43
+		rl.DrawRectangle(x,y,1+(ii+tick)%2,1+(ii+tick)%2,rl.Color{120,230,255,u8(100+(i%3)*45)})
+	}
+	rl.EndBlendMode()
+
+	// Stepped circular throat.
+	rl.DrawRectangle(cx-6,cy-15,12,2,void)
+	rl.DrawRectangle(cx-11,cy-13,22,3,void)
+	rl.DrawRectangle(cx-14,cy-10,28,20,void)
+	rl.DrawRectangle(cx-11,cy+10,22,3,void)
+	rl.DrawRectangle(cx-6,cy+13,12,2,void)
+
+	// Snapped bands circulate around a dark two-pixel eye. Alternating offsets
+	// give clockwise motion without smooth rotation or blurred curves.
+	for i in 0..<6 {
+		ii:=i32(i)
+		y:=cy-10+ii*4
+		inset:=abs(2-ii)
+		shift:=(tick+ii*2)%5
+		col:=blue if (ii+tick/2)%3!=0 else deep
+		rl.DrawRectangle(cx-11+inset+shift/2,y,22-inset*2-shift,2,col)
+		if (ii+tick)%2==0 do rl.DrawRectangle(cx-7+shift,y-1,4,1,hot)
+	}
+	rl.DrawRectangle(cx-2,cy-2,4,4,outline)
+	rl.DrawRectangle(cx-1,cy-1,2,2,rl.Color{2,5,14,255})
+
+	// Broken octagonal rim: pale stone anchors, cyan energy joins.
+	rl.DrawRectangle(cx-7,cy-18,14,3,outline); rl.DrawRectangle(cx-6,cy-17,12,2,stone_hi)
+	rl.DrawRectangle(cx-13,cy-16,7,4,outline); rl.DrawRectangle(cx-12,cy-15,6,3,stone)
+	rl.DrawRectangle(cx+6,cy-16,7,4,outline); rl.DrawRectangle(cx+6,cy-15,6,3,stone)
+	rl.DrawRectangle(cx-17,cy-12,4,7,outline); rl.DrawRectangle(cx-16,cy-11,3,6,rune)
+	rl.DrawRectangle(cx+13,cy-12,4,7,outline); rl.DrawRectangle(cx+13,cy-11,3,6,rune)
+	rl.DrawRectangle(cx-18,cy-5,3,10,outline); rl.DrawRectangle(cx-17,cy-4,2,8,stone)
+	rl.DrawRectangle(cx+15,cy-5,3,10,outline); rl.DrawRectangle(cx+15,cy-4,2,8,stone)
+	rl.DrawRectangle(cx-17,cy+5,4,7,outline); rl.DrawRectangle(cx-16,cy+5,3,6,rune)
+	rl.DrawRectangle(cx+13,cy+5,4,7,outline); rl.DrawRectangle(cx+13,cy+5,3,6,rune)
+	rl.DrawRectangle(cx-13,cy+12,7,4,outline); rl.DrawRectangle(cx-12,cy+12,6,3,stone)
+	rl.DrawRectangle(cx+6,cy+12,7,4,outline); rl.DrawRectangle(cx+6,cy+12,6,3,stone)
+	rl.DrawRectangle(cx-7,cy+15,14,3,outline); rl.DrawRectangle(cx-6,cy+15,12,2,stone_hi)
+
+	// Four cardinal rune clasps make the circle read as altar-bound machinery.
+	for i in 0..<4 {
+		rx,ry:=cx-3,cy-21
+		switch i {
+		case 1: rx=cx+18; ry=cy-3
+		case 2: rx=cx-3; ry=cy+18
+		case 3: rx=cx-21; ry=cy-3
+		case:
+		}
+		rl.DrawRectangle(rx,ry,6,6,outline)
+		draw_pixel_rune_mark(rx+1,ry+1,rune,i+int(tick/5))
+	}
+	if tick%4==0 do rl.DrawRectangle(cx+8,cy-16,2,1,hot)
+	if tick%4==2 do rl.DrawRectangle(cx-11,cy+15,2,1,hot)
 }

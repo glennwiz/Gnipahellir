@@ -136,6 +136,7 @@ src/
   crafting.odin    -- Recipe table, stations, offer matching, craft handler
   dimensions.odin  -- Spawner-opened ephemeral themed worlds (draft1_machines.md §7)
   miner.odin       -- Auto-Miner: dimension snake, wide-count haul, gem tiers (5b2)
+  golem.odin       -- Clay Golems: Gather/Build crews, routing, monuments, recovery
   sim.odin         -- Machine tick (5b): smelter ore+wood→bar tray, tree grower
   silo.odin        -- Silo: wide-count bulk storage, smelter out-chute (ticks in 5b)
   loot.odin        -- Enemy drop tables, ground-item spawn, loot PRNG
@@ -428,6 +429,10 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Hel_Gem_Ore    | X     | X        |        | Gem, cave 3 boss-arena depths  |
 | Auto_Miner     | X     | X        |        | Snake-miner base; anchors its dimension |
 | Miner_Body     | X     | X        |        | The snake's metal trail (drops nothing) |
+| Clay           | X     | X        |        | Damp upper-cave material; golem feedstock |
+| Clay_Hearth    | X     |          |        | Repairs golems and upgrades Command Wands |
+| Golem_Depot    | X     |          |        | Wide storage; feeds and collects from smelters |
+| World_Anchor   | X     |          |        | Keeps a dimension and its crew persistent |
 
 ---
 
@@ -472,6 +477,9 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Diamond         |           | X         | Gem drop, cave 3; miner tier 3               |
 | Hel_Gem         |           | X         | Gem drop, cave 3 arena depths; miner tier 4  |
 | Auto_Miner      | X         |           | Rune Altar craft; dimension-only snake miner |
+| Clay            | X         | X         | Cave-1 material; builds golems and monuments |
+| Command_Wand    |           |           | Controls 1 golem; Hearth upgrades raise cap to 5/15 |
+| Clay_Golem      |           | X         | One bindable Gather/Build worker |
 
 ---
 

@@ -435,6 +435,24 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Dirt,                 // mines back into the Dirt item
 		0,
 	},
+	.Clay                    = {
+		"Clay",
+		{.Solid, .Mineable, .Falls_Placed, .Settles},
+		rl.Color{166, 105, 72, 255},
+		0,
+		0,
+		.Clay,
+		0,
+	},
+	.Clay_Hearth             = {
+		"Clay Hearth", {.Solid}, rl.Color{180, 105, 58, 255}, 0, 0, .None, 0,
+	},
+	.Golem_Depot             = {
+		"Golem Depot", {.Solid}, rl.Color{82, 145, 118, 255}, 0, 0, .None, 0,
+	},
+	.World_Anchor            = {
+		"World Anchor", {.Solid}, rl.Color{145, 78, 190, 255}, 0, 0, .None, 0,
+	},
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
@@ -454,6 +472,9 @@ is_structure_tile := #partial [Tile_Type]bool {
 	.Dimension_Spawner       = true,
 	.Dimension_Spawner_Gold  = true,
 	.Dimension_Spawner_Runic = true,
+	.Clay_Hearth             = true,
+	.Golem_Depot             = true,
+	.World_Anchor            = true,
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────
@@ -735,6 +756,29 @@ gen_cave_1 :: proc(w: ^World_Grid, seed: u32 = 0) {
 			case depth > 35 && (h >> 16) % 100 < 1:
 				set_tile(w, x, y, .Gold_Ore)
 			}
+		}
+	}
+
+	// Damp clay seams line the first cave's upper walls.  A few adjacent open
+	// cells become shallow water pockets, making the new starter material easy
+	// to read and keeping it in the early descent rather than the deep ore tier.
+	for y in CAVE_TOP + 2 ..< min(CAVE_TOP + 22, CAVE_BOT) {
+		for x in CAVE_LEFT + 1 ..< CAVE_RIGHT - 1 {
+			if get_tile(w, x, y) != .Stone do continue
+			open_x, open_y := 0, 0
+			found_open := false
+			for d in ([4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+				if get_tile(w, x+d.x, y+d.y) == .Void {
+					open_x, open_y = x+d.x, y+d.y
+					found_open = true
+					break
+				}
+			}
+			if !found_open do continue
+			h := whash(u32(x)*2246822519 ~ u32(y)*3266489917 ~ seed)
+			if h % 100 >= 7 do continue
+			set_tile(w, x, y, .Clay)
+			if (h >> 8) % 4 == 0 do set_tile(w, open_x, open_y, .Water)
 		}
 	}
 }

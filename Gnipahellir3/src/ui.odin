@@ -74,6 +74,12 @@ SEL_CHIP   :: 52
 SEL_CHIP_X :: (UI_W - SEL_CHIP) / 2
 SEL_CHIP_Y :: UI_H - 70
 
+GOLEM_CMD_X :: i32(18)
+GOLEM_CMD_Y :: i32(UI_H - 112)
+GOLEM_CMD_W :: i32(390)
+GOLEM_CMD_H :: i32(66)
+GOLEM_PLAN_W :: i32(104)
+
 // ─── Floating Windows (draggable) ─────────────────────────────────────────────
 //
 //  Each floating window's top-left lives in UI_State.win_pos (defaults below);
@@ -591,6 +597,7 @@ action_labels := [Action]cstring {
 	.Interact   = "Interact",
 	.Inventory  = "Inventory",
 	.Blueprint  = "Blueprint",
+	.Golem_Crew = "Golem crew",
 }
 
 @(rodata)
@@ -690,7 +697,7 @@ DBG_MENU_X :: 24
 DBG_MENU_Y :: 80
 DBG_MENU_W :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS :: 11 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:give miner; 10:game of life
+DBG_MENU_ROWS :: 13 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -775,12 +782,26 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 		10,
 		rl.YELLOW,
 	)
+	rl.DrawText(
+		"Give Command Wand >",
+		DBG_MENU_X,
+		DBG_MENU_Y + 10 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.YELLOW,
+	)
+	rl.DrawText(
+		"Place Clay Golem >",
+		DBG_MENU_X,
+		DBG_MENU_Y + 11 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.YELLOW,
+	)
 
 	life_col := gs.debug.life ? rl.GREEN : text_dim
 	rl.DrawText(
 		gs.debug.life ? cstring("Game of Life: ON ?!") : cstring("Game of Life: OFF"),
 		DBG_MENU_X,
-		DBG_MENU_Y + 10 * DBG_MENU_ROW_H + 7,
+		DBG_MENU_Y + 12 * DBG_MENU_ROW_H + 7,
 		10,
 		life_col,
 	)
@@ -884,10 +905,26 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 		if cursor_in_window(gs, w) do return true
 	}
 	if sel_chip_hovered(gs) do return true  // the bottom-center placement chip
+	if equipped_command_wand(gs) != .None && mx >= GOLEM_CMD_X && mx < GOLEM_CMD_X+GOLEM_CMD_W &&
+	   my >= GOLEM_CMD_Y && my < GOLEM_CMD_Y+GOLEM_CMD_H {
+		return true
+	}
 	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings {
 		return true // full-screen modals — everything behind them is blocked
 	}
 	return false
+}
+
+golem_plan_button_at_cursor :: proc(gs: ^Game_State) -> Golem_Plan {
+	if equipped_command_wand(gs) == .None do return .None
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	if my < GOLEM_CMD_Y+30 || my >= GOLEM_CMD_Y+58 do return .None
+	for plan, i in ([3]Golem_Plan{.Clay_Hearth, .Golem_Depot, .World_Anchor}) {
+		x := GOLEM_CMD_X + 8 + i32(i)*GOLEM_PLAN_W
+		if mx >= x && mx < x+GOLEM_PLAN_W-4 && golem_plan_unlocked(gs,plan) do return plan
+	}
+	return .None
 }
 
 // True when the cursor is over the selected-block chip (bottom-center HUD).
@@ -952,6 +989,7 @@ draw_station_prompt :: proc(gs: ^Game_State) {
 
 draw_ui :: proc(gs: ^Game_State) {
 	draw_hud(gs)
+	draw_golem_command_strip(gs)
 	draw_hover_label(gs)
 	draw_objective(gs)
 	draw_station_prompt(gs)
@@ -982,6 +1020,44 @@ draw_ui :: proc(gs: ^Game_State) {
 	// important feedback must stay readable over inventory/storage windows,
 	// tooltips, dragged icons, books, menus, and every full-screen modal.
 	draw_notifications(gs)
+}
+
+draw_golem_command_strip :: proc(gs: ^Game_State) {
+	wand := equipped_command_wand(gs)
+	if wand == .None do return
+	cap := command_wand_capacity(wand)
+	loaded := golem_loaded_count(gs)
+	deployed := golem_deployed_count(gs, gs.level_index)
+
+	rl.DrawRectangle(GOLEM_CMD_X, GOLEM_CMD_Y, GOLEM_CMD_W, GOLEM_CMD_H, NORSE_PANEL)
+	rl.DrawRectangleLinesEx({f32(GOLEM_CMD_X), f32(GOLEM_CMD_Y), f32(GOLEM_CMD_W), f32(GOLEM_CMD_H)}, 2, NORSE_GOLD)
+	buf: [96]u8
+	fmt.bprintf(buf[:95], "CLAY CREW  %d/%d bound  %d here   [%v] all Gather/Build",
+		loaded, cap, deployed, gs.bindings[.Golem_Crew])
+	rl.DrawText(cstring(raw_data(buf[:])), GOLEM_CMD_X+8, GOLEM_CMD_Y+8, 11, NORSE_GOLD_HOT)
+
+	for plan, i in ([3]Golem_Plan{.Clay_Hearth, .Golem_Depot, .World_Anchor}) {
+		x := GOLEM_CMD_X + 8 + i32(i)*GOLEM_PLAN_W
+		y := GOLEM_CMD_Y + 30
+		unlocked := golem_plan_unlocked(gs, plan)
+		selected := gs.ui.golem_plan == plan
+		col := NORSE_GOLD_HOT if selected else (NORSE_BORDER if unlocked else rl.Color{65,60,58,180})
+		rl.DrawRectangle(x, y, GOLEM_PLAN_W-4, 28, NORSE_ROW)
+		rl.DrawRectangleLinesEx({f32(x),f32(y),f32(GOLEM_PLAN_W-4),28}, selected ? 2 : 1, col)
+		name := cstring(raw_data(golem_plan_table[plan].name))
+		rl.DrawText(name, x+5, y+8, 10, unlocked ? rl.WHITE : text_dim)
+	}
+	mode := cstring("PLAN: click an anchor") if gs.ui.golem_plan != .None else cstring("GATHER: drag zone | SHIFT+L/R paint/erase")
+	build_waiting:=false
+	p:=gs.golems.projects[gs.level_index]
+	for g in gs.golems.data do if g.status==.Deployed && g.level==gs.level_index && g.mode==.Build &&
+		(!p.active || p.complete) {build_waiting=true; break}
+	if gs.ui.golem_plan==.None && build_waiting {
+		mode=cstring("BUILD: select monument, then click its anchor")
+	} else if deployed > 0 && gs.ui.golem_plan == .None && !gs.golems.work[gs.level_index].active {
+		mode = cstring("WAITING: drag zone or SHIFT+L paint blocks")
+	}
+	rl.DrawText(mode, GOLEM_CMD_X+322, GOLEM_CMD_Y+37, 9, text_dim)
 }
 
 // ─── Ritual Instruction Tome ──────────────────────────────────────────────────

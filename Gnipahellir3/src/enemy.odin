@@ -105,7 +105,9 @@ SHELTER_TILES := [?]Template_Tile{
 
 // Static table; cannot be @(rodata) because the slice initializers are not
 // compile-time constants.  The arrays it points into ARE rodata — treat this
-// as read-only.
+// as read-only. Same reason golem.odin's HEARTH_CELLS/DEPOT_CELLS/
+// ANCHOR_CELLS/golem_plan_table aren't @(rodata) either — this is the
+// documented exception, now four instances across two files.
 build_templates := [Build_Kind]Build_Template{
     .Cairn   = {"cairn",   CAIRN_TILES[:]},
     .Pillar  = {"pillar",  PILLAR_TILES[:]},
@@ -312,13 +314,25 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 //  If the found path exceeds MAX_NAV_PATH, the prefix nearest the start is
 //  kept — the builder walks it and replans from there.
 
-astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1) -> bool {
+astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1, allow_mining := true, complete: ^bool = nil, protect_placed := false) -> bool {
     w := &gs.world
     out^ = {}
 
     fx, fy := snap_to_standable(w, int(from.x), int(from.y))
     sf := [2]i32{i32(fx), i32(fy)}
-    if chebyshev(sf, to) <= stop_within { return true }
+    if chebyshev(sf, to) <= stop_within {
+		// The snapped planning origin may differ from the body's real tile (for
+		// example while it balances across the edge of a block). Do not report
+		// an empty route until the body has physically reached that origin.
+		if sf!=from {
+			out.tiles[0]=sf
+			out.len=1
+		}
+        if complete != nil do complete^ = true
+        return true
+    }
+
+    reached_goal := false
 
     A_Node :: struct {
         pos:     [2]i32,
@@ -395,6 +409,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
         if chebyshev(cur.pos, to) <= stop_within {
             found = i16(cur_idx)
+            reached_goal = true
             break outer
         }
 
@@ -407,7 +422,12 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         nt := 0
 
         // Dig through the floor (only when landing one tile down).
-        if is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_protected(gs, x, y+1, owner) {
+        floor_mineable := false
+        if in_bounds(x,y+1) {
+            floor_flags := w.tile_flags[grid_idx(x, y+1)]
+            floor_mineable = !protect_placed || .Placed not_in floor_flags || .Golem_Placed in floor_flags
+        }
+        if allow_mining && floor_mineable && is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_protected(gs, x, y+1, owner) {
             push_trans(&trans, &nt, i32(x), i32(y+1), COST_MINE)
         }
 
@@ -468,7 +488,12 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             }
 
             // Tunnel into a mineable wall (needs a floor under the mined tile).
-            if is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_protected(gs, nx, y, owner) {
+            wall_mineable := false
+            if in_bounds(nx,y) {
+                wall_flags := w.tile_flags[grid_idx(nx, y)]
+                wall_mineable = !protect_placed || .Placed not_in wall_flags || .Golem_Placed in wall_flags
+            }
+            if allow_mining && wall_mineable && is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_protected(gs, nx, y, owner) {
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
             }
 
@@ -478,13 +503,15 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             // builders' only way UP through solid rock (zigzag staircases);
             // without it anything above a sheer wall is unreachable — dens
             // included, which starves the whole economy.
-            if is_solid(w, nx, y) && in_bounds(nx, y-2) {
+            if allow_mining && is_solid(w, nx, y) && in_bounds(nx, y-2) {
                 climb_tiles := [3][2]int{{nx, y - 1}, {x, y - 1}, {nx, y - 2}}
                 mines     := 0
                 climbable := true
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
-                    if is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y, owner) {
+                    cell_flags := w.tile_flags[grid_idx(c.x, c.y)]
+                    cell_mineable := !protect_placed || .Placed not_in cell_flags || .Golem_Placed in cell_flags
+                    if cell_mineable && is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y, owner) {
                         mines += 1
                     } else {
                         climbable = false
@@ -546,6 +573,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
             if chebyshev(np, to) <= stop_within {
                 found = i16(n_count - 1)
+                reached_goal = true
                 break outer
             }
         }
@@ -578,6 +606,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     for i in 0 ..< tmp_len {
         out.tiles[i] = tmp[tmp_len - 1 - i]
     }
+    if complete != nil do complete^ = reached_goal
     return true
 }
 

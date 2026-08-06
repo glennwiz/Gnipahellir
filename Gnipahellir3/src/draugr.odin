@@ -65,13 +65,18 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         return
     }
 
-    if gs.player.dead {
+    if gs.player.dead && golem_deployed_count(gs,gs.level_index)==0 {
         e.vel.x = 0
         return
     }
 
-    pt := player_tile(&gs.player)
     bt := builder_tile(e)
+    pt := player_tile(&gs.player)
+    golem_id := -1
+    if gt,gid,gok := nearest_deployed_golem(gs,bt); gok && (gs.player.dead || chebyshev(bt,gt)<chebyshev(bt,pt)) {
+        pt=gt
+        golem_id=gid
+    }
 
     // Player moved off the planned intercept — force a fresh path.
     if chebyshev(b.plan_target, pt) > 2 {
@@ -85,14 +90,19 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             b.attack_timer = DRAUGR_ATTACK_TIME
             // A claw costs a quarter of the player's max health, so four
             // clean strikes fell them from full (before armor blunts it).
-            dmg := (gs.player.hp_max + 3) / 4
-            eq_push(&gs.events, Event{
-                type    = .Damage_Dealt,
-                source  = enemy_entity_id(id),
-                target  = PLAYER_ID,
-                payload = {int_val = i32(dmg)},
-            })
-            log_action(gs, "Draugr#%d claws the player for %d", id, dmg)
+            if golem_id>=0 {
+                eq_push(&gs.events,Event{type=.Golem_Damaged,tile={i32(golem_id),0},payload={int_val=1}})
+                log_action(gs,"Draugr#%d cracks golem#%d",id,golem_id)
+            } else {
+                dmg := (gs.player.hp_max + 3) / 4
+                eq_push(&gs.events, Event{
+                    type    = .Damage_Dealt,
+                    source  = enemy_entity_id(id),
+                    target  = PLAYER_ID,
+                    payload = {int_val = i32(dmg)},
+                })
+                log_action(gs, "Draugr#%d claws the player for %d", id, dmg)
+            }
         }
     }
 }

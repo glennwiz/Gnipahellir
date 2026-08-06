@@ -26,6 +26,9 @@ game_update :: proc(gs: ^Game_State) {
     //     (visual only; writes gs.cam_y, reads player pos)
     update_camera(gs)
 
+    // 2c. Friendly clay workers move before enemies choose/advance targets.
+    update_golems(gs)
+
     // 3. Enemies
     update_enemies(gs)
 

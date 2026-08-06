@@ -40,6 +40,31 @@ spawn_collect_mote :: proc(gs: ^Game_State, from_tile: [2]i32, it: Item) {
         homing = true, target = target)
 }
 
+// Clay-worker cargo: a compact, delayed stream makes the direction of every
+// material transfer readable without UI text. Mining/fetching flies inward;
+// building/storing uses the same effect in reverse.
+spawn_transfer_motes :: proc(gs:^Game_State, from,to:[2]f32, color:rl.Color) {
+	d:=to-from
+	dist:=math.sqrt(d.x*d.x+d.y*d.y)
+	if dist<0.05 do return
+	dir:=d/dist
+	side:=[2]f32{-dir.y,dir.x}
+	TRANSFER_COUNT :: 5
+	for i in 0..<TRANSFER_COUNT {
+		seed:=u32(gs.frame)*43+u32(i)*719
+		vel:=d*1.5+side*jitter(seed,1.4)+[2]f32{0,-0.8+jitter(seed+1,0.4)}
+		c:=color
+		if i==0 {c=rl.Color{255,245,190,255}} else {c.a=255}
+		spawn_particle(&gs.particles,from,vel,c,0.72,f32(i)*0.035,homing=true,target=to)
+	}
+}
+
+spawn_item_transfer_motes :: proc(gs:^Game_State, from,to:[2]f32, item:Item) {
+	color:=rl.Color{210,180,140,255}
+	if item!=.None do color=item_table[item].color
+	spawn_transfer_motes(gs,from,to,color)
+}
+
 // Signed jitter in [-scale, +scale] from a deterministic hash.
 @(private = "file")
 jitter :: proc(seed: u32, scale: f32) -> f32 {

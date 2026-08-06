@@ -20,9 +20,18 @@ MAX_INVENTORY   :: 24
 MAX_AUDIO       :: 128
 MAX_LEVELS      :: 16
 MAX_PROGRESSION_TIERS :: 3
+MAX_GOLEMS      :: 15
 
 PLAYER_ID      :: Entity_ID(0)
 INVALID_ENTITY :: max(Entity_ID)
+
+// Friendly clay workers use their own fixed store rather than Enemy_IDs.
+// All four saved as u8 (Golem.mode/status/job/plan, memcpy'd into Save_Data
+// via Golem_System) — append-only, never reorder or remove a value.
+Golem_Mode :: enum u8 { Gather, Build }
+Golem_Status :: enum u8 { Empty, Carried, Deployed, Broken }
+Golem_Job :: enum u8 { Idle, Seek, Mine, Deliver, Fetch_Build, Place }
+Golem_Plan :: enum u8 { None, Clay_Hearth, Golem_Depot, World_Anchor }
 
 // ─── ID Types ─────────────────────────────────────────────────────────────────
 
@@ -95,6 +104,11 @@ Tile_Type :: enum u8 {
     Blueprint_Chest_A,
     Blueprint_Chest_B,
     Blueprint_Chest_C,
+    // Clay-golem automation (appended: terrain ordinals are serialized)
+    Clay,
+    Clay_Hearth,
+    Golem_Depot,
+    World_Anchor,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -183,6 +197,12 @@ Item :: enum u8 {
     Barrel,
     // Recoverable one-stack trash buffer, unlocked by an equipped charm
     Void_Charm,
+    // Clay-golem automation (appended: item ordinals are serialized)
+    Clay,
+    Command_Wand,
+    Command_Wand_Emerald,
+    Command_Wand_Hel,
+    Clay_Golem,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -225,6 +245,7 @@ Action :: enum u8 {
     Interact,
     Inventory,   // opens the bag + crafting panel together (crafting has no key of its own)
     Blueprint,
+    Golem_Crew, // crew-wide Gather/Build toggle while the command wand is equipped
 }
 
 // ─── Terrain Flags ────────────────────────────────────────────────────────────
@@ -257,6 +278,8 @@ Tile_Flag :: enum u8 {
     Lit,
     Placed,   // a player-placed block: distinguishes placed stone/grass from the
               // identical natural terrain so only placed ones obey gravity
+    Golem_Placed, // temporary navigation masonry a clay golem may reclaim
+    Golem_Marked, // explicit command-wand paint: mine this ordinary block
 }
 
 Tile_Flags :: bit_set[Tile_Flag; u8]
@@ -335,6 +358,18 @@ Event_Type :: enum u8 {
     Structure_Reclaim,  // tile = equipment whose deliberate hold completed
     Void_Store,         // int_val = bag slot; replaces (deletes) the prior void stack
     Void_Take,          // tile.x = target bag slot; recovers the current void stack
+    // Clay-golem commands (appended so existing event values stay stable)
+    Golem_Load,         // int_val = bag slot containing a crafted Clay_Golem
+    Golem_Deploy,       // tile = deployment cell
+    Golem_Toggle,       // int_val = golem slot
+    Golem_Recall,       // int_val = golem slot
+    Golem_Crew_Toggle,  // current level: Gather <-> Build
+    Golem_Zone,         // tile = second corner; int_val packs first corner x/y
+    Golem_Project,      // tile = anchor; int_val = Golem_Plan
+    Golem_Hearth_Use,   // tile = hearth: repair first, then upgrade wand
+    Golem_Damaged,      // tile.x = golem slot, int_val = damage
+    Golem_Mark,         // Shift+left wand paint: explicit excavation tile
+    Golem_Unmark,       // Shift+right wand paint: erase excavation tile
 }
 
 Event_Payload :: struct #raw_union {

@@ -14,6 +14,7 @@ Reclaim_Block :: enum u8 {
     Loaded_Miner,
     Anchored_Dimension,
     Active_Ritual,
+    Permanent_Monument,
 }
 
 // Normal click on equipment means "use", never "mine". E remains the broad
@@ -60,6 +61,12 @@ structure_interact :: proc(gs: ^Game_State, tile: [2]i32) {
         }
     case .Tree_Grower:
         notify(gs, "The grower works while open sky waits above")
+    case .Clay_Hearth:
+        eq_push(&gs.events, Event{type = .Golem_Hearth_Use, tile = tile})
+    case .Golem_Depot:
+        if d := golem_depot_at(gs, gs.level_index, tile); d != nil do golem_depot_withdraw(gs, d)
+    case .World_Anchor:
+        notify(gs, "The anchor holds this manufactured world in memory")
     case:
     }
 }
@@ -91,23 +98,29 @@ structure_reclaim_block :: proc(gs: ^Game_State, tile: [2]i32) -> Reclaim_Block 
         }
     case .Sky_Altar:
         if gs.ritual.active && gs.ritual.altar == tile do return .Active_Ritual
+    case .Clay_Hearth, .Golem_Depot, .World_Anchor:
+        return .Permanent_Monument
     case:
     }
     return .None
 }
 
+reclaim_block_message := [Reclaim_Block]string{
+    .None               = "",
+    .Need_Pickaxe       = "Equip a pickaxe to reclaim equipment",
+    .Wand_Equipped      = "Equip the pickaxe - a wand cannot reclaim equipment",
+    .Loaded_Smelter     = "Empty the smelter before reclaiming it",
+    .Loaded_Silo        = "Empty the silo before reclaiming it",
+    .Loaded_Barrel      = "Empty the barrel before reclaiming it",
+    .Loaded_Miner       = "Claim the miner's haul before reclaiming it",
+    .Anchored_Dimension = "The working miner anchors this spawner - reclaim it first",
+    .Active_Ritual      = "The altar cannot move during a ritual",
+    .Permanent_Monument = "Golem monuments are bound into the world",
+}
+
 notify_reclaim_block :: proc(gs: ^Game_State, block: Reclaim_Block) {
-    switch block {
-    case .Need_Pickaxe:       notify(gs, "Equip a pickaxe to reclaim equipment")
-    case .Wand_Equipped:      notify(gs, "Equip the pickaxe - a wand cannot reclaim equipment")
-    case .Loaded_Smelter:     notify(gs, "Empty the smelter before reclaiming it")
-    case .Loaded_Silo:        notify(gs, "Empty the silo before reclaiming it")
-    case .Loaded_Barrel:      notify(gs, "Empty the barrel before reclaiming it")
-    case .Loaded_Miner:       notify(gs, "Claim the miner's haul before reclaiming it")
-    case .Anchored_Dimension: notify(gs, "The working miner anchors this spawner - reclaim it first")
-    case .Active_Ritual:      notify(gs, "The altar cannot move during a ritual")
-    case .None:
-    }
+    if block == .None do return
+    notify(gs, reclaim_block_message[block])
 }
 
 // Hold Shift + mine over one adjacent structure. Any interruption resets the

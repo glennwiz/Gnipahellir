@@ -4444,4 +4444,845 @@ loaded_barrel_refuses_the_pick :: proc(t: ^testing.T) {
     testing.expect(t, barrel_at(gs, gs.level_index, tile) == nil, "record freed on reclaim")
 }
 
+@(test)
+gravity_preserves_golem_masonry_ownership :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	w:=&gs.world
+	gs.elapsed_time=10
+	x:=104
+	for yy in 68..=76 do for xx in x-1..=x+2 do set_tile(w,xx,yy,.Air)
+	set_tile(w,x+1,75,.Stone)
+	set_tile(w,x,70,.Stone)
+	set_tile(w,x+1,70,.Stone)
+	w.tile_flags[grid_idx(x+1,70)]+={.Placed,.Golem_Placed}
+	golem_register_block_grace(gs,0,{i32(x+1),70})
+
+	set_tile(w,x,70,.Void)
+	gravity_check_removed(gs,x,70)
+	testing.expect_value(t,gravity_count_active(gs),1)
+	for _ in 0..<400 do update_gravity(gs)
+	settled:=[2]i32{i32(x+1),74}
+	testing.expect(t,.Golem_Placed in w.tile_flags[grid_idx(int(settled.x),int(settled.y))],
+		"settled navigation masonry must remain golem cleanup work")
+	testing.expect(t,golem_block_grace_protected(gs,1,settled),"remaining cross-worker grace follows the falling block")
+	testing.expect(t,!golem_block_grace_protected(gs,0,settled),"the owner may still reclaim the settled block")
+}
+
+// ─── Clay-golem automation ───────────────────────────────────────────────────
+
+@(test)
+clay_seams_spawn_in_the_early_cave :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	clay, wet := 0, 0
+	for y in CAVE_TOP+2 ..< min(CAVE_TOP+22,CAVE_BOT) do for x in CAVE_LEFT+1 ..< CAVE_RIGHT-1 {
+		if get_tile(&gs.world,x,y)==.Clay do clay += 1
+		if get_tile(&gs.world,x,y)==.Water do wet += 1
+	}
+	testing.expect(t,clay>0,"upper cave should contain mineable clay")
+	testing.expect(t,wet>0,"some clay seams should expose shallow water")
+	testing.expect_value(t,terrain_table[.Clay].drop_item,Item.Clay)
+}
+
+@(test)
+command_wand_loads_deploys_and_recalls_golems :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.player.equipment[.Weapon] = .Command_Wand
+	gs.player.pos = {90, f32(SURFACE_Y)-PLAYER_H}
+	inventory_insert(&gs.player.inventory,.Clay_Golem,2)
+	slot := -1
+	for s,i in gs.player.inventory.slots do if s.item==.Clay_Golem {slot=i;break}
+	testing.expect(t,golem_load(gs,slot),"basic wand should bind its first golem")
+	testing.expect(t,!golem_load(gs,slot),"basic wand capacity is exactly one")
+	testing.expect_value(t,golem_loaded_count(gs),1)
+
+	spawn := [2]i32{91,i32(SURFACE_Y-1)}
+	testing.expect(t,golem_deploy(gs,spawn),"bound golem should deploy on open ground")
+	testing.expect_value(t,golem_deployed_count(gs,LEVEL_SURFACE),1)
+	testing.expect_value(t,gs.golems.data[0].mode,Golem_Mode.Gather)
+	golem_toggle(gs,0)
+	testing.expect_value(t,gs.golems.data[0].mode,Golem_Mode.Build)
+	golem_recall(gs,0)
+	testing.expect_value(t,gs.golems.data[0].status,Golem_Status.Carried)
+}
+
+@(test)
+debug_cheat_places_a_ready_clay_golem :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 54..=58 do set_tile(&gs.world,90,y,.Air)
+	set_tile(&gs.world,90,59,.Stone)
+	testing.expect(t,debug_golem_deploy(gs,{90,58}),"the debug stamp should deploy directly on open ground")
+	g:=&gs.golems.data[0]
+	testing.expect_value(t,g.status,Golem_Status.Deployed)
+	testing.expect_value(t,g.mode,Golem_Mode.Gather)
+	testing.expect_value(t,g.level,gs.level_index)
+	testing.expect_value(t,golem_tile(g),[2]i32{90,58})
+}
+
+@(test)
+command_wand_zone_requires_a_deliberate_drag :: proc(t:^testing.T) {
+	testing.expect(t,!golem_zone_drag_ready({100,100},{103,104}),"a normal click or small hand jitter must preserve the old zone")
+	testing.expect(t,golem_zone_drag_ready({100,100},{106,100}),"a deliberate six-pixel drag should start zone painting")
+}
+
+@(test)
+command_wand_golem_hitbox_matches_the_visible_worker :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,mode=.Gather,project_cell=-1}
+	// This point is just outside the center tile but still over the padded
+	// rendered worker, reproducing the fiddly click from the playtest.
+	point:=[2]f32{19.95*CELL_SIZE,(g.pos.y+.3)*CELL_SIZE}
+	testing.expect_value(t,golem_at_world_point(gs,point),0)
+}
+
+@(test)
+hearth_upgrades_one_to_five_to_fifteen_slots :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.player.equipment[.Weapon]=.Command_Wand
+	inventory_insert(&gs.player.inventory,.Emerald,1)
+	golem_hearth_use(gs)
+	testing.expect_value(t,gs.player.equipment[.Weapon],Item.Command_Wand_Emerald)
+	testing.expect_value(t,command_wand_capacity(gs.player.equipment[.Weapon]),5)
+	testing.expect_value(t,inventory_count(&gs.player.inventory,.Emerald),0)
+
+	inventory_insert(&gs.player.inventory,.Hel_Gem,1)
+	golem_hearth_use(gs)
+	testing.expect_value(t,gs.player.equipment[.Weapon],Item.Command_Wand_Hel)
+	testing.expect_value(t,command_wand_capacity(gs.player.equipment[.Weapon]),15)
+}
+
+@(test)
+gather_zone_is_normalized_and_capped :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	golem_set_zone(gs,{80,80},{150,20})
+	w := gs.golems.work[gs.level_index]
+	testing.expect(t,w.active,"work order should activate")
+	testing.expect(t,w.max.x-w.min.x+1<=GOLEM_ZONE_MAX_W,"zone width must be capped")
+	testing.expect(t,w.max.y-w.min.y+1<=GOLEM_ZONE_MAX_H,"zone height must be capped")
+	testing.expect(t,w.min.x<=w.max.x && w.min.y<=w.max.y,"reversed drag should normalize")
+}
+
+@(test)
+gatherer_skips_an_unreachable_nearest_resource :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 55..=59 do for x in 16..=23 do set_tile(&gs.world,x,y,.Air)
+	for x in 16..=23 do set_tile(&gs.world,x,60,.Stone)
+	// A protected column divides the nearest block from the worker. Dig-aware
+	// A* must not tunnel through it or walk around either world edge.
+	for y in 0..<GRID_H {
+		set_tile(&gs.world,21,y,.Stone)
+		gs.world.tile_flags[grid_idx(21,y)] += {.Placed}
+	}
+	blocked,reachable:=[2]i32{22,59},[2]i32{17,59}
+	set_tile(&gs.world,int(blocked.x),int(blocked.y),.Stone)
+	set_tile(&gs.world,int(reachable.x),int(reachable.y),.Stone)
+	gs.golems.work[gs.level_index]={active=true,min={17,59},max={22,59}}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+
+	first,found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,found,"fixture needs a resource candidate")
+	testing.expect_value(t,first,blocked)
+	testing.expect(t,golem_assign_resource(gs,0),"the gatherer should try another resource after pathfinding rejects the nearest")
+	testing.expect(t,g.has_target,"a successful alternative must remain reserved")
+	testing.expect_value(t,g.target,reachable)
+}
+
+@(test)
+gatherer_cleans_navigation_masonry_after_natural_resources :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 56..=59 do for x in 19..=25 do set_tile(&gs.world,x,y,.Air)
+	for x in 19..=25 do set_tile(&gs.world,x,60,.Stone)
+	player_block,nav_block,natural:=[2]i32{21,59},[2]i32{22,59},[2]i32{24,59}
+	for cell in ([3][2]i32{player_block,nav_block,natural}) do set_tile(&gs.world,int(cell.x),int(cell.y),.Stone)
+	gs.world.tile_flags[grid_idx(int(player_block.x),int(player_block.y))]+={.Placed}
+	gs.world.tile_flags[grid_idx(int(nav_block.x),int(nav_block.y))]+={.Placed,.Golem_Placed}
+	gs.golems.work[gs.level_index]={active=true,min={21,59},max={24,59}}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+
+	first,found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,found,"fixture needs natural work")
+	testing.expect_value(t,first,natural)
+	set_tile(&gs.world,int(natural.x),int(natural.y),.Air)
+	cleanup,cleanup_found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,cleanup_found,"owned navigation masonry should become cleanup work")
+	testing.expect_value(t,cleanup,nav_block)
+	set_tile(&gs.world,int(nav_block.x),int(nav_block.y),.Air)
+	player_cleanup,player_cleanup_found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,player_cleanup_found,"a marked Gather rectangle should finish ordinary player masonry")
+	testing.expect_value(t,player_cleanup,player_block)
+}
+
+@(test)
+fresh_golem_masonry_has_cross_worker_grace :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.elapsed_time=10
+	for y in 56..=59 do for x in 19..=23 do set_tile(&gs.world,x,y,.Air)
+	for x in 19..=23 do set_tile(&gs.world,x,60,.Stone)
+	owned,spare:=[2]i32{21,59},[2]i32{22,59}
+	for cell in ([2][2]i32{owned,spare}) {
+		set_tile(&gs.world,int(cell.x),int(cell.y),.Grass)
+		gs.world.tile_flags[grid_idx(int(cell.x),int(cell.y))]+={.Placed,.Golem_Placed}
+		golem_register_block_grace(gs,0,cell)
+	}
+	gs.golems.work[gs.level_index]={active=true,min=owned,max=spare}
+	owner:=&gs.golems.data[0]
+	other:=&gs.golems.data[1]
+	owner^={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+	other^={status=.Deployed,level=gs.level_index,pos={23.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+
+	_,other_found:=golem_find_resource(gs,1,nil)
+	testing.expect(t,!other_found,"another worker must not select freshly placed masonry")
+	testing.expect(t,!golem_mine_tile(gs,other,owned,true,1),"a stale path must not bypass the grace period")
+	testing.expect(t,golem_mine_tile(gs,owner,spare,true,0),"the placing worker may reclaim its own block immediately")
+
+	gs.elapsed_time+=GOLEM_BLOCK_GRACE_TIME+.01
+	target,found:=golem_find_resource(gs,1,nil)
+	testing.expect(t,found,"masonry should become ordinary cleanup work after three seconds")
+	testing.expect_value(t,target,owned)
+	testing.expect(t,golem_mine_tile(gs,other,owned,true,1),"another worker may reclaim the block after grace expires")
+}
+
+@(test)
+gather_zone_clears_grass_and_dirt :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 56..=59 do for x in 19..=23 do set_tile(&gs.world,x,y,.Air)
+	for x in 19..=23 do set_tile(&gs.world,x,60,.Stone)
+	grass,dirt:=[2]i32{21,59},[2]i32{22,59}
+	set_tile(&gs.world,int(grass.x),int(grass.y),.Grass)
+	set_tile(&gs.world,int(dirt.x),int(dirt.y),.Dirt)
+	gs.golems.work[gs.level_index]={active=true,min=grass,max=dirt}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+	target,found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,found,"surface clearing should include ordinary soil")
+	testing.expect(t,target==grass || target==dirt,"surface clearing should select grass or dirt")
+	set_tile(&gs.world,int(target.x),int(target.y),.Air)
+	other,other_found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,other_found,"both surface terrain types should be gatherable")
+	testing.expect(t,other==grass || other==dirt,"the remaining soil should still be selected")
+}
+
+@(test)
+painted_excavation_works_outside_zone_and_takes_priority :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 56..=59 do for x in 19..=27 do set_tile(&gs.world,x,y,.Air)
+	for x in 19..=27 do set_tile(&gs.world,x,60,.Stone)
+	zone_block,painted:=[2]i32{21,59},[2]i32{25,59}
+	set_tile(&gs.world,int(zone_block.x),int(zone_block.y),.Stone)
+	set_tile(&gs.world,int(painted.x),int(painted.y),.Stone)
+	gs.golems.work[gs.level_index]={active=true,min=zone_block,max=zone_block}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+
+	testing.expect(t,golem_set_block_mark(gs,painted,true),"Shift-paint should tag an ordinary mineable block")
+	testing.expect(t,.Golem_Marked in gs.world.tile_flags[grid_idx(int(painted.x),int(painted.y))],"paint must persist on the world cell")
+	target,found:=golem_find_resource(gs,0,nil)
+	testing.expect(t,found,"painted excavation should create a gather job")
+	testing.expect_value(t,target,painted)
+	testing.expect(t,golem_mine_tile(gs,g,painted,false,0),"paint explicitly permits mining outside the rectangle")
+	testing.expect(t,.Golem_Marked not_in gs.world.tile_flags[grid_idx(int(painted.x),int(painted.y))],"mining consumes the paint tag")
+	testing.expect_value(t,gs.golem_marks.count,0)
+
+	set_tile(&gs.world,int(painted.x),int(painted.y),.Stone)
+	testing.expect(t,golem_set_block_mark(gs,painted,true),"the brush can repaint a block")
+	testing.expect(t,golem_set_block_mark(gs,painted,false),"Shift-right should erase painted excavation")
+	testing.expect(t,.Golem_Marked not_in gs.world.tile_flags[grid_idx(int(painted.x),int(painted.y))],"erasing leaves the block untouched")
+}
+
+@(test)
+painted_excavation_carves_a_path_without_rectangle :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 55..=59 do for x in 18..=30 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=30 do set_tile(&gs.world,x,60,.Stone)
+	for x in 24..=27 {
+		set_tile(&gs.world,x,59,.Stone)
+		testing.expect(t,golem_set_block_mark(gs,{i32(x),59},true),"tunnel brush should tag every stone")
+	}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={20.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,grounded=true,project_cell=-1}
+	testing.expect(t,!gs.golems.work[gs.level_index].active,"painted excavation must not require a rectangle")
+
+	for _ in 0..<2000 {
+		update_golems(gs)
+		if gs.golem_marks.count==0 do break
+	}
+	for x in 24..=27 do testing.expect(t,get_tile(&gs.world,x,59)!=.Stone,"the crew should carve the painted run")
+	testing.expect_value(t,gs.golem_marks.count,0)
+}
+
+@(test)
+paint_brush_rasterizes_fast_drag_without_gaps :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 50..=53 do for x in 20..=26 do set_tile(&gs.world,x,y,.Stone)
+	golem_queue_paint_line(gs,{20,50},{26,53},true)
+	process_events(gs)
+	testing.expect_value(t,gs.golem_marks.count,7)
+	for x in 20..=26 {
+		marked_in_column:=false
+		for y in 50..=53 do if .Golem_Marked in gs.world.tile_flags[grid_idx(x,y)] {
+			marked_in_column=true
+			break
+		}
+		testing.expect(t,marked_in_column,"a fast brush sweep must not skip crossed columns")
+	}
+}
+
+@(test)
+golem_packs_real_block_and_routes_it :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	g := &gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={90,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,project_cell=-1}
+	target := [2]i32{92,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(target.x),int(target.y),.Iron_Ore)
+	gs.golems.work[gs.level_index]={active=true,min={89,i32(SURFACE_Y-3)},max={95,i32(SURFACE_Y)}}
+	testing.expect(t,golem_mine_tile(gs,g,target),"golem should mine a natural resource in its zone")
+	testing.expect_value(t,golem_pack_count(g),1)
+	testing.expect_value(t,golem_pack_peek(g),Item.Iron_Ore)
+	testing.expect(t,get_tile(&gs.world,int(target.x),int(target.y))!=.Iron_Ore,"block leaves the world grid")
+	testing.expect(t,gs.particles.count>=5,"mining should stream the block toward the worker")
+	testing.expect_value(t,gs.particles.data[0].pos,tile_center(target))
+	testing.expect_value(t,gs.particles.data[0].target,golem_center(g))
+
+	smelter := [2]i32{94,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(smelter.x),int(smelter.y),.Smelter)
+	g.carry=golem_pack_pop(g)
+	testing.expect(t,golem_deposit_at(gs,smelter,g.carry),"ore should route into a compatible furnace")
+	testing.expect_value(t,gs.world.sim_data[grid_idx(int(smelter.x),int(smelter.y))].in_item,Item.Iron_Ore)
+}
+
+@(test)
+gather_mode_walks_a_block_back_to_storage :: proc(t: ^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in SURFACE_Y-4..<SURFACE_Y do for x in 112..=126 do set_tile(&gs.world,x,y,.Air)
+	for x in 112..=126 do set_tile(&gs.world,x,SURFACE_Y,.Grass)
+	store:=[2]i32{114,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(store.x),int(store.y),.Barrel); barrel_on_placed(gs,store)
+	target:=[2]i32{124,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(target.x),int(target.y),.Clay)
+	gs.golems.work[gs.level_index]={active=true,min={118,i32(SURFACE_Y-3)},max={125,i32(SURFACE_Y-1)}}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={118,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,facing=1,project_cell=-1}
+	for _ in 0..<5000 {
+		update_golems(gs)
+		if barrel_total(barrel_at(gs,gs.level_index,store))>0 do break
+	}
+	b:=barrel_at(gs,gs.level_index,store)
+	testing.expect_value(t,barrel_total(b),1)
+	testing.expect_value(t,b.slots[0].item,Item.Clay)
+	testing.expect(t,get_tile(&gs.world,int(target.x),int(target.y))!=.Clay,"the carried block should leave the seam")
+}
+
+@(test)
+gatherer_clears_access_floor_and_stockpiles_without_storage :: proc(t: ^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	// Reproduce the playtest stall: the selected stone is below the surface,
+	// while A* approaches through a Grass floor one cell outside the zone.
+	for y in 51..=56 do for x in 120..=140 do set_tile(&gs.world,x,y,.Air)
+	for x in 120..=140 {
+		set_tile(&gs.world,x,54,.Grass)
+		set_tile(&gs.world,x,55,.Stone)
+	}
+	zone_min := [2]i32{129,53}
+	zone_max := [2]i32{136,56}
+	gs.golems.work[gs.level_index]={active=true,min=zone_min,max=zone_max}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={124,f32(54)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,facing=1,project_cell=-1}
+
+	target := [2]i32{129,55}
+	for _ in 0..<2000 {
+		update_golems(gs)
+	}
+	testing.expect(t,get_tile(&gs.world,128,54)!=.Grass,"gatherer should clear the mineable access floor planned by A*")
+	testing.expect(t,get_tile(&gs.world,int(target.x),int(target.y))!=.Stone,"gatherer should reach and mine the selected stone")
+
+	found_pile := false
+	for y in 49..=60 do for x in 116..=144 {
+		idx := grid_idx(x,y)
+		if !golem_in_work_zone(gs,{i32(x),i32(y)}) && gs.world.items[idx]!=.None && gs.world.item_counts[idx]>0 {
+			found_pile=true
+		}
+	}
+	testing.expect(t,found_pile,"without compatible storage the gathered blocks should form a pile outside the zone")
+}
+
+@(test)
+loaded_gatherer_does_not_jump_loop_on_a_mining_route :: proc(t: ^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	// Two open chambers separated by an unbroken wall. The loaded worker has
+	// an old dig-aware route toward storage on the far side, exactly like the
+	// live save that repeatedly jumped at a solid waypoint.
+	for y in 48..=60 do for x in 14..=36 do set_tile(&gs.world,x,y,.Air)
+	for x in 14..=36 do set_tile(&gs.world,x,60,.Stone)
+	for y in 0..=60 do for x in 24..=27 do set_tile(&gs.world,x,y,.Stone)
+	chest := [2]i32{31,59}
+	set_tile(&gs.world,int(chest.x),int(chest.y),.Barrel)
+	barrel_on_placed(gs,chest)
+	gs.golems.work[gs.level_index]={active=true,min={29,54},max={34,59}}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20,f32(60)-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Deliver,carry=.Grass_Turf,target=chest,has_target=true,facing=1,grounded=true,project_cell=-1}
+	g.path={len=1,cursor=0}
+	g.path.tiles[0]={24,59} // stale mining waypoint through the wall
+
+	for _ in 0..<2000 {
+		update_golems(gs)
+		if barrel_total(barrel_at(gs,gs.level_index,chest))>0 &&
+		   g.carry==.None && golem_pack_count(g)==0 {break}
+	}
+	testing.expect_value(t,g.carry,Item.None)
+	testing.expect(t,!g.has_target || g.path.len==0 || !is_solid(&gs.world,int(g.path.tiles[g.path.cursor].x),int(g.path.tiles[g.path.cursor].y)),
+		"a loaded worker must not keep jumping at a solid mining waypoint")
+	b:=barrel_at(gs,gs.level_index,chest)
+	testing.expect(t,b!=nil && barrel_total(b)>0,"the worker should use its pack to dig through and deliver the original cargo")
+	testing.expect_value(t,golem_pack_count(g),0)
+	testing.expect(t,barrel_total(b)>1,"natural blocks cleared from the route should unload with the original cargo")
+}
+
+@(test)
+golem_bridge_spends_a_real_pack_block :: proc(t: ^testing.T) {
+	gs:=test_state(); defer free(gs)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20,f32(60)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,job=.Mine,grounded=true,project_cell=-1}
+	for y in 56..=60 do for x in 18..=23 do set_tile(&gs.world,x,y,.Air)
+	set_tile(&gs.world,20,60,.Stone)
+	_ = golem_pack_add(g,.Stone_Block)
+	g.path={len=1,cursor=0}; g.path.tiles[0]={21,59}
+	testing.expect(t,golem_exec_path_bridge(gs,g,0),"the gap waypoint should trigger a bridge action")
+	testing.expect_value(t,get_tile(&gs.world,21,60),Tile_Type.Stone)
+	testing.expect(t,.Placed in gs.world.tile_flags[grid_idx(21,60)],"navigation masonry remains a real placed block")
+	testing.expect(t,.Golem_Placed in gs.world.tile_flags[grid_idx(21,60)],"navigation masonry is reclaimable by its worker")
+	testing.expect(t,gs.particles.count>=5,"placing a navigation block should stream cargo from the worker")
+	testing.expect_value(t,gs.particles.data[0].pos,golem_center(g))
+	testing.expect_value(t,gs.particles.data[0].target,tile_center({21,60}))
+	testing.expect_value(t,golem_pack_count(g),0)
+}
+
+@(test)
+golem_storage_transfers_show_both_directions :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 57..=61 do for x in 18..=23 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=23 do set_tile(&gs.world,x,61,.Stone)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Build,grounded=true,project_cell=-1}
+	source:=[2]i32{22,60}
+	gs.world.items[grid_idx(int(source.x),int(source.y))]=.Plank
+	gs.world.item_counts[grid_idx(int(source.x),int(source.y))]=1
+	testing.expect(t,golem_fetch_carried(gs,g,source,.Plank),"the worker should collect the stored plank")
+	testing.expect(t,gs.particles.count>=5,"collecting should stream cargo toward the worker")
+	testing.expect_value(t,gs.particles.data[0].pos,tile_center(source))
+	testing.expect_value(t,gs.particles.data[0].target,golem_center(g))
+	gs.particles={}
+	dest:=[2]i32{19,60}
+	testing.expect(t,golem_store_carried(gs,g,dest),"the worker should store the carried plank")
+	testing.expect(t,gs.particles.count>=5,"storing should stream cargo away from the worker")
+	testing.expect_value(t,gs.particles.data[0].pos,golem_center(g))
+	testing.expect_value(t,gs.particles.data[0].target,tile_center(dest))
+}
+
+@(test)
+golem_unloads_its_entire_pack_before_leaving_storage :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 57..=61 do for x in 18..=23 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=23 do set_tile(&gs.world,x,61,.Stone)
+	store:=[2]i32{22,60}
+	set_tile(&gs.world,int(store.x),int(store.y),.Barrel)
+	barrel_on_placed(gs,store)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Deliver,carry=.Stone_Block,target=store,has_target=true,grounded=true,project_cell=-1}
+	for _ in 0..<GOLEM_PACK_CAP-1 do _=golem_pack_add(g,.Stone_Block)
+
+	for _ in 0..<GOLEM_PACK_CAP do golem_update_one(gs,0)
+	b:=barrel_at(gs,gs.level_index,store)
+	testing.expect_value(t,barrel_total(b),GOLEM_PACK_CAP)
+	testing.expect_value(t,g.carry,Item.None)
+	testing.expect_value(t,golem_pack_count(g),0)
+	testing.expect(t,!g.has_target,"the worker should leave only after every carried block is stored")
+}
+
+@(test)
+golem_reroutes_remaining_pack_when_storage_fills :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 57..=61 do for x in 18..=24 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=24 do set_tile(&gs.world,x,61,.Stone)
+	first,second:=[2]i32{22,60},[2]i32{23,60}
+	set_tile(&gs.world,int(first.x),int(first.y),.Barrel); barrel_on_placed(gs,first)
+	set_tile(&gs.world,int(second.x),int(second.y),.Barrel); barrel_on_placed(gs,second)
+	b1:=barrel_at(gs,gs.level_index,first)
+	for &slot in b1.slots do slot={item=.Dirt,count=MAX_STACK}
+	b1.slots[0]={item=.Stone_Block,count=MAX_STACK-1}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Deliver,carry=.Stone_Block,target=first,has_target=true,grounded=true,project_cell=-1}
+	_ = golem_pack_add(g,.Stone_Block)
+	_ = golem_pack_add(g,.Stone_Block)
+
+	for _ in 0..<3 do golem_update_one(gs,0)
+	testing.expect_value(t,b1.slots[0].count,MAX_STACK)
+	testing.expect_value(t,barrel_total(barrel_at(gs,gs.level_index,second)),2)
+	testing.expect_value(t,g.carry,Item.None)
+	testing.expect_value(t,golem_pack_count(g),0)
+}
+
+@(test)
+golem_replans_a_saved_jump_blocked_by_placed_masonry :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 51..=55 do for x in 20..=28 do set_tile(&gs.world,x,y,.Air)
+	for x in 20..=28 do set_tile(&gs.world,x,55,.Stone)
+	set_tile(&gs.world,26,54,.Stone)
+	set_tile(&gs.world,22,53,.Grass)
+	gs.world.tile_flags[grid_idx(22,53)] += {.Placed}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={22.2,55-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Deliver,carry=.Stone_Block,target={26,53},has_target=true,grounded=true,project_cell=-1}
+	for _ in 0..<GOLEM_PACK_CAP do _=golem_pack_add(g,.Stone_Block)
+	g.path={len=1}; g.path.tiles[0]={23,53}
+	testing.expect(t,golem_path_obstructed(gs,g),"fixture needs the saved jump arc blocked overhead")
+	golem_update_one(gs,0)
+	testing.expect(t,g.has_target,"the loaded worker should find the open route around its old masonry")
+	testing.expect(t,!golem_path_obstructed(gs,g),"the replacement route must not repeat the blocked jump")
+	testing.expect_value(t,get_tile(&gs.world,22,53),Tile_Type.Grass)
+}
+
+@(test)
+golem_reclaims_its_own_navigation_masonry :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 51..=55 do for x in 20..=24 do set_tile(&gs.world,x,y,.Air)
+	for x in 20..=24 do set_tile(&gs.world,x,55,.Stone)
+	set_tile(&gs.world,22,53,.Stone)
+	gs.world.tile_flags[grid_idx(22,53)] += {.Placed,.Golem_Placed}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={22.2,55-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={24,52},has_target=true,grounded=true,project_cell=-1}
+	g.path={len=1}; g.path.tiles[0]={23,53}
+	testing.expect(t,golem_path_obstructed(gs,g),"fixture needs the worker's block in its takeoff arc")
+	golem_update_one(gs,0)
+	testing.expect(t,!is_solid(&gs.world,22,53),"the worker should pick its own obstructing block back up")
+	testing.expect_value(t,golem_pack_count(g),1)
+	testing.expect(t,.Golem_Placed not_in gs.world.tile_flags[grid_idx(22,53)],"reclaimed masonry must clear its ownership marker")
+}
+
+@(test)
+golem_replans_an_upper_waypoint_after_falling :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 57..=70 do for x in 21..=27 do set_tile(&gs.world,x,y,.Air)
+	for x in 21..=27 do set_tile(&gs.world,x,70,.Stone)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={24.2,70-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Mine,target={24,60},has_target=true,grounded=true,project_cell=-1}
+	_ = golem_pack_add(g,.Stone_Block)
+	g.path={len=1}; g.path.tiles[0]={24,62}
+	testing.expect(t,golem_path_stale(g),"fixture needs a ledge waypoint abandoned by a fall")
+	golem_update_one(gs,0)
+	testing.expect(t,g.recovering,"the worker should replan from the landing and start a climb")
+	testing.expect_value(t,g.path.len,0)
+}
+
+@(test)
+golem_walks_to_the_standable_origin_used_by_pathfinding :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 54..=61 do for x in 35..=41 do set_tile(&gs.world,x,y,.Air)
+	set_tile(&gs.world,37,58,.Stone)
+	set_tile(&gs.world,38,60,.Stone)
+	set_tile(&gs.world,39,60,.Stone)
+	gs.golems.work[gs.level_index]={active=true,min={35,54},max={41,61}}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={37.85,58-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Mine,target={39,60},has_target=true,grounded=true,project_cell=-1}
+	testing.expect(t,golem_set_target(gs,g,g.target),"the snapped route should be valid")
+	testing.expect_value(t,g.path.len,1)
+	testing.expect_value(t,g.path.tiles[0],[2]i32{38,59})
+	for _ in 0..<200 {
+		golem_update_one(gs,0)
+		if get_tile(&gs.world,39,60)!=.Stone do break
+	}
+	testing.expect(t,get_tile(&gs.world,39,60)!=.Stone,"the perched worker should move to the assumed origin and mine")
+}
+
+@(test)
+golem_stall_watchdog_enters_local_recovery :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 54..=62 do for x in 45..=49 do set_tile(&gs.world,x,y,.Air)
+	for x in 45..=49 do set_tile(&gs.world,x,62,.Stone)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={47.2,62-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Mine,target={47,55},has_target=true,grounded=true,project_cell=-1,replan_timer=GOLEM_STUCK_TIME}
+	_ = golem_pack_add(g,.Stone_Block)
+	g.path={len=1}; g.path.tiles[0]={48,61}
+	golem_update_one(gs,0)
+	testing.expect(t,g.recovering,"a route with no waypoint progress must fall back to local recovery")
+	testing.expect_value(t,g.path.len,0)
+	testing.expect(t,g.replan_timer<GOLEM_STUCK_TIME,"the watchdog must reset after intervening")
+}
+
+@(test)
+golem_unembeds_from_a_settled_falling_block :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 59..=65 do for x in 28..=34 do set_tile(&gs.world,x,y,.Air)
+	set_tile(&gs.world,29,63,.Stone)
+	set_tile(&gs.world,30,62,.Stone)
+	gs.world.tile_flags[grid_idx(30,62)] += {.Placed}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={30.2,62.2},hp=GOLEM_HP,mode=.Gather,
+		job=.Deliver,carry=.Stone_Block,target={20,55},has_target=true,project_cell=-1}
+	_ = golem_pack_add(g,.Dirt)
+	testing.expect(t,!golem_body_clear(&gs.world,g.pos),"fixture needs the worker embedded in settled stone")
+	testing.expect(t,golem_unembed(gs,g),"the worker should eject to nearby open ground")
+	testing.expect(t,golem_body_clear(&gs.world,g.pos),"the ejected body must be clear of terrain")
+	testing.expect(t,golem_tile(g)!=[2]i32{30,62},"the worker must leave the occupied cell")
+	testing.expect(t,g.recovering,"an ejected worker should recover locally toward its upper objective")
+	testing.expect_value(t,g.carry,Item.Stone_Block)
+	testing.expect_value(t,golem_pack_count(g),1)
+}
+
+@(test)
+falling_block_crumbles_instead_of_settling_inside_a_golem :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 59..=64 do for x in 38..=42 do set_tile(&gs.world,x,y,.Air)
+	set_tile(&gs.world,40,64,.Stone)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={40.2,64-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+	gs.gravity.blocks[0]={tile=.Stone,x=40,y=62.9,source_x=40,source_y=60,active=true}
+	update_gravity(gs)
+	testing.expect(t,!gs.gravity.blocks[0].active,"the falling block should resolve on contact")
+	testing.expect(t,!is_solid(&gs.world,40,63),"a falling block must not settle inside the worker")
+	testing.expect(t,golem_body_clear(&gs.world,g.pos),"the worker must remain outside solid terrain")
+	drops:=0
+	for i in 0..<GRID_W*GRID_H do if gs.world.items[i]==.Stone_Block do drops+=int(gs.world.item_counts[i])
+	testing.expect(t,drops>0,"the blocked fall should preserve its material as a ground item")
+}
+
+@(test)
+build_worker_without_a_project_unloads_then_waits :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 52..=81 do for x in 18..=24 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=24 do set_tile(&gs.world,x,81,.Stone)
+	gs.golems.work[gs.level_index]={active=true,min={18,52},max={24,56}}
+	store:=[2]i32{22,80}
+	set_tile(&gs.world,int(store.x),int(store.y),.Barrel)
+	barrel_on_placed(gs,store)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,81-GOLEM_H},hp=GOLEM_HP,mode=.Build,
+		job=.Idle,carry=.Stone_Block,grounded=true,project_cell=-1}
+	_ = golem_pack_add(g,.Leaf)
+	for _ in 0..<5 do golem_update_one(gs,0)
+	testing.expect_value(t,g.carry,Item.None)
+	testing.expect_value(t,golem_pack_count(g),0)
+	testing.expect_value(t,g.mode,Golem_Mode.Build)
+	testing.expect_value(t,g.job,Golem_Job.Idle)
+	testing.expect(t,!g.has_target && !g.recovering,"an off-duty builder should wait for a monument plan")
+	testing.expect_value(t,barrel_total(barrel_at(gs,gs.level_index,store)),2)
+}
+
+@(test)
+golem_recovery_punches_through_a_den_shell_instead_of_aborting :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	_ = den_owner_fixture(gs)
+	// The fixture's shelter wall includes (48,50). Put the worker directly
+	// beneath it with an otherwise clear, supported rescue shaft.
+	for y in 47..=52 do set_tile(&gs.world,48,y,.Air)
+	set_tile(&gs.world,48,50,.Iron_Ore)
+	gs.world.tile_flags[grid_idx(48,50)]={}
+	set_tile(&gs.world,48,53,.Stone)
+	testing.expect(t,den_protected(gs,48,50,-1),"fixture needs a protected mineral shell overhead")
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={48.2,53-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={48,45},has_target=true,recover_from=52,grounded=true,project_cell=-1}
+	testing.expect(t,!golem_mine_tile(gs,g,{48,50},true),"ordinary path clearing must still protect the den")
+	g.recovering=true
+	golem_update_recovery(gs,g,0)
+	testing.expect(t,g.recovering,"a den shell above the shaft must not cancel self-rescue")
+	testing.expect_value(t,get_tile(&gs.world,48,50),Tile_Type.Air)
+	testing.expect_value(t,golem_pack_count(g),1)
+}
+
+@(test)
+golem_internal_pack_pillars_out_of_a_deep_pocket :: proc(t: ^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for &tile in gs.world.terrain do tile=.Stone
+	for y in 95..=99 do set_tile(&gs.world,30,y,.Air)
+	for y in 82..=86 do for x in 27..=33 do set_tile(&gs.world,x,y,.Air)
+	stone_before:=0
+	for tile in gs.world.terrain do if tile==.Stone do stone_before+=1
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={30.2,100-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={30,84},has_target=true,facing=1,grounded=true,project_cell=-1,
+		recovering=true,recover_from=99}
+	gs.golems.work[gs.level_index]={active=true,min={27,82},max={33,86}}
+	start_y:=golem_tile(g).y
+	for _ in 0..<5000 {
+		update_golems(gs)
+		if !g.recovering do break
+	}
+	rise:=start_y-golem_tile(g).y
+	testing.expect(t,!g.recovering,"vertical recovery should hand control back to the objective")
+	testing.expect(t,rise>=12,"the golem should pillar from the bottom pocket back toward its target")
+	placed:=0
+	for flags in gs.world.tile_flags do if .Placed in flags do placed+=1
+	testing.expect(t,placed>0,"the climb should leave visible foothold blocks")
+	stone_after:=0
+	for tile in gs.world.terrain do if tile==.Stone do stone_after+=1
+	stone_carried:=0
+	for item in g.pack do if item==.Stone_Block do stone_carried+=1
+	if g.carry==.Stone_Block do stone_carried+=1
+	testing.expect_value(t,stone_after+stone_carried,stone_before)
+}
+
+@(test)
+golem_recovery_closes_the_two_tile_seek_handoff :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 82..=87 do for x in 40..=42 do set_tile(&gs.world,x,y,.Air)
+	set_tile(&gs.world,41,87,.Stone)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={41.2,87-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={41,84},has_target=true,grounded=true,recovering=true,project_cell=-1}
+	_ = golem_pack_add(g,.Stone_Block)
+	start:=golem_tile(g)
+	golem_update_recovery(gs,g,0)
+	testing.expect(t,golem_tile(g).y<start.y,"Seek recovery must climb when still two tiles outside its one-tile reach")
+	testing.expect(t,g.recovering,"the handoff happens only after the remaining reach gap is closed")
+}
+
+@(test)
+adjacent_recovering_golems_do_not_mine_each_others_pillars :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 54..=60 do for x in 18..=23 do set_tile(&gs.world,x,y,.Air)
+	for x in 18..=23 do set_tile(&gs.world,x,61,.Stone)
+	left,right:=&gs.golems.data[0],&gs.golems.data[1]
+	left^={status=.Deployed,level=gs.level_index,pos={20.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={20,50},has_target=true,recovering=true,grounded=true,project_cell=-1}
+	right^={status=.Deployed,level=gs.level_index,pos={21.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={21,50},has_target=true,recovering=true,grounded=true,project_cell=-1}
+	_ = golem_pack_add(left,.Stone_Block)
+	golem_update_recovery(gs,left,0)
+	testing.expect(t,.Golem_Placed in gs.world.tile_flags[grid_idx(20,60)],"left worker should create its foothold")
+	golem_update_recovery(gs,right,1)
+	testing.expect(t,is_solid(&gs.world,20,60),"the neighboring worker must preserve that foothold")
+	testing.expect(t,.Golem_Placed in gs.world.tile_flags[grid_idx(20,60)],"the neighboring worker must preserve ownership marking")
+}
+
+@(test)
+golem_depot_feeds_and_collects_smelter_output :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	dt := [2]i32{90,i32(SURFACE_Y-1)}
+	st := [2]i32{91,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(dt.x),int(dt.y),.Golem_Depot)
+	golem_depot_on_built(gs,dt)
+	d := golem_depot_at(gs,gs.level_index,dt)
+	testing.expect(t,d!=nil,"built depot needs a saved record")
+	golem_depot_add(d,.Iron_Ore,2); golem_depot_add(d,.Wood_Log,2)
+	set_tile(&gs.world,int(st.x),int(st.y),.Smelter)
+	tick_golem_depot(gs,int(dt.x),int(dt.y))
+	tick_golem_depot(gs,int(dt.x),int(dt.y))
+	sd := &gs.world.sim_data[grid_idx(int(st.x),int(st.y))]
+	testing.expect_value(t,sd.in_item,Item.Iron_Ore)
+	testing.expect_value(t,int(sd.fuel_count),2)
+
+	gs.delta_time=SMELT_TIME
+	tick_smelter(gs,int(st.x),int(st.y))
+	has_bar := false
+	for slot in d.slots do if slot.item==.Iron_Bar && slot.count>0 do has_bar=true
+	testing.expect(t,has_bar,"adjacent depot should accept the cast bar")
+}
+
+@(test)
+golem_monument_project_completes_into_infrastructure :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.player.equipment[.Weapon]=.Command_Wand_Emerald
+	anchor := [2]i32{100,i32(SURFACE_Y-1)}
+	gs.player.pos={99,f32(SURFACE_Y)-PLAYER_H}
+	testing.expect(t,golem_project_start(gs,.Golem_Depot,anchor),"emerald wand should mark a depot")
+	p := &gs.golems.projects[gs.level_index]
+	for c in golem_plan_table[.Golem_Depot].cells {
+		T:=anchor+c.off
+		set_tile(&gs.world,int(T.x),int(T.y),c.tile)
+	}
+	golem_project_finish_if_done(gs,p)
+	testing.expect(t,p.complete,"matching every planned cell completes the monument")
+	testing.expect(t,golem_depot_at(gs,gs.level_index,anchor)!=nil,"completed depot should create its storage record")
+}
+
+@(test)
+build_mode_crew_fetches_and_places_a_hearth :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.delta_time=.05
+	gs.player.equipment[.Weapon]=.Command_Wand
+	gs.player.pos={119,f32(SURFACE_Y)-PLAYER_H}
+	anchor := [2]i32{120,i32(SURFACE_Y-1)}
+	for y in SURFACE_Y-6..<SURFACE_Y do for x in 114..=126 do set_tile(&gs.world,x,y,.Air)
+	for x in 114..=126 do set_tile(&gs.world,x,SURFACE_Y,.Grass)
+	testing.expect(t,golem_project_start(gs,.Clay_Hearth,anchor),"hearth project should start")
+
+	store := [2]i32{116,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(store.x),int(store.y),.Barrel)
+	barrel_on_placed(gs,store)
+	b:=barrel_at(gs,gs.level_index,store)
+	barrel_deposit(b,.Stone_Block,4)
+	barrel_deposit(b,.Clay,3)
+	barrel_deposit(b,.Plank,4)
+	barrel_deposit(b,.Iron_Bar,1)
+	for i in 0..<3 {
+		gs.golems.data[i]={status=.Deployed,level=gs.level_index,pos={117+f32(i)*0.7,f32(SURFACE_Y)-GOLEM_H},
+			hp=GOLEM_HP,mode=.Build,facing=1,project_cell=-1}
+	}
+	for _ in 0..<8000 {
+		update_golems(gs)
+		update_gravity(gs)
+		if gs.golems.projects[gs.level_index].complete do break
+	}
+	testing.expect(t,gs.golems.projects[gs.level_index].complete,"the crew should construct the Hearth from stored materials")
+	testing.expect_value(t,get_tile(&gs.world,int(anchor.x),int(anchor.y)),Tile_Type.Clay_Hearth)
+	testing.expect_value(t,barrel_total(b),0)
+}
+
+@(test)
+broken_golem_is_recalled_and_repaired :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.player.equipment[.Weapon]=.Command_Wand
+	gs.player.pos={90,50}
+	g:=&gs.golems.data[0]
+	g^={status=.Broken,level=gs.level_index,pos={91,50},hp=0,carry=.Stone_Block,project_cell=-1}
+	golem_recall(gs,0)
+	testing.expect_value(t,g.status,Golem_Status.Carried)
+	testing.expect_value(t,inventory_count(&gs.player.inventory,.Stone_Block),1)
+	inventory_insert(&gs.player.inventory,.Clay,2)
+	golem_hearth_use(gs)
+	testing.expect_value(t,g.hp,GOLEM_HP)
+	testing.expect_value(t,inventory_count(&gs.player.inventory,.Clay),0)
+}
+
+@(test)
+world_anchor_preserves_a_deployed_dimension_crew :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.level_index=LEVEL_DIMENSION
+	gs.levels.generated[LEVEL_DIMENSION]=true
+	gs.golems.data[0]={status=.Deployed,level=LEVEL_DIMENSION,hp=GOLEM_HP,project_cell=-1}
+	testing.expect(t,!dimension_world_anchored(gs),"a loose crew does not anchor an ephemeral world")
+	set_tile(&gs.world,20,20,.World_Anchor)
+	testing.expect(t,dimension_world_anchored(gs),"the monument should anchor the active dimension")
+}
+
 

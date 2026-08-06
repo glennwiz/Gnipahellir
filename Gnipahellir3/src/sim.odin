@@ -38,6 +38,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Tree_Grower = tick_grower,
     .Flower_Bed  = tick_flower_bed,
     .Silo        = tick_silo,
+    .Golem_Depot = tick_golem_depot,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
@@ -99,8 +100,10 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     // slots, skipping the 99-cap tray.
     out_silo := silo_adjacent(gs, x, y)
     if out_silo != nil && !silo_has_room_for(out_silo, rule.bar) do out_silo = nil
+    out_depot := golem_depot_adjacent(gs, x, y)
+    if out_depot != nil && !golem_depot_has_room(out_depot, rule.bar) do out_depot = nil
 
-    tray_ok := out_silo != nil ||
+    tray_ok := out_silo != nil || out_depot != nil ||
                sd.store_count == 0 ||
                (sd.store_item == rule.bar && int(sd.store_count) < MAX_STACK)
     if !tray_ok {
@@ -117,6 +120,8 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     if sd.in_count == 0 do sd.in_item = .None
     if out_silo != nil {
         silo_add(out_silo, rule.bar, 1)
+    } else if out_depot != nil {
+        _ = golem_depot_add(out_depot, rule.bar, 1)
     } else {
         sd.store_item  = rule.bar
         sd.store_count += 1

@@ -2,6 +2,31 @@ package game
 
 import rl "vendor:raylib"
 
+GOLEM_ZONE_DRAG_THRESHOLD :: f32(6)
+
+golem_zone_drag_ready :: proc(start,now:[2]f32) -> bool {
+	dx,dy:=now.x-start.x,now.y-start.y
+	return dx*dx+dy*dy>=GOLEM_ZONE_DRAG_THRESHOLD*GOLEM_ZONE_DRAG_THRESHOLD
+}
+
+// Rasterize between sampled mouse positions so a fast sweep or distant zoom
+// cannot leave holes in a painted tunnel.
+golem_queue_paint_line :: proc(gs:^Game_State,a,b:[2]i32,mark:bool) {
+	x0,y0,x1,y1:=a.x,a.y,b.x,b.y
+	dx:=abs(x1-x0); sx:=i32(1) if x0<x1 else -1
+	dy:=-abs(y1-y0); sy:=i32(1) if y0<y1 else -1
+	err:=dx+dy
+	for {
+		if in_bounds(int(x0),int(y0)) {
+			eq_push(&gs.events,Event{type=.Golem_Mark if mark else .Golem_Unmark,tile={x0,y0}})
+		}
+		if x0==x1 && y0==y1 do break
+		e2:=2*err
+		if e2>=dy {err+=dy; x0+=sx}
+		if e2<=dx {err+=dx; y0+=sy}
+	}
+}
+
 // Wheel zoom request. Capture the world point beneath the cursor so
 // update_camera can preserve it throughout the eased zoom.
 request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32) {
@@ -131,6 +156,15 @@ update_input :: proc(gs: ^Game_State) {
     bind := gs.bindings
     shift_down := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
     world_mouse := !cursor_over_ui(gs) && gs.ui.drag_item == .None
+    command_active := equipped_command_wand(gs) != .None
+	if !command_active {
+		gs.ui.golem_zone_press=false
+		gs.ui.golem_zone_drag=false
+	}
+	if command_active && shift_down {
+		gs.ui.golem_zone_press=false
+		gs.ui.golem_zone_drag=false
+	}
     inp.move_left  = rl.IsKeyDown(bind[.Move_Left])  || rl.IsKeyDown(.LEFT)
     inp.move_right = rl.IsKeyDown(bind[.Move_Right]) || rl.IsKeyDown(.RIGHT)
     inp.jump       = rl.IsKeyPressed(bind[.Jump]) || rl.IsKeyPressed(.UP) || rl.IsKeyPressed(.SPACE)
@@ -138,6 +172,11 @@ update_input :: proc(gs: ^Game_State) {
     inp.attack     = rl.IsMouseButtonPressed(.LEFT) && world_mouse && !shift_down
     inp.reclaim    = rl.IsMouseButtonDown(.LEFT) && world_mouse && shift_down
     inp.interact   = rl.IsKeyPressed(bind[.Interact])
+    if command_active {
+        inp.mine = false
+        inp.attack = false
+        inp.reclaim = false
+    }
 
     // Player-built equipment always wins over mining. Normal click uses it;
     // Shift+hold is handled separately by update_reclaim.
@@ -199,16 +238,81 @@ update_input :: proc(gs: ^Game_State) {
         if gs.ui.show_inventory && !gs.ui.show_crafting do place_bag_centered(gs)
     }
 
-    // A normal click uses the exact equipment under the cursor. Shift reserves
-    // the press for the deliberate reclaim hold instead.
-    if rl.IsMouseButtonPressed(.LEFT) && world_mouse && !shift_down {
-        if is_blueprint_chest(hover_t) {
+    // The command-wand strip chooses a monument plan; selecting the active
+    // plan again returns the wand to Gather-zone painting.
+    if command_active && rl.IsMouseButtonPressed(.LEFT) {
+        if plan := golem_plan_button_at_cursor(gs); plan != .None {
+            gs.ui.golem_plan = .None if gs.ui.golem_plan == plan else plan
+        }
+    }
+
+    // Machines get the exact tile click; the golem uses its visible padded
+    // body. Empty world only arms a zone gesture—it does not alter the order
+    // unless the cursor subsequently crosses the deliberate drag threshold.
+    if rl.IsMouseButtonPressed(.LEFT) && world_mouse {
+		if command_active {
+			gs.ui.golem_zone_press=false
+			gs.ui.golem_zone_drag=false
+		}
+        if !shift_down && is_blueprint_chest(hover_t) {
             // Queue this like barrel interaction so the newly opened window
             // cannot consume the same mouse press that clicked the world chest.
             eq_push(&gs.events, Event{type = .Barrel_Interact, tile = inp.mouse_tile})
-        } else if is_structure_tile[hover_t] {
+        } else if !shift_down && is_structure_tile[hover_t] {
             eq_push(&gs.events, Event{type = .Structure_Interact, tile = inp.mouse_tile})
+		} else if gid:=golem_at_world_point(gs,inp.mouse_world); command_active && gid>=0 {
+			eq_push(&gs.events,Event{
+				type=.Golem_Recall if shift_down else .Golem_Toggle,
+				payload={int_val=i32(gid)},
+			})
+        } else if command_active && !shift_down {
+            if gs.ui.golem_plan != .None {
+                eq_push(&gs.events, Event{type = .Golem_Project, tile = inp.mouse_tile,
+                    payload = {int_val = i32(gs.ui.golem_plan)}})
+            } else {
+				gs.ui.golem_zone_press = true
+                gs.ui.golem_zone_start = inp.mouse_tile
+				gs.ui.golem_zone_press_screen=inp.mouse_screen
+            }
         }
+    }
+
+	if command_active && gs.ui.golem_zone_press && rl.IsMouseButtonDown(.LEFT) &&
+	   golem_zone_drag_ready(gs.ui.golem_zone_press_screen,inp.mouse_screen) {
+		gs.ui.golem_zone_drag=true
+	}
+	if gs.ui.golem_zone_press && rl.IsMouseButtonReleased(.LEFT) {
+		if command_active && gs.ui.golem_zone_drag && world_mouse && inp.mouse_tile!=gs.ui.golem_zone_start {
+			a:=gs.ui.golem_zone_start
+			packed:=u32(a.x)|(u32(a.y)<<16)
+			eq_push(&gs.events,Event{type=.Golem_Zone,tile=inp.mouse_tile,
+				payload={int_val=i32(packed)}})
+		}
+		gs.ui.golem_zone_press=false
+		gs.ui.golem_zone_drag=false
+	}
+
+	// Precision excavation brush. Shift keeps normal rectangle painting out of
+	// the way; left tags blocks and right erases tags. A direct Shift-click on a
+	// golem remains Recall and is deliberately not also painted beneath it.
+	paint_button:=i8(0)
+	if rl.IsMouseButtonDown(.LEFT) do paint_button=1
+	if rl.IsMouseButtonDown(.RIGHT) do paint_button=2
+	if command_active && shift_down && world_mouse && paint_button!=0 {
+		left_on_golem:=paint_button==1 && golem_at_world_point(gs,inp.mouse_world)>=0
+		if !left_on_golem && (inp.golem_paint_button!=paint_button || inp.golem_paint_last!=inp.mouse_tile) {
+			start:=inp.mouse_tile
+			if inp.golem_paint_button==paint_button do start=inp.golem_paint_last
+			golem_queue_paint_line(gs,start,inp.mouse_tile,paint_button==1)
+			inp.golem_paint_last=inp.mouse_tile
+		}
+		inp.golem_paint_button=paint_button
+	} else {
+		inp.golem_paint_button=0
+	}
+
+    if command_active && rl.IsKeyPressed(bind[.Golem_Crew]) {
+        eq_push(&gs.events, Event{type = .Golem_Crew_Toggle})
     }
 
     // UI toggles. TAB with any window open sweeps them all shut (like ESC);
@@ -441,7 +545,11 @@ update_input :: proc(gs: ^Game_State) {
     // Right-click in the open bag equips the item; on an equip box, unequips.
     if rl.IsMouseButtonPressed(.RIGHT) && gs.ui.show_inventory {
         if slot := slot_at_cursor(gs); slot >= 0 {
-            eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(slot)}})
+            if gs.player.inventory.slots[slot].item == .Clay_Golem {
+                eq_push(&gs.events, Event{type = .Golem_Load, payload = {int_val = i32(slot)}})
+            } else {
+                eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(slot)}})
+            }
         } else if es := equip_slot_at_cursor(gs); es != .None {
             eq_push(&gs.events, Event{type = .Unequip_Request, payload = {int_val = i32(es)}})
         }
@@ -452,7 +560,9 @@ update_input :: proc(gs: ^Game_State) {
     // stack hits zero).  Fires on a fresh press or when the cursor crosses into a
     // new tile, so holding still doesn't re-fire (which would spam the
     // special-item rejection toasts and churn the event queue).
-    if rl.IsMouseButtonDown(.RIGHT) && !cursor_over_ui(gs) {
+    if command_active && !shift_down && rl.IsMouseButtonPressed(.RIGHT) && !cursor_over_ui(gs) {
+        eq_push(&gs.events, Event{type = .Golem_Deploy, tile = inp.mouse_tile})
+    } else if !command_active && rl.IsMouseButtonDown(.RIGHT) && !cursor_over_ui(gs) {
         if rl.IsMouseButtonPressed(.RIGHT) || inp.mouse_tile != inp.place_last {
             eq_push(&gs.events, Event{type = .Place_Request, tile = inp.mouse_tile})
             inp.place_last = inp.mouse_tile
@@ -487,6 +597,12 @@ update_input :: proc(gs: ^Game_State) {
             inp.mine   = false  // the stamp click must not also chip or swing
             inp.attack = false
         }
+		if gs.debug.place_golem && rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) {
+			_ = debug_golem_deploy(gs,inp.mouse_tile)
+			gs.debug.place_golem=false
+			inp.mine=false
+			inp.attack=false
+		}
 
         // Armed altar stamp (F2 menu): the next world click raises the tier's
         // full sky structure — foundation and capstone — at the clicked tile.
@@ -509,16 +625,30 @@ update_input :: proc(gs: ^Game_State) {
             case 6: gs.player.mana = gs.player.mana_max
             case 7:
                 gs.debug.place_tile = .Dimension_Spawner
+				gs.debug.place_golem = false
                 gs.debug.menu_open  = false
                 notify(gs, "Debug: click a tile to stamp the Metal spawner")
             case 8:
                 gs.debug.place_tile = .Dimension_Spawner_Gold
+				gs.debug.place_golem = false
                 gs.debug.menu_open  = false
                 notify(gs, "Debug: click a tile to stamp the Gold spawner")
             case 9:
                 inventory_insert(&gs.player.inventory, .Auto_Miner, 1)
                 notify(gs, "Debug: Auto-Miner in the bag - place it inside a dimension")
             case 10:
+                if inventory_insert(&gs.player.inventory,.Command_Wand,1) {
+                    notify(gs,"Debug: Clay Command Wand added to the bag")
+                } else {
+                    notify(gs,"Debug: bag full - Command Wand not added")
+                }
+            case 11:
+				gs.debug.place_tile=.Air
+				gs.debug.place_tier=0
+				gs.debug.place_golem=true
+				gs.debug.menu_open=false
+				notify(gs,"Debug: click an open grounded tile to place a Clay Golem")
+            case 12:
                 gs.debug.life = !gs.debug.life
                 if gs.debug.life {
                     gs.debug.life_timer = 0
@@ -534,14 +664,17 @@ update_input :: proc(gs: ^Game_State) {
             switch r := altar_menu_row_at_cursor(gs); r {
             case 0:
                 gs.debug.place_tile = .Sky_Altar
+				gs.debug.place_golem = false
                 gs.debug.altar_menu = false
                 notify(gs, "Debug: click a tile to stamp the Sky Altar")
             case 1:
                 gs.debug.place_tile = .Rune_Altar
+				gs.debug.place_golem = false
                 gs.debug.altar_menu = false
                 notify(gs, "Debug: click a tile to stamp the Rune Altar")
             case 2, 3, 4:
                 gs.debug.place_tier = r - 1  // tier + 1
+				gs.debug.place_golem = false
                 gs.debug.altar_menu = false
                 notify(gs, "Debug: click a tile to raise the %s", structure_templates[r-2].name)
             case 5:

@@ -93,6 +93,11 @@ item_table := [Item]Item_Info{
     .Flower_Bed        = { "Flower Bed",        {120, 90,  50,  255}, .Flower_Bed },
     .Barrel            = { "Barrel",            {150, 100, 55,  255}, .Barrel },
     .Void_Charm        = { "Void Charm",        {105, 55,  150, 255}, .Air },
+    .Clay              = { "Clay",              {166, 105, 72,  255}, .Clay },
+    .Command_Wand      = { "Clay Command Wand", {190, 125, 80,  255}, .Air },
+    .Command_Wand_Emerald = { "Emerald Command Wand", {70, 220, 135, 255}, .Air },
+    .Command_Wand_Hel  = { "Hel Command Wand",  {225, 55,  85,  255}, .Air },
+    .Clay_Golem        = { "Clay Golem",        {178, 116, 78,  255}, .Air },
 }
 
 is_blueprint :: proc(it: Item) -> bool {
@@ -117,6 +122,9 @@ item_equip_slot := #partial [Item]Equip_Slot{
     .Mine_Wand_Silver = .Weapon,
     .Mine_Wand_Gold   = .Weapon,
     .Mine_Wand_Runic  = .Weapon,
+    .Command_Wand         = .Weapon,
+    .Command_Wand_Emerald = .Weapon,
+    .Command_Wand_Hel     = .Weapon,
     .Aether_Charm = .Charm,
     .Void_Charm   = .Charm,
     .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,  .Runic_Helm       = .Head,

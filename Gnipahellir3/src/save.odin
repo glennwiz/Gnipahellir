@@ -13,14 +13,59 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(21)  // v21: three charm slots; v20: void slot; v19: pickaxe Tool slot
+SAVE_VERSION :: i32(23)  // v23: saved golem packs and vertical recovery state
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 3_160_512
+SAVE_DATA_EXPECTED_SIZE :: 3_171_464
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
+
+// One-version migration keeps the active playtest run intact. v22 had the
+// same world/progression layout but each golem ended at project_cell.
+Golem_v22 :: struct {
+    status:       Golem_Status,
+    level:        int,
+    pos:          [2]f32,
+    vel:          [2]f32,
+    hp:           u8,
+    mode:         Golem_Mode,
+    job:          Golem_Job,
+    carry:        Item,
+    target:       [2]i32,
+    has_target:   bool,
+    path:         Nav_Path,
+    mine_timer:   f32,
+    hazard_timer: f32,
+    replan_timer: f32,
+    facing:       i8,
+    grounded:     bool,
+    project_cell: i16,
+}
+
+Golem_System_v22 :: struct {
+    data:     [MAX_GOLEMS]Golem_v22,
+    work:     [NUM_LEVELS]Golem_Work_Order,
+    projects: [NUM_LEVELS]Golem_Project,
+    depots:   [MAX_GOLEM_DEPOTS]Golem_Depot_State,
+}
+
+Save_Data_v22 :: struct {
+    version:      i32,
+    level_index:  int,
+    world:        World_Grid,
+    levels:       Level_Store,
+    player:       Player,
+    enemies:      Enemy_Store,
+    golems:       Golem_System_v22,
+    sim:          Sim_State,
+    progression:  Progression_State,
+    dimension:    Dimension_State,
+    elapsed_time: f32,
+    frame:        u64,
+}
+#assert(size_of(Save_Data_v22) == 3_171_224)
 
 Save_Data :: struct {
     version:      i32,
@@ -29,6 +74,7 @@ Save_Data :: struct {
     levels:       Level_Store,   // stashed non-active levels
     player:       Player,
     enemies:      Enemy_Store,   // builder goals/dens/carry ride along — Enemy is flat
+    golems:       Golem_System,
     sim:          Sim_State,
     progression:  Progression_State,
     dimension:    Dimension_State,
@@ -46,6 +92,7 @@ save_game :: proc(gs: ^Game_State) -> bool {
     sd.levels       = gs.levels
     sd.player       = gs.player
     sd.enemies      = gs.enemies
+    sd.golems       = gs.golems
     sd.sim          = gs.sim
     sd.progression  = gs.progression
     sd.dimension    = gs.dimension
@@ -59,6 +106,39 @@ load_game :: proc(gs: ^Game_State) -> bool {
     data, err := os.read_entire_file_from_path(SAVE_FILE, context.allocator)
     if err != nil do return false
     defer delete(data)
+    if len(data) == size_of(Save_Data_v22) {
+        old := new(Save_Data_v22)
+        defer free(old)
+        mem.copy(old, raw_data(data), size_of(Save_Data_v22))
+        if old.version != 22 || old.player.dead do return false
+
+        gs.level_index = old.level_index
+        gs.world = old.world
+        gs.levels = old.levels
+        gs.player = old.player
+        gs.enemies = old.enemies
+        gs.golems.work = old.golems.work
+        gs.golems.projects = old.golems.projects
+        gs.golems.depots = old.golems.depots
+        for &g, i in gs.golems.data {
+            o := old.golems.data[i]
+            g.status=o.status; g.level=o.level; g.pos=o.pos; g.vel=o.vel; g.hp=o.hp
+            g.mode=o.mode; g.job=o.job; g.carry=o.carry; g.target=o.target
+            g.has_target=o.has_target; g.path=o.path; g.mine_timer=o.mine_timer
+            g.hazard_timer=o.hazard_timer; g.replan_timer=o.replan_timer
+            g.facing=o.facing; g.grounded=o.grounded; g.project_cell=o.project_cell
+        }
+        gs.sim = old.sim
+        gs.progression = old.progression
+        gs.dimension = old.dimension
+        gs.elapsed_time = old.elapsed_time
+        gs.frame = old.frame
+        seal_loose_blueprints(&gs.world)
+        for i in 0 ..< len(gs.levels.worlds) do if gs.levels.generated[i] do seal_loose_blueprints(&gs.levels.worlds[i])
+        log_action(gs, "run migrated from save v22")
+        gs.save_dirty = true
+        return true
+    }
     if len(data) != size_of(Save_Data) do return false
 
     sd := new(Save_Data)
@@ -73,6 +153,7 @@ load_game :: proc(gs: ^Game_State) -> bool {
     gs.levels       = sd.levels
     gs.player       = sd.player
     gs.enemies      = sd.enemies
+    gs.golems       = sd.golems
     gs.sim          = sd.sim
     gs.progression  = sd.progression
     gs.dimension    = sd.dimension

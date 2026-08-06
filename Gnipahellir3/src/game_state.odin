@@ -29,6 +29,8 @@ World_Grid :: struct {
 
 // ─── Entity Storage ───────────────────────────────────────────────────────────
 
+// Saved as u8 (Enemy.kind, memcpy'd into Save_Data) — append-only, same rule
+// as the enums in types.odin: never reorder or remove a value, only add.
 Enemy_Kind :: enum u8 {
     Garm,
     Undead,
@@ -83,6 +85,7 @@ Builder_State :: struct {
 }
 
 // Boss phases escalate with lost hp; order matters (a phase never regresses).
+// Also saved as u8 (Garm_State.phase) — append-only for the same reason.
 Garm_Phase :: enum u8 {
     Chase,   // full hp: hunt + fireballs only
     Column,  // <= GARM_PHASE2_HP: raises the center column
@@ -115,6 +118,90 @@ Enemy_Store :: struct {
     data:   [MAX_ENEMIES]Enemy,
     active: [MAX_ENEMIES]bool,   // enemy_alloc scans this linearly
     count:  int,
+}
+
+// ─── Friendly Clay Golems ───────────────────────────────────────────────────
+
+GOLEM_PROJECT_CELLS :: 128
+MAX_GOLEM_DEPOTS     :: 8
+GOLEM_DEPOT_SLOTS    :: 12
+GOLEM_PACK_CAP       :: 8
+GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
+
+Golem :: struct {
+    status:       Golem_Status,
+    level:        int,
+    pos:          [2]f32,
+    vel:          [2]f32,
+    hp:           u8,
+    mode:         Golem_Mode,
+    job:          Golem_Job,
+    carry:        Item,
+    target:       [2]i32,
+    has_target:   bool,
+    path:         Nav_Path,
+    mine_timer:   f32,
+    hazard_timer: f32,
+    replan_timer: f32,
+    facing:       i8,
+    grounded:     bool,
+    project_cell: i16, // -1 when no build cell is reserved
+    pack:          [GOLEM_PACK_CAP]Item, // mined cargo and real bridge/pillar material
+    recovering:    bool,
+    recover_from:  i32,
+}
+
+Golem_Work_Order :: struct {
+    active: bool,
+    min:    [2]i32,
+    max:    [2]i32,
+}
+
+Golem_Project :: struct {
+    active:   bool,
+    complete: bool,
+    plan:     Golem_Plan,
+    level:    int,
+    anchor:   [2]i32,
+    reserved: [GOLEM_PROJECT_CELLS]u8, // 0 = free, otherwise golem slot + 1
+}
+
+Golem_Depot_State :: struct {
+    active: bool,
+    level:  int,
+    tile:   [2]i32,
+    slots:  [GOLEM_DEPOT_SLOTS]Silo_Slot,
+}
+
+Golem_System :: struct {
+    data:     [MAX_GOLEMS]Golem,
+    work:     [NUM_LEVELS]Golem_Work_Order,
+    projects: [NUM_LEVELS]Golem_Project,
+    depots:   [MAX_GOLEM_DEPOTS]Golem_Depot_State,
+}
+
+// Short-lived ownership for freshly placed navigation masonry. This stays
+// outside Golem_System because it is transient coordination state, not save
+// data; loading a run simply resumes without an obsolete three-second lock.
+Golem_Block_Grace :: struct {
+    tile:       [2]i32,
+    level:      int,
+    owner:      i16,
+    expires_at: f32,
+}
+
+Golem_Grace_State :: struct {
+    blocks: [GOLEM_BLOCK_GRACE_CAP]Golem_Block_Grace,
+}
+
+// Transient acceleration index over saved Tile_Flag.Golem_Marked cells. It is
+// rebuilt lazily after loading or changing level, so Save_Data stays compatible.
+Golem_Mark_Index :: struct {
+    valid: bool,
+    level: int,
+    count: int,
+    min:   [2]i32,
+    max:   [2]i32,
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────
@@ -237,12 +324,15 @@ Floating_Text_Store :: struct {
 //  save caught mid-fall drops the airborne blocks (a rare, cosmetic loss).
 
 Falling_Block :: struct {
-    tile:     Tile_Type,
-    x:        i32,   // column (never changes — blocks fall straight down)
-    y:        f32,   // tile-space top; fractional while sliding
-    source_x: i32,   // original grid cell; preserves the static texture variant
-    source_y: i32,   // while live Y moves through fractional rows
-    active:   bool,
+    tile:             Tile_Type,
+    x:                i32,   // column (never changes — blocks fall straight down)
+    y:                f32,   // tile-space top; fractional while sliding
+    source_x:         i32,   // original grid cell; preserves the static texture variant
+    source_y:         i32,   // while live Y moves through fractional rows
+    golem_placed:     bool,  // ownership follows settling navigation masonry
+    golem_owner:      i16,   // -1 once its placement grace has already expired
+    grace_expires_at: f32,
+    active:           bool,
 }
 
 Gravity_State :: struct {
@@ -275,6 +365,8 @@ Input_State :: struct {
     mouse_world:  [2]f32,   // world-pixel space (camera-inverse) — mining/placement
     mouse_screen: [2]f32,   // virtual-screen space — UI hit-testing
     place_last:   [2]i32,   // last tile a hold-to-place fired on — dedupes the sweep
+    golem_paint_last:   [2]i32,
+    golem_paint_button: i8, // 0 none, 1 mark, 2 erase; dedupes held wand paint
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
@@ -313,6 +405,11 @@ UI_State :: struct {
     focus_tile:      [2]i32,  // its tile — anchor for the highlight and prompt
     hover_tile:      [2]i32,
     tooltip_text:    [64]u8,
+    golem_plan:       Golem_Plan, // selected command-wand construction ghost
+	golem_zone_press: bool,       // empty-world press waiting to become a deliberate drag
+    golem_zone_drag:  bool,
+    golem_zone_start: [2]i32,
+	golem_zone_press_screen: [2]f32,
 }
 
 // ─── Notifications (timed on-screen popups) ───────────────────────────────────
@@ -338,6 +435,7 @@ Debug_State :: struct {
     fly:        bool,
     ultra_wand: bool,   // cheat: 13-tile mining wand, free, explosive impact
     place_tile: Tile_Type,  // armed stamp: next world click sets this tile (.Air = off)
+	place_golem: bool,    // armed stamp: next world click deploys a Clay Golem
     altar_menu: bool,   // F2: altar/ritual debug menu
     place_tier: int,    // armed altar stamp: next click raises this tier's sky structure (0 = off, else tier+1)
     life:       bool,   // easter egg: Conway's Game of Life eats the world (life.odin)
@@ -435,6 +533,9 @@ Game_State :: struct {
 
     player:      Player,
     enemies:     Enemy_Store,
+    golems:      Golem_System,
+    golem_grace: Golem_Grace_State,
+    golem_marks: Golem_Mark_Index,
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,
@@ -497,6 +598,7 @@ default_bindings := [Action]rl.KeyboardKey{
     .Interact   = .E,
     .Inventory  = .TAB,
     .Blueprint  = .B,
+    .Golem_Crew = .R,
 }
 
 // Seed 0 reproduces the original fixed world — used for the boot title screen

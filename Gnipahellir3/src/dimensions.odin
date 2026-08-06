@@ -13,6 +13,8 @@ package game
 //  from whichever level the spawner stands on.  The seed derives from the
 //  spawner's tile, so one spawner always opens the same world layout.
 
+// Saved as u8 (Dimension_State.kind, memcpy'd into Save_Data) — append-only,
+// never reorder or remove a value.
 Dimension_Kind :: enum u8 {
     Metal,
     Gold,
@@ -73,9 +75,9 @@ DIM_SPAWN_POS  :: [2]f32{8, 15 - PLAYER_H}
 dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) {
     seed := whash(u32(spawner.x) * 2654435761 + u32(spawner.y) * 97)
 
-    if gs.dimension.miner.active {
+    if dimension_world_anchored(gs) {
         if seed != gs.dimension.seed || kind != gs.dimension.kind {
-            notify(gs, "The Auto-Miner still gnaws at another world - reclaim it first")
+            notify(gs, "Another manufactured world is still anchored - release it first")
             return
         }
         // Re-entering the anchored world: keep the saved grid as-is.
@@ -83,6 +85,9 @@ dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) 
         gs.levels.generated[LEVEL_DIMENSION] = false
         gs.dimension.kind = kind
         gs.dimension.seed = seed
+        gs.golems.work[LEVEL_DIMENSION] = {}
+        gs.golems.projects[LEVEL_DIMENSION] = {}
+        for &d in gs.golems.depots do if d.active && d.level == LEVEL_DIMENSION do d = {}
     }
     gs.dimension.return_level = gs.level_index
     gs.dimension.return_pos   = gs.player.pos
@@ -99,6 +104,10 @@ dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) 
 
 // Step back through the dimension's gate to wherever the spawner stands.
 dimension_exit :: proc(gs: ^Game_State) {
+    if golem_deployed_count(gs, LEVEL_DIMENSION) > 0 && !dimension_world_anchored(gs) {
+        notify(gs, "Recall the clay crew or build a World Anchor before leaving")
+        return
+    }
     p := Portal{
         tiles      = DIM_GATE_TILES,
         dest_level = gs.dimension.return_level,

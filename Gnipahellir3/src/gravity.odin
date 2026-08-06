@@ -53,6 +53,13 @@ gravity_blocked :: proc(w: ^World_Grid, x, y: int) -> bool {
     return t != .Air && t != .Void
 }
 
+gravity_golem_occupies :: proc(gs:^Game_State, x,y:int) -> bool {
+	for &g in gs.golems.data {
+		if g.status==.Deployed && g.level==gs.level_index && golem_overlaps_cell(&g,x,y) do return true
+	}
+	return false
+}
+
 // What an emptied cell becomes: open air above the surface line / in the sky,
 // void underground — mirroring handle_tile_mined so tunnels stay tunnels.
 gravity_open_tile :: proc(gs: ^Game_State, y: int) -> Tile_Type {
@@ -73,16 +80,23 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
     for &b in gs.gravity.blocks {
         if b.active do continue
         idx := grid_idx(int(x), int(y))
+        golem_placed := .Golem_Placed in gs.world.tile_flags[idx]
+        owner, grace_expiry, has_grace := golem_block_grace_details(gs,{x,y})
+        if !has_grace do owner = -1
         b = Falling_Block{
             tile = t,
             x = x,
             y = f32(y),
             source_x = x,
             source_y = y,
+            golem_placed = golem_placed,
+            golem_owner = i16(owner),
+            grace_expires_at = grace_expiry,
             active = true,
         }
         set_tile(&gs.world, int(x), int(y), gravity_open_tile(gs, int(y)))
-        gs.world.tile_flags[idx] -= {.Placed}  // the block left this cell
+        golem_remove_block_mark(gs,{x,y})
+        gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed}  // the block left this cell
         return
     }
 }
@@ -163,14 +177,23 @@ update_gravity :: proc(gs: ^Game_State) {
 
         ny := b.y + FALL_SPEED * dt
         if ny >= rest {
-            if .Settles in terrain_table[b.tile].flags {
+            occupied:=gravity_golem_occupies(gs,int(b.x),r-1)
+            if .Settles in terrain_table[b.tile].flags && !occupied {
                 // Sand-style: the block becomes a tile again where it lands.  r
                 // is recomputed each frame off the live grid, and stacked fallers
                 // keep their row separation as they drop, so a lower block always
                 // settles before the one above reaches it — the tiles stack.  Re-
                 // mark .Placed so the settled block is still a faller (stays sand).
                 set_tile(w, int(b.x), r - 1, b.tile)
-                w.tile_flags[grid_idx(int(b.x), r - 1)] += {.Placed}
+                settled := [2]i32{b.x,i32(r-1)}
+                settled_idx := grid_idx(int(settled.x),int(settled.y))
+                w.tile_flags[settled_idx] += {.Placed}
+                if b.golem_placed {
+                    w.tile_flags[settled_idx] += {.Golem_Placed}
+                    if b.golem_owner >= 0 && b.grace_expires_at > gs.elapsed_time {
+                        golem_register_block_grace_until(gs,int(b.golem_owner),settled,b.grace_expires_at)
+                    }
+                }
             } else if drop := terrain_table[b.tile].drop_item; drop != .None {
                 spawn_ground_item(w, {b.x, i32(r - 1)}, drop, 1)   // crumbles to a pile
             }

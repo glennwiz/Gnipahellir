@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take:
+        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark:
             gs.save_dirty = true
         }
 
@@ -150,6 +150,9 @@ process_events :: proc(gs: ^Game_State) {
             if is_wand(crafted) && !gs.wand_hint_shown {
                 gs.wand_hint_shown = true
                 notify(gs, "Equip the wand (right-click it in the bag) to mine at range")
+            }
+            if crafted == .Command_Wand {
+                notify(gs, "Equip the Command Wand; right-click crafted golems to bind them")
             }
 
         case .Station_Interact:
@@ -331,6 +334,41 @@ process_events :: proc(gs: ^Game_State) {
         case .Void_Take:
             void_slot_take(gs, int(e.tile.x))
 
+        case .Golem_Load:
+            golem_load(gs, int(e.payload.int_val))
+
+        case .Golem_Deploy:
+            golem_deploy(gs, e.tile)
+
+        case .Golem_Toggle:
+            golem_toggle(gs, int(e.payload.int_val))
+
+        case .Golem_Recall:
+            golem_recall(gs, int(e.payload.int_val))
+
+        case .Golem_Crew_Toggle:
+            golem_crew_toggle(gs)
+
+        case .Golem_Zone:
+            packed := u32(e.payload.int_val)
+            start := [2]i32{i32(packed & 0xffff), i32((packed >> 16) & 0xffff)}
+            golem_set_zone(gs, start, e.tile)
+
+        case .Golem_Project:
+            golem_project_start(gs, Golem_Plan(e.payload.int_val), e.tile)
+
+        case .Golem_Hearth_Use:
+            golem_hearth_use(gs)
+
+        case .Golem_Damaged:
+            golem_damage(gs, int(e.tile.x), int(e.payload.int_val))
+
+        case .Golem_Mark:
+            golem_set_block_mark(gs,e.tile,true)
+
+        case .Golem_Unmark:
+            golem_set_block_mark(gs,e.tile,false)
+
         case .Structure_Interact:
             structure_interact(gs, e.tile)
 
@@ -456,7 +494,8 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         fill = .Air
     }
     set_tile(&gs.world, x, y, fill)
-    gs.world.tile_flags[idx] -= {.Placed}   // the placed block is gone from this cell
+    golem_remove_block_mark(gs,e.tile)
+    gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed} // the placed block is gone
     audio_play(&gs.audio, .Mine)
 
     // Cutting this tile may leave a tree (or a wood/leaf build) hanging — drop
@@ -508,7 +547,8 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     if old_tile == .Door {
         if px, py, ok := door_partner(&gs.world, x, y); ok {
             pidx := grid_idx(px, py)
-            gs.world.tile_flags[pidx] -= {.Placed}
+            golem_remove_block_mark(gs,{i32(px),i32(py)})
+            gs.world.tile_flags[pidx] -= {.Placed,.Golem_Placed}
             set_tile(&gs.world, px, py, gravity_open_tile(gs, py))
             gravity_check_removed(gs, px, py)
         }
