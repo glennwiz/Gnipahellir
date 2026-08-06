@@ -543,7 +543,7 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
             // the arena carve wipes any inside the room itself.
             case depth_tier == 2 && y > ARENA_Y0 - 10 && (gh >> 10) % 1000 < 4:
                 set_tile(w, x, y, .Hel_Gem_Ore)
-            case depth_tier == 1 && depth > 60 && gh % 1000 < 3:
+            case depth_tier == 1 && depth > 60 && gh % 1000 < 6:
                 set_tile(w, x, y, .Jade_Ore)
             case depth_tier == 2 && depth > 60 && gh % 1000 < 3:
                 set_tile(w, x, y, .Diamond_Ore)

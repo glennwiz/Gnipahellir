@@ -165,10 +165,12 @@ recipe_unlock := #partial [Item]Item{
     .Sword       = .Iron_Ore,
     .Mine_Wand   = .Iron_Ore,
     .Iron_Bucket = .Iron_Ore,
-    // Smelted tier — opens once you cast your first bar
+    // Smelted tier — opens once you cast your first bar.  The Jade Ring
+    // shows up here too, ungated by Jade itself, so the recipe card (and its
+    // Jade cost) is the player's cue to go look for the gem.
     .Iron_Helm = .Iron_Bar, .Iron_Chestplate = .Iron_Bar, .Iron_Gauntlets = .Iron_Bar,
     .Iron_Greaves = .Iron_Bar, .Iron_Boots = .Iron_Bar,
-    .Dvergr_Forge = .Iron_Bar, .Silo = .Iron_Bar,
+    .Dvergr_Forge = .Iron_Bar, .Silo = .Iron_Bar, .Jade_Ring = .Iron_Bar,
     // Silver / gold ladders
     .Silver_Sword = .Silver_Bar, .Mine_Wand_Silver = .Silver_Bar,
     .Silver_Helm = .Silver_Bar, .Silver_Chestplate = .Silver_Bar, .Silver_Gauntlets = .Silver_Bar,
@@ -184,7 +186,6 @@ recipe_unlock := #partial [Item]Item{
     .Void_Charm = .Emerald,
     .Command_Wand = .Clay,
     .Clay_Golem   = .Command_Wand,
-    .Jade_Ring    = .Jade,
     // Runic endgame
     .Mine_Wand_Runic = .Runic_Sky_Ore, .Runic_Sword = .Runic_Sky_Ore,
     .Runic_Helm = .Runic_Sky_Ore, .Runic_Chestplate = .Runic_Sky_Ore, .Runic_Gauntlets = .Runic_Sky_Ore,

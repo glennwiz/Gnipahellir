@@ -1822,6 +1822,54 @@ draw_inventory :: proc(gs: ^Game_State) {
 	}
 }
 
+CRAFT_DESC_LINE_H :: i32(14)
+
+// Greedy word-wrap for the crafting detail panel's item description: draws
+// each line left-aligned at x, CRAFT_DESC_LINE_H apart, and returns the y
+// just below the last line so callers can stack more text beneath it.
+// Fixed-buffer, no allocation — descriptions are short hand-authored strings.
+draw_wrapped_text :: proc(text: string, x, y, max_w: i32, font_size: i32, color: rl.Color) -> i32 {
+	cy := y
+	buf: [128]u8
+	blen := 0
+	word_start := 0
+	for i := 0; i <= len(text); i += 1 {
+		if i < len(text) && text[i] != ' ' do continue
+		word := text[word_start:i]
+		word_start = i + 1
+		if len(word) == 0 do continue
+
+		sep := blen > 0 ? 1 : 0
+		trial: [128]u8
+		copy(trial[:], buf[:blen])
+		tn := blen
+		if sep == 1 { trial[tn] = ' '; tn += 1 }
+		copy(trial[tn:], word)
+		tn += len(word)
+		trial[tn] = 0
+		fits := rl.MeasureText(cstring(raw_data(trial[:])), font_size) <= max_w
+
+		if fits || blen == 0 {
+			copy(buf[:], trial[:tn])
+			blen = tn
+			buf[blen] = 0
+		} else {
+			buf[blen] = 0
+			rl.DrawText(cstring(raw_data(buf[:])), x, cy, font_size, color)
+			cy += CRAFT_DESC_LINE_H
+			copy(buf[:], word)
+			blen = len(word)
+			buf[blen] = 0
+		}
+	}
+	if blen > 0 {
+		buf[blen] = 0
+		rl.DrawText(cstring(raw_data(buf[:])), x, cy, font_size, color)
+		cy += CRAFT_DESC_LINE_H
+	}
+	return cy
+}
+
 // A "forge" panel: a grid of recipe cards on the left, and a detail column on
 // the right (big result icon, ingredient have/need rows, a glowing CRAFT
 // button).  Reads craft_selected_recipe for the shown recipe.
@@ -1926,6 +1974,24 @@ draw_crafting :: proc(gs: ^Game_State) {
 		rl.DrawText(hs, detx + CRAFT_DETAIL_W - hw - 8, iy + 4, 12,
 			enough ? rl.Color{110, 210, 110, 255} : rl.Color{225, 90, 80, 255})
 		iy += 28
+	}
+
+	// Description + any passive stat bonuses, filling the gap above CRAFT —
+	// this is the player's cue for what the item actually does (a charm's
+	// effect, a potion's use, an armor piece's bonus).
+	desc_y := iy + 4
+	rl.DrawRectangle(detx, desc_y, CRAFT_DETAIL_W - 4, 1, NORSE_BORDER)
+	desc_y += 8
+	if desc := item_table[r.result].desc; desc != "" {
+		desc_y = draw_wrapped_text(desc, detx, desc_y, CRAFT_DETAIL_W - 8, 11, rl.Color{205, 195, 175, 255})
+	}
+	for stat in Stat {
+		bonus := item_stat_bonus[r.result][stat]
+		if bonus == 0 do continue
+		line: [24]u8
+		fmt.bprintf(line[:23], "+%d %s", bonus, stat_label[stat])
+		rl.DrawText(cstring(raw_data(line[:])), detx, desc_y, 11, rl.Color{110, 210, 110, 255})
+		desc_y += CRAFT_DESC_LINE_H
 	}
 
 	// CRAFT button — glows when craftable, dim otherwise.

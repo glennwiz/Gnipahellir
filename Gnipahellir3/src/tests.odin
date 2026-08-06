@@ -1617,6 +1617,14 @@ recipes_unlock_when_their_material_is_found :: proc(t: ^testing.T) {
 
     // A deeper-tier recipe is still gated.
     testing.expect(t, !gs.progression.recipe_unlocked[.Dvergr_Forge], "forge waits on a smelted bar")
+
+    // The Jade Ring is gated by Iron_Bar too, never by Jade itself — its
+    // recipe card (and Jade cost) is what tells the player to go find one.
+    testing.expect(t, !gs.progression.recipe_unlocked[.Jade_Ring], "jade ring waits on a smelted bar")
+    inventory_insert(&gs.player.inventory, .Iron_Bar, 1)
+    update_recipe_unlocks(gs)
+    testing.expect(t, gs.progression.recipe_unlocked[.Jade_Ring], "iron bar reveals the jade ring")
+    testing.expect(t, visible(gs, .Jade_Ring), "jade ring listed without ever holding jade")
 }
 
 @(test)
