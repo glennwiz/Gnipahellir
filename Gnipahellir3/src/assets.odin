@@ -97,8 +97,10 @@ tile_sprite :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) -> (Tile_Sprite, b
 		return .Lava, true
 	case .Magic_Lava:
 		return .Magic_Lava, true
-	case .Water:
-		return .Water, true
+	// .Water deliberately excluded: its atlas cell is blank (unpainted, near-
+	// fully transparent), which made water tiles invisible wherever the atlas
+	// loaded successfully. Falls through to the flat terrain_table color
+	// instead (draw_tile's Solid style), same as Clay and other atlas-less tiles.
 	}
 	return .Granite, false
 }
