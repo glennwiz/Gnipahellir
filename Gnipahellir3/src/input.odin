@@ -181,7 +181,7 @@ update_input :: proc(gs: ^Game_State) {
     // Player-built equipment always wins over mining. Normal click uses it;
     // Shift+hold is handled separately by update_reclaim.
     hover_t := get_tile(&gs.world, int(inp.mouse_tile.x), int(inp.mouse_tile.y))
-    if is_structure_tile[hover_t] || is_blueprint_chest(hover_t) {
+    if is_structure_tile[hover_t] || is_rune_scroll_chest(hover_t) {
         inp.mine = false
         inp.attack = false
     }
@@ -194,7 +194,7 @@ update_input :: proc(gs: ^Game_State) {
     }
     if gs.ui.show_barrel {
         container_t := get_tile(&gs.world, int(gs.ui.barrel_tile.x), int(gs.ui.barrel_tile.y))
-        if container_t != .Barrel && !is_blueprint_chest(container_t) {
+        if container_t != .Barrel && container_t != .Rune_Coffer && !is_rune_scroll_chest(container_t) {
             gs.ui.show_barrel = false
         }
     }
@@ -238,6 +238,12 @@ update_input :: proc(gs: ^Game_State) {
         if gs.ui.show_inventory && !gs.ui.show_crafting do place_bag_centered(gs)
     }
 
+    // The rune scroll chip beside it: click to toggle the rune scroll overlay —
+    // the same action as the [B] key.
+    if rl.IsMouseButtonPressed(.LEFT) && rs_chip_hovered(gs) && gs.ui.win_drag < 0 && gs.ui.drag_item == .None {
+        gs.ui.show_rune_scroll = !gs.ui.show_rune_scroll
+    }
+
     // The command-wand strip chooses a monument plan; selecting the active
     // plan again returns the wand to Gather-zone painting.
     if command_active && rl.IsMouseButtonPressed(.LEFT) {
@@ -254,7 +260,7 @@ update_input :: proc(gs: ^Game_State) {
 			gs.ui.golem_zone_press=false
 			gs.ui.golem_zone_drag=false
 		}
-        if !shift_down && is_blueprint_chest(hover_t) {
+        if !shift_down && is_rune_scroll_chest(hover_t) {
             // Queue this like barrel interaction so the newly opened window
             // cannot consume the same mouse press that clicked the world chest.
             eq_push(&gs.events, Event{type = .Barrel_Interact, tile = inp.mouse_tile})
@@ -320,10 +326,10 @@ update_input :: proc(gs: ^Game_State) {
     // crafting has no key of its own — it's the panel beside the bag, and the
     // recipe list grows to whatever station is in range.
     if rl.IsKeyPressed(bind[.Inventory]) {
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel {
             gs.ui.show_inventory = false
             gs.ui.show_crafting  = false
-            gs.ui.show_blueprint = false
+            gs.ui.show_rune_scroll = false
             gs.ui.show_smelter   = false
             gs.ui.show_barrel    = false
             gs.ui.drag_item      = .None
@@ -340,8 +346,8 @@ update_input :: proc(gs: ^Game_State) {
             place_craft_pair(gs)   // center the bag+craft pair so nothing spills
         }
     }
-    if rl.IsKeyPressed(bind[.Blueprint]) {
-        gs.ui.show_blueprint = !gs.ui.show_blueprint
+    if rl.IsKeyPressed(bind[.Rune_Scroll]) {
+        gs.ui.show_rune_scroll = !gs.ui.show_rune_scroll
     }
 
     // Slot selection: number keys 1-8 pick the first inventory row; pressing the
@@ -353,11 +359,11 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_blueprint || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_pixel_editor {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_pixel_editor {
             // First ESC sweeps every window closed; the next one opens the menu.
             gs.ui.show_inventory    = false
             gs.ui.show_crafting     = false
-            gs.ui.show_blueprint    = false
+            gs.ui.show_rune_scroll    = false
             gs.ui.show_smelter      = false
             gs.ui.show_barrel       = false
             gs.ui.show_pixel_editor = false
@@ -380,8 +386,8 @@ update_input :: proc(gs: ^Game_State) {
                 } else {
                     gs.player.inventory.selected = slot
                 }
-                if is_blueprint(gs.player.inventory.slots[slot].item) {
-                    gs.ui.show_blueprint = true  // clicking a blueprint opens its overlay
+                if is_rune_scroll(gs.player.inventory.slots[slot].item) {
+                    gs.ui.show_rune_scroll = true  // clicking a rune scroll opens its overlay
                 }
                 // Grabbing a bag stack starts a drag: released on a furnace or
                 // barrel window it feeds/stores; released on the open world it
@@ -602,7 +608,7 @@ update_input :: proc(gs: ^Game_State) {
             if gs.debug.place_tile == .Sky_Altar && gs.level_index == LEVEL_SURFACE {
                 gs.progression.sky_altar_pos = {i32(x), i32(y)}
                 notify(gs, "The Sky Altar rises - a portal opens to the heavens!")
-                spawn_deep_blueprint(gs)
+                spawn_deep_rune_scroll(gs)
             }
             gs.debug.place_tile = .Air
             inp.mine   = false  // the stamp click must not also chip or swing
@@ -724,8 +730,8 @@ update_input :: proc(gs: ^Game_State) {
                 gs.debug.altar_menu = false
                 notify(gs, "Debug: click a tile to raise the %s", structure_templates[r-2].name)
             case 5:
-                for t in 0 ..< MAX_PROGRESSION_TIERS do gs.progression.blueprint_found[t] = true
-                notify(gs, "Debug: all blueprints found")
+                for t in 0 ..< MAX_PROGRESSION_TIERS do gs.progression.rune_scroll_found[t] = true
+                notify(gs, "Debug: all rune scrolls found")
             case 6:
                 debug_complete_next_ritual(gs)
             }

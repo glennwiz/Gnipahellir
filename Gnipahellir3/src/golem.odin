@@ -621,10 +621,6 @@ golem_register_block_grace_until :: proc(gs: ^Game_State, owner: int, tile: [2]i
 	}
 }
 
-golem_register_block_grace :: proc(gs: ^Game_State, owner: int, tile: [2]i32) {
-	golem_register_block_grace_until(gs,owner,tile,gs.elapsed_time+GOLEM_BLOCK_GRACE_TIME)
-}
-
 golem_block_grace_details :: proc(gs: ^Game_State, tile: [2]i32) -> (owner: int, expires_at: f32, ok: bool) {
 	for entry in gs.golem_grace.blocks {
 		if entry.expires_at > gs.elapsed_time && entry.level == gs.level_index && entry.tile == tile {
@@ -738,7 +734,7 @@ golem_find_resource :: proc(gs: ^Game_State, id: int, skipped: [][2]i32) -> ([2]
 		idx := grid_idx(x, y)
 		T := [2]i32{i32(x), i32(y)}
 		if golem_resource_skipped(T, skipped) || golem_target_claimed(gs, id, T) do continue
-		if gs.world.items[idx] != .None && gs.world.item_counts[idx] > 0 && !is_blueprint(gs.world.items[idx]) {
+		if gs.world.items[idx] != .None && gs.world.item_counts[idx] > 0 && !is_rune_scroll(gs.world.items[idx]) {
 			if !golem_pack_has_room(&gs.golems.data[id]) do continue
 			score := chebyshev(from, T) - 100
 			if score < best_score {best, best_score, ok = T, score, true}
@@ -825,7 +821,7 @@ golem_deposit_possible :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> boo
 		return golem_smelter_accepts(&gs.world.sim_data[grid_idx(int(tile.x), int(tile.y))], item)
 	case .Golem_Depot:
 		if d := golem_depot_at(gs, gs.level_index, tile); d != nil do return golem_depot_has_room(d, item)
-	case .Barrel, .Sky_Blueprint_Chest, .Blueprint_Chest_A, .Blueprint_Chest_B, .Blueprint_Chest_C:
+	case .Barrel, .Sky_Rune_Scroll_Chest, .Rune_Scroll_Chest_A, .Rune_Scroll_Chest_B, .Rune_Scroll_Chest_C:
 		if b := barrel_at(gs, gs.level_index, tile); b != nil {
 			for s in b.slots do if s.item == item && s.count < MAX_STACK || s.item == .None || s.count == 0 do return true
 		}
@@ -874,7 +870,7 @@ golem_find_deposit :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i32
 		class := i32(4)
 		if t == .Smelter do class = 0
 		if t == .Golem_Depot do class = 1
-		if t == .Barrel || is_blueprint_chest(t) do class = 2
+		if t == .Barrel || is_rune_scroll_chest(t) do class = 2
 		if t == .Silo do class = 3
 		score := class*i32(GRID_W)*2 + chebyshev(from, T)
 		if score < best_score {best, best_score, ok = T, score, true}
@@ -893,7 +889,7 @@ golem_deposit_at :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> bool {
 		return true
 	case .Golem_Depot:
 		if d := golem_depot_at(gs, gs.level_index, tile); d != nil do return golem_depot_add(d, item, 1)
-	case .Barrel, .Sky_Blueprint_Chest, .Blueprint_Chest_A, .Blueprint_Chest_B, .Blueprint_Chest_C:
+	case .Barrel, .Sky_Rune_Scroll_Chest, .Rune_Scroll_Chest_A, .Rune_Scroll_Chest_B, .Rune_Scroll_Chest_C:
 		if b := barrel_at(gs, gs.level_index, tile); b != nil do return barrel_deposit(b, item, 1) == 1
 	case .Silo:
 		if s := silo_at(gs, gs.level_index, tile); s != nil && silo_has_room_for(s, item) {
@@ -1316,7 +1312,7 @@ golem_path_stale :: proc(g:^Golem) -> bool {
 
 golem_pick_resource :: proc(gs: ^Game_State, g: ^Golem, id: int) {
 	idx := grid_idx(int(g.target.x), int(g.target.y))
-	if gs.world.items[idx] != .None && gs.world.item_counts[idx] > 0 && !is_blueprint(gs.world.items[idx]) {
+	if gs.world.items[idx] != .None && gs.world.item_counts[idx] > 0 && !is_rune_scroll(gs.world.items[idx]) {
 		item:=gs.world.items[idx]
 		if golem_pack_add(g, item) {
 			gs.world.item_counts[idx] -= 1

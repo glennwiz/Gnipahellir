@@ -6,10 +6,10 @@ package game
 //  it before it can be placed.  A template is ASCII art anchored on its capstone
 //  marker 'A'; every other glyph names a tile that must already be present.
 //
-//  There is one template per progression tier, so each blueprint raises a
+//  There is one template per progression tier, so each rune scroll raises a
 //  grander altar.  To add or change one you touch only this file: extend the
 //  legend in `structure_template_cell`, then draw the rows in
-//  `structure_templates`.  Placement (placement.odin) and the blueprint overlay
+//  `structure_templates`.  Placement (placement.odin) and the rune scroll overlay
 //  (ui.odin) read these tables, so nothing else needs to change.
 //
 //  (Distinct from enemy.odin's Build_Template, which is the builders' den shell.)
@@ -32,27 +32,24 @@ structure_template_cell :: proc(glyph: rune) -> (tile: Tile_Type, kind: Structur
 }
 
 Structure_Template :: struct {
-    capstone: Item,
-    name:     string,
-    rows:     []string,   // top-to-bottom; exactly one 'A' marks the capstone
+    name: string,
+    rows: []string,   // top-to-bottom; exactly one 'A' marks the capstone
 }
 
-// One template per progression tier — each blueprint raises a grander altar.
+// One template per progression tier — each rune scroll raises a grander altar.
 @(rodata)
 structure_templates := [MAX_PROGRESSION_TIERS]Structure_Template{
     { // Tier A → cave 2: a humble altar of stone and wood
-        capstone = .Sky_Altar,
-        name     = "Stone Altar",
-        rows     = {
+        name = "Stone Altar",
+        rows = {
             "  A  ",
             " WWW ",
             "SSSSS",
         },
     },
     { // Tier B → cave 3: silver and gold set upon the rock
-        capstone = .Sky_Altar,
-        name     = "Silver-Gold Altar",
-        rows     = {
+        name = "Silver-Gold Altar",
+        rows = {
             "   A   ",
             "  GGG  ",
             " ISISI ",
@@ -60,9 +57,8 @@ structure_templates := [MAX_PROGRESSION_TIERS]Structure_Template{
         },
     },
     { // Tier C → the final depths: a crown of gold
-        capstone = .Sky_Altar,
-        name     = "Golden Altar",
-        rows     = {
+        name = "Golden Altar",
+        rows = {
             "   A   ",
             "  GGG  ",
             " GISIG ",
@@ -76,7 +72,7 @@ structure_templates := [MAX_PROGRESSION_TIERS]Structure_Template{
 // item isn't a templated structure.
 structure_template_for :: proc(gs: ^Game_State, item: Item) -> ^Structure_Template {
     if item != .Sky_Altar do return nil
-    tier := blueprint_active_tier(gs)
+    tier := rune_scroll_active_tier(gs)
     if tier < 0 do tier = 0
     return &structure_templates[tier]
 }

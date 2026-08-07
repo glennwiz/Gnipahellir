@@ -34,7 +34,7 @@ STEP_HEIGHT :: f32(1.0)
 // A door is solid rock to every body EXCEPT the player, who always walks
 // through it in every direction (Glenn's design: no open/close, just a
 // passageway).  A structure — machines/stations/spawners/altars
-// (is_structure_tile) or a blueprint chest (is_blueprint_chest) — is similar
+// (is_structure_tile) or a rune scroll chest (is_rune_scroll_chest) — is similar
 // but only sideways: the player walks through its sides, yet still lands and
 // stands on its top like solid ground.  Raw material tiles (Stone/Dirt/Grass/
 // ore/Clay/...) are NOT included here on purpose — those stay solid to the
@@ -48,7 +48,7 @@ blocks_body :: proc(w: ^World_Grid, x, y: int, is_player, horizontal: bool) -> b
     if is_player {
         t := get_tile(w, x, y)
         if t == .Door do return false
-        if horizontal && (is_structure_tile[t] || is_blueprint_chest(t)) do return false
+        if horizontal && (is_structure_tile[t] || is_rune_scroll_chest(t)) do return false
     }
     return is_solid(w, x, y)
 }

@@ -174,9 +174,9 @@ player_interact :: proc(gs: ^Game_State) {
     cx := int(gs.player.pos.x + PLAYER_W*0.5)
     cy := int(gs.player.pos.y + PLAYER_H*0.5)
 
-    // Blueprint coffers get first claim on the broad interaction key: they are
+    // Rune Scroll coffers get first claim on the broad interaction key: they are
     // permanent progression finds, not mineable storage furniture.
-    if open_nearby_blueprint_chest(gs, cx, cy) do return
+    if open_nearby_rune_scroll_chest(gs, cx, cy) do return
 
     // Standing in a dimension's return gate: step back home.
     if gs.level_index == LEVEL_DIMENSION && get_tile(&gs.world, cx, cy) == .Dimension_Gate {
@@ -269,19 +269,19 @@ structure_costs := [MAX_PROGRESSION_TIERS][2]Ingredient{
     { {.Cloud_Stone, 20}, {.Gold_Bar, 10}  },   // final → boss gate (Phase 5)
 }
 
-// The tier the blueprint overlay speaks to: the first blueprint found whose
-// sky structure isn't raised yet.  -1 = the player carries no active blueprint.
-blueprint_active_tier :: proc(gs: ^Game_State) -> int {
+// The tier the rune scroll overlay speaks to: the first rune scroll found whose
+// sky structure isn't raised yet.  -1 = the player carries no active rune scroll.
+rune_scroll_active_tier :: proc(gs: ^Game_State) -> int {
     for t in 0 ..< MAX_PROGRESSION_TIERS {
-        if gs.progression.blueprint_found[t] && !gs.progression.sky_structure_complete[t] {
+        if gs.progression.rune_scroll_found[t] && !gs.progression.sky_structure_complete[t] {
             return t
         }
     }
     return -1
 }
 
-// Which cave a tier's ritual unlocks — for the blueprint overlay text.
-blueprint_unlocks_name :: proc(tier: int) -> string {
+// Which cave a tier's ritual unlocks — for the rune scroll overlay text.
+rune_scroll_unlocks_name :: proc(tier: int) -> string {
     switch tier {
     case 0:  return level_names[LEVEL_CAVE2]
     case 1:  return level_names[LEVEL_CAVE3]
@@ -289,27 +289,27 @@ blueprint_unlocks_name :: proc(tier: int) -> string {
     }
 }
 
-// Each tier's blueprint item and where it rests — for the locked-gate toast
+// Each tier's rune scroll item and where it rests — for the locked-gate toast
 // and the HUD objective line.
 @(rodata)
-tier_blueprints := [MAX_PROGRESSION_TIERS]Item{.Blueprint_A, .Blueprint_B, .Blueprint_C}
+tier_rune_scrolls := [MAX_PROGRESSION_TIERS]Item{.Rune_Scroll_A, .Rune_Scroll_B, .Rune_Scroll_C}
 
 @(rodata)
-blueprint_places := [MAX_PROGRESSION_TIERS]string{
+rune_scroll_places := [MAX_PROGRESSION_TIERS]string{
     "deep beneath the Surface",
     "in the Deep Cave",
     "in Gnipahellir",
 }
 
-// Raising the Sky Altar reveals Blueprint A in the sealed portal chamber
+// Raising the Sky Altar reveals Rune Scroll A in the sealed portal chamber
 // (carved by carve_level0_portals) — one goal at a time for new players.
 // Idempotent: no respawn once found or while it already lies there.
-spawn_deep_blueprint :: proc(gs: ^Game_State) {
-    if gs.progression.blueprint_found[0] do return
+spawn_deep_rune_scroll :: proc(gs: ^Game_State) {
+    if gs.progression.rune_scroll_found[0] do return
     idx := grid_idx(141, 94)
-    if is_blueprint_chest(gs.world.terrain[idx]) do return
+    if is_rune_scroll_chest(gs.world.terrain[idx]) do return
     if gs.world.items[idx] != .None do return
-    if !place_blueprint_chest(&gs.world, 141, 94, .Blueprint_A) do return
+    if !place_rune_scroll_chest(&gs.world, 141, 94, .Rune_Scroll_A) do return
     notify(gs, "Something stirs deep below - seek the sealed chamber")
 }
 
@@ -336,9 +336,9 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
     if p.sky_altar_pos == {0, 0} {
         return fmt.bprintf(buf, "Raise a Sky Altar on the Surface to open the way above")
     }
-    if !p.blueprint_found[tier] {
+    if !p.rune_scroll_found[tier] {
         return fmt.bprintf(buf, "Find %s %s",
-            item_table[tier_blueprints[tier]].name, blueprint_places[tier])
+            item_table[tier_rune_scrolls[tier]].name, rune_scroll_places[tier])
     }
     c := structure_costs[tier]
     return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s - [%v] at the altar in the %s",
@@ -357,13 +357,13 @@ handle_ritual_request :: proc(gs: ^Game_State) {
         log_action(gs, "Ritual rejected: not on the sky level")
         return
     }
-    // First tier whose blueprint is found but structure unbuilt
+    // First tier whose rune scroll is found but structure unbuilt
     tier := -1
     all_built := true
     for t in 0 ..< MAX_PROGRESSION_TIERS {
         if gs.progression.sky_structure_complete[t] do continue
         all_built = false
-        if gs.progression.blueprint_found[t] {
+        if gs.progression.rune_scroll_found[t] {
             tier = t
             break
         }
@@ -372,7 +372,7 @@ handle_ritual_request :: proc(gs: ^Game_State) {
         if all_built {
             notify(gs, "The altar's work is done")
         } else {
-            notify(gs, "The altar is silent - find a blueprint first")
+            notify(gs, "The altar is silent - find a rune scroll first")
         }
         return
     }
@@ -595,11 +595,11 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
         for x in ARENA_X0 ..= ARENA_X1 do set_tile(w, x, ARENA_Y1 + 1, .Stone)
     }
 
-    // Blueprint chamber (bottom-left)
+    // Rune Scroll chamber (bottom-left)
     carve_box(w, 8, 96, 16, 101)
     for x in 8 ..= 16 do set_tile(w, x, 102, .Stone)
-    bp: Item = depth_tier == 1 ? .Blueprint_B : .Blueprint_C
-    place_blueprint_chest(w, 12, 101, bp)
+    bp: Item = depth_tier == 1 ? .Rune_Scroll_B : .Rune_Scroll_C
+    place_rune_scroll_chest(w, 12, 101, bp)
 }
 
 carve_box :: proc(w: ^World_Grid, x0, y0, x1, y1: int) {
@@ -677,7 +677,7 @@ gen_sky_level :: proc(w: ^World_Grid, seed: u32 = 0) {
     set_tile(w, 96, 79, .Sky_Entrance)
 }
 
-// ─── Level 0 additions: portals + blueprint (called from world_init) ──────────
+// ─── Level 0 additions: portals + rune scroll (called from world_init) ──────────
 
 carve_level0_portals :: proc(w: ^World_Grid) {
     // Portal chamber deep in cave 1 (bottom-right chamber region)
@@ -686,15 +686,15 @@ carve_level0_portals :: proc(w: ^World_Grid) {
     set_tile(w, 143, 94, .Cave_Entrance)
     set_tile(w, 144, 94, .Cave_Entrance)
 
-    // Blueprint A is NOT placed here — it appears in this chamber only once
-    // the Sky Altar stands (spawn_deep_blueprint), so new players face one
-    // blueprint at a time.
+    // Rune Scroll A is NOT placed here — it appears in this chamber only once
+    // the Sky Altar stands (spawn_deep_rune_scroll), so new players face one
+    // rune scroll at a time.
 
-    // The Sky Blueprint waits in a rune-locked coffer near spawn.  It reveals
+    // The Sky Rune Scroll waits in a rune-locked coffer near spawn.  It reveals
     // the Sky Altar that, once built, opens the gate to the heavens.
     sbp_x := GRID_W/2 - 12
     set_tile(w, sbp_x, SURFACE_Y - 1, .Air)  // clear any decoration
-    place_blueprint_chest(w, sbp_x, SURFACE_Y - 1, .Sky_Blueprint)
+    place_rune_scroll_chest(w, sbp_x, SURFACE_Y - 1, .Sky_Rune_Scroll)
 }
 
 debug_add_all_structures :: proc(gs: ^Game_State) {
@@ -737,7 +737,7 @@ debug_stamp_altar_template :: proc(gs: ^Game_State, tier: int, ax, ay: int) {
 debug_complete_next_ritual :: proc(gs: ^Game_State) {
     for t in 0 ..< MAX_PROGRESSION_TIERS {
         if gs.progression.sky_structure_complete[t] do continue
-        gs.progression.blueprint_found[t] = true
+        gs.progression.rune_scroll_found[t] = true
         eq_push(&gs.events, Event{type = .Structure_Complete, payload = {int_val = i32(t)}})
         log_action(gs, "Debug: ritual tier %d completed", t)
         return

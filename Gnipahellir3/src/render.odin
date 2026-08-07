@@ -76,7 +76,7 @@ Draw_Style :: enum u8 {
     Pixel_Dirt,
     Pixel_Clay,
     Pixel_Flower_Bed,
-    Pixel_Blueprint_Chest,
+    Pixel_Rune_Scroll_Chest,
 }
 
 @(rodata)
@@ -94,10 +94,11 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Dirt        = .Pixel_Dirt,
     .Clay        = .Pixel_Clay,
     .Flower_Bed  = .Pixel_Flower_Bed,
-    .Sky_Blueprint_Chest = .Pixel_Blueprint_Chest,
-    .Blueprint_Chest_A   = .Pixel_Blueprint_Chest,
-    .Blueprint_Chest_B   = .Pixel_Blueprint_Chest,
-    .Blueprint_Chest_C   = .Pixel_Blueprint_Chest,
+    .Sky_Rune_Scroll_Chest = .Pixel_Rune_Scroll_Chest,
+    .Rune_Scroll_Chest_A   = .Pixel_Rune_Scroll_Chest,
+    .Rune_Scroll_Chest_B   = .Pixel_Rune_Scroll_Chest,
+    .Rune_Scroll_Chest_C   = .Pixel_Rune_Scroll_Chest,
+    .Rune_Coffer           = .Pixel_Rune_Scroll_Chest,
     // all others default to .Solid (zero value)
 }
 
@@ -135,8 +136,8 @@ GRID_LINE_PX :: f32(2.5)
 GRID_FADE_LO :: f32(1.6)
 GRID_FADE_HI :: f32(2.6)
 
-// Ground-item blueprint pulse: radians/sec for the glow sine wave.
-BLUEPRINT_PULSE_SPEED :: f32(4.0)
+// Ground-item rune scroll pulse: radians/sec for the glow sine wave.
+RUNE_SCROLL_PULSE_SPEED :: f32(4.0)
 
 draw_world :: proc(gs: ^Game_State) {
     w := &gs.world
@@ -160,13 +161,13 @@ draw_world :: proc(gs: ^Game_State) {
             // World item drop: small glinting square
             it := w.items[idx]
             if it != .None && w.item_counts[idx] > 0 {
-                if is_blueprint(it) {
-                    // Blueprints pulse in a brightened version of their own
+                if is_rune_scroll(it) {
+                    // Rune Scrolls pulse in a brightened version of their own
                     // seal color (bronze/silver/gold/sky — see items.odin) so
                     // each tier's glow reads apart, with a dark halo behind it
                     // so the ring shows against the light-blue sky instead of
                     // blending into it.
-                    pulse    := (math.sin(gs.elapsed_time * BLUEPRINT_PULSE_SPEED) + 1) * 0.5
+                    pulse    := (math.sin(gs.elapsed_time * RUNE_SCROLL_PULSE_SPEED) + 1) * 0.5
                     grow     := i32(pulse * 5)
                     halo_ext := grow + 2
                     rl.DrawRectangle(px + 2 - halo_ext, py + 2 - halo_ext, 6 + halo_ext*2, 6 + halo_ext*2, rl.Color{0, 0, 0, 100})
@@ -184,13 +185,13 @@ draw_world :: proc(gs: ^Game_State) {
             }
         }
     }
-    // The workbench, like the blueprint chest, is wider than its one-cell
+    // The workbench, like the rune scroll chest, is wider than its one-cell
     // collision footprint and needs a clean overlay pass after the grid.
     draw_crafting_benches(gs)
     draw_smelters(gs)
-    // Blueprint chests deliberately spill beyond one 10px terrain cell.  Draw
+    // Rune Scroll chests deliberately spill beyond one 10px terrain cell.  Draw
     // them after the grid so neighboring backdrop cells cannot crop the coffer.
-    draw_blueprint_chests(gs)
+    draw_rune_scroll_chests(gs)
     draw_golem_monuments(gs)
     // The surface descent shaft breaks the grass line as a raw Void slot —
     // dress its lip into a proper cave mouth (surface level only).
@@ -522,7 +523,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     if t == .Crafting_Bench || t == .Sky_Altar || t == .Smelter {
         // Backdrop only. These stations receive a larger pixel-art silhouette
         // after the terrain loop so neighboring cells cannot crop their art.
-        bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
+        bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
         return
     }
@@ -546,8 +547,8 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Dirt:       draw_pixel_dirt(px, py)
     case .Pixel_Clay:       draw_pixel_clay(px, py, x, y)
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
-    case .Pixel_Blueprint_Chest:
-        bg := terrain_table[blueprint_chest_backdrop(gs.level_index, y)].color
+    case .Pixel_Rune_Scroll_Chest:
+        bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
     case .Pixel_Cloud:
         // Sky backdrop only — the puffs paint in draw_cloud_layer, a
@@ -559,29 +560,29 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     }
 }
 
-// ─── Pixel Art: Blueprint Chest ───────────────────────────────────────────────
+// ─── Pixel Art: Rune Scroll Chest ───────────────────────────────────────────────
 //
-// A compact 16×11 Norse coffer translated from sprites/blueprint_chests_concept:
+// A compact 16×11 Norse coffer translated from sprites/blueprint_chests_concept.png:
 // arched oak lid, three iron straps, corner rivets, and a tier-colored rune
 // lock.  Its collision remains one cell; the broad silhouette is render-only.
 
-draw_blueprint_chests :: proc(gs: ^Game_State) {
+draw_rune_scroll_chests :: proc(gs: ^Game_State) {
     for y in 0 ..< GRID_H {
         for x in 0 ..< GRID_W {
             t := get_tile(&gs.world, x, y)
-            if is_blueprint_chest(t) {
+            if is_rune_scroll_chest(t) || t == .Rune_Coffer {
                 bx, by := i32(x*CELL_SIZE), i32(y*CELL_SIZE)
-                if gs.pixel_art.sprites[.Blueprint_Chest].has_data {
-                    draw_pixel_grid_sprite(gs, .Blueprint_Chest, bx, by)
+                if gs.pixel_art.sprites[.Rune_Scroll_Chest].has_data {
+                    draw_pixel_grid_sprite(gs, .Rune_Scroll_Chest, bx, by)
                 } else {
-                    draw_pixel_blueprint_chest(gs, bx, by, t, x, y)
+                    draw_pixel_rune_scroll_chest(gs, bx, by, t, x, y)
                 }
             }
         }
     }
 }
 
-draw_pixel_blueprint_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x, y: int) {
+draw_pixel_rune_scroll_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x, y: int) {
     ox, oy := bx - 3, by - 1
     outline := rl.Color{24, 20, 24, 255}
     iron    := rl.Color{54, 56, 64, 255}
@@ -636,7 +637,7 @@ draw_pixel_blueprint_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x
 // A compact 20x14 Norse workbench translated from
 // sprites/crafting_bench_concept.png: thick oak slab, braced legs, iron caps,
 // vise, mallet, rivets, and one restrained rune boss.  Collision stays one cell;
-// this is a read-only overlay, just like the blueprint chest.
+// this is a read-only overlay, just like the rune scroll chest.
 
 draw_crafting_benches :: proc(gs: ^Game_State) {
     for y in 0 ..< GRID_H {

@@ -33,8 +33,9 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
     }
 
     // Barrels keep their contents in a record, so they too need lasting ground
-    // and a free record slot (MAX_BARRELS).
-    if place_tile == .Barrel &&
+    // and a free record slot (MAX_BARRELS).  A rune coffer stores identically,
+    // so it answers to the same two gates.
+    if (place_tile == .Barrel || place_tile == .Rune_Coffer) &&
        (gs.level_index == LEVEL_DIMENSION || !barrel_slot_free(gs)) {
         return false
     }
@@ -113,12 +114,12 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
                 notify(gs, "Every silo is spoken for - reclaim one first")
             }
         }
-        // Explain the barrel's two gates.
-        if place_tile == .Barrel {
+        // Explain the barrel's (and the coffer's) two gates.
+        if place_tile == .Barrel || place_tile == .Rune_Coffer {
             if gs.level_index == LEVEL_DIMENSION {
-                notify(gs, "The barrel needs lasting ground - this world will collapse")
+                notify(gs, "The chest needs lasting ground - this world will collapse")
             } else if !barrel_slot_free(gs) {
-                notify(gs, "Every barrel is spoken for - reclaim one first")
+                notify(gs, "Every container is spoken for - reclaim one first")
             }
         }
         return
@@ -152,8 +153,8 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         silo_on_placed(gs, e.tile)
     }
 
-    // A placed Barrel opens its record book entry.
-    if place_tile == .Barrel {
+    // A placed Barrel — or a re-placed rune coffer — opens its record entry.
+    if place_tile == .Barrel || place_tile == .Rune_Coffer {
         barrel_on_placed(gs, e.tile)
     }
 
@@ -162,7 +163,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         gs.progression.sky_altar_pos = {i32(x), i32(y)}
         audio_play(&gs.audio, .Fanfare)
         notify(gs, "The Sky Altar rises - a portal opens to the heavens!")
-        spawn_deep_blueprint(gs)
+        spawn_deep_rune_scroll(gs)
     }
 }
 
@@ -192,11 +193,11 @@ handle_item_drop :: proc(gs: ^Game_State, e: Event) {
         notify(gs, "No room to drop there")
         return
     }
-    // Blueprints re-seal themselves when deliberately dropped.  They remain
+    // Rune Scrolls re-seal themselves when deliberately dropped.  They remain
     // unique progression objects instead of joining automation item piles.
-    if is_blueprint(s.item) {
+    if is_rune_scroll(s.item) {
         if tile_overlaps_player(gs, x, y) {
-            notify(gs, "Step aside before sealing the blueprint there")
+            notify(gs, "Step aside before sealing the rune scroll there")
             return
         }
         if gs.world.items[grid_idx(x, y)] != .None {
@@ -204,8 +205,8 @@ handle_item_drop :: proc(gs: ^Game_State, e: Event) {
             return
         }
         item := s.item
-        if !place_blueprint_chest(&gs.world, x, y, item) {
-            notify(gs, "The blueprint chest needs clear ground")
+        if !place_rune_scroll_chest(&gs.world, x, y, item) {
+            notify(gs, "The rune scroll chest needs clear ground")
             return
         }
         s.count -= 1

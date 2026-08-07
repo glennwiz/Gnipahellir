@@ -387,40 +387,56 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Barrel,
 		0,
 	},
-	.Sky_Blueprint_Chest     = {
-		"Sky Blueprint Chest",
-		{.Solid},
+	// The four sealed coffers are .Mineable only so the deliberate Shift+hold
+	// reclaim can prise them loose once emptied — a wand never strikes them and
+	// an ordinary click still opens them (both gated by is_structure_tile).
+	// They all reclaim into one plain Rune_Coffer: the tier seal is a one-time
+	// in-situ marking, not something you carry around.
+	.Sky_Rune_Scroll_Chest     = {
+		"Sky Rune Scroll Chest",
+		{.Solid, .Mineable},
 		rl.Color{120, 200, 255, 255},
 		0,
 		0,
-		.None,
+		.Rune_Coffer,
 		0,
 	},
-	.Blueprint_Chest_A       = {
-		"Bronze Blueprint Chest",
-		{.Solid},
+	.Rune_Scroll_Chest_A       = {
+		"Bronze Rune Scroll Chest",
+		{.Solid, .Mineable},
 		rl.Color{182, 108, 58, 255},
 		0,
 		0,
-		.None,
+		.Rune_Coffer,
 		0,
 	},
-	.Blueprint_Chest_B       = {
-		"Silver Blueprint Chest",
-		{.Solid},
+	.Rune_Scroll_Chest_B       = {
+		"Silver Rune Scroll Chest",
+		{.Solid, .Mineable},
 		rl.Color{205, 205, 225, 255},
 		0,
 		0,
-		.None,
+		.Rune_Coffer,
 		0,
 	},
-	.Blueprint_Chest_C       = {
-		"Golden Blueprint Chest",
-		{.Solid},
+	.Rune_Scroll_Chest_C       = {
+		"Golden Rune Scroll Chest",
+		{.Solid, .Mineable},
 		rl.Color{235, 195, 60, 255},
 		0,
 		0,
-		.None,
+		.Rune_Coffer,
+		0,
+	},
+	// The carried coffer, re-placed: ordinary barrel storage in the chest's
+	// own silhouette, its lock lit dull rune-stone instead of a tier color.
+	.Rune_Coffer               = {
+		"Rune Coffer",
+		{.Solid, .Placeable, .Mineable},
+		rl.Color{150, 138, 120, 255},
+		0,
+		0,
+		.Rune_Coffer,
 		0,
 	},
 	.Dirt                    = {
@@ -459,6 +475,15 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	.Quick_Clay              = {
 		"Quick Clay", {.Solid}, rl.Color{196, 150, 118, 255}, 0, 0, .None, 0,
 	},
+	.Sand                    = {
+		"Sand",
+		{.Solid, .Mineable},
+		rl.Color{225, 205, 150, 255},
+		0,
+		0,
+		.Sand,
+		0,
+	},
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
@@ -481,6 +506,14 @@ is_structure_tile := #partial [Tile_Type]bool {
 	.Clay_Hearth             = true,
 	.Golem_Depot             = true,
 	.World_Anchor            = true,
+	// Coffers are equipment too: a wand must never strike one, an ordinary
+	// click opens it, and only the deliberate Shift+hold prises it loose.
+	// (Input routes the four sealed variants to their own open path first.)
+	.Sky_Rune_Scroll_Chest   = true,
+	.Rune_Scroll_Chest_A     = true,
+	.Rune_Scroll_Chest_B     = true,
+	.Rune_Scroll_Chest_C     = true,
+	.Rune_Coffer             = true,
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────
@@ -766,28 +799,6 @@ gen_cave_1 :: proc(w: ^World_Grid, seed: u32 = 0) {
 		}
 	}
 
-	// Damp clay seams line the first cave's upper walls.  A few adjacent open
-	// cells become shallow water pockets, making the new starter material easy
-	// to read and keeping it in the early descent rather than the deep ore tier.
-	for y in CAVE_TOP + 2 ..< min(CAVE_TOP + 22, CAVE_BOT) {
-		for x in CAVE_LEFT + 1 ..< CAVE_RIGHT - 1 {
-			if get_tile(w, x, y) != .Stone do continue
-			open_x, open_y := 0, 0
-			found_open := false
-			for d in ([4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
-				if get_tile(w, x+d.x, y+d.y) == .Void {
-					open_x, open_y = x+d.x, y+d.y
-					found_open = true
-					break
-				}
-			}
-			if !found_open do continue
-			h := whash(u32(x)*2246822519 ~ u32(y)*3266489917 ~ seed)
-			if h % 100 >= 7 do continue
-			set_tile(w, x, y, .Clay)
-			if (h >> 8) % 4 == 0 do set_tile(w, open_x, open_y, .Water)
-		}
-	}
 }
 
 // ─── World Init ───────────────────────────────────────────────────────────────
@@ -824,9 +835,38 @@ world_init :: proc(w: ^World_Grid, seed: u32 = 0) {
 	// Cave level 1
 	gen_cave_1(w, seed)
 
-	// Surface decoration: trees and flowers
+	// Surface decoration: pond, trees, flowers
 	CHUNK :: 12
 	ent_x := GRID_W / 2
+
+	// A single earthen pond, seeded per world: water at the center, exposed
+	// clay banks around it (the mineable "water clay" starter material, now
+	// deliberately placed instead of scattered randomly through cave walls),
+	// sand at the shore.  Kept clear of the spawn shaft and the Sky Rune
+	// Scroll chest (both sit within POND_EXCLUDE of ent_x) by restricting the
+	// center to one of two safe bands to either side.
+	POND_RADIUS  :: 5
+	POND_EXCLUDE :: 36 // half-width of the spawn/rune-chest no-go band around ent_x
+	ph := whash(909090 + seed)
+	band_lo, band_hi := 16, ent_x - POND_EXCLUDE
+	if ph % 2 == 1 {
+		band_lo, band_hi = ent_x + POND_EXCLUDE, GRID_W - 16
+	}
+	pond_x := band_lo + POND_RADIUS + int((ph >> 8) % u32(max(band_hi-band_lo-2*POND_RADIUS, 1)))
+	for dx in -POND_RADIUS ..= POND_RADIUS {
+		x := pond_x + dx
+		switch dist := abs(dx); {
+		case dist <= 2:
+			set_tile(w, x, SURFACE_Y, .Water)
+			set_tile(w, x, SURFACE_Y + 1, .Water)
+			set_tile(w, x, SURFACE_Y + 2, .Clay)
+		case dist <= 4:
+			set_tile(w, x, SURFACE_Y, .Clay)
+		case:
+			set_tile(w, x, SURFACE_Y, .Sand)
+		}
+	}
+
 	for chunk in 0 ..< GRID_W / CHUNK {
 		h1 := whash(u32(chunk) * 31337 + seed)
 		h2 := whash(u32(chunk) * 99991 + seed)
@@ -834,7 +874,7 @@ world_init :: proc(w: ^World_Grid, seed: u32 = 0) {
 		if h1 % 10 < 7 {
 			tx := chunk * CHUNK + int(h1 % u32(CHUNK))
 			tree_height := 3 + int(h2 % 3)
-			if abs(tx - ent_x) > 3 && in_bounds(tx, SURFACE_Y) {
+			if abs(tx - ent_x) > 3 && abs(tx - pond_x) > POND_RADIUS + 1 && in_bounds(tx, SURFACE_Y) {
 				place_tree(w, tx, SURFACE_Y, tree_height)
 			}
 		}
@@ -847,7 +887,7 @@ world_init :: proc(w: ^World_Grid, seed: u32 = 0) {
 		hf := whash(u32(i) * 2654435761 + 101 + seed)
 		fx := int(hf % u32(GRID_W))
 		fy := SURFACE_Y - 1
-		if in_bounds(fx, fy) && get_tile(w, fx, fy) == .Air {
+		if in_bounds(fx, fy) && get_tile(w, fx, fy) == .Air && abs(fx-pond_x) > POND_RADIUS+1 {
 			set_tile(w, fx, fy, .Flower)
 		}
 	}
@@ -867,6 +907,6 @@ world_init :: proc(w: ^World_Grid, seed: u32 = 0) {
 	w.items[pick_idx] = .Pickaxe
 	w.item_counts[pick_idx] = 1
 
-	// Portals to cave 2 and the sky, plus Blueprint A
+	// Portals to cave 2 and the sky, plus Rune Scroll A
 	carve_level0_portals(w)
 }

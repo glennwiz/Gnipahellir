@@ -48,11 +48,11 @@ equip_slot_labels := [10]cstring{
 	"WPN", "PICK", "HEAD", "CHEST", "HANDS", "LEGS", "FEET", "CHM1", "CHM2", "CHM3",
 }
 
-// Blueprint overlay — centered panel.
-BP_W :: 540
-BP_H :: 360
-BP_X :: (UI_W - BP_W) / 2 // default position (draggable)
-BP_Y :: (UI_H - BP_H) / 2
+// Rune Scroll overlay — centered panel.
+RS_W :: 540
+RS_H :: 360
+RS_X :: (UI_W - RS_W) / 2 // default position (draggable)
+RS_Y :: (UI_H - RS_H) / 2
 
 // Smelter window — the furnace fire, the ground cells beside it, the tray.
 SMELT_W :: 250
@@ -74,6 +74,12 @@ SEL_CHIP   :: 52
 SEL_CHIP_X :: (UI_W - SEL_CHIP) / 2
 SEL_CHIP_Y :: UI_H - 70
 
+// Rune Scroll chip — sits left of the placement chip; shows the carried
+// rune scroll's icon (if any) and toggles the rune scroll overlay on click.
+RS_CHIP   :: 52
+RS_CHIP_X :: SEL_CHIP_X - 12 - RS_CHIP
+RS_CHIP_Y :: SEL_CHIP_Y
+
 GOLEM_CMD_X :: i32(18)
 GOLEM_CMD_Y :: i32(UI_H - 112)
 GOLEM_CMD_W :: i32(390)
@@ -91,7 +97,7 @@ UI_Window :: enum u8 {
 	Crafting,
 	Smelter,
 	Barrel,
-	Blueprint,
+	Rune_Scroll,
 }
 
 WINDOW_HEADER_H :: 40
@@ -102,12 +108,12 @@ default_window_pos := [UI_Window][2]i32 {
 	.Crafting  = {CRAFT_X, CRAFT_Y},
 	.Smelter   = {SMELT_X, SMELT_Y},
 	.Barrel    = {BARREL_X, BARREL_Y},
-	.Blueprint = {BP_X, BP_Y},
+	.Rune_Scroll = {RS_X, RS_Y},
 }
 
 // draw_ui stacks windows in enum order; drag hit-testing walks this top-down.
 @(rodata)
-window_top_down := [5]UI_Window{.Blueprint, .Barrel, .Smelter, .Crafting, .Inventory}
+window_top_down := [5]UI_Window{.Rune_Scroll, .Barrel, .Smelter, .Crafting, .Inventory}
 
 // Outer bounds of a floating window at its current position, and whether it
 // is open.  Crafting's height tracks its recipe list.
@@ -122,8 +128,8 @@ window_rect :: proc(gs: ^Game_State, w: UI_Window) -> (x, y, ww, wh: i32, open: 
 		return p.x, p.y, SMELT_W, SMELT_H, gs.ui.show_smelter
 	case .Barrel:
 		return p.x, p.y, BARREL_W, BARREL_H, gs.ui.show_barrel
-	case .Blueprint:
-		return p.x, p.y, BP_W, BP_H, gs.ui.show_blueprint
+	case .Rune_Scroll:
+		return p.x, p.y, RS_W, RS_H, gs.ui.show_rune_scroll
 	}
 	return
 }
@@ -606,7 +612,7 @@ action_labels := [Action]cstring {
 	.Jump       = "Jump",
 	.Interact   = "Interact",
 	.Inventory  = "Inventory",
-	.Blueprint  = "Blueprint",
+	.Rune_Scroll  = "Rune Scroll",
 	.Golem_Crew = "Golem crew",
 }
 
@@ -841,7 +847,7 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 ALT_MENU_X :: DBG_MENU_X + DBG_MENU_W + 36
 ALT_MENU_Y :: DBG_MENU_Y
 ALT_MENU_W :: 200
-ALT_MENU_ROWS :: 7 // 0/1: stamp sky/rune altar; 2-4: raise tier structure; 5: blueprints; 6: complete ritual
+ALT_MENU_ROWS :: 7 // 0/1: stamp sky/rune altar; 2-4: raise tier structure; 5: rune scrolls; 6: complete ritual
 
 // Menu row under the cursor, or -1.
 altar_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -875,7 +881,7 @@ draw_altar_menu :: proc(gs: ^Game_State) {
 	}
 
 	rl.DrawText(
-		"Find all blueprints >",
+		"Find all rune scrolls >",
 		ALT_MENU_X,
 		ALT_MENU_Y + 5 * DBG_MENU_ROW_H + 7,
 		10,
@@ -1083,6 +1089,7 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 		if cursor_in_window(gs, w) do return true
 	}
 	if sel_chip_hovered(gs) do return true  // the bottom-center placement chip
+	if rs_chip_hovered(gs) do return true   // the rune scroll chip beside it
 	if equipped_command_wand(gs) != .None && mx >= GOLEM_CMD_X && mx < GOLEM_CMD_X+GOLEM_CMD_W &&
 	   my >= GOLEM_CMD_Y && my < GOLEM_CMD_Y+GOLEM_CMD_H {
 		return true
@@ -1111,6 +1118,31 @@ sel_chip_hovered :: proc(gs: ^Game_State) -> bool {
 	my := i32(gs.input.mouse_screen.y)
 	return mx >= SEL_CHIP_X && mx < SEL_CHIP_X + SEL_CHIP &&
 	       my >= SEL_CHIP_Y && my < SEL_CHIP_Y + SEL_CHIP
+}
+
+// True when the cursor is over the rune scroll chip (bottom HUD, left of the
+// placement chip).
+rs_chip_hovered :: proc(gs: ^Game_State) -> bool {
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	return mx >= RS_CHIP_X && mx < RS_CHIP_X + RS_CHIP &&
+	       my >= RS_CHIP_Y && my < RS_CHIP_Y + RS_CHIP
+}
+
+// The rune scroll item the overlay is currently showing, or .None if the
+// player carries none — mirrors draw_rune_scroll's own branch order (the sky
+// rune scroll takes priority while its altar is still unbuilt).
+current_rune_scroll_item :: proc(gs: ^Game_State) -> Item {
+	if inventory_count(&gs.player.inventory, .Sky_Rune_Scroll) > 0 &&
+	   gs.progression.sky_altar_pos == {0, 0} {
+		return .Sky_Rune_Scroll
+	}
+	switch rune_scroll_active_tier(gs) {
+	case 0:  return .Rune_Scroll_A
+	case 1:  return .Rune_Scroll_B
+	case 2:  return .Rune_Scroll_C
+	}
+	return .None
 }
 
 // Equip box under the cursor, or .None (the boxes stack vertically).
@@ -1207,7 +1239,7 @@ draw_ui :: proc(gs: ^Game_State) {
 		draw_item_icon(gs.ui.drag_item, mx - 12, my - 12, 24)
 		rl.DrawRectangleLines(mx - 12, my - 12, 24, 24, NORSE_GOLD_HOT)
 	}
-	if gs.ui.show_blueprint do draw_blueprint(gs)
+	if gs.ui.show_rune_scroll do draw_rune_scroll(gs)
 	if gs.ui.show_book do draw_book(gs)
 	if gs.game_won do draw_win_screen(gs)
 	if gs.player.dead do draw_death_screen(gs)
@@ -1220,7 +1252,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	if gs.ui.show_charselect do draw_charselect(gs)
 	if gs.ui.show_settings do draw_settings(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included
-	// Notifications are the final UI layer.  Blueprint pickup messages and other
+	// Notifications are the final UI layer.  Rune Scroll pickup messages and other
 	// important feedback must stay readable over inventory/storage windows,
 	// tooltips, dragged icons, books, menus, and every full-screen modal.
 	draw_notifications(gs)
@@ -1584,21 +1616,27 @@ draw_hover_label :: proc(gs: ^Game_State) {
 	text := cstring(raw_data(terrain_table[t].name))
 	tw := rl.MeasureText(text, FONT)
 	equipment := is_structure_tile[t]
-	blueprint_chest := is_blueprint_chest(t)
+	rune_scroll_chest := is_rune_scroll_chest(t)
 	hint := cstring("click/E use  |  SHIFT+HOLD reclaim")
-	if blueprint_chest do hint = cstring("click/E open")
+	if rune_scroll_chest {
+		// A sealed coffer can't be prised loose yet — say what's owed instead
+		// of advertising a hold that will only refuse.
+		hint = rune_scroll_chest_holds_scroll(gs, gs.ui.hover_tile) \
+			? cstring("click/E open  |  take the scroll to free it") \
+			: cstring("click/E open  |  SHIFT+HOLD pick up")
+	}
 	hint_w := i32(0)
-	if equipment || blueprint_chest do hint_w = rl.MeasureText(hint, FONT)
+	if equipment || rune_scroll_chest do hint_w = rl.MeasureText(hint, FONT)
 	pw := max(tw, hint_w) + PAD*2
 	ph := i32(FONT) + PAD*2
-	if equipment || blueprint_chest do ph += i32(FONT) + 3
+	if equipment || rune_scroll_chest do ph += i32(FONT) + 3
 	x := clamp(i32(gs.input.mouse_screen.x) + 14, 0, i32(UI_W) - pw)
 	y := clamp(i32(gs.input.mouse_screen.y) + 18, 0, i32(UI_H) - ph)
 
 	rl.DrawRectangle(x, y, pw, ph, NORSE_PANEL)
 	rl.DrawRectangleLines(x, y, pw, ph, NORSE_BORDER)
 	rl.DrawText(text, x + PAD, y + PAD, FONT, rl.Color{255, 240, 180, 255})
-	if equipment || blueprint_chest {
+	if equipment || rune_scroll_chest {
 		rl.DrawText(hint, x + PAD, y + PAD + i32(FONT) + 3, FONT, rl.Color{225, 150, 70, 255})
 	}
 }
@@ -1653,6 +1691,39 @@ draw_hud :: proc(gs: ^Game_State) {
 	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
 
 	draw_sel_chip(gs)
+	draw_rs_chip(gs)
+}
+
+// The rune scroll chip: shows the carried rune scroll's icon, tinted gold once
+// its structure is ready to raise, with a [B] hint; empty when none is
+// carried.  Clicking it (handled in input.odin) toggles the rune scroll overlay.
+draw_rs_chip :: proc(gs: ^Game_State) {
+	hov := rs_chip_hovered(gs)
+	x := i32(RS_CHIP_X)
+	y := i32(RS_CHIP_Y)
+	item := current_rune_scroll_item(gs)
+	has_rs := item != .None
+
+	rl.DrawRectangle(x, y, RS_CHIP, RS_CHIP, NORSE_ROW)
+	bcol := NORSE_BORDER
+	switch {
+	case hov:    bcol = NORSE_GOLD_HOT
+	case has_rs: bcol = NORSE_GOLD
+	}
+	rl.DrawRectangleLinesEx({f32(x), f32(y), RS_CHIP, RS_CHIP}, (hov || has_rs) ? 2 : 1, bcol)
+
+	if has_rs {
+		draw_item_icon(item, x + 10, y + 8, 32)
+	}
+	hint := cstring(has_rs ? "rune scroll" : "no rune scroll")
+	hw := rl.MeasureText(hint, 10)
+	rl.DrawText(hint, x + (RS_CHIP - hw)/2, y - 15, 10, has_rs ? NORSE_GOLD_HOT : text_dim)
+
+	key_buf: [16]u8
+	fmt.bprintf(key_buf[:15], "[%v]", gs.bindings[.Rune_Scroll])
+	kb := cstring(raw_data(key_buf[:]))
+	kw := rl.MeasureText(kb, 10)
+	rl.DrawText(kb, x + (RS_CHIP - kw)/2, y + RS_CHIP - 14, 10, text_dim)
 }
 
 // The bottom-center placement chip: shows the selected item's icon + count, a
@@ -2140,14 +2211,14 @@ draw_smelter :: proc(gs: ^Game_State) {
 	}
 }
 
-// Shared normal-storage window: barrels and blueprint chests both expose the
-// same 4×4 inventory.  A fresh chest simply starts with its blueprint in slot 5.
+// Shared normal-storage window: barrels and rune scroll chests both expose the
+// same 4×4 inventory.  A fresh chest simply starts with its rune scroll in slot 5.
 draw_barrel :: proc(gs: ^Game_State) {
 	px := gs.ui.win_pos[.Barrel].x
 	py := gs.ui.win_pos[.Barrel].y
 	tile := gs.ui.barrel_tile
 	container_t := get_tile(&gs.world, int(tile.x), int(tile.y))
-	is_chest := is_blueprint_chest(container_t)
+	is_chest := is_rune_scroll_chest(container_t)
 
 	pcx := i32(gs.player.pos.x + PLAYER_W * 0.5)
 	pcy := i32(gs.player.pos.y + PLAYER_H * 0.5)
@@ -2179,25 +2250,51 @@ draw_barrel :: proc(gs: ^Game_State) {
 	rl.DrawText(footer, px + BARREL_PAD, py + BARREL_H - 20, 10, text_dim)
 }
 
-// The interactive blueprint overlay (B, or click a blueprint in the bag):
+// The interactive rune scroll overlay (B, or click a rune scroll in the bag):
 // what to gather, the build template for the altar, and the path to the cave.
-draw_blueprint :: proc(gs: ^Game_State) {
-	x := gs.ui.win_pos[.Blueprint].x
-	y := gs.ui.win_pos[.Blueprint].y
-	rl.DrawRectangle(x, y, BP_W, BP_H, panel_bg)
-	rl.DrawRectangleLines(x, y, BP_W, BP_H, panel_border)
+// Flank a title string with a pair of carved rune glyphs on each side — the
+// procedural line-segment runes (draw_rune), not real codepoints the default
+// font can't draw. `seed` just varies which of the 6 shapes show up per title.
+draw_rune_scroll_title :: proc(text: cstring, x, y: i32, font: i32, col: rl.Color, seed: int) {
+	rl.DrawText(text, x, y, font, col)
+	rw := f32(font) * 0.5
+	rh := f32(font) * 0.8
+	ry := f32(y) + (f32(font) - rh) * 0.5
+	rcol := col
+	rcol.a = 200
+	draw_rune(seed,   f32(x) - rw*2 - 10, ry, rw, rh, rcol, 2)
+	draw_rune(seed+2, f32(x) - rw - 4,    ry, rw, rh, rcol, 2)
+	tw := rl.MeasureText(text, font)
+	rx := f32(x + tw) + 10
+	draw_rune(seed+4, rx,      ry, rw, rh, rcol, 2)
+	draw_rune(seed+1, rx+rw+4, ry, rw, rh, rcol, 2)
+}
 
-	accent := rl.Color{130, 180, 255, 255}
+draw_rune_scroll :: proc(gs: ^Game_State) {
+	x := gs.ui.win_pos[.Rune_Scroll].x
+	y := gs.ui.win_pos[.Rune_Scroll].y
+	rl.DrawRectangle(x, y, RS_W, RS_H, NORSE_PANEL)
+	rl.DrawRectangleLinesEx({f32(x), f32(y), f32(RS_W), f32(RS_H)}, 2, NORSE_BORDER)
+
+	// Carved corner ticks, matching the crafting/notification frames.
+	TICK :: i32(7)
+	rl.DrawRectangle(x, y, TICK, 2, NORSE_GOLD_HOT)
+	rl.DrawRectangle(x, y, 2, TICK, NORSE_GOLD_HOT)
+	rl.DrawRectangle(x+RS_W-TICK, y+RS_H-2, TICK, 2, NORSE_GOLD_HOT)
+	rl.DrawRectangle(x+RS_W-2, y+RS_H-TICK, 2, TICK, NORSE_GOLD_HOT)
+	draw_rune_strip(f32(x + RS_W) - 160, f32(y) + 15, 6, rl.Color{200, 150, 70, 120})
+
+	accent := NORSE_GOLD_HOT
 	good := rl.Color{120, 220, 120, 255}
 	warm := rl.Color{250, 220, 110, 255}
 
-	rl.DrawText("[B] close", x + BP_W - 92, y + 14, 12, text_dim)
+	rl.DrawText("[B] close", x + RS_W - 92, y + 14, 12, text_dim)
 
-	// Opening objective: with the Sky Blueprint in hand and no gate raised yet,
+	// Opening objective: with the Sky Rune Scroll in hand and no gate raised yet,
 	// show how to build the surface Sky Altar that opens the way above.
-	if inventory_count(&gs.player.inventory, .Sky_Blueprint) > 0 &&
+	if inventory_count(&gs.player.inventory, .Sky_Rune_Scroll) > 0 &&
 	   gs.progression.sky_altar_pos == {0, 0} {
-		rl.DrawText("BLUEPRINT: The Sky Gate", x + 20, y + 18, 24, accent)
+		draw_rune_scroll_title("THE SKY GATE", x + 96, y + 18, 24, accent, 0)
 		rl.DrawText(
 			"Raise a Sky Altar on the surface to open the way above.",
 			x + 20,
@@ -2215,19 +2312,19 @@ draw_blueprint :: proc(gs: ^Game_State) {
 		rl.DrawText(
 			"Build it on the grass - the portal blooms above the altar.",
 			x + 20,
-			y + BP_H - 32,
+			y + RS_H - 32,
 			14,
 			text_dim,
 		)
 		return
 	}
 
-	tier := blueprint_active_tier(gs)
+	tier := rune_scroll_active_tier(gs)
 	if tier < 0 {
-		rl.DrawText("BLUEPRINT", x + 20, y + 18, 24, accent)
-		rl.DrawText("You carry no blueprint yet.", x + 20, y + 64, 18, text_dim)
+		draw_rune_scroll_title("RUNE SCROLL", x + 96, y + 18, 24, accent, 0)
+		rl.DrawText("You carry no rune scroll yet.", x + 20, y + 64, 18, text_dim)
 		rl.DrawText(
-			"Delve the caves - each blueprint waits in a sealed chest.",
+			"Delve the caves - each rune scroll waits in a sealed chest.",
 			x + 20,
 			y + 92,
 			16,
@@ -2237,12 +2334,12 @@ draw_blueprint :: proc(gs: ^Game_State) {
 	}
 
 	// Title + objective
-	rl.DrawText("BLUEPRINT: The Sky Ritual", x + 20, y + 18, 24, accent)
+	draw_rune_scroll_title("THE SKY RITUAL", x + 96, y + 18, 24, accent, tier*2)
 	obj_buf: [96]u8
 	fmt.bprintf(
 		obj_buf[:95],
 		"Raise the sky structure to unlock %s.",
-		blueprint_unlocks_name(tier),
+		rune_scroll_unlocks_name(tier),
 	)
 	rl.DrawText(cstring(raw_data(obj_buf[:])), x + 20, y + 52, 16, rl.Color{225, 225, 240, 255})
 
@@ -2311,7 +2408,7 @@ draw_blueprint :: proc(gs: ^Game_State) {
 	rl.DrawText(
 		"Build the altar in the Low Sky, gather the offering, then press E.",
 		x + 20,
-		y + BP_H - 32,
+		y + RS_H - 32,
 		14,
 		text_dim,
 	)
@@ -2339,7 +2436,7 @@ draw_template_diagram :: proc(tpl: ^Structure_Template, cx, top: i32) {
 		for glyph, c in line {
 			tile, kind := structure_template_cell(glyph)
 			if kind == .Empty do continue
-			col := kind == .Capstone ? item_table[tpl.capstone].color : terrain_table[tile].color
+			col := kind == .Capstone ? item_table[Item.Sky_Altar].color : terrain_table[tile].color
 			bx := rx + i32(c) * CELL
 			by := top + i32(r) * CELL
 			rl.DrawRectangle(bx + 1, by + 1, CELL - 2, CELL - 2, col)

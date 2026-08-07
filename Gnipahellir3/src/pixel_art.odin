@@ -14,7 +14,7 @@ import "core:os"
 //  Debug/dev tool only; not part of the player's Save_Data.
 
 // Shared swatches, seeded from the colors already duplicated between
-// draw_pixel_blueprint_chest, draw_pixel_crafting_bench and the smelter's
+// draw_pixel_rune_scroll_chest, draw_pixel_crafting_bench and the smelter's
 // static shell (render.odin) plus item_art.odin's shared ICON_* colors —
 // "our colour palette", not invented.
 PALETTE_SIZE :: 25
@@ -51,7 +51,7 @@ game_palette := [PALETTE_SIZE]rl.Color{
 // Extend by adding one entry here + one row in pixel_sprite_table + one
 // call-site swap in render.odin (see context.md's pixel-art editor notes).
 Pixel_Sprite_ID :: enum u8 {
-	Blueprint_Chest,
+	Rune_Scroll_Chest,
 	Crafting_Bench,
 	Smelter,
 }
@@ -73,7 +73,7 @@ Pixel_Sprite_Info :: struct {
 }
 
 pixel_sprite_table := [Pixel_Sprite_ID]Pixel_Sprite_Info{
-	.Blueprint_Chest = {"Blueprint Chest", 16, 11, -3, -1},
+	.Rune_Scroll_Chest = {"Rune Scroll Chest", 16, 11, -3, -1},
 	.Crafting_Bench  = {"Crafting Bench", 20, 14, -5, -4},
 	// Only the static furnace shell is grid-editable — the fire, smoke,
 	// fuel/ore/output and progress bar stay procedural (draw_pixel_smelter_dynamic,
@@ -148,18 +148,18 @@ seed_shell_rects :: proc(rects: []Shell_Rect, grid: ^Pixel_Grid) {
 seed_pixel_grid :: proc(id: Pixel_Sprite_ID) -> Pixel_Grid {
 	grid: Pixel_Grid
 	switch id {
-	case .Blueprint_Chest: seed_blueprint_chest_grid(&grid)
+	case .Rune_Scroll_Chest: seed_rune_scroll_chest_grid(&grid)
 	case .Crafting_Bench:  seed_crafting_bench_grid(&grid)
 	case .Smelter:         seed_shell_rects(smelter_shell_rects, &grid)
 	}
 	return grid
 }
 
-// Mirrors draw_pixel_blueprint_chest (render.odin), skipping only the
+// Mirrors draw_pixel_rune_scroll_chest (render.odin), skipping only the
 // translucent ambient glow (not a flat pixel) and using a neutral gold
 // placeholder for the tier-specific rune-lock accent (real chests are bronze/
 // silver/gold; the grid is shared across all three once edited).
-seed_blueprint_chest_grid :: proc(grid: ^Pixel_Grid) {
+seed_rune_scroll_chest_grid :: proc(grid: ^Pixel_Grid) {
 	outline, iron, iron_hi := u8(1), u8(17), u8(18)
 	wood_d, wood, wood_hi  := u8(5), u8(6), u8(7)
 	accent, white          := u8(12), u8(15)

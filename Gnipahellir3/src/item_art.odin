@@ -490,17 +490,19 @@ SKY_ALTAR_GRID :: Icon_Grid{
 	"............",
 }
 
-// Rolled scroll (B parchment, D rolled ends) with a seal (A).
-BLUEPRINT_GRID :: Icon_Grid{
+// Rolled parchment tube lying flat — wide, not tall, unlike a square box (B
+// body, L upper highlight, D outline/rolled-end caps). A dark binding cord
+// crosses the middle with a wax-seal rune (A) stamped beside it.
+RUNE_SCROLL_GRID :: Icon_Grid{
 	"............",
 	"............",
-	".DDBBBBBBDD.",
-	".DBBBBBBBBD.",
-	".DBBAABBBBD.",
-	".DBBAABBBBD.",
-	".DBBAABBBBD.",
-	".DBBBBBBBBD.",
-	".DDBBBBBBDD.",
+	"............",
+	".DDDDDDDDDD.",
+	"DLLLLLLLLLLD",
+	"DBBBDAABBBBD",
+	"DBBBDAABBBBD",
+	"DBBBDBBBBBBD",
+	".DDDDDDDDDD.",
 	"............",
 	"............",
 	"............",
@@ -588,10 +590,10 @@ item_icons := [Item]Item_Icon{
 	// Same rolled-scroll shape for all three; the seal wax (accent) carries the
 	// tier's material — bronze (Plank), silver (Silver Bar), gold (Gold Bar) —
 	// so A/B/C stop being pixel-identical (ground colors in items.odin match).
-	.Blueprint_A      = {BLUEPRINT_GRID, {{226, 206, 162, 255}, {188, 164, 118, 255}, {}, {182, 108, 58,  255}, {}}},
-	.Blueprint_B      = {BLUEPRINT_GRID, {{214, 208, 214, 255}, {172, 168, 182, 255}, {}, {205, 205, 225, 255}, {}}},
-	.Blueprint_C      = {BLUEPRINT_GRID, {{235, 218, 168, 255}, {196, 172, 110, 255}, {}, {235, 195, 60,  255}, {}}},
-	.Sky_Blueprint    = {BLUEPRINT_GRID, {{150, 195, 235, 255}, {112, 152, 196, 255}, {}, {240, 250, 255, 255}, {}}},
+	.Rune_Scroll_A      = {RUNE_SCROLL_GRID, {{226, 206, 162, 255}, {34, 26, 22, 255}, {245, 232, 205, 255}, {182, 108, 58,  255}, {}}},
+	.Rune_Scroll_B      = {RUNE_SCROLL_GRID, {{214, 208, 214, 255}, {34, 26, 22, 255}, {236, 233, 240, 255}, {205, 205, 225, 255}, {}}},
+	.Rune_Scroll_C      = {RUNE_SCROLL_GRID, {{235, 218, 168, 255}, {34, 26, 22, 255}, {250, 240, 205, 255}, {235, 195, 60,  255}, {}}},
+	.Sky_Rune_Scroll    = {RUNE_SCROLL_GRID, {{150, 195, 235, 255}, {34, 26, 22, 255}, {200, 225, 250, 255}, {240, 250, 255, 255}, {}}},
 	.Sky_Altar        = {SKY_ALTAR_GRID, {{}, {}, {190, 230, 255, 255}, {90, 180, 255, 255}, {}}},
 	.Cloud_Stone      = {CLOUD_STONE_GRID, {{225, 235, 250, 255}, {172, 186, 215, 255}, {250, 252, 255, 255}, {}, {}}},
 	.Aether_Crystal   = {CRYSTAL_GRID, {{}, {}, {198, 255, 220, 255}, {110, 225, 160, 255}, {66, 168, 108, 255}}},
@@ -659,6 +661,10 @@ item_icons := [Item]Item_Icon{
 	.Clay_Golem       = {SMELTER_GRID, {{166, 105, 72, 255}, {92, 54, 38, 255}, {}, {80, 220, 145, 255}, {225, 170, 120, 255}}},
 	// Jade Ring — silver band, jade-lit charm
 	.Jade_Ring        = {CHARM_GRID, {{}, {}, {205, 205, 225, 255}, {150, 210, 165, 255}, {92, 152, 108, 255}}},
+	// Pond shore sand — same clod shape as Dirt/Clay, pale sandy palette
+	.Sand             = {DIRT_GRID, {{225, 205, 150, 255}, {180, 158, 105, 255}, {245, 232, 200, 255}, {}, {}}},
+	// Rune Coffer — the barrel silhouette in the chest's darker oak and iron
+	.Rune_Coffer      = {BARREL_GRID, {{126, 68, 36, 255}, {74, 39, 24, 255}, {174, 102, 54, 255}, {}, {}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

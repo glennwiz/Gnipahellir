@@ -11,6 +11,8 @@ Reclaim_Block :: enum u8 {
     Loaded_Smelter,
     Loaded_Silo,
     Loaded_Barrel,
+    Loaded_Coffer,
+    Sealed_Chest,
     Loaded_Miner,
     Anchored_Dimension,
     Active_Ritual,
@@ -34,7 +36,9 @@ structure_interact :: proc(gs: ^Game_State, tile: [2]i32) {
     #partial switch t {
     case .Smelter:
         eq_push(&gs.events, Event{type = .Smelter_Interact, tile = tile})
-    case .Barrel:
+    case .Barrel, .Rune_Coffer:
+        eq_push(&gs.events, Event{type = .Barrel_Interact, tile = tile})
+    case .Sky_Rune_Scroll_Chest, .Rune_Scroll_Chest_A, .Rune_Scroll_Chest_B, .Rune_Scroll_Chest_C:
         eq_push(&gs.events, Event{type = .Barrel_Interact, tile = tile})
     case .Silo:
         if s := silo_at(gs, gs.level_index, tile); s != nil do silo_withdraw(gs, s)
@@ -84,6 +88,13 @@ structure_reclaim_block :: proc(gs: ^Game_State, tile: [2]i32) -> Reclaim_Block 
         if s := silo_at(gs, gs.level_index, tile); s != nil && silo_total(s) > 0 do return .Loaded_Silo
     case .Barrel:
         if b := barrel_at(gs, gs.level_index, tile); b != nil && barrel_total(b) > 0 do return .Loaded_Barrel
+    case .Rune_Coffer:
+        if b := barrel_at(gs, gs.level_index, tile); b != nil && barrel_total(b) > 0 do return .Loaded_Coffer
+    case .Sky_Rune_Scroll_Chest, .Rune_Scroll_Chest_A, .Rune_Scroll_Chest_B, .Rune_Scroll_Chest_C:
+        // The seal comes first: the rune scroll is the progression find, and
+        // prising the coffer loose must never be what swallows it.
+        if rune_scroll_chest_holds_scroll(gs, tile) do return .Sealed_Chest
+        if b := barrel_at(gs, gs.level_index, tile); b != nil && barrel_total(b) > 0 do return .Loaded_Coffer
     case .Auto_Miner:
         if gs.dimension.miner.active && gs.dimension.miner.base == tile &&
            miner_haul_total(&gs.dimension.miner) > 0 {
@@ -112,6 +123,8 @@ reclaim_block_message := [Reclaim_Block]string{
     .Loaded_Smelter     = "Empty the smelter before reclaiming it",
     .Loaded_Silo        = "Empty the silo before reclaiming it",
     .Loaded_Barrel      = "Empty the barrel before reclaiming it",
+    .Loaded_Coffer      = "Empty the coffer before prising it loose",
+    .Sealed_Chest       = "Take the rune scroll first",
     .Loaded_Miner       = "Claim the miner's haul before reclaiming it",
     .Anchored_Dimension = "The working miner anchors this spawner - reclaim it first",
     .Active_Ritual      = "The altar cannot move during a ritual",
@@ -125,7 +138,8 @@ notify_reclaim_block :: proc(gs: ^Game_State, block: Reclaim_Block) {
 
 // Hold Shift + mine over one adjacent structure. Any interruption resets the
 // timer; only a completed hold emits the ordinary Tile_Mined event that owns
-// drops, machine cleanup, gravity and sound.
+// drops, machine cleanup, gravity and sound.  Rune scroll chests and coffers
+// ride the same path — they are is_structure_tile like any other equipment.
 update_reclaim :: proc(gs: ^Game_State) {
     r := &gs.reclaim
     if !gs.input.reclaim || gs.player.dead || gs.game_won {

@@ -9,7 +9,7 @@ package game
 //  player stays frozen so you can stand and watch the world seethe.
 //
 //  Debug-only chaos: toggled from the F1 menu (debug builds), never saved,
-//  and it will happily eat portals, stations and blueprints.  That's the fun.
+//  and it will happily eat portals, stations and rune scrolls.  That's the fun.
 
 LIFE_TICK :: f32(0.25)  // seconds per generation
 

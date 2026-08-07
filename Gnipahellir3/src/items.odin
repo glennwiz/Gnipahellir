@@ -37,13 +37,13 @@ item_table := [Item]Item_Info{
     .Smelter        = { "Smelter",         {200, 100, 0,   255}, .Smelter, "Casts ore into bars; feed it wood to keep the fire lit." },
     .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air, "Carries water or lava between cells." },
     .Hell_Key       = { "Hell Key",        {220, 30,  60,  255}, .Air, "Garm's key. Opens whatever door awaits the final seal." },
-    // Blueprint seal color echoes its ritual's material cost — bronze/silver/
+    // Rune Scroll seal color echoes its ritual's material cost — bronze/silver/
     // gold — so the three tiers read apart at a glance instead of sharing one
     // blue swatch (icon seal wax in item_art.odin mirrors these).
-    .Blueprint_A    = { "Blueprint A",     {182, 108, 58,  255}, .Air, "A ritual seal — build its structure to progress." },
-    .Blueprint_B    = { "Blueprint B",     {205, 205, 225, 255}, .Air, "A ritual seal — build its structure to progress." },
-    .Blueprint_C    = { "Blueprint C",     {235, 195, 60,  255}, .Air, "A ritual seal — build its structure to progress." },
-    .Sky_Blueprint  = { "Sky Blueprint",   {120, 200, 255, 255}, .Air, "The seal for the sky altar's structure." },
+    .Rune_Scroll_A    = { "Rune Scroll A",     {182, 108, 58,  255}, .Air, "A ritual seal — build its structure to progress." },
+    .Rune_Scroll_B    = { "Rune Scroll B",     {205, 205, 225, 255}, .Air, "A ritual seal — build its structure to progress." },
+    .Rune_Scroll_C    = { "Rune Scroll C",     {235, 195, 60,  255}, .Air, "A ritual seal — build its structure to progress." },
+    .Sky_Rune_Scroll  = { "Sky Rune Scroll",   {120, 200, 255, 255}, .Air, "The seal for the sky altar's structure." },
     .Sky_Altar      = { "Sky Altar",       {200, 200, 255, 255}, .Sky_Altar, "Raises a portal to the low sky once its ritual is built." },
     .Cloud_Stone    = { "Cloud Stone",     {200, 220, 255, 255}, .Air, "Light stone gathered from the clouds above." },
     .Aether_Crystal = { "Aether Crystal",  {180, 255, 200, 255}, .Air, "A crystallized wisp of sky magic." },
@@ -100,10 +100,12 @@ item_table := [Item]Item_Info{
     .Command_Wand_Hel  = { "Hel Command Wand",  {225, 55,  85,  255}, .Air, "A Hel-forged command wand — commands even more golems." },
     .Clay_Golem        = { "Clay Golem",        {178, 116, 78,  255}, .Air, "Loads into the command wand; deploy it to gather or build." },
     .Jade_Ring         = { "Jade Ring",         {150, 210, 165, 255}, .Air, "A worn charm: teleports you straight to the surface on demand." },
+    .Sand              = { "Sand",              {225, 205, 150, 255}, .Sand, "Fine shore sand, dug from the pond's rim." },
+    .Rune_Coffer       = { "Rune Coffer",       {150, 138, 120, 255}, .Rune_Coffer, "An emptied rune chest, prised loose. Re-place it as a 4x4 store." },
 }
 
-is_blueprint :: proc(it: Item) -> bool {
-    return it == .Blueprint_A || it == .Blueprint_B || it == .Blueprint_C || it == .Sky_Blueprint
+is_rune_scroll :: proc(it: Item) -> bool {
+    return it == .Rune_Scroll_A || it == .Rune_Scroll_B || it == .Rune_Scroll_C || it == .Sky_Rune_Scroll
 }
 
 // ─── Equipment & Stats ────────────────────────────────────────────────────────

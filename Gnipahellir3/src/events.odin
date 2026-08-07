@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Blueprint_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark:
+        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Rune_Scroll_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark:
             gs.save_dirty = true
         }
 
@@ -113,16 +113,16 @@ process_events :: proc(gs: ^Game_State) {
         case .Item_Pickup:
             audio_play(&gs.audio, .Pickup)
             #partial switch Item(e.payload.int_val) {
-            case .Blueprint_A:
-                eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 0}})
-            case .Blueprint_B:
-                eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 1}})
-            case .Blueprint_C:
-                eq_push(&gs.events, Event{type = .Blueprint_Found, payload = {int_val = 2}})
+            case .Rune_Scroll_A:
+                eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 0}})
+            case .Rune_Scroll_B:
+                eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 1}})
+            case .Rune_Scroll_C:
+                eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 2}})
             case .Hell_Key:
                 eq_push(&gs.events, Event{type = .Game_Won})
-            case .Sky_Blueprint:
-                notify(gs, "Sky Blueprint found - raise a Sky Altar to open the way above (B)")
+            case .Sky_Rune_Scroll:
+                notify(gs, "Sky Rune Scroll found - raise a Sky Altar to open the way above (B)")
             case .Pickaxe:
                 // First pickaxe: teach its dedicated slot and the core verb.
                 // One-shot so a dropped-and-repicked pick doesn't nag.
@@ -178,8 +178,8 @@ process_events :: proc(gs: ^Game_State) {
             smelter_withdraw(gs, e.tile)
 
         case .Barrel_Interact:
-            if is_blueprint_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) {
-                open_blueprint_chest(gs, e.tile)
+            if is_rune_scroll_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) {
+                open_rune_scroll_chest(gs, e.tile)
             } else {
                 gs.ui.show_barrel    = true
                 gs.ui.barrel_tile    = e.tile
@@ -195,9 +195,9 @@ process_events :: proc(gs: ^Game_State) {
         case .Barrel_Take:
             if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
                 slot := int(e.payload.int_val)
-                if is_blueprint_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) &&
-                   slot >= 0 && slot < BARREL_SLOTS && is_blueprint(b.slots[slot].item) {
-                    blueprint_chest_take(gs, b, slot)
+                if is_rune_scroll_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) &&
+                   slot >= 0 && slot < BARREL_SLOTS && is_rune_scroll(b.slots[slot].item) {
+                    rune_scroll_chest_take(gs, b, slot)
                 } else {
                     barrel_take(gs, b, slot)
                 }
@@ -237,9 +237,9 @@ process_events :: proc(gs: ^Game_State) {
             switch {
             case gs.progression.sky_altar_pos == {0, 0}:
                 notify(gs, "Sealed by runes - raise a Sky Altar on the Surface first")
-            case tier >= 0 && tier < MAX_PROGRESSION_TIERS && !gs.progression.blueprint_found[tier]:
+            case tier >= 0 && tier < MAX_PROGRESSION_TIERS && !gs.progression.rune_scroll_found[tier]:
                 notify(gs, "Sealed by runes - find %s %s",
-                    item_table[tier_blueprints[tier]].name, blueprint_places[tier])
+                    item_table[tier_rune_scrolls[tier]].name, rune_scroll_places[tier])
             case:
                 notify(gs, "Sealed by runes - the sky ritual will break the seal")
             }
@@ -247,14 +247,14 @@ process_events :: proc(gs: ^Game_State) {
         case .Player_Died:
             gs.player.dead = true
 
-        case .Blueprint_Found:
+        case .Rune_Scroll_Found:
             tier := int(e.payload.int_val)
             if tier >= 0 && tier < MAX_PROGRESSION_TIERS {
-                gs.progression.blueprint_found[tier] = true
-                // Blueprints aren't inspectable yet — surface the ritual
+                gs.progression.rune_scroll_found[tier] = true
+                // Rune Scrolls aren't inspectable yet — surface the ritual
                 // cost at pickup so the player knows what to gather.
                 c := structure_costs[tier]
-                notify(gs, "Blueprint! Altar ritual needs %d %s + %d %s",
+                notify(gs, "Rune Scroll! Altar ritual needs %d %s + %d %s",
                     c[0].count, item_table[c[0].item].name,
                     c[1].count, item_table[c[1].item].name)
             }
@@ -455,10 +455,19 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     }
 
     // A loaded barrel refuses the pick — empty it before reclaiming the wood.
-    if old_tile == .Barrel {
+    // Rune coffers (and the sealed chests they come from) share the record
+    // book, so they share the rule: nothing stored is ever lost to a reclaim.
+    if old_tile == .Barrel || old_tile == .Rune_Coffer || is_rune_scroll_chest(old_tile) {
+        // A chest whose rune scroll is still inside stays put — the scroll is
+        // the progression find, and prising the coffer loose must never be the
+        // thing that swallows it.
+        if is_rune_scroll_chest(old_tile) && rune_scroll_chest_holds_scroll(gs, e.tile) {
+            notify(gs, "Take the rune scroll first")
+            return
+        }
         if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
             if barrel_total(b) > 0 {
-                notify(gs, "The barrel is full - empty it before you break it")
+                notify(gs, "The chest is full - empty it before you break it")
                 return
             }
         }

@@ -182,24 +182,24 @@ shaft_mouth_is_dressable :: proc(t: ^testing.T) {
 }
 
 @(test)
-blueprint_overlay_tracks_the_active_objective :: proc(t: ^testing.T) {
+rune_scroll_overlay_tracks_the_active_objective :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // No blueprint found → nothing for the overlay to show.
-    testing.expect_value(t, blueprint_active_tier(gs), -1)
+    // No rune scroll found → nothing for the overlay to show.
+    testing.expect_value(t, rune_scroll_active_tier(gs), -1)
 
-    // Finding tier 0's blueprint makes it the active objective.
-    gs.progression.blueprint_found[0] = true
-    testing.expect_value(t, blueprint_active_tier(gs), 0)
-    testing.expect_value(t, blueprint_unlocks_name(0), level_names[LEVEL_CAVE2])
+    // Finding tier 0's rune scroll makes it the active objective.
+    gs.progression.rune_scroll_found[0] = true
+    testing.expect_value(t, rune_scroll_active_tier(gs), 0)
+    testing.expect_value(t, rune_scroll_unlocks_name(0), level_names[LEVEL_CAVE2])
 
-    // Raising its structure advances to the next found blueprint, else none.
+    // Raising its structure advances to the next found rune scroll, else none.
     gs.progression.sky_structure_complete[0] = true
-    testing.expect_value(t, blueprint_active_tier(gs), -1)
-    gs.progression.blueprint_found[1] = true
-    testing.expect_value(t, blueprint_active_tier(gs), 1)
-    testing.expect_value(t, blueprint_unlocks_name(1), level_names[LEVEL_CAVE3])
+    testing.expect_value(t, rune_scroll_active_tier(gs), -1)
+    gs.progression.rune_scroll_found[1] = true
+    testing.expect_value(t, rune_scroll_active_tier(gs), 1)
+    testing.expect_value(t, rune_scroll_unlocks_name(1), level_names[LEVEL_CAVE3])
 }
 
 @(test)
@@ -330,7 +330,7 @@ stone_wood_altar_pixel_skin_requires_complete_foundation :: proc(t:^testing.T) {
 @(test)
 each_tier_raises_a_distinct_altar :: proc(t: ^testing.T) {
     // Every progression tier has its own template, and the deeper ones call for
-    // silver and gold — so each blueprint reads differently.
+    // silver and gold — so each rune scroll reads differently.
     a := &structure_templates[0]
     b := &structure_templates[1]
     testing.expect(t, a.name != b.name, "tier A and B templates should differ")
@@ -458,9 +458,9 @@ player_passes_through_structures_enemies_blocked :: proc(t: ^testing.T) {
 }
 
 @(test)
-player_passes_through_blueprint_chests_sideways_only :: proc(t: ^testing.T) {
-    // Blueprint chests aren't in is_structure_tile (they gate their own
-    // separate reclaim/mining rules via is_blueprint_chest), so the
+player_passes_through_rune_scroll_chests_sideways_only :: proc(t: ^testing.T) {
+    // Rune Scroll chests aren't in is_structure_tile (they gate their own
+    // separate reclaim/mining rules via is_rune_scroll_chest), so the
     // walk-through exception is wired to them independently in physics.odin
     // — verify it actually took.
     gs := test_state()
@@ -468,20 +468,20 @@ player_passes_through_blueprint_chests_sideways_only :: proc(t: ^testing.T) {
     w := &gs.world
 
     for yy in 40 ..= 52 do for xx in 96 ..= 104 do set_tile(w, xx, yy, .Air)
-    set_tile(w, 100, 50, .Blueprint_Chest_A)
-    testing.expect(t, is_solid(w, 100, 50), "a blueprint chest is solid rock")
+    set_tile(w, 100, 50, .Rune_Scroll_Chest_A)
+    testing.expect(t, is_solid(w, 100, 50), "a rune scroll chest is solid rock")
 
     grounded: bool
 
     ppos := [2]f32{98, 50}
     pvel := [2]f32{50, 0}
     move_body(w, &ppos, &pvel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded, is_player = true)
-    testing.expect(t, ppos.x > 100, "the player phases through a blueprint chest sideways")
+    testing.expect(t, ppos.x > 100, "the player phases through a rune scroll chest sideways")
 
     epos := [2]f32{98, 50}
     evel := [2]f32{50, 0}
     move_body(w, &epos, &evel, {PLAYER_W, PLAYER_H}, 0.1, 0, 0, &grounded)
-    testing.expect(t, epos.x < 100, "a blueprint chest walls other entities out")
+    testing.expect(t, epos.x < 100, "a rune scroll chest walls other entities out")
 
     dpos := [2]f32{100, 44}
     dvel := [2]f32{}
@@ -490,7 +490,7 @@ player_passes_through_blueprint_chests_sideways_only :: proc(t: ^testing.T) {
         move_body(w, &dpos, &dvel, {PLAYER_W, PLAYER_H}, 1.0/60.0,
             GRAVITY, MAX_FALL_SPEED, &dgrounded, is_player = true)
     }
-    testing.expect(t, dgrounded, "the player lands on top of a blueprint chest")
+    testing.expect(t, dgrounded, "the player lands on top of a rune scroll chest")
     testing.expect(t, abs(dpos.y + PLAYER_H - 50) < 0.01, "feet rest exactly on the chest's top")
 }
 
@@ -622,33 +622,33 @@ pickup_collects_world_drops :: proc(t: ^testing.T) {
 }
 
 @(test)
-blueprint_chest_opens_container_then_claims :: proc(t: ^testing.T) {
+rune_scroll_chest_opens_container_then_claims :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     gs.player.pos = {10, 40}
-    set_tile(&gs.world, 11, 41, .Blueprint_Chest_A)
+    set_tile(&gs.world, 11, 41, .Rune_Scroll_Chest_A)
 
-    testing.expect(t, open_blueprint_chest(gs, {11, 41}), "chest should be recognized")
+    testing.expect(t, open_rune_scroll_chest(gs, {11, 41}), "chest should be recognized")
     testing.expect(t, gs.ui.show_barrel, "chest should open the shared container window")
     testing.expect(t, gs.ui.show_inventory, "bag should open beside the chest")
-    testing.expect(t, !gs.progression.blueprint_found[0], "opening alone must not claim the blueprint")
-    testing.expect_value(t, inventory_count(&gs.player.inventory, .Blueprint_A), 0)
-    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Blueprint_Chest_A)
+    testing.expect(t, !gs.progression.rune_scroll_found[0], "opening alone must not claim the rune scroll")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Rune_Scroll_A), 0)
+    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Scroll_Chest_A)
     chest_store := barrel_at(gs, gs.level_index, {11, 41})
     testing.expect(t, chest_store != nil, "opening should create ordinary 4x4 storage")
-    testing.expect_value(t, chest_store.slots[BLUEPRINT_CHEST_SLOT].item, Item.Blueprint_A)
+    testing.expect_value(t, chest_store.slots[RUNE_SCROLL_CHEST_SLOT].item, Item.Rune_Scroll_A)
 
     eq_push(&gs.events, Event{
         type    = .Barrel_Take,
         tile    = {11, 41},
-        payload = {int_val = BLUEPRINT_CHEST_SLOT},
+        payload = {int_val = RUNE_SCROLL_CHEST_SLOT},
     })
     process_events(gs)
 
-    testing.expect(t, gs.progression.blueprint_found[0], "blueprint A should set tier 0")
-    testing.expect_value(t, inventory_count(&gs.player.inventory, .Blueprint_A), 1)
-    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Blueprint_Chest_A)
+    testing.expect(t, gs.progression.rune_scroll_found[0], "rune scroll A should set tier 0")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Rune_Scroll_A), 1)
+    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Scroll_Chest_A)
     testing.expect(t, gs.ui.show_barrel, "permanent chest window should stay open")
 
     // The same chest is immediately reusable as ordinary storage.
@@ -664,7 +664,79 @@ blueprint_chest_opens_container_then_claims :: proc(t: ^testing.T) {
 }
 
 @(test)
-blueprint_stays_inside_open_chest_when_bag_is_full :: proc(t: ^testing.T) {
+sealed_chest_refuses_pickup_until_the_scroll_is_out :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+
+	gs.player.pos = {10, 40}
+	set_tile(&gs.world, 11, 41, .Rune_Scroll_Chest_A)
+
+	// Still sealed: the hold is refused outright, so the scroll can never be
+	// swallowed by prising the coffer loose.
+	testing.expect_value(t, structure_reclaim_block(gs, {11, 41}), Reclaim_Block.Sealed_Chest)
+	gs.input.reclaim    = true
+	gs.input.mouse_tile = {11, 41}
+	for _ in 0 ..< 60 do update_reclaim(gs)
+	process_events(gs)
+	testing.expect(t, gs.reclaim.blocked, "a sealed chest must block the hold")
+	testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Scroll_Chest_A)
+	testing.expect_value(t, gs.world.items[grid_idx(11, 41)], Item.None)
+
+	// Take the scroll the ordinary way, then the emptied chest comes loose.
+	testing.expect(t, open_rune_scroll_chest(gs, {11, 41}), "chest should open")
+	eq_push(&gs.events, Event{type = .Barrel_Take, tile = {11, 41},
+		payload = {int_val = RUNE_SCROLL_CHEST_SLOT}})
+	process_events(gs)
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Rune_Scroll_A), 1)
+
+	testing.expect_value(t, structure_reclaim_block(gs, {11, 41}), Reclaim_Block.None)
+	gs.reclaim = {}
+	for _ in 0 ..< 60 do update_reclaim(gs)
+	process_events(gs)
+	// Reclaims drop at the tile as a ground pile, same as any other structure.
+	testing.expect_value(t, gs.world.items[grid_idx(11, 41)], Item.Rune_Coffer)
+	testing.expect(t, get_tile(&gs.world, 11, 41) != .Rune_Scroll_Chest_A, "the chest should be gone from the world")
+	testing.expect(t, barrel_at(gs, gs.level_index, {11, 41}) == nil, "its storage record should be freed")
+}
+
+@(test)
+rune_coffer_re_places_as_ordinary_storage :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+
+	gs.player.pos = {10, 40}
+	inventory_insert(&gs.player.inventory, .Rune_Coffer, 1)
+	for &s, i in gs.player.inventory.slots {
+		if s.item == .Rune_Coffer { gs.player.inventory.selected = i; break }
+	}
+	// Placed adjacent to the player so the PICK_RANGE reclaim can reach it later.
+	set_tile(&gs.world, 11, 42, .Stone)  // something to attach to
+	eq_push(&gs.events, Event{type = .Place_Request, tile = {11, 41}})
+	process_events(gs)
+
+	testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Coffer)
+	b := barrel_at(gs, gs.level_index, {11, 41})
+	testing.expect(t, b != nil, "a placed coffer claims a storage record")
+
+	// It stores like any barrel, and refuses the pick while loaded.
+	gs.player.inventory.slots[0] = {.Stone_Block, 3}
+	eq_push(&gs.events, Event{type = .Barrel_Store, tile = {11, 41}, payload = {int_val = 0}})
+	process_events(gs)
+	testing.expect_value(t, barrel_total(b), 3)
+	testing.expect_value(t, structure_reclaim_block(gs, {11, 41}), Reclaim_Block.Loaded_Coffer)
+
+	// Emptied, it comes straight back up as a coffer again.
+	eq_push(&gs.events, Event{type = .Barrel_Take, tile = {11, 41}, payload = {int_val = 0}})
+	process_events(gs)
+	testing.expect_value(t, structure_reclaim_block(gs, {11, 41}), Reclaim_Block.None)
+	gs.input.reclaim    = true
+	gs.input.mouse_tile = {11, 41}
+	for _ in 0 ..< 60 do update_reclaim(gs)
+	process_events(gs)
+	testing.expect_value(t, gs.world.items[grid_idx(11, 41)], Item.Rune_Coffer)
+	testing.expect(t, barrel_at(gs, gs.level_index, {11, 41}) == nil, "reclaim frees the record")
+}
+
+@(test)
+rune_scroll_stays_inside_open_chest_when_bag_is_full :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
@@ -672,38 +744,38 @@ blueprint_stays_inside_open_chest_when_bag_is_full :: proc(t: ^testing.T) {
     for i in 0 ..< MAX_INVENTORY {
         gs.player.inventory.slots[i] = {.Stone_Block, MAX_STACK}
     }
-    set_tile(&gs.world, 11, 41, .Blueprint_Chest_A)
+    set_tile(&gs.world, 11, 41, .Rune_Scroll_Chest_A)
 
-    testing.expect(t, open_blueprint_chest(gs, {11, 41}), "chest should be recognized")
+    testing.expect(t, open_rune_scroll_chest(gs, {11, 41}), "chest should be recognized")
     testing.expect(t, gs.ui.show_barrel, "full bag must not prevent the chest window opening")
     eq_push(&gs.events, Event{
         type    = .Barrel_Take,
         tile    = {11, 41},
-        payload = {int_val = BLUEPRINT_CHEST_SLOT},
+        payload = {int_val = RUNE_SCROLL_CHEST_SLOT},
     })
     process_events(gs)
 
-    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Blueprint_Chest_A)
-    testing.expect_value(t, inventory_count(&gs.player.inventory, .Blueprint_A), 0)
+    testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Scroll_Chest_A)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Rune_Scroll_A), 0)
     testing.expect(t, gs.ui.show_barrel, "open chest should remain visible after a refused take")
     chest_store := barrel_at(gs, gs.level_index, {11, 41})
     testing.expect(t, chest_store != nil, "full bag must not remove chest storage")
-    testing.expect_value(t, chest_store.slots[BLUEPRINT_CHEST_SLOT].item, Item.Blueprint_A)
+    testing.expect_value(t, chest_store.slots[RUNE_SCROLL_CHEST_SLOT].item, Item.Rune_Scroll_A)
 }
 
 @(test)
-loose_blueprints_are_sealed_for_save_compatibility :: proc(t: ^testing.T) {
+loose_rune_scrolls_are_sealed_for_save_compatibility :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     idx := grid_idx(20, 80)
     set_tile(&gs.world, 20, 80, .Void)
-    gs.world.items[idx]       = .Blueprint_C
+    gs.world.items[idx]       = .Rune_Scroll_C
     gs.world.item_counts[idx] = 1
 
-    seal_loose_blueprints(&gs.world)
+    seal_loose_rune_scrolls(&gs.world)
 
-    testing.expect_value(t, get_tile(&gs.world, 20, 80), Tile_Type.Blueprint_Chest_C)
+    testing.expect_value(t, get_tile(&gs.world, 20, 80), Tile_Type.Rune_Scroll_Chest_C)
     testing.expect_value(t, gs.world.items[idx], Item.None)
     testing.expect_value(t, gs.world.item_counts[idx], 0)
 }
@@ -963,7 +1035,7 @@ ritual_consumes_and_unlocks :: proc(t: ^testing.T) {
 
     inv := &gs.player.inventory
     gs.level_index = LEVEL_SKY  // ritual is gated to the sky level
-    gs.progression.blueprint_found[0] = true
+    gs.progression.rune_scroll_found[0] = true
 
     // Missing materials: nothing happens
     handle_ritual_request(gs)
@@ -995,7 +1067,7 @@ ritual_swirls_then_leaves_a_tome :: proc(t: ^testing.T) {
 
     inv := &gs.player.inventory
     gs.level_index = LEVEL_SKY
-    gs.progression.blueprint_found[0] = true
+    gs.progression.rune_scroll_found[0] = true
     inventory_insert(inv, .Cloud_Stone, 8)
     inventory_insert(inv, .Plank, 4)
 
@@ -1054,10 +1126,10 @@ ritual_gated_to_sky_level :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // Blueprint + full materials, but standing on the surface (C4): the
+    // Rune Scroll + full materials, but standing on the surface (C4): the
     // altar must refuse and explain itself.
     inv := &gs.player.inventory
-    gs.progression.blueprint_found[0] = true
+    gs.progression.rune_scroll_found[0] = true
     inventory_insert(inv, .Cloud_Stone, 8)
     inventory_insert(inv, .Plank, 4)
 
@@ -1310,7 +1382,7 @@ plain_clouds_chance_drop_cloud_stone :: proc(t: ^testing.T) {
 }
 
 @(test)
-cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
+cave_generation_has_ore_and_rune_scrolls :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
@@ -1328,7 +1400,7 @@ cave_generation_has_ore_and_blueprints :: proc(t: ^testing.T) {
     testing.expect(t, iron > 50, "cave 2 should have iron")
     testing.expect(t, silver > 20, "cave 2 should have silver")
     testing.expect(t, voids > 2000, "cave 2 should be substantially open")
-    testing.expect_value(t, get_tile(w, 12, 101), Tile_Type.Blueprint_Chest_B)
+    testing.expect_value(t, get_tile(w, 12, 101), Tile_Type.Rune_Scroll_Chest_B)
     testing.expect_value(t, w.items[grid_idx(12, 101)], Item.None)
     testing.expect_value(t, get_tile(w, 93, 26), Tile_Type.Cave_Entrance)
 }
@@ -2286,13 +2358,13 @@ notifications_explain_ritual_state :: proc(t: ^testing.T) {
 
     gs.level_index = LEVEL_SKY  // ritual is gated to the sky level
 
-    // No blueprint: the altar explains itself instead of doing nothing
+    // No rune scroll: the altar explains itself instead of doing nothing
     handle_ritual_request(gs)
     testing.expect_value(t, gs.notify.count, 1)
-    testing.expect(t, strings.contains(notify_text(gs, 0), "blueprint"), "should point at the missing blueprint")
+    testing.expect(t, strings.contains(notify_text(gs, 0), "rune scroll"), "should point at the missing rune scroll")
 
-    // Blueprint but no materials: names the first missing ingredient + counts
-    gs.progression.blueprint_found[0] = true
+    // Rune Scroll but no materials: names the first missing ingredient + counts
+    gs.progression.rune_scroll_found[0] = true
     inventory_insert(&gs.player.inventory, .Cloud_Stone, 3)
     handle_ritual_request(gs)
     testing.expect_value(t, gs.notify.count, 2)
@@ -2311,53 +2383,53 @@ objective_line_walks_the_loop :: proc(t: ^testing.T) {
     defer free(gs)
     buf: [128]u8
 
-    // Fresh run: raise the sky gate first (Blueprint A doesn't exist yet)
+    // Fresh run: raise the sky gate first (Rune Scroll A doesn't exist yet)
     s := current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "Sky Altar"), "fresh run points at raising the sky altar")
 
-    // Gate up: hunt the deep blueprint
+    // Gate up: hunt the deep rune scroll
     gs.progression.sky_altar_pos = {90, 90}
     s = current_objective(gs, buf[:127])
-    testing.expect(t, strings.contains(s, "Blueprint A"), "next step is finding Blueprint A")
+    testing.expect(t, strings.contains(s, "Rune Scroll A"), "next step is finding Rune Scroll A")
 
-    // Blueprint found: show the tier-0 ritual cost
-    gs.progression.blueprint_found[0] = true
+    // Rune Scroll found: show the tier-0 ritual cost
+    gs.progression.rune_scroll_found[0] = true
     s = current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "Cloud Stone"), "ritual cost names the sky material")
 
-    // Structure A raised: hunt Blueprint B
+    // Structure A raised: hunt Rune Scroll B
     gs.progression.sky_structure_complete[0] = true
     s = current_objective(gs, buf[:127])
-    testing.expect(t, strings.contains(s, "Blueprint B"), "tier 1 points at Blueprint B")
+    testing.expect(t, strings.contains(s, "Rune Scroll B"), "tier 1 points at Rune Scroll B")
 
     // All rituals done: face the boss
-    gs.progression.blueprint_found        = {true, true, true}
+    gs.progression.rune_scroll_found        = {true, true, true}
     gs.progression.sky_structure_complete = {true, true, true}
     s = current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "GARM"), "endgame points at the boss")
 }
 
 @(test)
-deep_blueprint_waits_for_the_altar :: proc(t: ^testing.T) {
+deep_rune_scroll_waits_for_the_altar :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
     idx := grid_idx(141, 94)
-    testing.expect(t, !is_blueprint_chest(gs.world.terrain[idx]), "Blueprint A chest must not exist at world gen")
+    testing.expect(t, !is_rune_scroll_chest(gs.world.terrain[idx]), "Rune Scroll A chest must not exist at world gen")
 
-    spawn_deep_blueprint(gs)
-    testing.expect_value(t, gs.world.terrain[idx], Tile_Type.Blueprint_Chest_A)
+    spawn_deep_rune_scroll(gs)
+    testing.expect_value(t, gs.world.terrain[idx], Tile_Type.Rune_Scroll_Chest_A)
     testing.expect_value(t, gs.world.items[idx], Item.None)
 
     // Idempotent: a second raise keeps the same single chest.
-    spawn_deep_blueprint(gs)
-    testing.expect_value(t, gs.world.terrain[idx], Tile_Type.Blueprint_Chest_A)
+    spawn_deep_rune_scroll(gs)
+    testing.expect_value(t, gs.world.terrain[idx], Tile_Type.Rune_Scroll_Chest_A)
 
     // Already found: never respawns
     set_tile(&gs.world, 141, 94, .Void)
-    gs.progression.blueprint_found[0] = true
-    spawn_deep_blueprint(gs)
-    testing.expect(t, !is_blueprint_chest(gs.world.terrain[idx]), "found blueprint chest must not respawn")
+    gs.progression.rune_scroll_found[0] = true
+    spawn_deep_rune_scroll(gs)
+    testing.expect(t, !is_rune_scroll_chest(gs.world.terrain[idx]), "found rune scroll chest must not respawn")
 }
 
 @(test)
@@ -2784,23 +2856,24 @@ projectiles_fly_hit_and_expire :: proc(t: ^testing.T) {
     defer free(gs)
 
     // Wall hit: fired at the ground, dies on the solid tile, world intact
-    spawn_projectile(gs, {30, f32(SURFACE_Y) - 3}, {0, 20}, PLAYER_ID, 1)
+    // (x=76 sits in the spawn/rune-chest band the surface pond always avoids)
+    spawn_projectile(gs, {76, f32(SURFACE_Y) - 3}, {0, 20}, PLAYER_ID, 1)
     testing.expect_value(t, gs.projectiles.count, 1)
     for _ in 0 ..< 30 { update_projectiles(gs); eq_clear(&gs.events) }
     testing.expect_value(t, gs.projectiles.count, 0)
-    testing.expect_value(t, get_tile(&gs.world, 30, SURFACE_Y), Tile_Type.Grass)
+    testing.expect_value(t, get_tile(&gs.world, 76, SURFACE_Y), Tile_Type.Grass)
 
     // Player hit: enemy-owned fireball flying at the player
     // (clear the corridor first — surface gen may have tree trunks here)
-    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
-    for x in 30 ..= 36 { set_tile(&gs.world, x, SURFACE_Y - 1, .Air) }
-    spawn_projectile(gs, {34, f32(SURFACE_Y) - 1}, {-10, 0}, enemy_entity_id(0), 2)
+    gs.player.pos = {76, f32(SURFACE_Y) - PLAYER_H}
+    for x in 76 ..= 82 { set_tile(&gs.world, x, SURFACE_Y - 1, .Air) }
+    spawn_projectile(gs, {80, f32(SURFACE_Y) - 1}, {-10, 0}, enemy_entity_id(0), 2)
     for _ in 0 ..< 60 { update_projectiles(gs); process_events(gs); eq_clear(&gs.events) }
     testing.expect_value(t, gs.player.hp, 8)
     testing.expect_value(t, gs.projectiles.count, 0)
 
     // Owner immunity: the player's own shot leaves the player unhurt
-    spawn_projectile(gs, {f32(30) + PLAYER_W*0.5, f32(SURFACE_Y) - 1}, {10, 0}, PLAYER_ID, 2)
+    spawn_projectile(gs, {f32(76) + PLAYER_W*0.5, f32(SURFACE_Y) - 1}, {10, 0}, PLAYER_ID, 2)
     for _ in 0 ..< 60 { update_projectiles(gs); process_events(gs); eq_clear(&gs.events) }
     testing.expect_value(t, gs.player.hp, 8)
 
@@ -2883,7 +2956,7 @@ garm_spawns_only_behind_boss_gate :: proc(t: ^testing.T) {
     testing.expect(t, !garm_present(gs), "no Garm before the boss gate")
 
     // Structure C completes while inside cave 3: Garm awakens
-    gs.progression.blueprint_found[2] = true
+    gs.progression.rune_scroll_found[2] = true
     inventory_insert(&gs.player.inventory, .Cloud_Stone, 20)
     inventory_insert(&gs.player.inventory, .Gold_Bar, 10)
     gs.level_index = LEVEL_SKY  // ritual gating
@@ -3330,7 +3403,7 @@ builder_soak_cave2_economy :: proc(t: ^testing.T) {
     testing.expectf(t, dens_done_window >= 0 && dens_done_window <= 10,
         "all dens should stand within 10 minutes (done at %d)", dens_done_window)
 
-    // The deposit loop must have produced raidable loot (blueprints are tiles,
+    // The deposit loop must have produced raidable loot (rune scrolls are tiles,
     // so every world item here was deposited by a builder).
     loot := 0
     for i in 0 ..< GRID_W * GRID_H {
@@ -3468,9 +3541,9 @@ dead_player_cannot_act :: proc(t: ^testing.T) {
     handle_craft_request(gs, Event{payload = {int_val = 0}})
     testing.expect_value(t, inventory_count(inv, .Plank), 0)
 
-    // Ritual rejected (blueprint + materials present, on the sky level)
+    // Ritual rejected (rune scroll + materials present, on the sky level)
     gs.level_index = LEVEL_SKY
-    gs.progression.blueprint_found[0] = true
+    gs.progression.rune_scroll_found[0] = true
     inventory_insert(inv, .Cloud_Stone, 8)
     inventory_insert(inv, .Plank, 4)
     handle_ritual_request(gs)
@@ -4590,7 +4663,7 @@ gravity_preserves_golem_masonry_ownership :: proc(t:^testing.T) {
 	set_tile(w,x,70,.Stone)
 	set_tile(w,x+1,70,.Stone)
 	w.tile_flags[grid_idx(x+1,70)]+={.Placed,.Golem_Placed}
-	golem_register_block_grace(gs,0,{i32(x+1),70})
+	golem_register_block_grace_until(gs,0,{i32(x+1),70},gs.elapsed_time+GOLEM_BLOCK_GRACE_TIME)
 
 	set_tile(w,x,70,.Void)
 	gravity_check_removed(gs,x,70)
@@ -4606,16 +4679,20 @@ gravity_preserves_golem_masonry_ownership :: proc(t:^testing.T) {
 // ─── Clay-golem automation ───────────────────────────────────────────────────
 
 @(test)
-clay_seams_spawn_in_the_early_cave :: proc(t: ^testing.T) {
+surface_pond_has_water_clay_and_sand :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
-	clay, wet := 0, 0
-	for y in CAVE_TOP+2 ..< min(CAVE_TOP+22,CAVE_BOT) do for x in CAVE_LEFT+1 ..< CAVE_RIGHT-1 {
-		if get_tile(&gs.world,x,y)==.Clay do clay += 1
-		if get_tile(&gs.world,x,y)==.Water do wet += 1
+	clay, wet, sand := 0, 0, 0
+	for x in 0 ..< GRID_W {
+		tile := get_tile(&gs.world,x,SURFACE_Y)
+		if tile==.Clay do clay += 1
+		if tile==.Water do wet += 1
+		if tile==.Sand do sand += 1
 	}
-	testing.expect(t,clay>0,"upper cave should contain mineable clay")
-	testing.expect(t,wet>0,"some clay seams should expose shallow water")
+	testing.expect(t,clay>0,"the pond should expose mineable clay banks")
+	testing.expect(t,wet>0,"the pond should hold water")
+	testing.expect(t,sand>0,"the pond should have a sand shore")
 	testing.expect_value(t,terrain_table[.Clay].drop_item,Item.Clay)
+	testing.expect_value(t,terrain_table[.Sand].drop_item,Item.Sand)
 }
 
 @(test)
@@ -4801,7 +4878,7 @@ fresh_golem_masonry_has_cross_worker_grace :: proc(t:^testing.T) {
 	for cell in ([2][2]i32{owned,spare}) {
 		set_tile(&gs.world,int(cell.x),int(cell.y),.Grass)
 		gs.world.tile_flags[grid_idx(int(cell.x),int(cell.y))]+={.Placed,.Golem_Placed}
-		golem_register_block_grace(gs,0,cell)
+		golem_register_block_grace_until(gs,0,cell,gs.elapsed_time+GOLEM_BLOCK_GRACE_TIME)
 	}
 	gs.golems.work[gs.level_index]={active=true,min=owned,max=spare}
 	owner:=&gs.golems.data[0]
@@ -5551,7 +5628,7 @@ pixel_art_save_and_load_round_trips :: proc(t: ^testing.T) {
 	path :: "pixel_art_test_scratch.dat"
 	defer os.remove(path)
 
-	data := &gs.pixel_art.sprites[.Blueprint_Chest]
+	data := &gs.pixel_art.sprites[.Rune_Scroll_Chest]
 	data.has_data = true
 	data.grid[0][0] = 5
 	data.grid[10][15] = 16
@@ -5560,7 +5637,7 @@ pixel_art_save_and_load_round_trips :: proc(t: ^testing.T) {
 
 	loaded := new(Game_State); defer free(loaded)
 	testing.expect(t, load_pixel_art_from(loaded, path), "load should succeed")
-	ld := &loaded.pixel_art.sprites[.Blueprint_Chest]
+	ld := &loaded.pixel_art.sprites[.Rune_Scroll_Chest]
 	testing.expect(t, ld.has_data, "loaded sprite should carry has_data through")
 	testing.expect_value(t, ld.grid[0][0], u8(5))
 	testing.expect_value(t, ld.grid[10][15], u8(16))

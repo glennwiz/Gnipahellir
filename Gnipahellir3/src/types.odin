@@ -99,11 +99,11 @@ Tile_Type :: enum u8 {
     // (appended: terrain is saved as u8, order is frozen)
     Barrel,
     // Permanent progression/storage coffers.  Each variant starts with the
-    // named blueprint; appended because terrain enum ordinals are serialized.
-    Sky_Blueprint_Chest,
-    Blueprint_Chest_A,
-    Blueprint_Chest_B,
-    Blueprint_Chest_C,
+    // named rune scroll; appended because terrain enum ordinals are serialized.
+    Sky_Rune_Scroll_Chest,
+    Rune_Scroll_Chest_A,
+    Rune_Scroll_Chest_B,
+    Rune_Scroll_Chest_C,
     // Clay-golem automation (appended: terrain ordinals are serialized)
     Clay,
     Clay_Hearth,
@@ -113,6 +113,12 @@ Tile_Type :: enum u8 {
     // vertical movement (golem.odin Quick Clay) — never mineable, never
     // placed by a player. (appended: terrain ordinals are serialized)
     Quick_Clay,
+    // Surface pond shore (appended: terrain ordinals are serialized)
+    Sand,
+    // A rune scroll chest carried off and re-placed: the same ornate coffer
+    // without a tier seal, storing like an ordinary barrel.  (appended:
+    // terrain ordinals are serialized)
+    Rune_Coffer,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -140,10 +146,10 @@ Item :: enum u8 {
     Smelter,
     Iron_Bucket,
     Hell_Key,
-    Blueprint_A,
-    Blueprint_B,
-    Blueprint_C,
-    Sky_Blueprint,
+    Rune_Scroll_A,
+    Rune_Scroll_B,
+    Rune_Scroll_C,
+    Sky_Rune_Scroll,
     Sky_Altar,
     Cloud_Stone,
     Aether_Crystal,
@@ -210,6 +216,11 @@ Item :: enum u8 {
     // Cheap early recall: warps the player back to the surface. (appended:
     // item ordinals are serialized)
     Jade_Ring,
+    // Surface pond shore material (appended: item ordinals are serialized)
+    Sand,
+    // An emptied rune scroll chest, prised loose and carried off (appended:
+    // item ordinals are serialized)
+    Rune_Coffer,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -251,7 +262,7 @@ Action :: enum u8 {
     Jump,
     Interact,
     Inventory,   // opens the bag + crafting panel together (crafting has no key of its own)
-    Blueprint,
+    Rune_Scroll,
     Golem_Crew, // crew-wide Gather/Build toggle while the command wand is equipped
 }
 
@@ -338,7 +349,7 @@ Event_Type :: enum u8 {
     Player_Died,
 
     // Progression
-    Blueprint_Found,
+    Rune_Scroll_Found,
     Structure_Complete,
     Cave_Unlocked,
     Boss_Defeated,

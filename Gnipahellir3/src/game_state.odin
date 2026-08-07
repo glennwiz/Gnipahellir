@@ -391,7 +391,7 @@ Input_State :: struct {
 UI_State :: struct {
     show_inventory:  bool,
     show_crafting:   bool,
-    show_blueprint:  bool,
+    show_rune_scroll:  bool,
     show_smelter:    bool,   // furnace window; smelter_tile says which furnace
     show_barrel:     bool,   // barrel window; barrel_tile says which barrel
     show_debug:      bool,
@@ -505,7 +505,7 @@ Audio_State :: struct {
 // ─── Progression ──────────────────────────────────────────────────────────────
 
 Progression_State :: struct {
-    blueprint_found:        [MAX_PROGRESSION_TIERS]bool,
+    rune_scroll_found:        [MAX_PROGRESSION_TIERS]bool,
     sky_structure_complete: [MAX_PROGRESSION_TIERS]bool,
     cave_unlocked:          [MAX_PROGRESSION_TIERS]bool,
     final_boss_defeated:    bool,
@@ -620,7 +620,7 @@ default_bindings := [Action]rl.KeyboardKey{
     .Jump       = .W,
     .Interact   = .E,
     .Inventory  = .TAB,
-    .Blueprint  = .B,
+    .Rune_Scroll  = .B,
     .Golem_Crew = .R,
 }
 

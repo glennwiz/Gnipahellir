@@ -133,8 +133,8 @@ load_game :: proc(gs: ^Game_State) -> bool {
         gs.dimension = old.dimension
         gs.elapsed_time = old.elapsed_time
         gs.frame = old.frame
-        seal_loose_blueprints(&gs.world)
-        for i in 0 ..< len(gs.levels.worlds) do if gs.levels.generated[i] do seal_loose_blueprints(&gs.levels.worlds[i])
+        seal_loose_rune_scrolls(&gs.world)
+        for i in 0 ..< len(gs.levels.worlds) do if gs.levels.generated[i] do seal_loose_rune_scrolls(&gs.levels.worlds[i])
         log_action(gs, "run migrated from save v22")
         gs.save_dirty = true
         return true
@@ -160,11 +160,11 @@ load_game :: proc(gs: ^Game_State) -> bool {
     gs.elapsed_time = sd.elapsed_time
     gs.frame        = sd.frame
 
-    // v21 previously stored progression blueprints as loose world items.
+    // v21 previously stored progression rune scrolls as loose world items.
     // Seal both the active grid and every already-generated stashed grid.
-    seal_loose_blueprints(&gs.world)
+    seal_loose_rune_scrolls(&gs.world)
     for i in 0 ..< len(gs.levels.worlds) {
-        if gs.levels.generated[i] do seal_loose_blueprints(&gs.levels.worlds[i])
+        if gs.levels.generated[i] do seal_loose_rune_scrolls(&gs.levels.worlds[i])
     }
 
     log_action(gs, "run continued from save")
