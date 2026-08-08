@@ -35,7 +35,10 @@ request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: boo
     next := clamp(gs.zoom_target + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
     if next == gs.zoom_target do return
 
-    if to_cursor {
+    // A followed body owns the framing (camera.odin): both wheel paths then just
+    // change the zoom, so neither the cursor anchor nor "back to the hero" can
+    // take the view off the worker you are watching.
+    if to_cursor && gs.cam_follow_kind == .None {
         cam := game_camera(gs)
         gs.zoom_anchor_screen = cursor
         gs.zoom_anchor_world = {
@@ -45,7 +48,7 @@ request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: boo
         gs.zoom_cursor_active = true
     } else {
         gs.zoom_cursor_active = false
-        camera_begin_recenter(gs)
+        if gs.cam_follow_kind == .None do camera_begin_recenter(gs)
     }
     // Restart the glide from where the view actually is and at the pace it
     // already carries (camera.odin), so a notch landing mid-glide retargets
@@ -86,9 +89,14 @@ update_input :: proc(gs: ^Game_State) {
         gs.cam_dragging  = true
         gs.cam_drag_last = {vx, vy}
     }
+    // Only a cursor that actually moved is a pan: a still ALT+click is how you
+    // pick a body to follow (below), and camera_pan_drag takes the view off it.
     if gs.cam_dragging {
-        camera_pan_drag(gs, {vx - gs.cam_drag_last.x, vy - gs.cam_drag_last.y})
-        gs.cam_drag_last = {vx, vy}
+        d := [2]f32{vx - gs.cam_drag_last.x, vy - gs.cam_drag_last.y}
+        if d.x != 0 || d.y != 0 {
+            camera_pan_drag(gs, d)
+            gs.cam_drag_last = {vx, vy}
+        }
     }
 
     // World-space mouse: invert the (same) game camera.
@@ -281,6 +289,20 @@ update_input :: proc(gs: ^Game_State) {
     if command_active && rl.IsMouseButtonPressed(.LEFT) && !alt_down {
         if plan := golem_plan_button_at_cursor(gs); plan != .None {
             gs.ui.golem_plan = .None if gs.ui.golem_plan == plan else plan
+        }
+    }
+
+    // ALT+click hands the camera to the body under the cursor — a worker or a
+    // builder — and it rides that body (through zooming too) until you drag the
+    // view, walk, click empty ground, or it is gone.  ALT already suppresses
+    // every world action, so this press mines/orders nothing.
+    if alt_down && rl.IsMouseButtonPressed(.LEFT) && !cursor_over_ui(gs) && gs.ui.drag_item == .None {
+        if gid := golem_at_world_point(gs, inp.mouse_world); gid >= 0 {
+            camera_follow_entity(gs, .Golem, gid)
+        } else if eid := enemy_at_world_point(gs, inp.mouse_world); eid >= 0 {
+            camera_follow_entity(gs, .Enemy, eid)
+        } else {
+            camera_stop_follow(gs)
         }
     }
 

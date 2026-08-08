@@ -1,5 +1,6 @@
 package game
 
+import "core:math"
 import rl "vendor:raylib"
 
 // ─── Zoom Camera ──────────────────────────────────────────────────────────────
@@ -164,7 +165,63 @@ camera_snap_y :: proc(gs: ^Game_State) {
     gs.zoom_cursor_active = false
     gs.cam_recentering = false
     gs.cam_dragging = false
+    gs.cam_follow_kind = .None
     gs.player_step_visual_y = 0
+}
+
+// A followed body is watched through the SAME vertical deadzone the player gets
+// (CAM_DEADZONE_Y): its jumps and hops arc inside the band, so the view holds
+// perfectly still for them.  The anchor is then low-passed at this rate (1/s) on
+// the way out of the band.  A bare deadzone goes from still to the body's full
+// climb speed the instant the band is crossed — that jump in velocity is the
+// jerk a pillaring worker made, once per hop.  Because the error is exactly zero
+// at the crossing, the filter ramps the view into the motion from a standstill
+// and settles about a sixth of a second behind a steady climb.
+CAM_FOLLOW_Y_RATE :: f32(6)
+
+// ─── Following a body ─────────────────────────────────────────────────────────
+// ALT+click on a worker or a builder hands the camera to it. The follow is
+// expressed as cam_pan — the same offset the ALT zoom and the ALT drag produce —
+// rather than as a second tracked point, so every rule downstream comes along
+// unchanged: the level-edge clamp, the zoom glide (which is why zooming keeps the
+// body framed instead of snapping back to the hero), and the smoothstep home.
+
+// World-pixel center of the followed body, or ok=false once it is gone — killed,
+// despawned, recalled, or left behind on another level.
+camera_follow_point :: proc(gs: ^Game_State) -> (pt: [2]f32, ok: bool) {
+    switch gs.cam_follow_kind {
+    case .None:
+    case .Enemy:
+        if gs.cam_follow_id < 0 || gs.cam_follow_id >= MAX_ENEMIES do return
+        if !gs.enemies.active[gs.cam_follow_id] do return
+        e    := &gs.enemies.data[gs.cam_follow_id]
+        size := enemy_body_size(e.kind)
+        return {(e.pos.x + size.x*0.5) * CELL_SIZE, (e.pos.y + size.y*0.5) * CELL_SIZE}, true
+    case .Golem:
+        if gs.cam_follow_id < 0 || gs.cam_follow_id >= MAX_GOLEMS do return
+        g := &gs.golems.data[gs.cam_follow_id]
+        if g.status != .Deployed || g.level != gs.level_index do return
+        c := golem_center(g)
+        return {c.x * CELL_SIZE, c.y * CELL_SIZE}, true
+    }
+    return
+}
+
+camera_follow_entity :: proc(gs: ^Game_State, kind: Cam_Follow, id: int) {
+    gs.cam_follow_kind    = kind
+    gs.cam_follow_id      = id
+    gs.zoom_cursor_active = false
+    gs.cam_recentering    = false
+    // Start the Y anchor on the body, or the deadzone would begin off-centre and
+    // the filter would drift up to it for no reason.
+    if pt, ok := camera_follow_point(gs); ok do gs.cam_follow_y = pt.y
+}
+
+// Hand the camera back to the player. The view is left exactly where the follow
+// had it and returns under the usual rule — gliding home the next time the player
+// moves — so letting go never yanks the framing by itself.
+camera_stop_follow :: proc(gs: ^Game_State) {
+    gs.cam_follow_kind = .None
 }
 
 // Advance the Y anchor with a vertical deadzone: it only moves when the player
@@ -200,6 +257,36 @@ update_camera :: proc(gs: ^Game_State) {
         }
     }
 
+    // A followed body owns the pan while it lives, recomputed every frame so its
+    // own walking, the player's, and any zoom in flight all keep it framed.
+    following := gs.cam_follow_kind != .None
+    if following {
+        if pt, ok := camera_follow_point(gs); ok {
+            // X rides the body exactly (a walk is already smooth). Y goes through
+            // the deadzone — stated as a clamp, which is the same rule the player
+            // anchor uses: it does not move at all while the body is inside the
+            // band — and is then eased toward the band edge, so leaving the band
+            // ramps the view in rather than snapping to the body's full speed.
+            base_x := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE
+            want   := clamp(gs.cam_follow_y, pt.y - CAM_DEADZONE_Y, pt.y + CAM_DEADZONE_Y)
+            gs.cam_follow_y += (want - gs.cam_follow_y) *
+                               (1 - math.exp(-CAM_FOLLOW_Y_RATE * gs.delta_time))
+            gs.cam_pan = {pt.x - base_x, gs.cam_follow_y - gs.cam_y}
+            gs.zoom_cursor_active = false
+            gs.cam_recentering    = false
+            // Moving is the player's standing "take me home" order — the same
+            // rule an ALT pan obeys — so walking releases the follow and the
+            // branch below glides back from wherever the body had led the view.
+            if abs(gs.player.vel.x) > 0.05 || abs(gs.player.vel.y) > 0.05 {
+                camera_stop_follow(gs)
+                following = false
+            }
+        } else {
+            camera_stop_follow(gs)
+            following = false
+        }
+    }
+
     if gs.zoom_cursor_active {
         // ALT zoom: target = anchor_world - cursor displacement / zoom.
         // Recomputing this every eased frame keeps the same world pixel under
@@ -213,7 +300,7 @@ update_camera :: proc(gs: ^Game_State) {
         }
         if next_zoom == gs.zoom_target do gs.zoom_cursor_active = false
         gs.cam_recentering = false
-    } else {
+    } else if !following {
         // Looking around should not permanently detach the view from the hero.
         // Movement is the player's implicit "take me home" camera command.
         if !gs.cam_recentering &&
@@ -263,6 +350,7 @@ camera_pan_drag :: proc(gs: ^Game_State, screen_delta: [2]f32) {
     }
     gs.zoom_cursor_active = false
     gs.cam_recentering    = false
+    gs.cam_follow_kind    = .None  // grabbing the view by hand takes it off a followed body
 }
 
 camera_begin_recenter :: proc(gs: ^Game_State) {

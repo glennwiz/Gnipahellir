@@ -52,12 +52,13 @@ log_camera :: proc(gs: ^Game_State) {
 
     // Which camera rule was driving this frame — the first thing you want to
     // know when a row looks wrong.
-    flag_buf: [4]u8
+    flag_buf: [5]u8
     n := 0
     if gs.zoom_t < 1         { flag_buf[n] = 'Z'; n += 1 }
     if gs.zoom_cursor_active { flag_buf[n] = 'A'; n += 1 }
     if gs.cam_recentering    { flag_buf[n] = 'R'; n += 1 }
     if gs.cam_dragging       { flag_buf[n] = 'D'; n += 1 }
+    if gs.cam_follow_kind != .None { flag_buf[n] = 'F'; n += 1 }
     flags := n == 0 ? "-" : string(flag_buf[:n])
 
     if cl.pos + CAM_LOG_LINE > CAM_LOG_CAP {
@@ -84,7 +85,7 @@ CAM_LOG_HEADER ::
 # Ring buffer: the newest ~20k frames (~5.5 min) survive, oldest first.
 # x/y     rl.Camera2D.target in world px, AFTER the level-edge clamp - what the renderer used
 # dx/dy   change since the previous row; vx = dx/dt (world px per second)
-# flags   Z zoom glide  A alt cursor zoom  R gliding back to the player  D alt drag pan  - idle
+# flags   Z zoom glide  A alt cursor zoom  R gliding back to the player  D alt drag pan  F following a body  - idle
 frame	dt	x	dx	vx	y	dy	zoom	pan_x	pan_y	player_x	flags
 `
 

@@ -633,6 +633,9 @@ Game_State :: struct {
     cam_recentering: bool, // true while that glide is running; not saved
     cam_dragging:  bool,   // true while ALT+mouse is panning the view; not saved
     cam_drag_last: [2]f32, // previous virtual-screen cursor pos of that drag; not saved
+    cam_follow_kind: Cam_Follow, // store the ALT-clicked body being followed lives in (.None = the player); not saved
+    cam_follow_id:   int,        // its slot in that store; not saved
+    cam_follow_y:    f32,        // deadzoned + eased Y anchor for that body, so its jumps don't bob the view; not saved
     zoom_anchor_world:  [2]f32, // world point kept beneath zoom_anchor_screen while easing; not saved
     zoom_anchor_screen: [2]f32, // virtual-screen cursor captured by an ALT wheel zoom; not saved
     zoom_cursor_active: bool,   // true while the live zoom is easing around that cursor anchor; not saved

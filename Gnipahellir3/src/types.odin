@@ -42,6 +42,10 @@ Golem_Status :: enum u8 { Empty, Carried, Deployed, Broken }
 Golem_Job :: enum u8 { Idle, Seek, Mine, Deliver, Fetch_Build, Place }
 Golem_Plan :: enum u8 { None, Clay_Hearth, Golem_Depot, World_Anchor }
 
+// Which store the ALT-click camera follow is indexing into (camera.odin).
+// .None = the ordinary player-centered camera.  Transient — never saved.
+Cam_Follow :: enum u8 { None, Enemy, Golem }
+
 // ─── ID Types ─────────────────────────────────────────────────────────────────
 
 Entity_ID :: distinct u16

@@ -835,6 +835,124 @@ plain_wheel_notch_glides_a_panned_view_home :: proc(t: ^testing.T) {
 }
 
 @(test)
+alt_click_follows_a_body_and_keeps_it_through_zoom :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+
+    // Both bodies well clear of every level edge, so this measures the follow
+    // rather than the camera clamp taking priority.
+    gs.player.pos = {90, 50}
+    e.pos         = {110, 50}
+    gs.zoom, gs.zoom_target = 2, 2
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+
+    body := [2]f32{(e.pos.x + BUILDER_W*0.5) * CELL_SIZE, (e.pos.y + BUILDER_H*0.5) * CELL_SIZE}
+    camera_follow_entity(gs, .Enemy, idx)
+    update_camera(gs)
+    testing.expect_value(t, game_camera(gs).target.x, body.x)
+    testing.expect_value(t, game_camera(gs).target.y, body.y)
+
+    // An ordinary wheel notch is normally the "back to the hero" command; while
+    // a body is followed it must only change the zoom.
+    request_zoom(gs, 1, {0, 0}, false)
+    for _ in 0 ..< 60 do update_camera(gs)
+    testing.expect_value(t, gs.zoom, f32(2 + ZOOM_STEP))
+    testing.expect_value(t, gs.cam_follow_kind, Cam_Follow.Enemy)
+    testing.expect_value(t, game_camera(gs).target.x, body.x)
+
+    // It rides the body's own walking.
+    e.pos.x += 5
+    update_camera(gs)
+    testing.expect_value(t, game_camera(gs).target.x, (e.pos.x + BUILDER_W*0.5) * CELL_SIZE)
+
+    // Moving is the standing "take me home" order: the follow lets go and the
+    // usual smoothstep glide brings the view back to the player.
+    gs.player.vel.x = 1
+    update_camera(gs)
+    testing.expect_value(t, gs.cam_follow_kind, Cam_Follow.None)
+    testing.expect(t, gs.cam_recentering, "walking starts the glide home from a follow")
+    gs.player.vel.x = 0
+    for _ in 0 ..< 60 do update_camera(gs)
+    testing.expect_value(t, gs.cam_pan.x, f32(0))
+    testing.expect_value(t, gs.cam_pan.y, f32(0))
+
+    // A body that dies (or is despawned) releases the follow without yanking the
+    // framing — the view holds where it was and comes home on the next move.
+    camera_follow_entity(gs, .Enemy, idx)
+    update_camera(gs)
+    held := gs.cam_pan
+    testing.expect(t, held.x != 0, "the follow had pulled the view off the player")
+    gs.enemies.active[idx] = false
+    update_camera(gs)
+    testing.expect_value(t, gs.cam_follow_kind, Cam_Follow.None)
+    testing.expect_value(t, gs.cam_pan.x, held.x)
+}
+
+@(test)
+a_followed_body_does_not_bob_the_view :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] { idx = i; break }
+    }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+
+    gs.player.pos = {90, 50}
+    e.pos         = {110, 50}
+    gs.zoom, gs.zoom_target = 2, 2
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+    camera_follow_entity(gs, .Enemy, idx)
+    update_camera(gs)
+    rest := game_camera(gs).target.y
+
+    // A hop, an ordinary builder jump: the arc stays inside the deadzone, so the
+    // view holds EXACTLY still — this is the bob that made a working body
+    // unwatchable.
+    for dy in ([]f32{-1, -2.5, -3, -1.5, 0}) {
+        e.pos.y = 50 + dy
+        update_camera(gs)
+        testing.expect_value(t, game_camera(gs).target.y, rest)
+    }
+
+    // Pillaring up, the case a bare deadzone handles badly: it crosses the band
+    // and the view has to follow. It must ramp in from a standstill instead of
+    // snapping to the body's climb speed.
+    first, mid := f32(0), f32(0)
+    for i in 0 ..< 12 {
+        e.pos.y -= 0.6
+        prev := game_camera(gs).target.y
+        update_camera(gs)
+        step := prev - game_camera(gs).target.y
+        testing.expect(t, step >= 0, "the view never lurches back down mid-climb")
+        if i == 0 do first = step
+        if i == 8 do mid   = step
+    }
+    testing.expect(t, mid > 0, "a climb past the band does drag the view along")
+    testing.expect(t, first*4 < mid, "and eases into it rather than snapping")
+
+    // It stays a follow, and the anchor keeps the body inside the band.
+    testing.expect_value(t, gs.cam_follow_kind, Cam_Follow.Enemy)
+    body_y := (e.pos.y + BUILDER_H*0.5) * CELL_SIZE
+    // Approached asymptotically — the filter closes on the band edge rather than
+    // landing on it, so allow a pixel of that tail.
+    for _ in 0 ..< 60 do update_camera(gs)
+    testing.expect(t, abs(game_camera(gs).target.y - body_y) <= CAM_DEADZONE_Y + 1,
+        "the settled view keeps the body within the deadzone")
+}
+
+@(test)
 cam_log_records_frames_and_rings :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

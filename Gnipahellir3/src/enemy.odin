@@ -210,6 +210,28 @@ enemy_speed :: proc(kind: Enemy_Kind) -> f32 {
     return BUILDER_SPEED
 }
 
+// Nearest live enemy body under a world pixel, or -1.  A small halo around the
+// body (the same allowance golem_at_world_point makes) keeps a walking builder
+// comfortable to click.  Query only — used by the ALT camera follow.
+enemy_at_world_point :: proc(gs: ^Game_State, world_pixel: [2]f32) -> int {
+    p := [2]f32{world_pixel.x/CELL_SIZE, world_pixel.y/CELL_SIZE}
+    best, best_dist := -1, max(f32)
+    for &e, i in gs.enemies.data {
+        if !gs.enemies.active[i] do continue
+        size := enemy_body_size(e.kind)
+        if p.x < e.pos.x - 0.3 || p.x > e.pos.x + size.x + 0.3 ||
+           p.y < e.pos.y - 0.3 || p.y > e.pos.y + size.y + 0.3 {
+            continue
+        }
+        dx := p.x - (e.pos.x + size.x*0.5)
+        dy := p.y - (e.pos.y + size.y*0.5)
+        if d := dx*dx + dy*dy; d < best_dist {
+            best, best_dist = i, d
+        }
+    }
+    return best
+}
+
 // Center tile for any enemy kind (name predates Garm; used everywhere).
 builder_tile :: proc(e: ^Enemy) -> [2]i32 {
     size := enemy_body_size(e.kind)
