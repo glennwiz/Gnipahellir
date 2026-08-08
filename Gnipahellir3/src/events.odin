@@ -307,9 +307,12 @@ process_events :: proc(gs: ^Game_State) {
             handle_ritual_request(gs)
 
         case .Equip_Request:
-            // Right-click routes here: drink a consumable, else equip the gear.
+            // Right-click routes here: read a scroll, drink a consumable, else
+            // equip the gear.
             slot := int(e.payload.int_val)
-            if slot >= 0 && slot < MAX_INVENTORY && item_is_consumable(gs.player.inventory.slots[slot].item) {
+            if slot >= 0 && slot < MAX_INVENTORY && item_is_readable(gs.player.inventory.slots[slot].item) {
+                player_read(gs, slot)
+            } else if slot >= 0 && slot < MAX_INVENTORY && item_is_consumable(gs.player.inventory.slots[slot].item) {
                 player_consume(gs, slot)
             } else {
                 player_equip(gs, slot)

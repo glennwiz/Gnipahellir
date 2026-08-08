@@ -1325,19 +1325,25 @@ draw_book :: proc(gs: ^Game_State) {
 	// Header rune band + title
 	draw_rune_strip(f32(bx + bw / 2), f32(by + 34), 12, NORSE_GOLD)
 	title := book_title(gs.ui.book_tier)
+	if gs.ui.book_page == .Waters do title = "Of Water and Fire"
 	tw := rl.MeasureText(title, 40)
 	rl.DrawText(title, bx + (bw - tw) / 2, by + 60, 40, ink)
 	rl.DrawLine(bx + 60, by + 112, bx + bw - 60, by + 112, faint)
 
-	// Body — the passage to the next portal
-	l1, l2, l3 := book_lines(gs.ui.book_tier)
-	ty := by + 156
-	for line in ([3]cstring{l1, l2, l3}) {
-		if line != "" {
-			lw := rl.MeasureText(line, 20)
-			rl.DrawText(line, bx + (bw - lw) / 2, ty, 20, ink)
+	switch gs.ui.book_page {
+	case .Seal:
+		// The passage to the next portal
+		l1, l2, l3 := book_lines(gs.ui.book_tier)
+		ty := by + 156
+		for line in ([3]cstring{l1, l2, l3}) {
+			if line != "" {
+				lw := rl.MeasureText(line, 20)
+				rl.DrawText(line, bx + (bw - lw) / 2, ty, 20, ink)
+			}
+			ty += 40
 		}
-		ty += 40
+	case .Waters:
+		draw_book_waters(gs, bx, by, bw, ink, faint)
 	}
 
 	hint: cstring = "[E] close the tome"
@@ -1351,6 +1357,52 @@ draw_book :: proc(gs: ^Game_State) {
 		flash := 1.0 - f32(frames) / 16.0
 		rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{255, 250, 236, u8(255 * flash)})
 	}
+}
+
+// The pond-shore scroll: how fluids move, and the one shape that makes a
+// spring.  The stencil is DRAWN rather than described — it is a 5x2 block of
+// terrain, which prose renders almost unreadable — and it is drawn in the real
+// terrain colours so the page and the world agree.  Read-only, like all draw_*.
+draw_book_waters :: proc(gs: ^Game_State, bx, by, bw: i32, ink, faint: rl.Color) {
+	line :: proc(text: cstring, bx, bw, y: i32, size: i32, col: rl.Color) {
+		w := rl.MeasureText(text, size)
+		rl.DrawText(text, bx + (bw - w) / 2, y, size, col)
+	}
+
+	line("Water and fire both seek the low road. They fall, they run", bx, bw, by + 132, 19, ink)
+	line("down a slope, and they find any hole left open to them.", bx, bw, by + 158, 19, ink)
+	line("What pours away is spent - a pool dug open drains dry.", bx, bw, by + 184, 19, ink)
+
+	line("But wall a pool this way, and its middle never empties:", bx, bw, by + 222, 19, ink)
+
+	// The stencil, in real terrain colours: S W W W S over S S . S S
+	CELL  :: i32(34)
+	stone := terrain_table[.Stone].color
+	water := terrain_table[.Water].color
+	gx := bx + (bw - CELL * 5) / 2
+	gy := by + 256
+	rows := [2][5]int{
+		{0, 1, 1, 1, 0},   // 0 = stone, 1 = water, 2 = the hollow
+		{0, 0, 2, 0, 0},
+	}
+	for row, ry in rows {
+		for kind, rx in row {
+			cx := gx + i32(rx) * CELL
+			cy := gy + i32(ry) * CELL
+			switch kind {
+			case 0: rl.DrawRectangle(cx, cy, CELL, CELL, stone)
+			case 1: rl.DrawRectangle(cx, cy, CELL, CELL, water)
+			case 2: rl.DrawRectangle(cx, cy, CELL, CELL, rl.Color{28, 24, 20, 255})
+			}
+			rl.DrawRectangleLinesEx({f32(cx), f32(cy), f32(CELL), f32(CELL)}, 1, faint)
+		}
+	}
+	// Mark the mouth so the empty cell reads as deliberate, not a gap in the art.
+	mouth := gx + CELL*2 + CELL/2
+	rl.DrawText("^", mouth - 5, gy + CELL*2 + 4, 20, NORSE_GOLD)
+	line("the hollow beneath fills again, and again, for ever", bx, bw, gy + CELL * 2 + 26, 17, faint)
+
+	line("Fire obeys the same shape. Carry either in an iron pail.", bx, bw, by + 396, 19, ink)
 }
 
 book_title :: proc(tier: int) -> cstring {
@@ -1603,41 +1655,129 @@ draw_notifications :: proc(gs: ^Game_State) {
 	}
 }
 
-// A small plate beside the cursor naming the tile it points at — the
-// genre-standard "what am I pointing at" readout. Empty sky/void and any
-// pointer over a panel or full-screen modal are skipped.
+// A small plate beside the cursor naming what it points at, with a line of
+// prose under the name — the genre-standard "what am I pointing at" readout.
+// A loose item lying on the tile is the more specific thing under the cursor,
+// so it wins the plate (and shows even over empty sky, where drops land).
+// Otherwise the tile speaks; empty sky/void and any pointer over a panel or
+// full-screen modal are skipped.
+HOVER_DESC_W    :: i32(210)  // wrap width for the description line
+HOVER_DESC_HOLD :: f32(3.0)  // seconds the description sits at full strength
+HOVER_DESC_FADE :: f32(0.6)  // seconds it takes to fade out after the hold
+
+// What the cursor is describing right now: a loose item on the tile if there is
+// one, else the terrain.  Empty sky/void describes nothing.
+hover_subject :: proc(gs: ^Game_State) -> (tile: Tile_Type, item: Item) {
+	ht := gs.ui.hover_tile
+	if !in_bounds(int(ht.x), int(ht.y)) do return .Air, .None
+	idx := grid_idx(int(ht.x), int(ht.y))
+	if gs.world.items[idx] != .None && gs.world.item_counts[idx] > 0 {
+		return .Air, gs.world.items[idx]
+	}
+	return get_tile(&gs.world, int(ht.x), int(ht.y)), .None
+}
+
+// The description is a first-encounter note: it plays once, the first time you
+// point at a kind of thing you have never pointed at before, then that kind is
+// marked seen and stays quiet.  Pointing at something already seen shows the
+// name alone.
+//
+// Sky and void are not a subject at all — crossing open air between two tiles
+// must not cut short a description you are still reading.
+update_hover_desc :: proc(gs: ^Game_State) {
+	t := max(gs.ui.hover_desc_timer - gs.delta_time, 0)
+	tile, item := hover_subject(gs)
+	if item == .None && (tile == .Air || tile == .Void) {
+		gs.ui.hover_desc_timer = t
+		return
+	}
+	if tile != gs.ui.hover_desc_tile || item != gs.ui.hover_desc_item {
+		gs.ui.hover_desc_tile = tile
+		gs.ui.hover_desc_item = item
+		seen := item != .None ? &gs.ui.hover_seen_item[item] : &gs.ui.hover_seen_tile[tile]
+		t = 0
+		if !seen^ {
+			seen^ = true
+			t = HOVER_DESC_HOLD + HOVER_DESC_FADE
+		}
+	}
+	gs.ui.hover_desc_timer = t
+}
+
 draw_hover_label :: proc(gs: ^Game_State) {
 	if gs.ui.show_book || gs.player.dead || cursor_over_ui(gs) do return
-	t := get_tile(&gs.world, int(gs.ui.hover_tile.x), int(gs.ui.hover_tile.y))
-	if t == .Air || t == .Void do return
+	ht := gs.ui.hover_tile
+	if !in_bounds(int(ht.x), int(ht.y)) do return
+	t := get_tile(&gs.world, int(ht.x), int(ht.y))
 
 	FONT :: 10
 	PAD  :: i32(6)
-	text := cstring(raw_data(terrain_table[t].name))
+
+	name_buf: [64]u8
+	desc: string
+	equipment, rune_scroll_chest: bool
+
+	idx  := grid_idx(int(ht.x), int(ht.y))
+	drop := gs.world.items[idx]
+	if drop != .None && gs.world.item_counts[idx] > 0 {
+		n := gs.world.item_counts[idx]
+		if n > 1 {
+			fmt.bprintf(name_buf[:63], "%s x%d", item_table[drop].name, n)
+		} else {
+			fmt.bprintf(name_buf[:63], "%s", item_table[drop].name)
+		}
+		desc = item_table[drop].desc
+	} else {
+		if t == .Air || t == .Void do return
+		fmt.bprintf(name_buf[:63], "%s", terrain_table[t].name)
+		desc = tile_desc(t)
+		equipment = is_structure_tile[t]
+		rune_scroll_chest = is_rune_scroll_chest(t)
+	}
+	// The name is the constant readout; only the prose holds and fades, and
+	// update_hover_desc decides when it is armed at all.
+	fade := clamp(gs.ui.hover_desc_timer / HOVER_DESC_FADE, 0, 1)
+	if fade <= 0 do desc = ""
+	text := cstring(raw_data(name_buf[:]))
 	tw := rl.MeasureText(text, FONT)
-	equipment := is_structure_tile[t]
-	rune_scroll_chest := is_rune_scroll_chest(t)
+
 	hint := cstring("click/E use  |  SHIFT+HOLD reclaim")
 	if rune_scroll_chest {
 		// A sealed coffer can't be prised loose yet — say what's owed instead
 		// of advertising a hold that will only refuse.
-		hint = rune_scroll_chest_holds_scroll(gs, gs.ui.hover_tile) \
+		hint = rune_scroll_chest_holds_scroll(gs, ht) \
 			? cstring("click/E open  |  take the scroll to free it") \
 			: cstring("click/E open  |  SHIFT+HOLD pick up")
 	}
 	hint_w := i32(0)
 	if equipment || rune_scroll_chest do hint_w = rl.MeasureText(hint, FONT)
-	pw := max(tw, hint_w) + PAD*2
-	ph := i32(FONT) + PAD*2
-	if equipment || rune_scroll_chest do ph += i32(FONT) + 3
+
+	// Measure the wrapped desc with the exact layout it will be drawn at, so
+	// the plate can never be a line short of its own text.
+	desc_h := i32(0)
+	if desc != "" do desc_h = draw_wrapped_text(desc, 0, 0, HOVER_DESC_W, FONT, {}, true) + 2
+
+	// Plate height mirrors the draw order below exactly: name, gap, wrapped
+	// desc, hint.
+	pw := max(tw, hint_w, desc != "" ? HOVER_DESC_W : 0) + PAD*2
+	ph := PAD + i32(FONT)
+	if desc != "" || equipment || rune_scroll_chest do ph += 3
+	ph += desc_h
+	if equipment || rune_scroll_chest do ph += i32(FONT)
+	ph += PAD
 	x := clamp(i32(gs.input.mouse_screen.x) + 14, 0, i32(UI_W) - pw)
 	y := clamp(i32(gs.input.mouse_screen.y) + 18, 0, i32(UI_H) - ph)
 
 	rl.DrawRectangle(x, y, pw, ph, NORSE_PANEL)
 	rl.DrawRectangleLines(x, y, pw, ph, NORSE_BORDER)
 	rl.DrawText(text, x + PAD, y + PAD, FONT, rl.Color{255, 240, 180, 255})
+	ty := y + PAD + i32(FONT) + 3
+	if desc != "" {
+		ty = draw_wrapped_text(desc, x + PAD, ty, HOVER_DESC_W, FONT,
+			rl.Color{205, 195, 175, u8(255 * fade)}) + 2
+	}
 	if equipment || rune_scroll_chest {
-		rl.DrawText(hint, x + PAD, y + PAD + i32(FONT) + 3, FONT, rl.Color{225, 150, 70, 255})
+		rl.DrawText(hint, x + PAD, ty, FONT, rl.Color{225, 150, 70, 255})
 	}
 }
 
@@ -1899,7 +2039,10 @@ CRAFT_DESC_LINE_H :: i32(14)
 // each line left-aligned at x, CRAFT_DESC_LINE_H apart, and returns the y
 // just below the last line so callers can stack more text beneath it.
 // Fixed-buffer, no allocation — descriptions are short hand-authored strings.
-draw_wrapped_text :: proc(text: string, x, y, max_w: i32, font_size: i32, color: rl.Color) -> i32 {
+// measure_only runs the same wrap and returns the same y without drawing, so a
+// caller that sizes a plate around the text (the hover label) measures with the
+// exact layout it will later draw.
+draw_wrapped_text :: proc(text: string, x, y, max_w: i32, font_size: i32, color: rl.Color, measure_only := false) -> i32 {
 	cy := y
 	buf: [128]u8
 	blen := 0
@@ -1926,7 +2069,7 @@ draw_wrapped_text :: proc(text: string, x, y, max_w: i32, font_size: i32, color:
 			buf[blen] = 0
 		} else {
 			buf[blen] = 0
-			rl.DrawText(cstring(raw_data(buf[:])), x, cy, font_size, color)
+			if !measure_only do rl.DrawText(cstring(raw_data(buf[:])), x, cy, font_size, color)
 			cy += CRAFT_DESC_LINE_H
 			copy(buf[:], word)
 			blen = len(word)
@@ -1935,7 +2078,7 @@ draw_wrapped_text :: proc(text: string, x, y, max_w: i32, font_size: i32, color:
 	}
 	if blen > 0 {
 		buf[blen] = 0
-		rl.DrawText(cstring(raw_data(buf[:])), x, cy, font_size, color)
+		if !measure_only do rl.DrawText(cstring(raw_data(buf[:])), x, cy, font_size, color)
 		cy += CRAFT_DESC_LINE_H
 	}
 	return cy

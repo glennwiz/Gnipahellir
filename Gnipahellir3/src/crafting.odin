@@ -59,13 +59,13 @@ recipe_table := [?]Recipe{
     { .Crafting_Bench, 1, .None,  {{.Plank, 4},       {},               {}} },
     { .Smelter,        1, .Bench, {{.Stone_Block, 8}, {.Iron_Ore, 2},   {}} },
     { .Tree_Grower,    1, .Bench, {{.Plank, 2},       {.Leaf, 4},       {}} },
-    { .Iron_Bucket,    1, .Bench, {{.Iron_Ore, 3},    {},               {}} },
+    { .Iron_Bucket,    1, .Bench, {{.Iron_Bar, 3},    {},               {}} },
     { .Sky_Altar,      1, .Bench, {{.Stone_Block, 6}, {.Plank, 4},      {}} },
     { .Sword,          1, .Bench, {{.Iron_Bar, 2},    {.Plank, 1},      {}} },
     // The station ladder: forge is smithed at the bench from smelted iron,
     // the altar raised at the forge — its cloud stone means reaching the sky
     // first.  Forge-tier and up runs on bars: the smelter casts them from
-    // ore stacks dropped beside it (2 ore = 1 bar).
+    // ore stacks dropped beside it (1 iron ore = 1 bar; silver/gold 2 = 1).
     { .Dvergr_Forge,   1, .Bench, {{.Stone_Block, 10}, {.Iron_Bar, 3},    {}} },
     { .Rune_Altar,     1, .Forge, {{.Gold_Bar, 2},     {.Cloud_Stone, 6}, {}} },
     // The miner's ladder: each wand tier consumes the one before it.
@@ -164,13 +164,13 @@ recipe_unlock := #partial [Item]Item{
     .Smelter     = .Iron_Ore,
     .Sword       = .Iron_Ore,
     .Mine_Wand   = .Iron_Ore,
-    .Iron_Bucket = .Iron_Ore,
     // Smelted tier — opens once you cast your first bar.  The Jade Ring
     // shows up here too, ungated by Jade itself, so the recipe card (and its
     // Jade cost) is the player's cue to go look for the gem.
     .Iron_Helm = .Iron_Bar, .Iron_Chestplate = .Iron_Bar, .Iron_Gauntlets = .Iron_Bar,
     .Iron_Greaves = .Iron_Bar, .Iron_Boots = .Iron_Bar,
     .Dvergr_Forge = .Iron_Bar, .Silo = .Iron_Bar, .Jade_Ring = .Iron_Bar,
+    .Iron_Bucket = .Iron_Bar,
     // Silver / gold ladders
     .Silver_Sword = .Silver_Bar, .Mine_Wand_Silver = .Silver_Bar,
     .Silver_Helm = .Silver_Bar, .Silver_Chestplate = .Silver_Bar, .Silver_Gauntlets = .Silver_Bar,
@@ -196,14 +196,25 @@ recipe_unlock := #partial [Item]Item{
 // Reveal recipes whose gating material the player now holds (sticky), popping a
 // one-shot "New recipe" note.  Step in game_update; reads inventory, pushes no
 // events.  Pre-marked (.None) recipes never notify — see game_state_init.
+// recipe_unlocked is sized to MAX_ITEM_SLOTS rather than [Item] so that
+// appending an item never changes the save layout — these two keep the call
+// sites reading in terms of items rather than raw indices.
+recipe_revealed :: #force_inline proc(p: ^Progression_State, it: Item) -> bool {
+    return p.recipe_unlocked[int(it)]
+}
+
+reveal_recipe :: #force_inline proc(p: ^Progression_State, it: Item) {
+    p.recipe_unlocked[int(it)] = true
+}
+
 update_recipe_unlocks :: proc(gs: ^Game_State) {
     first: Item = .None
     more  := 0
     for r in recipe_table {
-        if gs.progression.recipe_unlocked[r.result] do continue
+        if recipe_revealed(&gs.progression, r.result) do continue
         req := recipe_unlock[r.result]
         if req != .None && inventory_count(&gs.player.inventory, req) == 0 do continue
-        gs.progression.recipe_unlocked[r.result] = true
+        reveal_recipe(&gs.progression, r.result)
         if first == .None { first = r.result } else { more += 1 }
     }
     if first != .None {
@@ -283,7 +294,7 @@ visible_recipes :: proc(gs: ^Game_State, idx_buf: ^[len(recipe_table)]int) -> in
     n := 0
     for r, i in recipe_table {
         if r.station != .None && r.station != gs.ui.active_station do continue
-        if !gs.progression.recipe_unlocked[r.result] do continue   // hidden until discovered
+        if !recipe_revealed(&gs.progression, r.result) do continue   // hidden until discovered
         idx_buf[n] = i
         n += 1
     }

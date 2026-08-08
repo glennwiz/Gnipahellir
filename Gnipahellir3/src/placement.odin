@@ -90,6 +90,13 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     x := int(e.tile.x)
     y := int(e.tile.y)
 
+    // The bucket places no tile of its own (place_tile is .Air), so it would
+    // fall straight through placement_ok and do nothing — it gets the click first.
+    if slot.item == .Iron_Bucket {
+        bucket_use(gs, x, y)
+        return
+    }
+
     if !placement_ok(gs, slot.item, x, y) {
         // Explain the common templated-structure miss (the red ghost shows the rest).
         if tpl := structure_template_for(gs, slot.item); tpl != nil {
@@ -165,6 +172,44 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         notify(gs, "The Sky Altar rises - a portal opens to the heavens!")
         spawn_deep_rune_scroll(gs)
     }
+}
+
+// The Iron Bucket: right-click a water/lava cell to scoop it up, right-click an
+// open cell to pour it back out.  The load rides on the player rather than the
+// stack, so it is one bucketful at a time however many buckets you own.  The
+// scooped cell opens exactly as a mined one does, so a lifted tile leaves the
+// same hole digging it would.
+bucket_use :: proc(gs: ^Game_State, x, y: int) {
+    if !in_bounds(x, y) do return
+
+    pcx := int(gs.player.pos.x + PLAYER_W*0.5)
+    pcy := int(gs.player.pos.y + PLAYER_H*0.5)
+    if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH {
+        notify(gs, "Too far away to reach with the bucket")
+        return
+    }
+
+    if gs.player.bucket_fluid == .Air {
+        t := get_tile(&gs.world, x, y)
+        if !is_fluid_tile(t) {
+            notify(gs, "The bucket carries only water or lava")
+            return
+        }
+        set_tile(&gs.world, x, y, gravity_open_tile(gs, y))
+        gs.player.bucket_fluid = t
+        notify(gs, "The bucket fills with %s", terrain_table[t].name)
+        audio_play(&gs.audio, .Pickup)
+        return
+    }
+
+    if !fluid_open(&gs.world, x, y) {
+        notify(gs, "Pour the bucket into an open cell")
+        return
+    }
+    notify(gs, "You pour out the %s", terrain_table[gs.player.bucket_fluid].name)
+    set_tile(&gs.world, x, y, gs.player.bucket_fluid)
+    gs.player.bucket_fluid = .Air
+    audio_play(&gs.audio, .Place)
 }
 
 // Dropping a bag stack onto an open ground cell (drag it out of the bag onto

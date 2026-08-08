@@ -86,6 +86,7 @@ main :: proc() {
     save_on_quit(gs)
     flush_action_log(gs)
     flush_cam_log(gs)
+    flush_mouse_log(gs)
     audio_shutdown(&gs.audio)
     assets_shutdown(&gs.assets)
     rl.UnloadRenderTexture(target)

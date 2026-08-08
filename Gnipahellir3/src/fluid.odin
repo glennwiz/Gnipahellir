@@ -6,8 +6,12 @@ package game
 //  fluid cell is one unit that steps into an open neighbour and leaves its own
 //  cell open behind it — nothing is ever copied, so a body of fluid holds
 //  exactly the tiles world-gen laid down.  Breach a basin and it drains; once
-//  it has run out, it is gone.  (That also means no duplication exploit: you
-//  cannot farm an infinite pond.)
+//  it has run out, it is gone.  You cannot farm the pond.
+//
+//  There is exactly ONE exception, and it has to be BUILT: a spring (see
+//  `fluid_is_spring`).  Wall a three-wide pool and leave a gap under its middle
+//  and that middle cell stops being a drop of water and becomes a source, which
+//  is where new fluid enters the world.  Nothing else creates fluid.
 //
 //  One step, per cell, tries in order:
 //    1. straight down            — the whole point: fluid spreads downward
@@ -32,24 +36,33 @@ package game
 //  terrain array, which is saved wholesale, so flow persists across saves with
 //  no version bump — only the tick timers below are transient.
 
-// One row per flowing tile type.  Period is the whole speed knob: water
-// splashes, lava creeps at a pace you can walk away from.
+// One row per flowing tile type.  Period is the whole speed knob, and it is
+// tuned for readability rather than realism: water advances a tile a second so
+// you can watch a flood arrive and get out of its way, and lava creeps at a
+// third of that.  Lava must stay slower than water.
 Fluid_Rule :: struct {
 	tile:   Tile_Type,
-	period: f32, // seconds between flow steps
+	period: f32, // seconds between flow steps — one tile per period
 }
 
 @(rodata)
 fluid_rules := [?]Fluid_Rule {
-	{.Water, 0.08},
-	{.Lava, 0.35},
-	{.Magic_Lava, 0.35},
+	{.Water, 1.0},
+	{.Lava, 3.0},
+	{.Magic_Lava, 3.0},
 }
 
 // How far along its row a blocked cell can spot somewhere to fall.  Bigger =
 // a puddle drains to a more distant hole; the cost is this many lookups per
 // blocked cell per step.
 FLUID_SPREAD :: 8
+
+// Is this tile one of the flowing kinds?  Keyed off the same table the flow
+// runs from, so anything that flows is also something the bucket can carry.
+is_fluid_tile :: proc(t: Tile_Type) -> bool {
+	for rule in fluid_rules do if rule.tile == t do return true
+	return false
+}
 
 // Fluid only ever moves into genuinely empty space: it never eats terrain,
 // plants or structures, and never displaces another fluid.  Out of bounds
@@ -69,6 +82,27 @@ fluid_drop_distance :: proc(w: ^World_Grid, x, y, d: int) -> int {
 		if fluid_open(w, cx, y + 1) do return i
 	}
 	return 0
+}
+
+// Is (x,y) — already known to hold `fluid` — the mouth of a spring?  The shape
+// is exact and has to be built on purpose:
+//
+//        x-2  x-1   x   x+1  x+2
+//   y     S    W    W    W    S
+//   y+1   S    S    V    S    S
+//                   ^ new fluid wells up here
+//
+// Any solid walls it (stone, dirt, ore, a block you placed) — only the four S
+// cells' solidity is checked, not what they are made of.  The two S cells
+// UNDER the flanking fluid are what keep this from firing by accident: in a
+// natural pond the flanks sit on more water, so a pond is never a spring and
+// still drains when you dig it out.  Break any wall and the spring dies.
+fluid_is_spring :: proc(w: ^World_Grid, x, y: int, fluid: Tile_Type) -> bool {
+	if !fluid_open(w, x, y + 1) do return false          // nowhere to well up into
+	if get_tile(w, x - 1, y) != fluid do return false    // the flanking pool
+	if get_tile(w, x + 1, y) != fluid do return false
+	if !is_solid(w, x - 2, y) || !is_solid(w, x + 2, y) do return false      // walled in
+	return is_solid(w, x - 1, y + 1) && is_solid(w, x + 1, y + 1)            // flanks stand on rock
 }
 
 update_fluid :: proc(gs: ^Game_State) {
@@ -100,6 +134,22 @@ fluid_step :: proc(gs: ^Game_State, fluid: Tile_Type, flip: bool) {
 			idx := grid_idx(x, y)
 			if w.terrain[idx] != fluid do continue
 			if moved[idx] do continue
+
+			// A spring COPIES itself downward and stays put — the one place
+			// fluid enters the world.  Checked before the fall rule, which
+			// would otherwise just move this cell into the gap.  It refills
+			// only while that gap is open, so a spring feeding a sealed pocket
+			// quietly stops: one tile per step, never a runaway.
+			if fluid_is_spring(w, x, y, fluid) {
+				// Row y+1 is already finished this step (rows run bottom-up),
+				// so the newborn cell needs no `moved` guard.
+				set_tile(w, x, y + 1, fluid)
+				if !gs.spring_hint_shown {
+					gs.spring_hint_shown = true
+					notify(gs, "A spring wells up - walled this way, it will never run dry")
+				}
+				continue
+			}
 
 			if fluid_open(w, x, y + 1) {
 				fluid_move(gs, x, y, x, y + 1, fluid, &moved)

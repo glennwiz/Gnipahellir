@@ -594,6 +594,8 @@ item_icons := [Item]Item_Icon{
 	.Rune_Scroll_B      = {RUNE_SCROLL_GRID, {{214, 208, 214, 255}, {34, 26, 22, 255}, {236, 233, 240, 255}, {205, 205, 225, 255}, {}}},
 	.Rune_Scroll_C      = {RUNE_SCROLL_GRID, {{235, 218, 168, 255}, {34, 26, 22, 255}, {250, 240, 205, 255}, {235, 195, 60,  255}, {}}},
 	.Sky_Rune_Scroll    = {RUNE_SCROLL_GRID, {{150, 195, 235, 255}, {34, 26, 22, 255}, {200, 225, 250, 255}, {240, 250, 255, 255}, {}}},
+	// Lore, not progression — a damp pond-shore parchment with a deep-water seal.
+	.Scroll_Of_Waters   = {RUNE_SCROLL_GRID, {{198, 212, 224, 255}, {30, 34, 40,  255}, {232, 242, 250, 255}, {48,  128, 200, 255}, {}}},
 	.Sky_Altar        = {SKY_ALTAR_GRID, {{}, {}, {190, 230, 255, 255}, {90, 180, 255, 255}, {}}},
 	.Cloud_Stone      = {CLOUD_STONE_GRID, {{225, 235, 250, 255}, {172, 186, 215, 255}, {250, 252, 255, 255}, {}, {}}},
 	.Aether_Crystal   = {CRYSTAL_GRID, {{}, {}, {198, 255, 220, 255}, {110, 225, 160, 255}, {66, 168, 108, 255}}},

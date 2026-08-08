@@ -451,6 +451,7 @@ update_ritual :: proc(gs: ^Game_State) {
     spawn_ritual_flash(gs, altar)
     eq_push(&gs.events, Event{type = .Structure_Complete, payload = {int_val = i32(tier)}})
     gs.ui.show_book       = true
+    gs.ui.book_page       = .Seal
     gs.ui.book_tier       = tier
     gs.ui.book_open_frame = gs.frame
     log_action(gs, "Sky structure %d complete (ritual)", tier)

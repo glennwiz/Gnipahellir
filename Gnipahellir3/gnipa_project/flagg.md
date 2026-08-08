@@ -118,7 +118,7 @@ Literal violations of "input.odin never writes World_Grid or entity data," all b
 ## ⚪ INFO
 
 **Dead / unobtainable items**
-- `Iron_Bucket` — craftable (`src/crafting.odin:64`) but `Player.bucket_lava` (`src/game_state.odin:141`) is never read or written; item does nothing (plan.md promises lava pickup).
+- ~~`Iron_Bucket`~~ **CLOSED 2026-08-08** — wired up: right-click a water/lava cell to fill it, an open cell to pour (`bucket_use`, `src/placement.odin`). The dead `Player.bucket_lava` bool became `bucket_fluid: Tile_Type` (same 1 byte, no save bump). One load at a time — the fluid rides on the player, not the stack.
 - `Potion_Health` / `Potion_Mana` — no source, no consume code.
 - `Gold_Rare_Ore` — full plumbing exists (tile, item, 1:1 smelt rule, builder interest) but **no generation code places it**; debug only. Also: Work_done.md's "gold smelts 1:1" claim is doc drift — regular gold smelts 2:1 (`src/sim.odin:25-30`).
 

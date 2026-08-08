@@ -486,6 +486,54 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 	},
 }
 
+// ─── Terrain Descriptions ─────────────────────────────────────────────────────
+//
+//  One line of "what am I pointing at" prose per tile, read by the cursor hover
+//  label (ui.odin).  Sparse on purpose: a tile that mines into an item already
+//  has that item's crafting-panel desc, so only tiles that drop nothing — or
+//  whose drop reads wrong for the tile in the ground — get their own line.
+//  tile_desc resolves the two; the tests keep every tile covered.
+@(rodata)
+terrain_desc := #partial [Tile_Type]string {
+	.Air        = "Open air — nothing here to mine.",
+	.Void       = "Unbroken dark. Nothing lives in it and nothing digs out of it.",
+	.Grass      = "Turf-capped surface soil. Mines into a placeable square of turf.",
+	.Water      = "Swimmable water — it slows you down. Scoop it with an iron bucket.",
+	.Lava       = "Molten rock. It burns while you stand in it; an iron bucket moves it.",
+	.Magic_Lava = "Cursed molten rock — it burns far harder than plain lava.",
+	// Gateways: the label should say where the step leads.
+	.Cave_Entrance  = "A mouth into the caves. Walk into it to descend.",
+	.Sky_Entrance   = "A gate to the low sky. Walk into it to rise.",
+	.Dimension_Gate = "The way out of a manufactured world. Walk in to return.",
+	// Sky
+	.Cloud        = "A drifting cloud bank. Mining it sheds cloud stone now and then.",
+	.Wind_Current = "A ribbon of moving air threading the sky.",
+	.Void_Sky     = "The sky's raw edge. It bleeds you for every moment you hang in it.",
+	// Crops: harvested by walking through, never mined, so they drop nothing.
+	.Flower     = "A wild bloom. Walk through it to forage the flower.",
+	.Flower_Bed = "A planted crop. Walk through it to harvest whatever has bloomed.",
+	// The auto-miner's tail, mineable but yielding nothing.
+	.Miner_Body = "The auto-miner's spent trail. Mine it away to clear the line.",
+	// Golem monuments — solid, unmineable, each with its own job.
+	.Clay_Hearth  = "The crew's hearth: mends a cracked golem for clay, and binds a better command wand.",
+	.Golem_Depot  = "The crew's drop-off. Deployed golems stock it; press E to empty it into your bag.",
+	.World_Anchor = "Holds a manufactured world in place so it survives you leaving it.",
+	.Quick_Clay   = "A foothold a golem conjured for itself. It dissolves on its own.",
+	// Sealed coffers: the Rune Coffer drop line describes the emptied husk, not
+	// the sealed chest you are looking at.
+	.Sky_Rune_Scroll_Chest = "A sealed sky coffer. Open it to take the scroll inside.",
+	.Rune_Scroll_Chest_A   = "A sealed bronze coffer. Open it to take the scroll inside.",
+	.Rune_Scroll_Chest_B   = "A sealed silver coffer. Open it to take the scroll inside.",
+	.Rune_Scroll_Chest_C   = "A sealed golden coffer. Open it to take the scroll inside.",
+}
+
+// The hover line for a tile: its own desc when it has one, otherwise the desc
+// of the item it mines into.  Read-only table lookup.
+tile_desc :: proc(t: Tile_Type) -> string {
+	if d := terrain_desc[t]; d != "" do return d
+	return item_table[terrain_table[t].drop_item].desc
+}
+
 // Player-built machines, stations, spawners and altars — tiles you interact
 // with, not terrain you dig.  A wand never fires at one (mining.odin): you
 // reclaim a structure with the pick up close, which spills its contents safely.
@@ -865,6 +913,17 @@ world_init :: proc(w: ^World_Grid, seed: u32 = 0) {
 		case:
 			set_tile(w, x, SURFACE_Y, .Sand)
 		}
+	}
+
+	// The Scroll of Waters rests on the pond's sand shore — the fluid system
+	// explains itself where you first meet it.  Sits on the rim cell so it is
+	// visible from the bank; the tree and flower loops below already skip
+	// everything within POND_RADIUS+1, so nothing overwrites it.
+	scroll_x := pond_x + POND_RADIUS
+	if in_bounds(scroll_x, SURFACE_Y - 1) {
+		scroll_idx := grid_idx(scroll_x, SURFACE_Y - 1)
+		w.items[scroll_idx] = .Scroll_Of_Waters
+		w.item_counts[scroll_idx] = 1
 	}
 
 	for chunk in 0 ..< GRID_W / CHUNK {

@@ -158,7 +158,7 @@ draw_world :: proc(gs: ^Game_State) {
                 rl.DrawRectangleLinesEx({f32(px), f32(py), CELL_SIZE, CELL_SIZE}, grid_thick, grid_col)
             }
 
-            // World item drop: small glinting square
+            // World item drop: the item's own pixel icon, no outline
             it := w.items[idx]
             if it != .None && w.item_counts[idx] > 0 {
                 if is_rune_scroll(it) {
@@ -180,8 +180,9 @@ draw_world :: proc(gs: ^Game_State) {
                     }
                     rl.DrawRectangle(px + 2 - grow, py + 2 - grow, 6 + grow*2, 6 + grow*2, glow_col)
                 }
-                rl.DrawRectangle(px + 2, py + 2, 6, 6, item_table[it].color)
-                rl.DrawRectangleLinesEx({f32(px) + 1, f32(py) + 1, 8, 8}, 1, rl.WHITE)
+                // Same 8x8 footprint as the old flat square; draw_item_icon
+                // falls back to that flat color for items without art.
+                draw_item_icon(it, px + 1, py + 1, 8)
             }
         }
     }
@@ -1343,11 +1344,13 @@ draw_pixel_flower :: proc(bx, by: i32) {
 
 // Crack marks on the tile the pick is working: one diagonal per chip landed.
 // Only drawn while the tile is still in pick range — stale chip state on a
-// tile the player walked away from stays invisible.
+// tile the player walked away from stays invisible.  Reach is measured from
+// the BODY (in_pick_reach), which is what the pick itself uses: measuring from
+// the center TILE hid the marks on every tile above the head or below the feet.
 draw_mining_cracks :: proc(gs: ^Game_State) {
     p := &gs.player
     if p.chip_hits == 0 { return }
-    if chebyshev(p.chip_tile, player_tile(p)) > PICK_RANGE { return }
+    if !in_pick_reach(p, p.chip_tile) { return }
 
     px := p.chip_tile.x * CELL_SIZE
     py := p.chip_tile.y * CELL_SIZE

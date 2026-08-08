@@ -59,6 +59,10 @@ game_update :: proc(gs: ^Game_State) {
     //     tile highlight and click handler (writes UI_State only)
     update_station_focus(gs)
 
+    // 5c2. Cursor description — arms the hover plate's prose on a new kind of
+    //      subject and ages it out (writes UI_State only)
+    update_hover_desc(gs)
+
     // 5d. Recipe unlocks — reveal recipes whose gating material is now held
     //     (writes progression, pops a notify; pushes no events)
     update_recipe_unlocks(gs)

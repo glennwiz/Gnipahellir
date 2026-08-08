@@ -35,7 +35,8 @@ item_table := [Item]Item_Info{
     .Crafting_Bench = { "Crafting Bench",  {160, 120, 60,  255}, .Crafting_Bench, "Your first station — most early recipes start here." },
     .Tree_Grower    = { "Tree Grower",     {0,   140, 0,   255}, .Tree_Grower, "Plant it to sprout and grow a new tree over time." },
     .Smelter        = { "Smelter",         {200, 100, 0,   255}, .Smelter, "Casts ore into bars; feed it wood to keep the fire lit." },
-    .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air, "Carries water or lava between cells." },
+    .Scroll_Of_Waters = { "Scroll of Waters", {150, 190, 225, 255}, .Air, "A waterlogged scroll from the pond shore. Right-click to read it." },
+    .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air, "Carries one load of water or lava. Right-click a pool to fill it, an open cell to pour. Wall a 3-wide pool in stone and leave a gap under its middle: that middle cell becomes a spring that never runs dry." },
     .Hell_Key       = { "Hell Key",        {220, 30,  60,  255}, .Air, "Garm's key. Opens whatever door awaits the final seal." },
     // Rune Scroll seal color echoes its ritual's material cost — bronze/silver/
     // gold — so the three tiers read apart at a glance instead of sharing one
@@ -279,6 +280,24 @@ FLOWER_BED_BLOOMS :: 5
 // A consumable is used (drunk) from the bag rather than equipped.
 item_is_consumable :: proc(it: Item) -> bool {
     return it == .Potion_Health
+}
+
+// A readable opens the tome overlay from the bag instead of equipping.  It is
+// never spent — a reference you keep.
+item_is_readable :: proc(it: Item) -> bool {
+    return it == .Scroll_Of_Waters
+}
+
+// Open the tome on the page this scroll carries.  The sim freezes while it is
+// up (game_update) and E/ESC/click closes it (input.odin), exactly as the
+// ritual's tome does.
+player_read :: proc(gs: ^Game_State, inv_slot: int) {
+    if inv_slot < 0 || inv_slot >= MAX_INVENTORY do return
+    if !item_is_readable(gs.player.inventory.slots[inv_slot].item) do return
+    gs.ui.show_book       = true
+    gs.ui.book_page       = .Waters
+    gs.ui.book_open_frame = gs.frame
+    audio_play(&gs.audio, .Pickup)
 }
 
 // Drink a consumable from a bag slot.  A Health Potion restores POTION_HEAL,

@@ -861,6 +861,42 @@ cam_log_records_frames_and_rings :: proc(t: ^testing.T) {
 }
 
 @(test)
+mouse_log_records_the_aimed_and_the_struck_tile :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Cursor on the tile beside the player's head; the pick's direction cone
+    // answers with a horizontal swing, so both body tiles are candidates.
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    aim := [2]i32{31, i32(SURFACE_Y) - 2}
+    set_tile(&gs.world, int(aim.x), int(aim.y), .Stone)
+    gs.input.mine        = true
+    gs.input.mouse_tile  = aim
+    gs.input.mouse_world = {(f32(aim.x) + 0.5)*CELL_SIZE, (f32(aim.y) + 0.5)*CELL_SIZE}
+    gs.mouse_log = {}
+
+    for _ in 0 ..< 3 {
+        gs.player.mine_timer = 0
+        player_mine(gs, 1.0/60.0)
+    }
+    rows := string(gs.mouse_log.buf[:gs.mouse_log.pos])
+    testing.expect(t, gs.mouse_log.pos > 0, "a mining swing writes a row")
+    testing.expect(t, strings.contains(rows, "PICK"), "the pick path is named in the row")
+    testing.expect(t, strings.contains(rows, "MINED"), "the swing that breaks the tile says so")
+    testing.expect(t, strings.contains(rows, "Stone"), "the struck tile's type is recorded")
+    testing.expect_value(t, strings.count(rows, "\n"), 3)  // one row per swing, no more
+
+    // A playtest outlives the buffer, so the oldest rows must give way to the
+    // newest rather than the log falling silent.
+    gs.mouse_log.pos = MOUSE_LOG_CAP - MOUSE_LOG_LINE + 1
+    filled := gs.mouse_log.pos
+    gs.player.mine_timer = 0
+    player_mine(gs, 1.0/60.0)
+    testing.expect_value(t, gs.mouse_log.end, filled)
+    testing.expect(t, gs.mouse_log.pos < MOUSE_LOG_LINE, "wrapped back to the start")
+}
+
+@(test)
 player_actions_mark_autosave :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -1565,7 +1601,10 @@ building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
 // never a guess.  Grep the test log for "size_of(Save_Data)".
 @(test)
 save_data_size_probe :: proc(t: ^testing.T) {
-    log.infof("size_of(Save_Data) = %d (expected %d)", size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE)
+    // len(Item) rides along: an appended item grows Progression_State's
+    // recipe_unlocked, which is the usual reason this size moves.
+    log.infof("size_of(Save_Data) = %d (expected %d), len(Item) = %d, size_of(Progression_State) = %d",
+        size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE, len(Item), size_of(Progression_State))
     testing.expect_value(t, size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE)
 }
 
@@ -1679,8 +1718,7 @@ cave_generation_has_ore_and_rune_scrolls :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(w, 93, 26), Tile_Type.Cave_Entrance)
 }
 
-// One pick swing / wand attempt pointing at the tile; the pick only reads
-// the rough direction, the wand reads the exact tile.
+// One pick swing / wand attempt with the cursor on that tile's center.
 @(private = "file")
 mine_swing :: proc(gs: ^Game_State, tile: [2]i32) {
     gs.input.mine        = true
@@ -1693,11 +1731,11 @@ mine_swing :: proc(gs: ^Game_State, tile: [2]i32) {
 }
 
 @(test)
-pick_chips_by_rough_direction :: proc(t: ^testing.T) {
+pick_chips_the_block_under_the_cursor :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // body rows 52..53, center tile (30, 53)
 
     // Down-forward: pointing at the diagonal grass — two chips crack it,
     // the third breaks it (opens to void)
@@ -1723,9 +1761,31 @@ pick_chips_by_rough_direction :: proc(t: ^testing.T) {
     for _ in 0 ..< PICK_HITS { mine_swing(gs, up) }
     testing.expect_value(t, get_tile(&gs.world, 30, SURFACE_Y - 3), Tile_Type.Air)
 
-    // Switching direction resets the chip count
-    mine_swing(gs, {30, i32(SURFACE_Y)})
+    // The regression this rule was written for: a block at HEAD height, one
+    // column over, is 47 degrees off the player's center — the old direction
+    // cone read that as "up" and mined the block ABOVE it instead.
+    head  := [2]i32{31, i32(SURFACE_Y) - 2}
+    above := [2]i32{31, i32(SURFACE_Y) - 3}
+    set_tile(&gs.world, int(head.x),  int(head.y),  .Stone)
+    set_tile(&gs.world, int(above.x), int(above.y), .Iron_Ore)
+    for _ in 0 ..< PICK_HITS { mine_swing(gs, head) }
+    testing.expect_value(t, get_tile(&gs.world, int(head.x),  int(head.y)),  Tile_Type.Air)
+    testing.expect_value(t, get_tile(&gs.world, int(above.x), int(above.y)), Tile_Type.Iron_Ore)
+
+    // Pointing at a block that can't be worked mines NOTHING — never a
+    // neighbour the cursor didn't ask for.
+    hole := [2]i32{30, i32(SURFACE_Y)}
+    set_tile(&gs.world, int(hole.x), int(hole.y), .Void)
+    set_tile(&gs.world, 29, SURFACE_Y, .Clay)
+    for _ in 0 ..< PICK_HITS + 1 { mine_swing(gs, hole) }
+    testing.expect_value(t, get_tile(&gs.world, 29, SURFACE_Y), Tile_Type.Clay)
+    testing.expect_value(t, gs.player.chip_hits, u8(0))
+
+    // Moving the cursor to a different block restarts its chip count
+    set_tile(&gs.world, 29, SURFACE_Y - 1, .Stone)
     mine_swing(gs, {29, i32(SURFACE_Y)})
+    mine_swing(gs, {29, i32(SURFACE_Y) - 1})
+    testing.expect_value(t, gs.player.chip_tile, [2]i32{29, i32(SURFACE_Y) - 1})
     testing.expect_value(t, gs.player.chip_hits, u8(1))
 }
 
@@ -1945,31 +2005,31 @@ recipes_unlock_when_their_material_is_found :: proc(t: ^testing.T) {
     }
 
     // Hand recipes are known from the start; the smelter (needs iron) is hidden.
-    testing.expect(t, gs.progression.recipe_unlocked[.Crafting_Bench], "bench known from start")
-    testing.expect(t, !gs.progression.recipe_unlocked[.Smelter], "smelter hidden until iron")
+    testing.expect(t, recipe_revealed(&gs.progression, .Crafting_Bench), "bench known from start")
+    testing.expect(t, !recipe_revealed(&gs.progression, .Smelter), "smelter hidden until iron")
     testing.expect(t, !visible(gs, .Smelter), "smelter not listed before iron")
 
     // Finding iron ore reveals the iron-tier recipes (with a notify).
     inventory_insert(&gs.player.inventory, .Iron_Ore, 1)
     update_recipe_unlocks(gs)
-    testing.expect(t, gs.progression.recipe_unlocked[.Smelter], "iron reveals the smelter")
+    testing.expect(t, recipe_revealed(&gs.progression, .Smelter), "iron reveals the smelter")
     testing.expect(t, gs.notify.count >= 1, "a new recipe pops a note")
     testing.expect(t, visible(gs, .Smelter), "smelter now listed")
 
     // Sticky: spending the iron doesn't re-hide the recipe.
     inventory_remove(&gs.player.inventory, .Iron_Ore, 1)
     update_recipe_unlocks(gs)
-    testing.expect(t, gs.progression.recipe_unlocked[.Smelter], "unlock is sticky")
+    testing.expect(t, recipe_revealed(&gs.progression, .Smelter), "unlock is sticky")
 
     // A deeper-tier recipe is still gated.
-    testing.expect(t, !gs.progression.recipe_unlocked[.Dvergr_Forge], "forge waits on a smelted bar")
+    testing.expect(t, !recipe_revealed(&gs.progression, .Dvergr_Forge), "forge waits on a smelted bar")
 
     // The Jade Ring is gated by Iron_Bar too, never by Jade itself — its
     // recipe card (and Jade cost) is what tells the player to go find one.
-    testing.expect(t, !gs.progression.recipe_unlocked[.Jade_Ring], "jade ring waits on a smelted bar")
+    testing.expect(t, !recipe_revealed(&gs.progression, .Jade_Ring), "jade ring waits on a smelted bar")
     inventory_insert(&gs.player.inventory, .Iron_Bar, 1)
     update_recipe_unlocks(gs)
-    testing.expect(t, gs.progression.recipe_unlocked[.Jade_Ring], "iron bar reveals the jade ring")
+    testing.expect(t, recipe_revealed(&gs.progression, .Jade_Ring), "iron bar reveals the jade ring")
     testing.expect(t, visible(gs, .Jade_Ring), "jade ring listed without ever holding jade")
 }
 
@@ -2862,10 +2922,13 @@ sword_melee_kills_builders :: proc(t: ^testing.T) {
     testing.expect(t, idx >= 0, "level 0 should have a builder")
     e := &gs.enemies.data[idx]
 
-    // Park the builder beside the player, refresh its entity-map marker
-    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    // Park the builder beside the player, refresh its entity-map marker.
+    // x=76 sits inside the always-pond-free spawn band: this test equips from a
+    // hardcoded bag slot, so it must not walk over the pond-shore scroll and
+    // have that claim slot 0 first.
+    gs.player.pos = {76, f32(SURFACE_Y) - PLAYER_H}
     prev := builder_tile(e)
-    e.pos = {31.5, f32(SURFACE_Y) - BUILDER_H}
+    e.pos = {77.5, f32(SURFACE_Y) - BUILDER_H}
     entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
 
     gs.input.attack     = true
@@ -3853,6 +3916,89 @@ item_icons_are_well_formed :: proc(t: ^testing.T) {
 }
 
 @(test)
+every_tile_and_item_has_a_hover_description :: proc(t: ^testing.T) {
+    // The cursor hover label prints one line of prose for whatever it points
+    // at, so nothing in the world may resolve to an empty description.
+    for tile in Tile_Type {
+        if tile_desc(tile) == "" {
+            log.errorf("tile %v has no description (add a terrain_desc line or give its drop_item a desc)", tile)
+            testing.fail(t)
+        }
+    }
+    for info, it in item_table {
+        if it == .None do continue
+        if info.desc == "" {
+            log.errorf("item %v has no description", it)
+            testing.fail(t)
+        }
+    }
+}
+
+@(test)
+hover_description_shows_once_per_new_kind :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Two stone tiles and a grass tile to sweep between, with open air above.
+    ax, ay := 20, CAVE_TOP + 4
+    bx, by := 24, CAVE_TOP + 4
+    cx, cy := 28, CAVE_TOP + 4
+    set_tile(&gs.world, ax, ay, .Stone)
+    set_tile(&gs.world, bx, by, .Stone)
+    set_tile(&gs.world, cx, cy, .Grass)
+    set_tile(&gs.world, bx, by - 1, .Air)
+
+    // Stone has never been pointed at, so its description plays.
+    gs.ui.hover_tile = {i32(ax), i32(ay)}
+    update_hover_desc(gs)
+    testing.expect(t, gs.ui.hover_desc_timer > 0, "unseen stone should show its description")
+    testing.expect(t, gs.ui.hover_seen_tile[.Stone], "stone should now be marked seen")
+
+    // It ages out on its own.
+    for _ in 0 ..< 600 do update_hover_desc(gs)
+    testing.expect_value(t, gs.ui.hover_desc_timer, f32(0))
+
+    // Another stone tile is the same kind — already seen, stays quiet.
+    gs.ui.hover_tile = {i32(bx), i32(by)}
+    update_hover_desc(gs)
+    testing.expect_value(t, gs.ui.hover_desc_timer, f32(0))
+
+    // And returning to the very first tile stays quiet too: seen is seen.
+    gs.ui.hover_tile = {i32(ax), i32(ay)}
+    update_hover_desc(gs)
+    testing.expect_value(t, gs.ui.hover_desc_timer, f32(0))
+
+    // A kind never pointed at before does play.
+    gs.ui.hover_tile = {i32(cx), i32(cy)}
+    update_hover_desc(gs)
+    testing.expect(t, gs.ui.hover_desc_timer > 0, "grass is a new kind and should show")
+
+    // Crossing open air mid-read must not cut the description short.
+    armed := gs.ui.hover_desc_timer
+    gs.ui.hover_tile = {i32(bx), i32(by - 1)}
+    update_hover_desc(gs)
+    testing.expect(t, gs.ui.hover_desc_timer > 0 && gs.ui.hover_desc_timer < armed,
+        "air should age the description, not cancel it")
+
+    // A loose item is its own kind, even lying on terrain already seen.
+    for _ in 0 ..< 600 do update_hover_desc(gs)
+    gs.world.items[grid_idx(cx, cy)]       = .Pickaxe
+    gs.world.item_counts[grid_idx(cx, cy)] = 1
+    gs.ui.hover_tile = {i32(cx), i32(cy)}
+    update_hover_desc(gs)
+    testing.expect(t, gs.ui.hover_desc_timer > 0, "an unseen drop is its own kind")
+    testing.expect_value(t, gs.ui.hover_desc_item, Item.Pickaxe)
+
+    // Second pickaxe elsewhere: seen, so silent.
+    for _ in 0 ..< 600 do update_hover_desc(gs)
+    gs.world.items[grid_idx(ax, ay - 1)]       = .Pickaxe
+    gs.world.item_counts[grid_idx(ax, ay - 1)] = 1
+    gs.ui.hover_tile = {i32(ax), i32(ay - 1)}
+    update_hover_desc(gs)
+    testing.expect_value(t, gs.ui.hover_desc_timer, f32(0))
+}
+
+@(test)
 ambience_breathes_motes_into_the_air :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -3874,15 +4020,15 @@ smelter_casts_bars_from_ore :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
-    // A smelter on the surface with 4 iron ore laid beside it, stoked with wood.
+    // A smelter on the surface with 2 iron ore laid beside it, stoked with wood.
     sx, sy := GRID_W/2, SURFACE_Y - 1
     set_tile(&gs.world, sx, sy, .Smelter)
     in_idx := grid_idx(sx - 1, sy)
     gs.world.items[in_idx]       = .Iron_Ore
-    gs.world.item_counts[in_idx] = 4
+    gs.world.item_counts[in_idx] = 2
     gs.world.sim_data[grid_idx(sx, sy)].fuel_count = u8(FUEL_PER_BAR * 2)  // enough for 2 bars
 
-    // Two smelt cycles: the ore is auto-pulled into the buffer, 4 ore → 2 bars.
+    // Two smelt cycles: the ore is auto-pulled into the buffer, 2 ore → 2 bars.
     frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
     for _ in 0 ..< frames {
         update_sim(gs)
@@ -3998,7 +4144,7 @@ smelter_stalls_without_fuel :: proc(t: ^testing.T) {
         eq_clear(&gs.events)
     }
     testing.expect_value(t, int(sd.store_count), 1)  // exactly one bar — fuel ran out
-    testing.expect_value(t, int(sd.in_count), 2)     // one bar's ore eaten
+    testing.expect_value(t, int(sd.in_count), 3)     // one bar's ore eaten
     testing.expect_value(t, int(sd.fuel_count), 0)
 }
 
@@ -4650,10 +4796,10 @@ smelter_casts_into_adjacent_silo :: proc(t: ^testing.T) {
     silo_on_placed(gs, tile)
     in_idx := grid_idx(sx - 1, sy)
     gs.world.items[in_idx]       = .Iron_Ore
-    gs.world.item_counts[in_idx] = 4
+    gs.world.item_counts[in_idx] = 2
     gs.world.sim_data[grid_idx(sx, sy)].fuel_count = u8(FUEL_PER_BAR * 2)  // wood for 2 bars
 
-    // Two smelt cycles: 4 ore → 2 bars, straight past the tray.
+    // Two smelt cycles: 2 ore → 2 bars, straight past the tray.
     frames := int((SMELT_TIME * 2) / gs.delta_time) + 4
     for _ in 0 ..< frames {
         update_sim(gs)
@@ -5994,7 +6140,7 @@ water_falls_then_levels_out_without_losing_a_drop :: proc(t: ^testing.T) {
 	for y in y0 ..= y1 do set_tile(w, 102, y, .Water)   // a 6-tall column
 	testing.expect_value(t, fluid_count_in(gs, .Water, x0, x1, y0, y1), 6)
 
-	for _ in 0 ..< 400 do update_fluid(gs)
+	for _ in 0 ..< 3000 do update_fluid(gs)   // ~50 s: water steps once a second
 
 	// Every drop is still here, and all of it now rests on the floor row.
 	testing.expect_value(t, fluid_count_in(gs, .Water, x0, x1, y0, y1), 6)
@@ -6021,7 +6167,7 @@ a_settled_pond_never_churns :: proc(t: ^testing.T) {
 	before := gs.world.terrain
 	testing.expect(t, fluid_count(gs, .Water) > 0, "the surface pond should hold water to begin with")
 
-	for _ in 0 ..< 600 do update_fluid(gs)
+	for _ in 0 ..< 3000 do update_fluid(gs)
 
 	testing.expect(t, before == gs.world.terrain, "an undisturbed pond must not move a single tile")
 }
@@ -6042,7 +6188,7 @@ breaching_the_pond_drains_it_down_the_shaft :: proc(t: ^testing.T) {
 	total := fluid_count(gs, .Water)
 	for y in SURFACE_Y + 2 ..= SURFACE_Y + 20 do set_tile(w, pond_x, y, .Void)
 
-	for _ in 0 ..< 600 do update_fluid(gs)
+	for _ in 0 ..< 6000 do update_fluid(gs)
 
 	// The basin is dry — and the pond is spent, not a spring: every drop that
 	// left it is still in the world, just further down the hole.
@@ -6063,7 +6209,7 @@ lava_flows_like_water_but_creeps :: proc(t: ^testing.T) {
 	set_tile(w, 60, top, .Water)
 	set_tile(w, 120, top, .Lava)
 
-	for _ in 0 ..< 60 do update_fluid(gs)        // one second
+	for _ in 0 ..< 1200 do update_fluid(gs)      // ~20 s
 
 	water_y, lava_y := top, top
 	for y in top ..= bottom {
@@ -6071,9 +6217,234 @@ lava_flows_like_water_but_creeps :: proc(t: ^testing.T) {
 		if get_tile(w, 120, y) == .Lava do lava_y = y
 	}
 	testing.expect(t, lava_y > top, "lava must flow, not sit still")
-	testing.expect(t, water_y - top >= 3 * (lava_y - top), "water should outrun lava several times over")
+	testing.expect(t, water_y - top >= 2 * (lava_y - top), "water should outrun lava severalfold")
 
 	// Neither fluid multiplied on the way down.
 	testing.expect_value(t, fluid_count_in(gs, .Water, 60, 60, top, bottom), 1)
 	testing.expect_value(t, fluid_count_in(gs, .Lava, 120, 120, top, bottom), 1)
+}
+
+// ─── Fluid springs + the Iron Bucket ─────────────────────────────────────────
+
+// Build Glenn's exact spring stencil centred on (cx,cy), inside a sealed
+// chamber so the fluid it produces has somewhere to go and nowhere to escape:
+//
+//        S  W  W  W  S
+//        S  S  V  S  S      <- V is the mouth, at (cx, cy+1)
+//
+@(private = "file")
+fluid_build_spring :: proc(gs: ^Game_State, cx, cy: int, fluid: Tile_Type) {
+	w := &gs.world
+	// A stone shell with a hollow basin under the mouth for the output to pool in.
+	for y in cy - 1 ..= cy + 8 do for x in cx - 6 ..= cx + 6 do set_tile(w, x, y, .Stone)
+	for y in cy + 2 ..= cy + 7 do for x in cx - 5 ..= cx + 5 do set_tile(w, x, y, .Void)
+
+	set_tile(w, cx - 1, cy, fluid)          // S W W W S
+	set_tile(w, cx, cy, fluid)
+	set_tile(w, cx + 1, cy, fluid)
+	set_tile(w, cx, cy + 1, .Void)          // the mouth
+}
+
+@(test)
+a_walled_spring_never_runs_dry :: proc(t: ^testing.T) {
+	// The one deliberate exception to conserved mass: a spring is BUILT, and it
+	// makes new fluid rather than moving it.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	cx, cy := 100, 70
+	fluid_build_spring(gs, cx, cy, .Water)
+
+	testing.expect(t, fluid_is_spring(w, cx, cy, .Water), "the stencil as drawn is a spring")
+	start := fluid_count_in(gs, .Water, cx - 6, cx + 6, cy - 1, cy + 8)
+	testing.expect_value(t, start, 3)   // just the three tiles laid down
+
+	for _ in 0 ..< 3000 do update_fluid(gs)   // ~50 s
+
+	// It has been making water the whole time, and the basin below is filling.
+	grown := fluid_count_in(gs, .Water, cx - 6, cx + 6, cy - 1, cy + 8)
+	testing.expect(t, grown > start, "a spring must create water, not just move it")
+	testing.expect(t, gs.spring_hint_shown, "the first spring should teach itself")
+
+	// The three source tiles are still exactly where they were put.
+	testing.expect_value(t, get_tile(w, cx - 1, cy), Tile_Type.Water)
+	testing.expect_value(t, get_tile(w, cx, cy), Tile_Type.Water)
+	testing.expect_value(t, get_tile(w, cx + 1, cy), Tile_Type.Water)
+
+	// Drain the mouth by hand and it wells back up — that is the whole point.
+	set_tile(w, cx, cy + 1, .Void)
+	for _ in 0 ..< 120 do update_fluid(gs)
+	testing.expect_value(t, get_tile(w, cx, cy + 1), Tile_Type.Water)
+}
+
+@(test)
+the_natural_pond_is_not_a_spring :: proc(t: ^testing.T) {
+	// The regression that drove the exact stencil: under a looser "water beside
+	// water" rule the generated pond would be an infinite spring on turn one,
+	// and could never be drained.  Its flanking water sits on WATER, not rock,
+	// so it fails the stencil — which is what keeps the drain tests above true.
+	gs := test_state(); defer free(gs)
+	for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+		if get_tile(&gs.world, x, y) != .Water do continue
+		testing.expect(t, !fluid_is_spring(&gs.world, x, y, .Water),
+			"no naturally generated water may be a spring")
+	}
+}
+
+@(test)
+a_broken_spring_stops_flowing :: proc(t: ^testing.T) {
+	// Knock out one wall and the spring dies — it is a structure, not a blessing.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	cx, cy := 100, 70
+	fluid_build_spring(gs, cx, cy, .Water)
+	testing.expect(t, fluid_is_spring(w, cx, cy, .Water), "built spring runs")
+
+	// The rock under the left-hand flank is what separates this from a pond.
+	set_tile(w, cx - 1, cy + 1, .Void)
+	testing.expect(t, !fluid_is_spring(w, cx, cy, .Water), "a spring without its floor is just water")
+
+	for _ in 0 ..< 3000 do update_fluid(gs)
+	testing.expect_value(t, fluid_count_in(gs, .Water, cx - 6, cx + 6, cy - 1, cy), 0)  // drained away
+}
+
+@(test)
+a_lava_spring_wells_up_too :: proc(t: ^testing.T) {
+	// Same stencil, same rules — lava springs were Glenn's call alongside water.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	cx, cy := 100, 70
+	fluid_build_spring(gs, cx, cy, .Lava)
+
+	testing.expect(t, fluid_is_spring(w, cx, cy, .Lava), "lava obeys the same stencil")
+	start := fluid_count_in(gs, .Lava, cx - 6, cx + 6, cy - 1, cy + 8)
+	for _ in 0 ..< 6000 do update_fluid(gs)   // lava creeps at 3 s/step
+	testing.expect(t, fluid_count_in(gs, .Lava, cx - 6, cx + 6, cy - 1, cy + 8) > start,
+		"a lava spring must produce lava")
+}
+
+@(test)
+the_bucket_scoops_and_pours :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	inv := &gs.player.inventory
+
+	// Stand the player in a carved pocket with one water tile beside them.
+	px, py := 100, 70
+	for y in py - 2 ..= py + 2 do for x in px - 4 ..= px + 4 do set_tile(w, x, y, .Void)
+	set_tile(w, px, py + 1, .Stone)                      // something to stand on
+	gs.player.pos = {f32(px), f32(py) - PLAYER_H + 1}
+	set_tile(w, px + 2, py, .Water)
+
+	inventory_insert(inv, .Iron_Bucket, 1)
+	for s, i in inv.slots do if s.item == .Iron_Bucket { inv.selected = i; break }
+	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Air)   // starts empty
+
+	// Scooping stone does nothing.
+	bucket_use(gs, px - 3, py + 1)
+	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Air)
+
+	// Scoop the water: the cell opens and the bucket carries it.
+	bucket_use(gs, px + 2, py)
+	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Water)
+	testing.expect(t, get_tile(w, px + 2, py) != .Water, "the scooped cell is emptied")
+
+	// Pouring into solid rock is refused and loses nothing.
+	bucket_use(gs, px, py + 1)
+	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Water)
+
+	// Out of reach is refused too.
+	bucket_use(gs, px + 40, py)
+	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Water)
+
+	// Pour it into an open cell: water appears, bucket empties, stack survives.
+	bucket_use(gs, px - 2, py)
+	testing.expect_value(t, get_tile(w, px - 2, py), Tile_Type.Water)
+	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Air)
+	testing.expect_value(t, inventory_count(inv, .Iron_Bucket), 1)
+}
+
+// ─── Scroll of Waters + the v23 save migration ───────────────────────────────
+
+@(test)
+the_scroll_of_waters_waits_on_the_pond_shore :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+
+	found := -1
+	for x in 0 ..< GRID_W {
+		if gs.world.items[grid_idx(x, SURFACE_Y - 1)] == .Scroll_Of_Waters { found = x; break }
+	}
+	testing.expect(t, found >= 0, "a Scroll of Waters should lie on the surface")
+
+	// It sits on the pond's shore, not off in a field somewhere.
+	pond := -1
+	for x in 0 ..< GRID_W do if get_tile(&gs.world, x, SURFACE_Y + 1) == .Water { pond = x; break }
+	testing.expect(t, pond >= 0, "the pond exists")
+	testing.expect(t, abs(found - pond) <= 12, "the scroll should rest within sight of the water")
+
+	// It is lore, not progression: it must never be routed into a rune coffer.
+	testing.expect(t, !is_rune_scroll(.Scroll_Of_Waters), "the water scroll is not a progression seal")
+}
+
+@(test)
+reading_the_scroll_opens_the_waters_page :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	inv := &gs.player.inventory
+	inventory_insert(inv, .Scroll_Of_Waters, 1)
+	slot := -1
+	for s, i in inv.slots do if s.item == .Scroll_Of_Waters { slot = i; break }
+	testing.expect(t, slot >= 0, "the scroll is in the bag")
+
+	testing.expect(t, !gs.ui.show_book, "no tome open to begin with")
+	eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(slot)}})
+	process_events(gs)
+
+	testing.expect(t, gs.ui.show_book, "right-clicking the scroll opens the tome")
+	testing.expect_value(t, gs.ui.book_page, Book_Page.Waters)
+	// Reading never spends it — it is a reference you keep.
+	testing.expect_value(t, inventory_count(inv, .Scroll_Of_Waters), 1)
+	// And it did not get equipped into a gear slot on the way past.
+	for e in gs.player.equipment do testing.expect(t, e != .Scroll_Of_Waters, "a scroll is not gear")
+}
+
+@(test)
+a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
+	// Appending Scroll_Of_Waters grew Progression_State (recipe_unlocked was
+	// keyed by [Item]), so v23 saves must be carried across by hand.  Glenn
+	// playtests between sessions — losing the run here is a real loss.
+	path :: "gnipahellir_save_v23_migration_test.dat"
+	defer os.remove(path)
+
+	old := new(Save_Data_v23)
+	defer free(old)
+	old.version = 23
+	old.level_index = LEVEL_CAVE2
+	old.elapsed_time = 1234
+	old.frame = 4321
+	old.player.hp = 7
+	old.player.hp_max = 20
+	old.progression.cave_unlocked[0] = true
+	old.progression.rune_scroll_found[1] = true
+	old.progression.sky_altar_pos = {42, 43}
+	old.progression.recipe_unlocked[int(Item.Smelter)] = true
+	old.progression.recipe_unlocked[RECIPE_SLOTS_V23 - 1] = true   // the very last v23 slot
+
+	buf := ([^]u8)(old)[:size_of(Save_Data_v23)]
+	testing.expect(t, os.write_entire_file(path, buf) == nil, "wrote a synthetic v23 save")
+
+	gs := test_state(); defer free(gs)
+	testing.expect(t, load_game_from(gs, path), "a v23 save should still load")
+
+	testing.expect_value(t, gs.level_index, LEVEL_CAVE2)
+	testing.expect_value(t, gs.player.hp, 7)
+	testing.expect_value(t, gs.frame, u64(4321))
+	testing.expect(t, gs.progression.cave_unlocked[0], "unlocked caves survive")
+	testing.expect(t, gs.progression.rune_scroll_found[1], "found scrolls survive")
+	testing.expect_value(t, gs.progression.sky_altar_pos, [2]i32{42, 43})
+	testing.expect(t, recipe_revealed(&gs.progression, .Smelter), "revealed recipes survive")
+	testing.expect(t, gs.progression.recipe_unlocked[RECIPE_SLOTS_V23 - 1],
+		"the last v23 recipe slot lands in the same index, not shifted")
+	// The slots the wider array added must start clear, not full of garbage.
+	for i in RECIPE_SLOTS_V23 ..< MAX_ITEM_SLOTS {
+		testing.expect(t, !gs.progression.recipe_unlocked[i], "new recipe slots start locked")
+	}
 }

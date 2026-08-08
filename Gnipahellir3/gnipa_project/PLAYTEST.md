@@ -25,7 +25,8 @@ the header band and move them anywhere. Clicking a smelter (or pressing E
 beside one) opens its furnace window: a 3×3 mirror of the tiles around the
 fire with a progress bar. Drag ore **and wood** from the bag onto the window
 to lay stacks beside the furnace — one log's embers fire **three** bars
-(2 ore per bar) and the bars land in the **tray**, never on the ground. Click
+(iron smelts 1:1, silver and gold 2 ore per bar) and the bars land in the
+**tray**, never on the ground. Click
 the tray (or drag it onto the bag) to take the bars; mining the furnace
 spills a loaded tray. The **Silo** (Forge: 20 Stone Block + 4 Iron Bar) is
 bulk storage that counts past 99: drag stacks from the bag onto the ground
@@ -108,4 +109,6 @@ sleeps: "the dimension is played out."
 
 ## Known stubs (deliberate, don't file as bugs)
 
-- Iron_Bucket can't scoop lava; potions exist but are unobtainable/unusable
+- Potions exist but are unobtainable/unusable
+  *(Iron_Bucket now works — right-click a water/lava cell to fill, an open cell
+  to pour. One load at a time, however many buckets you carry.)*

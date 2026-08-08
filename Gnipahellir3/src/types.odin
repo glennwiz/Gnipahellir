@@ -22,6 +22,15 @@ MAX_LEVELS      :: 16
 MAX_PROGRESSION_TIERS :: 3
 MAX_GOLEMS      :: 15
 
+// Headroom for every per-Item array that lives inside a SAVED struct (today
+// just Progression_State.recipe_unlocked).  Keying those by [Item] directly
+// meant every single appended item silently changed size_of(Save_Data) and
+// broke every existing save — a tax paid on Sand, on Rune_Coffer, and again on
+// Scroll_Of_Waters.  Sizing to a fixed ceiling instead makes appending an item
+// free forever.  Raise this (and bump SAVE_VERSION once) if it ever fills up.
+MAX_ITEM_SLOTS  :: 128
+#assert(len(Item) <= MAX_ITEM_SLOTS)
+
 PLAYER_ID      :: Entity_ID(0)
 INVALID_ENTITY :: max(Entity_ID)
 
@@ -221,6 +230,19 @@ Item :: enum u8 {
     // An emptied rune scroll chest, prised loose and carried off (appended:
     // item ordinals are serialized)
     Rune_Coffer,
+    // Readable lore found on the pond shore — teaches how fluids flow and how a
+    // spring is built.  NOT a Rune Scroll: those are progression seals, and
+    // is_rune_scroll deliberately excludes this one.  (appended: item ordinals
+    // are serialized)
+    Scroll_Of_Waters,
+}
+
+// Which text the full-screen tome is showing.  `Seal` is the ritual's passage
+// tome (keyed further by UI_State.book_tier); `Waters` is the pond-shore scroll.
+// Transient UI state — never saved.
+Book_Page :: enum u8 {
+    Seal,
+    Waters,
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

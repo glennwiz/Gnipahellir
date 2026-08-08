@@ -467,7 +467,7 @@ Adding a new terrain type = one entry in this table. No other files change.
 | Cloud_Stone     |           | X         | Sky -1 ore drop, structure ingredient   |
 | Aether_Crystal  |           | X         | Sky -2 ore drop, structure ingredient   |
 | Runic_Sky_Ore   |           | X         | Sky -3 ore drop, structure ingredient   |
-| Iron_Bar        |           | X         | Smelted (2 ore → 1 bar; 1 log fires 3); builds the Forge |
+| Iron_Bar        |           | X         | Smelted (1 ore → 1 bar); builds the Forge |
 | Silver_Bar      |           | X         | Smelted; Forge-tier gear ingredient      |
 | Gold_Bar        |           | X         | Smelted; Forge/Altar-tier gear ingredient |
 | Dimension_Spawner | X       |           | Rune Altar craft (iron bars); portal to a Metal world |

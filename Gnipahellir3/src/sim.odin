@@ -26,7 +26,7 @@ Smelt_Rule :: struct {
 
 @(rodata)
 smelt_table := [?]Smelt_Rule{
-    { .Iron_Ore,      .Iron_Bar,   2 },
+    { .Iron_Ore,      .Iron_Bar,   1 },
     { .Silver_Ore,    .Silver_Bar, 2 },
     { .Gold_Ore,      .Gold_Bar,   2 },
     { .Gold_Rare_Ore, .Gold_Bar,   1 },  // rare ore is rich: one is enough

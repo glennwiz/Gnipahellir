@@ -251,7 +251,8 @@ Player :: struct {
     chip_hits:        u8,    // chips landed on it (PICK_HITS breaks it)
     inventory:        Inventory,
     equipment:        [Equip_Slot]Item,   // equipped gear; [.None] unused
-    bucket_lava:      bool,
+    bucket_fluid:     Tile_Type, // what the Iron Bucket is carrying; .Air = empty
+                                 // (u8 like the bool it replaced — Save_Data layout is unchanged)
     grounded:         bool,
     facing:           int,
     dead:             bool,
@@ -411,8 +412,9 @@ UI_State :: struct {
     show_title:      bool,   // boot title screen; any key dismisses it into the character-select
     show_charselect: bool,   // startup form picker; dismissed by choosing a look
     show_settings:   bool,   // volume sliders + key rebinding screen
-    show_book:       bool,   // the ritual's instruction tome overlay (opens on a completed offering)
-    book_tier:       int,    // which structure tier's passage the tome describes
+    show_book:       bool,   // full-screen tome overlay (ritual passage, or a read scroll)
+    book_page:       Book_Page, // which text the tome is showing
+    book_tier:       int,    // .Seal only: which structure tier's passage the tome describes
     book_open_frame: u64,    // gs.frame the tome opened — drives the flash-in (frame counts even while paused)
     settings_capture: int,   // action index awaiting a new key, -1 = none
     settings_drag:    int,   // volume slider being dragged (0..2), -1 = none
@@ -433,6 +435,16 @@ UI_State :: struct {
     focus_station:   Station, // nearest interactable station in range this frame (.None = none)
     focus_tile:      [2]i32,  // its tile — anchor for the highlight and prompt
     hover_tile:      [2]i32,
+    // Cursor description line: shown once, the first time you point at a kind
+    // of thing you have never pointed at before, then it holds and fades and
+    // that kind stays quiet from then on (update_hover_desc).  The seen sets
+    // are deliberately not saved — they are UI state, and a reloaded run
+    // simply re-teaches.
+    hover_desc_tile:  Tile_Type, // subject when it is terrain (.Air = a drop, below)
+    hover_desc_item:  Item,      // subject when it is a loose item on the ground
+    hover_desc_timer: f32,       // seconds of description left; 0 = name only
+    hover_seen_tile:  [Tile_Type]bool, // kinds whose description has been shown
+    hover_seen_item:  [Item]bool,
     tooltip_text:    [64]u8,
     golem_plan:       Golem_Plan, // selected command-wand construction ghost
 	golem_zone_press: bool,       // empty-world press waiting to become a deliberate drag
@@ -522,7 +534,11 @@ Progression_State :: struct {
     cave_unlocked:          [MAX_PROGRESSION_TIERS]bool,
     final_boss_defeated:    bool,
     sky_altar_pos:          [2]i32,  // surface tile of the built sky-gate altar; {0,0} = closed
-    recipe_unlocked:        [Item]bool,  // sticky: a recipe (keyed by result) revealed once its gating material was held (crafting.odin)
+    // Sticky: a recipe (keyed by result item) revealed once its gating material
+    // was held (crafting.odin).  Indexed through recipe_revealed/reveal_recipe
+    // rather than by [Item] directly — see MAX_ITEM_SLOTS for why it is sized to
+    // a ceiling instead of to the enum.
+    recipe_unlocked:        [MAX_ITEM_SLOTS]bool,
 }
 
 // ─── Sky Altar ritual (the offering animation) ────────────────────────────────
@@ -629,11 +645,13 @@ Game_State :: struct {
     craft_hint_shown:   bool, // one-shot: the "open bag to craft" popup on first wood log (not saved)
     forage_hint_shown:  bool, // one-shot: the "brew potions" popup on first foraged flower (not saved)
     wand_hint_shown:    bool, // one-shot: the "equip the wand" popup on first crafted wand (not saved)
+    spring_hint_shown:  bool, // one-shot: the "it will not run dry" popup on the first spring (not saved)
 
 
 
     debug_log:   Debug_Log,
     cam_log:     Cam_Log,
+    mouse_log:   Mouse_Log,
     debug:       Debug_State,
 }
 
@@ -666,10 +684,10 @@ new_game_world_seed :: proc() -> u32 {
 
 game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     // Preserved across a reset (audio/assets are live GPU/OS handles set up
-    // once in main(); stats and key bindings persist across runs). debug_log
-    // and cam_log are NOT preserved here: they're multi-hundred-KB buffers, too
-    // large to stack-copy, and losing an unflushed tail on a New Game is
-    // harmless (both are diagnostic only).
+    // once in main(); stats and key bindings persist across runs). debug_log,
+    // cam_log and mouse_log are NOT preserved here: they're multi-hundred-KB
+    // buffers, too large to stack-copy, and losing an unflushed tail on a New
+    // Game is harmless (all three are diagnostic only).
     audio    := gs.audio
     assets   := gs.assets
     stats    := gs.stats
@@ -707,7 +725,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     // Recipes with no gating material (Plank, Bench) are known from the start;
     // pre-mark them so update_recipe_unlocks doesn't announce them as "new".
     for r in recipe_table {
-        if recipe_unlock[r.result] == .None do gs.progression.recipe_unlocked[r.result] = true
+        if recipe_unlock[r.result] == .None do reveal_recipe(&gs.progression, r.result)
     }
 
     world_init(&gs.world, world_seed)

@@ -13,59 +13,58 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(23)  // v23: saved golem packs and vertical recovery state
+SAVE_VERSION :: i32(24)  // v24: recipe_unlocked sized to MAX_ITEM_SLOTS, not [Item]
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
-SAVE_DATA_EXPECTED_SIZE :: 3_171_464
+// (save_data_size_probe logs the real number, plus len(Item).)
+SAVE_DATA_EXPECTED_SIZE :: 3_171_512
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
-// One-version migration keeps the active playtest run intact. v22 had the
-// same world/progression layout but each golem ended at project_cell.
-Golem_v22 :: struct {
-    status:       Golem_Status,
-    level:        int,
-    pos:          [2]f32,
-    vel:          [2]f32,
-    hp:           u8,
-    mode:         Golem_Mode,
-    job:          Golem_Job,
-    carry:        Item,
-    target:       [2]i32,
-    has_target:   bool,
-    path:         Nav_Path,
-    mine_timer:   f32,
-    hazard_timer: f32,
-    replan_timer: f32,
-    facing:       i8,
-    grounded:     bool,
-    project_cell: i16,
-}
+// One-version migration keeps the active playtest run intact.
+//
+// v23 was identical except that Progression_State keyed recipe_unlocked by
+// [Item], so the array was exactly as long as the item enum happened to be —
+// which is why appending Scroll_Of_Waters moved the whole save.  v24 sizes it
+// to MAX_ITEM_SLOTS so that never happens again; the migration just copies the
+// old flags into the front of the wider array.
+//
+// The v22 path was dropped here: it embedded the live Progression_State, so
+// this very change broke it, and v22 is two versions stale.
+//
+// NOTE: this reuses the LIVE Player/World_Grid/etc. — correct only while those
+// are unchanged since v23.  Player's `bucket_lava: bool` did become
+// `bucket_fluid: Tile_Type` this session, but it is the same byte and the old
+// bool was never written, so a v23 save reads back as an empty bucket.
+RECIPE_SLOTS_V23 :: 84   // FROZEN len(Item) at v23 — never re-derive from len(Item)
 
-Golem_System_v22 :: struct {
-    data:     [MAX_GOLEMS]Golem_v22,
-    work:     [NUM_LEVELS]Golem_Work_Order,
-    projects: [NUM_LEVELS]Golem_Project,
-    depots:   [MAX_GOLEM_DEPOTS]Golem_Depot_State,
+Progression_State_v23 :: struct {
+    rune_scroll_found:      [MAX_PROGRESSION_TIERS]bool,
+    sky_structure_complete: [MAX_PROGRESSION_TIERS]bool,
+    cave_unlocked:          [MAX_PROGRESSION_TIERS]bool,
+    final_boss_defeated:    bool,
+    sky_altar_pos:          [2]i32,
+    recipe_unlocked:        [RECIPE_SLOTS_V23]bool,
 }
+#assert(size_of(Progression_State_v23) == 104)
 
-Save_Data_v22 :: struct {
+Save_Data_v23 :: struct {
     version:      i32,
     level_index:  int,
     world:        World_Grid,
     levels:       Level_Store,
     player:       Player,
     enemies:      Enemy_Store,
-    golems:       Golem_System_v22,
+    golems:       Golem_System,
     sim:          Sim_State,
-    progression:  Progression_State,
+    progression:  Progression_State_v23,
     dimension:    Dimension_State,
     elapsed_time: f32,
     frame:        u64,
 }
-#assert(size_of(Save_Data_v22) == 3_171_224)
+#assert(size_of(Save_Data_v23) == 3_171_464)
 
 Save_Data :: struct {
     version:      i32,
@@ -103,39 +102,44 @@ save_game :: proc(gs: ^Game_State) -> bool {
 }
 
 load_game :: proc(gs: ^Game_State) -> bool {
-    data, err := os.read_entire_file_from_path(SAVE_FILE, context.allocator)
+    return load_game_from(gs, SAVE_FILE)
+}
+
+// Split out so tests can drive a synthetic save (a migration fixture) without
+// ever touching the player's real SAVE_FILE.
+load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
+    data, err := os.read_entire_file_from_path(path, context.allocator)
     if err != nil do return false
     defer delete(data)
-    if len(data) == size_of(Save_Data_v22) {
-        old := new(Save_Data_v22)
+    if len(data) == size_of(Save_Data_v23) {
+        old := new(Save_Data_v23)
         defer free(old)
-        mem.copy(old, raw_data(data), size_of(Save_Data_v22))
-        if old.version != 22 || old.player.dead do return false
+        mem.copy(old, raw_data(data), size_of(Save_Data_v23))
+        if old.version != 23 || old.player.dead do return false
 
         gs.level_index = old.level_index
         gs.world = old.world
         gs.levels = old.levels
         gs.player = old.player
         gs.enemies = old.enemies
-        gs.golems.work = old.golems.work
-        gs.golems.projects = old.golems.projects
-        gs.golems.depots = old.golems.depots
-        for &g, i in gs.golems.data {
-            o := old.golems.data[i]
-            g.status=o.status; g.level=o.level; g.pos=o.pos; g.vel=o.vel; g.hp=o.hp
-            g.mode=o.mode; g.job=o.job; g.carry=o.carry; g.target=o.target
-            g.has_target=o.has_target; g.path=o.path; g.mine_timer=o.mine_timer
-            g.hazard_timer=o.hazard_timer; g.replan_timer=o.replan_timer
-            g.facing=o.facing; g.grounded=o.grounded; g.project_cell=o.project_cell
-        }
+        gs.golems = old.golems
         gs.sim = old.sim
-        gs.progression = old.progression
         gs.dimension = old.dimension
         gs.elapsed_time = old.elapsed_time
         gs.frame = old.frame
+
+        // Only progression changed shape: the same flags, now in a wider array.
+        gs.progression.rune_scroll_found      = old.progression.rune_scroll_found
+        gs.progression.sky_structure_complete = old.progression.sky_structure_complete
+        gs.progression.cave_unlocked          = old.progression.cave_unlocked
+        gs.progression.final_boss_defeated    = old.progression.final_boss_defeated
+        gs.progression.sky_altar_pos          = old.progression.sky_altar_pos
+        gs.progression.recipe_unlocked = {}
+        for f, i in old.progression.recipe_unlocked do gs.progression.recipe_unlocked[i] = f
+
         seal_loose_rune_scrolls(&gs.world)
         for i in 0 ..< len(gs.levels.worlds) do if gs.levels.generated[i] do seal_loose_rune_scrolls(&gs.levels.worlds[i])
-        log_action(gs, "run migrated from save v22")
+        log_action(gs, "run migrated from save v23")
         gs.save_dirty = true
         return true
     }
