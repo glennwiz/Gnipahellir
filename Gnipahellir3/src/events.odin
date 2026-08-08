@@ -104,7 +104,9 @@ process_events :: proc(gs: ^Game_State) {
             }
 
         case .Lava_Spread:
-            // sim system not implemented yet (Phase 4+)
+            // Unused: fluid flow (fluid.odin) walks the grid on its own clock
+            // rather than announcing every cell it moves, which would swamp
+            // the queue.  The event is kept only because Event_Type is frozen.
 
         case .Tree_Grew:
             audio_play(&gs.audio, .Place, audio_tile_gain(gs, e.tile))

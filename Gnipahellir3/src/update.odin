@@ -77,6 +77,10 @@ game_update :: proc(gs: ^Game_State) {
     //     above) down until they land.  Mutates the grid, pushes no events.
     update_gravity(gs)
 
+    // 6c. Fluids — water and lava flow downhill through the grid gravity just
+    //     rearranged.  Mutates the grid, pushes no events.
+    update_fluid(gs)
+
     // 7. Notifications — ages/expires the popup stack (pushes no events)
     update_notifications(gs)
 

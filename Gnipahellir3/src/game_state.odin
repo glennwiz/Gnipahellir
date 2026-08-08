@@ -356,6 +356,18 @@ Gravity_State :: struct {
     blocks: [MAX_FALLING]Falling_Block,
 }
 
+// ─── Fluid Flow ───────────────────────────────────────────────────────────────
+//
+//  Water/lava positions live in the terrain grid itself (fluid.odin moves them
+//  a cell at a time), so all this holds is the per-fluid tick clock and the
+//  alternating sideways bias.  Transient: not part of Save_Data — flow resumes
+//  from wherever the saved terrain left it.
+
+Fluid_State :: struct {
+    timers: [len(fluid_rules)]f32,
+    flip:   [len(fluid_rules)]bool,
+}
+
 // ─── Event Queue ──────────────────────────────────────────────────────────────
 
 Event_Queue :: struct {
@@ -563,6 +575,7 @@ Game_State :: struct {
     particles:   Particle_Store,
     floating_text: Floating_Text_Store,   // damage numbers (floating_text.odin)
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
+    fluid:       Fluid_State,     // water/lava flow clocks (fluid.odin); transient, not saved
     ritual:      Ritual_State,    // the Sky Altar offering animation (levels.odin); transient, not saved
     reclaim:     Reclaim_State,   // Shift+hold pickaxe dismantle; transient, not saved
     ambience_timer: f32,   // countdown to the next ambient-mote probe pass

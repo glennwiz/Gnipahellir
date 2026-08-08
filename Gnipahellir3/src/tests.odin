@@ -5956,3 +5956,124 @@ pixel_art_load_rejects_missing_or_bad_file :: proc(t: ^testing.T) {
 }
 
 
+
+// ─── Fluid flow (fluid.odin) ─────────────────────────────────────────────────
+
+@(private = "file")
+fluid_count :: proc(gs: ^Game_State, fluid: Tile_Type) -> int {
+	n := 0
+	for tile in gs.world.terrain do if tile == fluid do n += 1
+	return n
+}
+
+@(private = "file")
+fluid_count_in :: proc(gs: ^Game_State, fluid: Tile_Type, x0, x1, y0, y1: int) -> int {
+	n := 0
+	for y in y0 ..= y1 do for x in x0 ..= x1 do if get_tile(&gs.world, x, y) == fluid do n += 1
+	return n
+}
+
+// Carve a sealed stone box: interior [x0..x1] x [y0..y1] open, stone walls and
+// floor around it.  Fluid poured inside can only move within the box.
+@(private = "file")
+fluid_carve_box :: proc(gs: ^Game_State, x0, x1, y0, y1: int) {
+	w := &gs.world
+	for y in y0 - 1 ..= y1 + 1 do for x in x0 - 1 ..= x1 + 1 do set_tile(w, x, y, .Stone)
+	for y in y0 ..= y1 do for x in x0 ..= x1 do set_tile(w, x, y, .Void)
+}
+
+@(test)
+water_falls_then_levels_out_without_losing_a_drop :: proc(t: ^testing.T) {
+	// A column of water dropped into a basin spreads out flat along the floor.
+	// Mass is conserved throughout: the tiles MOVE, they are never copied.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+
+	x0, x1, y0, y1 := 98, 106, 70, 75
+	fluid_carve_box(gs, x0, x1, y0, y1)
+	for y in y0 ..= y1 do set_tile(w, 102, y, .Water)   // a 6-tall column
+	testing.expect_value(t, fluid_count_in(gs, .Water, x0, x1, y0, y1), 6)
+
+	for _ in 0 ..< 400 do update_fluid(gs)
+
+	// Every drop is still here, and all of it now rests on the floor row.
+	testing.expect_value(t, fluid_count_in(gs, .Water, x0, x1, y0, y1), 6)
+	on_floor := 0
+	for x in x0 ..= x1 do if get_tile(w, x, y1) == .Water do on_floor += 1
+	testing.expect_value(t, on_floor, 6)
+
+	// It never ate the box it sits in, and never escaped it.
+	for y in y0 ..= y1 {
+		testing.expect_value(t, get_tile(w, x0 - 1, y), Tile_Type.Stone)
+		testing.expect_value(t, get_tile(w, x1 + 1, y), Tile_Type.Stone)
+	}
+	for x in x0 ..= x1 do testing.expect_value(t, get_tile(w, x, y1 + 1), Tile_Type.Stone)
+}
+
+@(test)
+a_settled_pond_never_churns :: proc(t: ^testing.T) {
+	// The pressure rule (spread sideways only while buried under your own
+	// fluid) is what keeps a resting body of water perfectly still.  The
+	// world's own generated pond is the case the player actually sees, so
+	// assert the untouched grid is bit-identical after a long soak.
+	gs := test_state(); defer free(gs)
+
+	before := gs.world.terrain
+	testing.expect(t, fluid_count(gs, .Water) > 0, "the surface pond should hold water to begin with")
+
+	for _ in 0 ..< 600 do update_fluid(gs)
+
+	testing.expect(t, before == gs.world.terrain, "an undisturbed pond must not move a single tile")
+}
+
+@(test)
+breaching_the_pond_drains_it_down_the_shaft :: proc(t: ^testing.T) {
+	// Dig out from under the pond and it empties into the hole — conserved
+	// fluid means the pond is spent, not an infinite spring.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+
+	pond_x := -1
+	for x in 0 ..< GRID_W do if get_tile(w, x, SURFACE_Y + 1) == .Water { pond_x = x; break }
+	testing.expect(t, pond_x >= 0, "the surface pond should exist")
+
+	// Walk to the middle of the pond, then sink a one-wide shaft under it.
+	for get_tile(w, pond_x + 1, SURFACE_Y + 1) == .Water do pond_x += 1
+	total := fluid_count(gs, .Water)
+	for y in SURFACE_Y + 2 ..= SURFACE_Y + 20 do set_tile(w, pond_x, y, .Void)
+
+	for _ in 0 ..< 600 do update_fluid(gs)
+
+	// The basin is dry — and the pond is spent, not a spring: every drop that
+	// left it is still in the world, just further down the hole.
+	testing.expect_value(t, fluid_count_in(gs, .Water, 0, GRID_W - 1, 0, SURFACE_Y + 1), 0)
+	testing.expect_value(t, fluid_count(gs, .Water), total)
+}
+
+@(test)
+lava_flows_like_water_but_creeps :: proc(t: ^testing.T) {
+	// Lava runs on the same rules and the same hook — only its period differs,
+	// so it oozes at a pace you can walk away from.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+
+	top, bottom := 60, 100
+	fluid_carve_box(gs, 60, 60, top, bottom)     // two one-wide sealed shafts
+	fluid_carve_box(gs, 120, 120, top, bottom)
+	set_tile(w, 60, top, .Water)
+	set_tile(w, 120, top, .Lava)
+
+	for _ in 0 ..< 60 do update_fluid(gs)        // one second
+
+	water_y, lava_y := top, top
+	for y in top ..= bottom {
+		if get_tile(w, 60, y) == .Water do water_y = y
+		if get_tile(w, 120, y) == .Lava do lava_y = y
+	}
+	testing.expect(t, lava_y > top, "lava must flow, not sit still")
+	testing.expect(t, water_y - top >= 3 * (lava_y - top), "water should outrun lava several times over")
+
+	// Neither fluid multiplied on the way down.
+	testing.expect_value(t, fluid_count_in(gs, .Water, 60, 60, top, bottom), 1)
+	testing.expect_value(t, fluid_count_in(gs, .Lava, 120, 120, top, bottom), 1)
+}
