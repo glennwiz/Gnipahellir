@@ -141,6 +141,9 @@ recipe_table := [?]Recipe{
     // a jade.  Worn in a charm slot, not spent — while equipped, the
     // inventory's "Return to Surface" button warps straight home.
     { .Jade_Ring,        1, .Bench, {{.Iron_Bar, 1}, {.Jade, 1}, {}} },
+    // Steam industry, machine one: the kettle.  (Appended — recipe indices
+    // are load-bearing for tests.)
+    { .Boiler,           1, .Bench, {{.Iron_Bar, 4},       {.Stone_Block, 6},   {}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -170,7 +173,7 @@ recipe_unlock := #partial [Item]Item{
     .Iron_Helm = .Iron_Bar, .Iron_Chestplate = .Iron_Bar, .Iron_Gauntlets = .Iron_Bar,
     .Iron_Greaves = .Iron_Bar, .Iron_Boots = .Iron_Bar,
     .Dvergr_Forge = .Iron_Bar, .Silo = .Iron_Bar, .Jade_Ring = .Iron_Bar,
-    .Iron_Bucket = .Iron_Bar,
+    .Iron_Bucket = .Iron_Bar, .Boiler = .Iron_Bar,
     // Silver / gold ladders
     .Silver_Sword = .Silver_Bar, .Mine_Wand_Silver = .Silver_Bar,
     .Silver_Helm = .Silver_Bar, .Silver_Chestplate = .Silver_Bar, .Silver_Gauntlets = .Silver_Bar,

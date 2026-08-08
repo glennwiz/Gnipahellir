@@ -122,6 +122,7 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Auto_Miner             = {120, 255, 210, 255}, // the snake's beating heart
     .Silo                   = {200, 210, 225, 255}, // cold iron sheen
     .Barrel                 = {190, 140, 80,  255}, // warm oak
+    .Boiler                 = {200, 225, 240, 255}, // steam white
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
@@ -1059,6 +1060,17 @@ draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         flick := (math.sin(gs.elapsed_time*13 + f32(x)) + 1) * 0.5
         rl.DrawRectangle(px + 2, py + 3, 6, 4, rl.Color{255, 150, 40, u8(80 + p*100 + flick*60)})
         rl.DrawRectangle(px, py - 2, i32(f32(CELL_SIZE) * clamp(p, 0, 1)), 2, rl.Color{255, 200, 80, 230})
+    case .Boiler:
+        sd := gs.world.sim_data[grid_idx(x, y)]
+        // The firebox glows while fuel is burning; the bar is the next puff.
+        if sd.spread_timer > 0 {
+            flick := (math.sin(gs.elapsed_time*11 + f32(x)) + 1) * 0.5
+            rl.DrawRectangle(px + 2, py + 5, 6, 3, rl.Color{255, 150, 40, u8(110 + flick*80)})
+        }
+        if r, ok := boiler_rule_for(t); ok && sd.growth_timer > 0 {
+            p := clamp(sd.growth_timer / r.period, 0, 1)
+            rl.DrawRectangle(px, py - 2, i32(f32(CELL_SIZE) * p), 2, rl.Color{200, 225, 240, 230})
+        }
     case .Tree_Grower:
         p := gs.world.sim_data[grid_idx(x, y)].growth_timer / TREE_GROW_TIME
         if p <= 0 do return

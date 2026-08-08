@@ -136,6 +136,10 @@ Tile_Type :: enum u8 {
     // pools under whatever ceiling you leave it, and fades if it escapes.
     // (appended: terrain ordinals are serialized)
     Steam,
+    // The steam track's kettle: drinks an adjacent water cell, breathes a
+    // steam cell into the open tile above.  (appended: terrain ordinals are
+    // serialized)
+    Boiler,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -243,6 +247,9 @@ Item :: enum u8 {
     // is_rune_scroll deliberately excludes this one.  (appended: item ordinals
     // are serialized)
     Scroll_Of_Waters,
+    // The steam industry's first machine (appended: item ordinals are
+    // serialized)
+    Boiler,
 }
 
 // Which text the full-screen tome is showing.  `Seal` is the ritual's passage

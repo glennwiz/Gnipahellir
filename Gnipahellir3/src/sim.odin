@@ -32,6 +32,36 @@ smelt_table := [?]Smelt_Rule{
     { .Gold_Rare_Ore, .Gold_Bar,   1 },  // rare ore is rich: one is enough
 }
 
+// ─── The Boiler archetype ─────────────────────────────────────────────────────
+//
+//  There will be TWO craft tracks — steam and magic — with the same inputs and
+//  outputs, differing only in what they burn, what counts as free heat, and
+//  what vapour they breathe.  So nothing here is a bespoke Boiler proc: one
+//  tick_boiler runs every kettle from a rule row looked up by its own tile.
+//  Adding the magic track = adding a row.  No logic changes.
+
+BOILER_FUEL_CAP :: MAX_STACK  // most fuel a kettle's hopper holds
+
+Boiler_Rule :: struct {
+    tile:      Tile_Type, // the kettle itself
+    source:    Tile_Type, // the fluid it drinks (orthogonally adjacent)
+    vapour:    Tile_Type, // the gas it breathes into the open tile above
+    heat_tile: Tile_Type, // adjacent cell that makes fuel unnecessary
+    fuel_item: Item,      // what stokes it otherwise
+    period:    f32,       // seconds per puff
+    burn_time: f32,       // seconds one fuel unit lasts
+}
+
+@(rodata)
+boiler_rules := [?]Boiler_Rule{
+    {.Boiler, .Water, .Steam, .Lava, .Wood_Log, 2.0, 8.0},
+}
+
+boiler_rule_for :: proc(t: Tile_Type) -> (Boiler_Rule, bool) {
+    for r in boiler_rules do if r.tile == t do return r, true
+    return {}, false
+}
+
 @(rodata)
 tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Smelter     = tick_smelter,
@@ -39,6 +69,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Flower_Bed  = tick_flower_bed,
     .Silo        = tick_silo,
     .Golem_Depot = tick_golem_depot,
+    .Boiler      = tick_boiler,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
@@ -135,14 +166,103 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     log_action(gs, "Smelter at (%d,%d) casts %v into its tray", x, y, rule.bar)
 }
 
+// Is one of the four orthogonal neighbours this tile?  Used for the boiler's
+// drink (source) and its free heat (heat_tile).
+adjacent_tile_of :: proc(w: ^World_Grid, x, y: int, t: Tile_Type) -> (int, int, bool) {
+    dirs := [4][2]int{{0, 1}, {0, -1}, {-1, 0}, {1, 0}}
+    for d in dirs {
+        if get_tile(w, x + d[0], y + d[1]) == t do return x + d[0], y + d[1], true
+    }
+    return 0, 0, false
+}
+
+// One tick of any kettle, driven entirely by its Boiler_Rule row.  Per puff it
+// drinks one orthogonally adjacent source cell and breathes one vapour cell
+// into the open tile above (age 0 — freshly boiled).  Heat is either loaded
+// fuel (one unit burns for burn_time, clocked in spread_timer) or a free
+// adjacent heat_tile cell.  Blocked above, dry, or cold -> it idles and
+// consumes NOTHING — self-regulating exactly the way the spring is, and for
+// the same reason: the mouth must be open.
+tick_boiler :: proc(gs: ^Game_State, x, y: int) {
+    w   := &gs.world
+    idx := grid_idx(x, y)
+    sd  := &w.sim_data[idx]
+    rule, ok := boiler_rule_for(w.terrain[idx])
+    if !ok do return
+
+    _ = machine_autopull_fuel(gs, x, y, sd, rule.fuel_item, BOILER_FUEL_CAP)
+
+    if !fluid_open(w, x, y - 1) {
+        sd.growth_timer = 0  // capped — nowhere for the puff to go
+        return
+    }
+    sx, sy, found := adjacent_tile_of(w, x, y, rule.source)
+    if !found {
+        sd.growth_timer = 0  // dry — nothing to boil, so nothing burns
+        return
+    }
+
+    // Heat: a heat_tile cell against the kettle boils for free; otherwise the
+    // burn clock eats loaded fuel, one unit per burn_time.
+    if _, _, hot := adjacent_tile_of(w, x, y, rule.heat_tile); !hot {
+        if sd.spread_timer <= 0 {
+            if sd.fuel_count == 0 {
+                sd.growth_timer = 0  // the fire is cold — feed it
+                return
+            }
+            sd.fuel_count -= 1
+            sd.spread_timer = rule.burn_time
+        }
+        sd.spread_timer -= gs.delta_time
+    }
+
+    sd.growth_timer += gs.delta_time
+    if sd.growth_timer < rule.period do return
+    sd.growth_timer = 0
+
+    set_tile(w, sx, sy, gravity_open_tile(gs, sy))
+    set_tile(w, x, y - 1, rule.vapour)
+    gs.fluid.age[grid_idx(x, y - 1)] = 0
+    spawn_smelt_burst(gs, {i32(x), i32(y)})
+    eq_push(&gs.events, Event{
+        type    = .Play_Sound,
+        tile    = {i32(x), i32(y)},
+        payload = {int_val = i32(Sound_ID.Place)},
+    })
+    log_action(gs, "Boiler at (%d,%d) breathes %v", x, y, rule.vapour)
+}
+
+// Draw one adjacent pile of `item` into the fuel buffer — the hopper pattern
+// shared by every fuel-burning machine (smelter, boilers).  Returns true if it
+// pulled: one pile per tick keeps it cheap.
+machine_autopull_fuel :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data, item: Item, cap: int) -> bool {
+    if int(sd.fuel_count) >= cap do return false
+    w := &gs.world
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 {
+            if dx == 0 && dy == 0 do continue
+            nx, ny := x + dx, y + dy
+            if !in_bounds(nx, ny) do continue
+            n := grid_idx(nx, ny)
+            if w.item_counts[n] == 0 || w.items[n] != item do continue
+            take := min(int(w.item_counts[n]), cap - int(sd.fuel_count))
+            if take <= 0 do continue
+            sd.fuel_count += u8(take)
+            w.item_counts[n] -= u8(take)
+            if w.item_counts[n] == 0 do w.items[n] = .None
+            return true
+        }
+    }
+    return false
+}
+
 // Draw ore and wood piles lying on adjacent cells into the internal buffers,
 // so a hopper of ore on one side and wood on another feeds the fire
 // automatically.  Ore goes to the input buffer (one kind at a time), wood to
 // the fuel buffer; either only when there is room.  One pile per tick.
 smelter_autopull :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data) {
-    ore_full  := int(sd.in_count) >= SMELTER_IN_CAP
-    fuel_full := int(sd.fuel_count) >= SMELTER_FUEL_CAP
-    if ore_full && fuel_full do return
+    if machine_autopull_fuel(gs, x, y, sd, FUEL_ITEM, SMELTER_FUEL_CAP) do return
+    if int(sd.in_count) >= SMELTER_IN_CAP do return
     w := &gs.world
     for dy in -1 ..= 1 {
         for dx in -1 ..= 1 {
@@ -152,17 +272,6 @@ smelter_autopull :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data) {
             n  := grid_idx(nx, ny)
             it := w.items[n]
             if w.item_counts[n] == 0 do continue
-
-            if !fuel_full && smelter_is_fuel(it) {
-                take := min(int(w.item_counts[n]), SMELTER_FUEL_CAP - int(sd.fuel_count))
-                if take <= 0 do continue
-                sd.fuel_count += u8(take)
-                w.item_counts[n] -= u8(take)
-                if w.item_counts[n] == 0 do w.items[n] = .None
-                return  // one pile per tick keeps it cheap
-            }
-
-            if ore_full do continue
             if _, ok := smelt_rule_for(it); !ok do continue
             if sd.in_item != .None && sd.in_item != it do continue
             have := sd.in_item == it ? int(sd.in_count) : 0

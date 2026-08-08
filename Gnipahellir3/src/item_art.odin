@@ -667,6 +667,8 @@ item_icons := [Item]Item_Icon{
 	.Sand             = {DIRT_GRID, {{225, 205, 150, 255}, {180, 158, 105, 255}, {245, 232, 200, 255}, {}, {}}},
 	// Rune Coffer — the barrel silhouette in the chest's darker oak and iron
 	.Rune_Coffer      = {BARREL_GRID, {{126, 68, 36, 255}, {74, 39, 24, 255}, {174, 102, 54, 255}, {}, {}}},
+	// Boiler — the machine box in riveted iron, its window a water sight-glass
+	.Boiler           = {SMELTER_GRID, {{96, 102, 116, 255}, {58, 62, 74, 255}, {}, {90, 160, 220, 255}, {200, 230, 250, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

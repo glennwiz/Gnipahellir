@@ -101,6 +101,8 @@ process_events :: proc(gs: ^Game_State) {
                 notify(gs, "Click the smelter and drag ore in - it casts bars")
             case .Tree_Grower:
                 notify(gs, "The grower raises a tree when open sky is above")
+            case .Boiler:
+                notify(gs, "Set it beside water and stoke it with wood - its steam rises")
             }
 
         case .Lava_Spread:
@@ -548,11 +550,13 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         }
     }
 
-    // A mined smelter spills its tray, its loaded ore AND its wood fuel —
+    // A mined smelter or boiler spills its tray, its loaded ore AND its fuel —
     // nothing in the furnace is lost.  Timers and buffers die with the tile so
     // a future machine here starts fresh.
     sd := &gs.world.sim_data[idx]
-    if old_tile == .Smelter {
+    boiler_rule, is_boiler := boiler_rule_for(old_tile)
+    if old_tile == .Smelter || is_boiler {
+        fuel := is_boiler ? boiler_rule.fuel_item : FUEL_ITEM
         if sd.store_count > 0 {
             spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))
         }
@@ -560,7 +564,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
             spawn_ground_item(&gs.world, e.tile, sd.in_item, int(sd.in_count))
         }
         if sd.fuel_count > 0 {
-            spawn_ground_item(&gs.world, e.tile, FUEL_ITEM, int(sd.fuel_count))
+            spawn_ground_item(&gs.world, e.tile, fuel, int(sd.fuel_count))
         }
     }
     sd^ = {}

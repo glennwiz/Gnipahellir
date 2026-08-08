@@ -495,6 +495,15 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.None,
 		0,
 	},
+	.Boiler                  = {
+		"Boiler",
+		{.Solid, .Placeable, .Mineable},
+		rl.Color{96, 102, 116, 255},
+		0,
+		0,
+		.Boiler,
+		0,
+	},
 }
 
 // ─── Terrain Descriptions ─────────────────────────────────────────────────────
@@ -574,6 +583,7 @@ is_structure_tile := #partial [Tile_Type]bool {
 	.Rune_Scroll_Chest_B     = true,
 	.Rune_Scroll_Chest_C     = true,
 	.Rune_Coffer             = true,
+	.Boiler                  = true,
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────

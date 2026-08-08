@@ -6587,6 +6587,78 @@ steam_dissipates_and_leaves_air :: proc(t: ^testing.T) {
 	testing.expect_value(t, fluid_count(gs, .Steam), 0)
 }
 
+// ─── The Boiler (sim.odin) — first machine of the two-track archetype ────────
+//
+//  Everything below reads the rule row (boiler_rules / boiler_rule_for), never
+//  tile literals — so the magic track inherits these tests the day its row
+//  lands.  Fixture: a sealed box, the kettle on the floor, its source beside
+//  it, head-room above for the vapour.
+
+@(private = "file")
+boiler_build :: proc(gs: ^Game_State, rule: Boiler_Rule) -> (bx, by: int) {
+	fluid_carve_box(gs, 98, 104, 68, 75)
+	bx, by = 100, 75
+	set_tile(&gs.world, bx, by, rule.tile)
+	set_tile(&gs.world, bx + 1, by, rule.source)
+	return
+}
+
+@(test)
+a_boiler_turns_water_and_fuel_into_steam :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := boiler_rules[0]
+	bx, by := boiler_build(gs, rule)
+	spawn_ground_item(w, {i32(bx - 1), i32(by)}, rule.fuel_item, 3)   // a hopper pile
+
+	for _ in 0 ..< 200 { update_sim(gs); update_fluid(gs) }   // ~3.3 s: one puff, then it rises
+
+	sd := &w.sim_data[grid_idx(bx, by)]
+	testing.expect(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75) >= 1, "the kettle must breathe vapour")
+	testing.expect(t, get_tile(w, bx + 1, by) != rule.source, "the drunk source cell is spent, not copied")
+	testing.expect(t, sd.fuel_count == 2 && sd.spread_timer > 0,
+		"the pile was auto-pulled and one unit is burning")
+}
+
+@(test)
+a_hot_cell_under_a_boiler_needs_no_fuel :: proc(t: ^testing.T) {
+	// Free heat: a heat_tile cell hard against the kettle replaces fuel — this
+	// is what makes "park the boiler on lava" a real build.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := boiler_rules[0]
+	bx, by := boiler_build(gs, rule)
+	set_tile(w, bx - 1, by, rule.heat_tile)
+
+	for _ in 0 ..< 200 { update_sim(gs); update_fluid(gs) }
+
+	sd := &w.sim_data[grid_idx(bx, by)]
+	testing.expect(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75) >= 1, "free heat must boil without fuel")
+	testing.expect_value(t, sd.fuel_count, u8(0))
+	testing.expect_value(t, sd.spread_timer, f32(0))
+}
+
+@(test)
+a_capped_boiler_idles :: proc(t: ^testing.T) {
+	// Blocked above -> it consumes NOTHING: no water drunk, no fuel burned.
+	// Self-regulating the way the spring is, and for the same reason: the
+	// mouth must be open.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := boiler_rules[0]
+	bx, by := boiler_build(gs, rule)
+	set_tile(w, bx, by - 1, .Stone)   // the cap
+	sd := &w.sim_data[grid_idx(bx, by)]
+	sd.fuel_count = 5
+
+	for _ in 0 ..< 600 { update_sim(gs); update_fluid(gs) }   // ~10 s — five puffs' worth
+
+	testing.expect_value(t, get_tile(w, bx + 1, by), rule.source)
+	testing.expect_value(t, sd.fuel_count, u8(5))
+	testing.expect_value(t, sd.spread_timer, f32(0))
+	testing.expect_value(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75), 0)
+}
+
 // ─── Scroll of Waters + the v23 save migration ───────────────────────────────
 
 @(test)
