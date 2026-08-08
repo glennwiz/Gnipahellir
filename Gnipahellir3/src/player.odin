@@ -6,6 +6,13 @@ JUMP_VEL       :: f32(-13.0)
 MAX_FALL_SPEED :: f32(25.0)
 FLY_SPEED      :: f32(14.0)  // debug fly mode
 
+// Water: it slows and it sinks, but it never drowns (no breath meter —
+// Glenn's call).  The repeatable stroke is what keeps that true: without it,
+// deep water would drown you by geometry.
+WATER_DRAG   :: f32(0.5)   // horizontal speed multiplier while submerged
+WATER_SINK   :: f32(0.35)  // gravity/terminal multiplier — you sink slowly
+WATER_STROKE :: f32(0.55)  // swim-stroke height, as a fraction of JUMP_VEL
+
 PLAYER_W :: f32(0.8)   // tile units
 PLAYER_H :: f32(1.8)   // tile units
 
@@ -44,6 +51,8 @@ update_player :: proc(gs: ^Game_State) {
     flying := false
     when GAME_DEBUG do flying = gs.debug.fly
 
+    submerged := !flying && player_in_water(gs)
+
     if flying {
         // ── Debug fly: directional movement, no gravity, no jump ──
         p.vel = {}
@@ -54,12 +63,20 @@ update_player :: proc(gs: ^Game_State) {
     } else {
         // ── Horizontal intent (Speed stat: base + equipment) ──────
         speed := f32(player_stat(p, .Speed))
+        if submerged do speed *= WATER_DRAG
         p.vel.x = 0
         if inp.move_left  { p.vel.x = -speed; p.facing = -1 }
         if inp.move_right { p.vel.x =  speed; p.facing =  1 }
 
-        // ── Jump ──────────────────────────────────────────────────
-        if inp.jump && p.grounded {
+        // ── Jump / swim stroke ────────────────────────────────────
+        // In water the stroke replaces the jump even with footing — a push
+        // off the pool floor is still a swim, not a leap.  It needs no
+        // ground, so mashing jump always climbs.
+        if inp.jump && submerged {
+            p.vel.y    = JUMP_VEL * WATER_STROKE
+            p.grounded = false
+            eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Jump)}})
+        } else if inp.jump && p.grounded {
             p.vel.y    = JUMP_VEL
             p.grounded = false
             eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Jump)}})
@@ -71,8 +88,14 @@ update_player :: proc(gs: ^Game_State) {
     prev_grounded := p.grounded
     prev_y        := p.pos.y
 
+    gravity  := flying ? f32(0) : GRAVITY
+    max_fall := MAX_FALL_SPEED
+    if submerged {
+        gravity  *= WATER_SINK   // you sink, slowly
+        max_fall *= WATER_SINK
+    }
     move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
-        flying ? 0 : GRAVITY, MAX_FALL_SPEED, &p.grounded, is_player = true,
+        gravity, max_fall, &p.grounded, is_player = true,
         step_up = true)
 
     // Keep the sprite at its pre-step height on the collision frame, then let

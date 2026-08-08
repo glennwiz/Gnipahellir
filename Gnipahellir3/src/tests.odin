@@ -6705,6 +6705,52 @@ an_engine_powers_a_smelter :: proc(t: ^testing.T) {
 	testing.expect_value(t, sa.store_count, stalled)
 }
 
+@(test)
+water_slows_the_player_and_lets_them_swim_out :: proc(t: ^testing.T) {
+	// Decision pair: water drags and sinks but never drowns — and that is only
+	// true because the stroke needs no footing, so deep water cannot become an
+	// inescapable pit by geometry.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	x0, x1, y0, y1 := 90, 110, 68, 75
+	fluid_carve_box(gs, x0, x1, y0, y1)
+
+	park :: proc(gs: ^Game_State, x, floor_y: int) {
+		gs.player.pos = {f32(x), f32(floor_y + 1) - PLAYER_H}
+		gs.player.vel = {}
+		gs.player.grounded = true
+	}
+
+	// Dry control: hold right for one second.
+	park(gs, 92, y1)
+	gs.input.move_right = true
+	for _ in 0 ..< 60 do update_player(gs)
+	dry_dx := gs.player.pos.x - 92
+
+	// Flood the box and make the exact same held walk.
+	for y in y0 + 2 ..= y1 do for x in x0 ..= x1 do set_tile(w, x, y, .Water)
+	park(gs, 92, y1)
+	for _ in 0 ..< 60 do update_player(gs)
+	wet_dx := gs.player.pos.x - 92
+	testing.expect(t, wet_dx < dry_dx*0.7, "the same held walk must cover visibly less ground submerged")
+	testing.expect(t, wet_dx > 0, "but water is wadable, not a wall")
+
+	// From the 6-deep pool floor, a stroke four times a second climbs to the
+	// surface — no ground contact required.
+	gs.input.move_right = false
+	park(gs, 100, y1)
+	gs.player.grounded = false
+	start_y := gs.player.pos.y
+	top_y := start_y
+	for i in 0 ..< 600 {
+		gs.input.jump = i % 15 == 0
+		update_player(gs)
+		top_y = min(top_y, gs.player.pos.y)
+	}
+	gs.input.jump = false
+	testing.expect(t, top_y <= start_y - 4, "repeated strokes must climb a deep pool")
+}
+
 // ─── Scroll of Waters + the v23 save migration ───────────────────────────────
 
 @(test)
