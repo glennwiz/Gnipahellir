@@ -103,6 +103,8 @@ process_events :: proc(gs: ^Game_State) {
                 notify(gs, "The grower raises a tree when open sky is above")
             case .Boiler:
                 notify(gs, "Set it beside water and stoke it with wood - its steam rises")
+            case .Steam_Engine:
+                notify(gs, "Feed it pooled steam - machines within 3 tiles run fast and free")
             }
 
         case .Lava_Spread:

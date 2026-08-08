@@ -42,8 +42,13 @@ game_update :: proc(gs: ^Game_State) {
     //      only after a continuous deliberate hold.
     update_reclaim(gs)
 
-    // 5b. Sim — placed machines (smelter, tree grower) tick; pushes
-    //     Tree_Grew/Play_Sound, so it must precede process_events
+    // 5b0. Power decay — ages engine stamps (writes Power_State only).  Runs
+    //      just before the sim so a consumer that ticks before its engine
+    //      still reads last frame's stamp — scan order never matters.
+    update_power(gs)
+
+    // 5b. Sim — placed machines (smelter, tree grower, boilers, engines)
+    //     tick; pushes Tree_Grew/Play_Sound, so it must precede process_events
     update_sim(gs)
 
     // 5b2. Auto-Miner — the dimension snake advances (dimension level only);

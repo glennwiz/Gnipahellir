@@ -140,6 +140,9 @@ Tile_Type :: enum u8 {
     // steam cell into the open tile above.  (appended: terrain ordinals are
     // serialized)
     Boiler,
+    // The steam track's power take-off: drinks pooled steam, stamps a powered
+    // field on nearby cells.  (appended: terrain ordinals are serialized)
+    Steam_Engine,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -250,6 +253,8 @@ Item :: enum u8 {
     // The steam industry's first machine (appended: item ordinals are
     // serialized)
     Boiler,
+    // (appended: item ordinals are serialized)
+    Steam_Engine,
 }
 
 // Which text the full-screen tome is showing.  `Seal` is the ritual's passage

@@ -62,6 +62,73 @@ boiler_rule_for :: proc(t: Tile_Type) -> (Boiler_Rule, bool) {
     return {}, false
 }
 
+// ─── The Engine archetype and power ───────────────────────────────────────────
+
+POWERED_SPEEDUP :: f32(3)  // a powered machine runs this many times faster
+
+Engine_Rule :: struct {
+    tile:   Tile_Type, // the engine itself
+    vapour: Tile_Type, // what it drinks
+    period: f32,       // seconds per vapour cell consumed
+    reach:  int,       // chebyshev radius it powers
+    linger: f32,       // seconds a stamp survives without fresh vapour
+}
+
+@(rodata)
+engine_rules := [?]Engine_Rule{
+    {.Steam_Engine, .Steam, 1.0, 3, 3.0},
+}
+
+engine_rule_for :: proc(t: Tile_Type) -> (Engine_Rule, bool) {
+    for r in engine_rules do if r.tile == t do return r, true
+    return {}, false
+}
+
+// Is this cell inside a running engine's field?  THE consumer API: it reads
+// one number and deliberately says NOTHING about which craft track powered it
+// — that is the whole two-track contract.  A machine that checks a specific
+// engine tile instead of calling this has broken the design.
+powered :: proc(gs: ^Game_State, x, y: int) -> bool {
+    return gs.power.charge[grid_idx(x, y)] > 0
+}
+
+// Step 5b0: engine stamps age out unless re-stamped.  The linger is what makes
+// consumers independent of grid scan order — a machine ticking before its
+// engine still reads last frame's charge.
+update_power :: proc(gs: ^Game_State) {
+    for &c in gs.power.charge {
+        if c > 0 do c = max(0, c - gs.delta_time)
+    }
+}
+
+// One tick of any engine, driven by its rule row.  Every period it drinks one
+// adjacent vapour cell; on success it stamps `linger` seconds of charge on
+// every cell within `reach`.  No vapour -> no stamp -> the flywheel coasts
+// down and everything it fed falls back to its own fuel.
+tick_engine :: proc(gs: ^Game_State, x, y: int) {
+    w   := &gs.world
+    idx := grid_idx(x, y)
+    sd  := &w.sim_data[idx]
+    rule, ok := engine_rule_for(w.terrain[idx])
+    if !ok do return
+
+    sd.growth_timer += gs.delta_time
+    if sd.growth_timer < rule.period do return
+    sd.growth_timer = 0
+
+    vx, vy, found := adjacent_tile_of(w, x, y, rule.vapour)
+    if !found do return  // starved — the field decays on its own
+
+    set_tile(w, vx, vy, gravity_open_tile(gs, vy))
+    gs.fluid.age[grid_idx(vx, vy)] = 0
+    for sy in y - rule.reach ..= y + rule.reach {
+        for sx in x - rule.reach ..= x + rule.reach {
+            if !in_bounds(sx, sy) do continue
+            gs.power.charge[grid_idx(sx, sy)] = rule.linger
+        }
+    }
+}
+
 @(rodata)
 tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Smelter     = tick_smelter,
@@ -70,6 +137,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Silo        = tick_silo,
     .Golem_Depot = tick_golem_depot,
     .Boiler      = tick_boiler,
+    .Steam_Engine = tick_engine,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
@@ -122,7 +190,11 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
         sd.growth_timer = 0  // nothing loaded, or not yet a full bar's worth
         return
     }
-    if int(sd.fuel_count) < FUEL_PER_BAR {
+    // A powered furnace burns no wood and casts POWERED_SPEEDUP times as fast
+    // — the reward for a real spring + boiler + engine build.  Deliberately
+    // track-agnostic: this proc knows nothing about steam or engines.
+    is_powered := powered(gs, x, y)
+    if !is_powered && int(sd.fuel_count) < FUEL_PER_BAR {
         sd.growth_timer = 0  // the fire is cold — feed it wood
         return
     }
@@ -142,12 +214,13 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
         return
     }
 
+    smelt_time := is_powered ? SMELT_TIME / POWERED_SPEEDUP : SMELT_TIME
     sd.growth_timer += gs.delta_time
-    if sd.growth_timer < SMELT_TIME do return
+    if sd.growth_timer < smelt_time do return
     sd.growth_timer = 0
 
-    sd.in_count   -= u8(rule.ore_per_bar)
-    sd.fuel_count -= u8(FUEL_PER_BAR)
+    sd.in_count -= u8(rule.ore_per_bar)
+    if !is_powered do sd.fuel_count -= u8(FUEL_PER_BAR)
     if sd.in_count == 0 do sd.in_item = .None
     if out_silo != nil {
         silo_add(out_silo, rule.bar, 1)

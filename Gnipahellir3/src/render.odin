@@ -123,6 +123,7 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Silo                   = {200, 210, 225, 255}, // cold iron sheen
     .Barrel                 = {190, 140, 80,  255}, // warm oak
     .Boiler                 = {200, 225, 240, 255}, // steam white
+    .Steam_Engine           = {235, 200, 110, 255}, // working brass
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
@@ -1070,6 +1071,25 @@ draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         if r, ok := boiler_rule_for(t); ok && sd.growth_timer > 0 {
             p := clamp(sd.growth_timer / r.period, 0, 1)
             rl.DrawRectangle(px, py - 2, i32(f32(CELL_SIZE) * p), 2, rl.Color{200, 225, 240, 230})
+        }
+    case .Steam_Engine:
+        // The spinning flywheel is the only tell the player needs: it turns
+        // while the engine's own cell is powered and stands still the moment
+        // the field dies.  Derived from powered() + elapsed_time — read-only.
+        wx, wy := px + CELL_SIZE/2, py + CELL_SIZE/2
+        brass := rl.Color{240, 212, 120, 255}
+        rl.DrawRectangle(px + 2, py + 2, 6, 6, rl.Color{140, 110, 40, 255})
+        phase := 0
+        if powered(gs, x, y) do phase = int(gs.elapsed_time*10) % 4
+        switch phase {
+        case 0: rl.DrawRectangle(wx - 3, wy - 1, 6, 2, brass)
+        case 1:
+            rl.DrawRectangle(wx - 2, wy - 2, 2, 2, brass)
+            rl.DrawRectangle(wx, wy, 2, 2, brass)
+        case 2: rl.DrawRectangle(wx - 1, wy - 3, 2, 6, brass)
+        case 3:
+            rl.DrawRectangle(wx, wy - 2, 2, 2, brass)
+            rl.DrawRectangle(wx - 2, wy, 2, 2, brass)
         }
     case .Tree_Grower:
         p := gs.world.sim_data[grid_idx(x, y)].growth_timer / TREE_GROW_TIME

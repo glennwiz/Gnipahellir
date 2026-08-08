@@ -669,6 +669,8 @@ item_icons := [Item]Item_Icon{
 	.Rune_Coffer      = {BARREL_GRID, {{126, 68, 36, 255}, {74, 39, 24, 255}, {174, 102, 54, 255}, {}, {}}},
 	// Boiler — the machine box in riveted iron, its window a water sight-glass
 	.Boiler           = {SMELTER_GRID, {{96, 102, 116, 255}, {58, 62, 74, 255}, {}, {90, 160, 220, 255}, {200, 230, 250, 255}}},
+	// Steam Engine — the machine box in iron with a brass flywheel window
+	.Steam_Engine     = {SMELTER_GRID, {{104, 100, 92, 255}, {62, 58, 52, 255}, {}, {200, 160, 60, 255}, {240, 212, 120, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

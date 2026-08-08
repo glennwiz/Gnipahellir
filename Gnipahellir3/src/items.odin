@@ -104,6 +104,7 @@ item_table := [Item]Item_Info{
     .Sand              = { "Sand",              {225, 205, 150, 255}, .Sand, "Fine shore sand, dug from the pond's rim." },
     .Rune_Coffer       = { "Rune Coffer",       {150, 138, 120, 255}, .Rune_Coffer, "An emptied rune chest, prised loose. Re-place it as a 4x4 store." },
     .Boiler            = { "Boiler",            {96, 102, 116, 255},  .Boiler, "Boils an adjacent water cell into steam, one puff at a time. Stoke it with wood - or set it against lava and it needs no fuel. Its steam rises up whatever shaft you leave above." },
+    .Steam_Engine      = { "Steam Engine",      {150, 122, 62, 255},  .Steam_Engine, "Set it in pooled steam: while it drinks, every machine within 3 tiles runs three times as fast on no fuel at all. A leak in your ceiling is power lost." },
 }
 
 is_rune_scroll :: proc(it: Item) -> bool {

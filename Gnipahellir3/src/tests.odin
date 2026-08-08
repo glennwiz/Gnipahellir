@@ -6659,6 +6659,52 @@ a_capped_boiler_idles :: proc(t: ^testing.T) {
 	testing.expect_value(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75), 0)
 }
 
+@(test)
+an_engine_powers_a_smelter :: proc(t: ^testing.T) {
+	// The whole loop closes: pooled vapour -> engine field -> the furnace in
+	// reach runs ~3x fast on ZERO fuel; cut the vapour and it falls back
+	// within linger.  The smelter reads only powered() — the two-track seam.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := engine_rules[0]
+
+	// Box A: a fuelless smelter, the engine two tiles away, and a capped
+	// one-cell vapour reservoir the test keeps topped up.
+	fluid_carve_box(gs, 96, 102, 70, 75)
+	set_tile(w, 99, 75, .Smelter)
+	set_tile(w, 101, 75, rule.tile)
+	set_tile(w, 102, 74, .Stone)   // cap the reservoir so the vapour sits still
+	sa := &w.sim_data[grid_idx(99, 75)]
+	sa.in_item = .Iron_Ore; sa.in_count = 60
+
+	// Box B, far outside the field: the identical furnace on ordinary wood.
+	fluid_carve_box(gs, 108, 114, 70, 75)
+	set_tile(w, 111, 75, .Smelter)
+	sb := &w.sim_data[grid_idx(111, 75)]
+	sb.in_item = .Iron_Ore; sb.in_count = 60; sb.fuel_count = 40
+
+	for _ in 0 ..< 600 {   // ~10 s with vapour always on tap
+		if get_tile(w, 102, 75) != rule.vapour {
+			set_tile(w, 102, 75, rule.vapour)
+			gs.fluid.age[grid_idx(102, 75)] = 0
+		}
+		update_power(gs); update_sim(gs); update_fluid(gs)
+	}
+
+	a_bars, b_bars := int(sa.store_count), int(sb.store_count)
+	testing.expect(t, b_bars > 0, "the wood furnace is the working control")
+	testing.expect(t, a_bars >= 2*b_bars, "a powered furnace must far outrun a wood one")
+	testing.expect_value(t, sa.fuel_count, u8(0))   // it never needed a single log
+
+	// Cut the vapour: the field decays within linger, and with no wood the
+	// powered furnace stalls — the leak IS the failure mode.
+	if get_tile(w, 102, 75) == rule.vapour do set_tile(w, 102, 75, .Void)
+	for _ in 0 ..< 300 { update_power(gs); update_sim(gs); update_fluid(gs) }   // 5 s > linger
+	stalled := sa.store_count
+	for _ in 0 ..< 300 { update_power(gs); update_sim(gs); update_fluid(gs) }
+	testing.expect_value(t, sa.store_count, stalled)
+}
+
 // ─── Scroll of Waters + the v23 save migration ───────────────────────────────
 
 @(test)

@@ -144,6 +144,7 @@ recipe_table := [?]Recipe{
     // Steam industry, machine one: the kettle.  (Appended — recipe indices
     // are load-bearing for tests.)
     { .Boiler,           1, .Bench, {{.Iron_Bar, 4},       {.Stone_Block, 6},   {}} },
+    { .Steam_Engine,     1, .Forge, {{.Iron_Bar, 10},      {.Silver_Bar, 2},    {}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -175,6 +176,7 @@ recipe_unlock := #partial [Item]Item{
     .Dvergr_Forge = .Iron_Bar, .Silo = .Iron_Bar, .Jade_Ring = .Iron_Bar,
     .Iron_Bucket = .Iron_Bar, .Boiler = .Iron_Bar,
     // Silver / gold ladders
+    .Steam_Engine = .Silver_Bar,   // power is a real mid-game gate
     .Silver_Sword = .Silver_Bar, .Mine_Wand_Silver = .Silver_Bar,
     .Silver_Helm = .Silver_Bar, .Silver_Chestplate = .Silver_Bar, .Silver_Gauntlets = .Silver_Bar,
     .Silver_Greaves = .Silver_Bar, .Silver_Boots = .Silver_Bar,
