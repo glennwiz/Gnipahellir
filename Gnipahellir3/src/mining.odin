@@ -92,9 +92,9 @@ in_pick_reach :: proc(p: ^Player, tile: [2]i32) -> bool {
 // The CURSOR chooses the block: of every tile the pick can reach, the swing
 // works the ONE whose center is nearest the pointer.  Point at a block and you
 // get that block — and if that block can't be mined you get nothing, rather
-// than a neighbour you didn't point at.  Precision over convenience: the cost
-// is that carving a two-tall tunnel wants a small cursor nudge between rows
-// instead of one swing taking both.
+// than a neighbour you didn't point at.  (The single exception is the tunnel
+// continuation in pick_continue, which is what makes a held button carve a
+// walkable tunnel without the cursor moving.)
 //
 // The one filter: a candidate must be CLOSER TO THE CURSOR THAN THE PLAYER IS
 // ("the cursor points at or past it").  That's what stops a click at the far
@@ -137,6 +137,58 @@ pick_target :: proc(p: ^Player, mouse_world: [2]f32) -> (target: [2]i32, ok: boo
 		}
 	}
 	return
+}
+
+// Tunnel continuation: once the pointed-at block is gone, keep the held swing
+// going on the rest of the tunnel mouth — the tiles in the SAME COLUMN at the
+// rows the BODY occupies, nearest the cursor first.  Hold the cursor on the
+// block at your feet and the one at your head follows, so a walkable tunnel
+// carves itself without the cursor ever moving.
+//
+// Scope is the whole point.  Only that column (never a neighbour you're not
+// pointing at) and only rows your body would walk into — so pointing at a hole
+// in the floor still mines nothing, and the ceiling above you is never taken by
+// surprise.  The body's own column is excluded by the row test itself: those
+// are the tiles the player is standing in.
+@(private = "file")
+pick_continue :: proc(
+	gs: ^Game_State,
+	mouse_world: [2]f32,
+	col_x: i32,
+	has_pick: bool,
+) -> (
+	target: [2]i32,
+	ok: bool,
+) {
+	p := &gs.player
+	col := i32(p.pos.x + PLAYER_W * 0.5)
+	if col_x == col {return} 	// the player's own column holds no tunnel to carve
+	top := i32(p.pos.y + 0.1)
+	bot := i32(p.pos.y + PLAYER_H - 0.1)
+
+	my := mouse_world.y / CELL_SIZE
+	best := max(f32)
+	for y := top; y <= bot; y += 1 {
+		if !in_bounds(int(col_x), int(y)) {continue}
+		// Nearest WORKABLE row: the row the cursor sits in is the one just
+		// mined out, so the scan has to look past it to find the next block.
+		if !pick_workable(gs, {col_x, y}, has_pick) {continue}
+		if d := abs(f32(y) + 0.5 - my); d < best {
+			best = d
+			target = {col_x, y}
+			ok = true
+		}
+	}
+	return
+}
+
+// Whether this swing can work that tile at all: mineable terrain, not a
+// structure (those want the deliberate Shift+hold reclaim), and — bare-handed —
+// only trees.
+@(private = "file")
+pick_workable :: proc(gs: ^Game_State, tile: [2]i32, has_pick: bool) -> bool {
+	t := get_tile(&gs.world, int(tile.x), int(tile.y))
+	return .Mineable in terrain_table[t].flags && !is_structure_tile[t] && (has_pick || t == .Wood)
 }
 
 // Called from update_player while the mine button is held.
@@ -186,15 +238,20 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	if C.x != cx {p.facing = 1 if C.x > cx else -1}
 	p.mine_timer = PICK_SWING_TIME
 
-	tile := get_tile(&gs.world, int(C.x), int(C.y))
-	workable := .Mineable in terrain_table[tile].flags &&
-		!is_structure_tile[tile] && // equipment needs Shift+hold reclaim
-		(has_pick || tile == .Wood) // fists fell trees only
-	if !workable {
-		// Still swing, so every click gives feedback — but nothing else is
-		// mined in its place: the cursor asked for THIS block.
-		log_mouse(gs, "WHIFF", C, has_pick ? terrain_table[tile].name : "no pickaxe")
-		return
+	// The block the cursor asked for, or — once that one is gone — the rest of
+	// the tunnel mouth in the same column.
+	continued := false
+	if !pick_workable(gs, C, has_pick) {
+		N, have_next := pick_continue(gs, gs.input.mouse_world, C.x, has_pick)
+		if !have_next {
+			// Still swing, so every click gives feedback — but nothing else is
+			// mined in its place: the cursor asked for THIS block.
+			tile := get_tile(&gs.world, int(C.x), int(C.y))
+			log_mouse(gs, "WHIFF", C, has_pick ? terrain_table[tile].name : "no pickaxe")
+			return
+		}
+		C = N
+		continued = true
 	}
 
 	if p.chip_tile != C {
@@ -208,10 +265,11 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 		note_buf: [64]u8
 		note := fmt.bprintf(
 			note_buf[:],
-			"%s %d/%d",
+			"%s %d/%d%s",
 			int(p.chip_hits) >= hits_needed ? "MINED" : "chip",
 			p.chip_hits,
 			hits_needed,
+			continued ? " (tunnel continue)" : "",
 		)
 		log_mouse(gs, has_pick ? "PICK" : "HAND", C, note)
 	}

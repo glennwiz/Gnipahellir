@@ -1790,6 +1790,43 @@ pick_chips_the_block_under_the_cursor :: proc(t: ^testing.T) {
 }
 
 @(test)
+held_swing_carves_the_whole_tunnel_mouth :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Body rows 52..53 (feet 53, head 52), standing in column 30.
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    feet := [2]i32{31, i32(SURFACE_Y) - 1}
+    head := [2]i32{31, i32(SURFACE_Y) - 2}
+    roof := [2]i32{31, i32(SURFACE_Y) - 3}
+    set_tile(&gs.world, int(feet.x), int(feet.y), .Stone)
+    set_tile(&gs.world, int(head.x), int(head.y), .Stone)
+    set_tile(&gs.world, int(roof.x), int(roof.y), .Stone)
+
+    // The cursor never moves off the LOWER block: the feet block goes first,
+    // then the swing continues into the head block on its own, so the tunnel
+    // ends up walkable.
+    for _ in 0 ..< PICK_HITS { mine_swing(gs, feet) }
+    testing.expect_value(t, get_tile(&gs.world, int(feet.x), int(feet.y)), Tile_Type.Air)
+    testing.expect_value(t, get_tile(&gs.world, int(head.x), int(head.y)), Tile_Type.Stone)
+
+    for _ in 0 ..< PICK_HITS { mine_swing(gs, feet) }
+    testing.expect_value(t, get_tile(&gs.world, int(head.x), int(head.y)), Tile_Type.Air)
+
+    // ...and it stops at the body's own height. The roof above the tunnel is
+    // not part of the mouth, so holding on does nothing more.
+    for _ in 0 ..< PICK_HITS * 2 { mine_swing(gs, feet) }
+    testing.expect_value(t, get_tile(&gs.world, int(roof.x), int(roof.y)), Tile_Type.Stone)
+
+    // The continuation never leaves the column being pointed at: a block one
+    // column further on is the next tunnel step, not this swing's business.
+    beyond := [2]i32{32, i32(SURFACE_Y) - 1}
+    set_tile(&gs.world, int(beyond.x), int(beyond.y), .Stone)
+    for _ in 0 ..< PICK_HITS * 2 { mine_swing(gs, feet) }
+    testing.expect_value(t, get_tile(&gs.world, int(beyond.x), int(beyond.y)), Tile_Type.Stone)
+}
+
+@(test)
 pickaxe_mines_only_while_equipped :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
