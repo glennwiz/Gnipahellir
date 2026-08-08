@@ -47,7 +47,13 @@ request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: boo
         gs.zoom_cursor_active = false
         camera_begin_recenter(gs)
     }
+    // Restart the glide from where the view actually is and at the pace it
+    // already carries (camera.odin), so a notch landing mid-glide retargets
+    // smoothly instead of snapping and braking.  Sample the framing before
+    // zoom_target moves — it is the old glide's endpoint.
+    from_target := game_camera(gs).target
     gs.zoom_target = next
+    camera_begin_zoom_glide(gs, from_target)
 }
 
 update_input :: proc(gs: ^Game_State) {

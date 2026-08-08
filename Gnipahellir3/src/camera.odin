@@ -1,7 +1,6 @@
 package game
 
 import rl "vendor:raylib"
-import "core:math"
 
 // ─── Zoom Camera ──────────────────────────────────────────────────────────────
 // Camera state lives on Game_State (gs.cam_y/cam_pan/zoom/...); this file owns
@@ -18,15 +17,90 @@ ZOOM_MAX  :: f32(4.0)
 // bob the view.  A little wider than a full jump so the whole arc is swallowed.
 CAM_DEADZONE_Y :: f32(3.5 * CELL_SIZE)
 
-// Zoom easing rate (1/s): higher = snappier. gs.zoom chases gs.zoom_target with
-// frame-rate-independent exponential decay so a wheel notch glides in ~0.1-0.2 s
-// instead of popping — which also feathers the clamp-release Y pan (see below).
-ZOOM_EASE :: f32(18.0)
+// A wheel notch glides to its new zoom over this many seconds, smoothstepped in
+// 1/zoom (view half-width) space — see update_camera for why that matters: the
+// edge clamp is linear in half-width, so easing there is what stops the camera
+// lurching sideways when the clamp lets go on the first notch.
+ZOOM_TIME :: f32(0.35)
 // Once the player moves, an ALT-shifted view returns to the normal
 // player-centered camera over this many seconds. A fixed duration with an
 // ease-in-out (not exponential decay, whose first frames move fastest and whip
 // the view back from a big offset) — the glide starts gently and settles.
 CAM_RECENTER_TIME :: f32(0.6)
+
+// smoothstep — zero slope at both ends, so a glide neither snaps off its start
+// nor slams into its finish.  Used by the recenter glide, which always starts
+// from a standstill.
+cam_ease :: proc(t: f32) -> f32 {
+    return t*t*(3 - 2*t)
+}
+
+// The zoom glide's curve: smoothstep generalised to start at a chosen speed.
+//
+// A wheel spin lands notches faster than a glide can finish, so most of them
+// retarget one already in flight — and smoothstep restarts at ZERO slope. That
+// dropped the camera's speed ~5x on every notch and re-ramped it, a ~20 Hz
+// stutter in the framing and in the zoom scale alike. A fixed-duration ease
+// cannot be retargeted without it.
+//
+// c is the initial slope, normalised (see cam_glide_c). It is the unique cubic
+// with p(0)=0, p(1)=1, p'(0)=c, p'(1)=0 — so it still lands exactly on target
+// with zero speed, and c=0 is smoothstep unchanged. Monotone for c in 0..3,
+// which is what cam_glide_c clamps to.
+cam_ease_from :: proc(t, c: f32) -> f32 {
+    return ((c - 2)*t + (3 - 2*c))*t*t + c*t
+}
+
+// Normalised initial slope for cam_ease_from: the speed a glide already carries,
+// expressed against the distance it now has to cover in ZOOM_TIME. Zero when
+// there is nothing to cover, or when the motion is heading AWAY from the new
+// target (a direction reversal genuinely has to stop and turn around).
+cam_glide_c :: proc(vel, dist: f32) -> f32 {
+    if dist == 0 do return 0
+    return clamp(vel * ZOOM_TIME / dist, 0, 3)
+}
+
+// Where the camera comes to rest on one axis at a given zoom: the point it
+// tracks, pulled back inside the level edges.
+cam_rest_axis :: proc(p, span, zoom: f32) -> f32 {
+    half := span * 0.5 / max(zoom, ZOOM_MIN)
+    return clamp(p, half, span - half)
+}
+
+// The points the camera tracks, before the level-edge clamp: the player's exact
+// float center on X, the deadzoned anchor on Y, each shifted by any ALT pan.
+cam_track_x :: proc(gs: ^Game_State) -> f32 {
+    return (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE + gs.cam_pan.x
+}
+cam_track_y :: proc(gs: ^Game_State) -> f32 {
+    return gs.cam_y + gs.cam_pan.y
+}
+
+// One axis of the camera target, mid-notch included.
+//
+// Easing zoom alone is not enough to make the framing glide, because the edge
+// clamp SATURATES: with the player at 934 px the clamp lets go at zoom 1.0278,
+// so a 1.00→1.15 notch does all its horizontal travel in the first third of the
+// glide — at which point smoothstep is at its fastest — and then stops dead.
+// That truncation is the sideways jerk, in both axes.
+//
+// So ease the framing itself, from where the view is to where this notch will
+// rest. The curve's zero end-slope then lands where the motion really ends, and
+// an axis with no travel to do (player away from the edge) stays perfectly
+// still. Both ends are relative to the live p, so walking mid-glide still
+// tracks. from_off is captured by camera_begin_zoom_glide, NOT re-derived from
+// the live zoom — see there.
+cam_glide_axis :: proc(gs: ^Game_State, p, span, from_off, c: f32) -> f32 {
+    if gs.zoom_t >= 1 do return cam_rest_axis(p, span, gs.zoom)
+    from := p + from_off
+    to   := cam_rest_axis(p, span, gs.zoom_target)
+    v    := from + (to - from) * cam_ease_from(gs.zoom_t, c)
+    // Zooming OUT narrows the visible window, so a framing that was legal when
+    // the notch started can fall outside it; hold it inside the level edges.
+    // (Zooming in only widens the window, so this is a no-op there.)
+    half := span * 0.5 / max(gs.zoom, ZOOM_MIN)
+    return clamp(v, half, span - half)
+}
 
 // Player-centered camera, plus the temporary offset made by an ALT cursor zoom.
 // Clamped so we never show past the level edges. At zoom 1.0 the clamp pins it
@@ -34,22 +108,45 @@ CAM_RECENTER_TIME :: f32(0.6)
 // only, so the view stays on the player unless ALT deliberately pulls it away.
 // Shared by render and input so both agree on the world↔screen mapping.
 game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
-    zoom   := max(gs.zoom, ZOOM_MIN)
-    half_w := f32(SCREEN_W) * 0.5 / zoom
-    half_h := f32(SCREEN_H) * 0.5 / zoom
-    // Exact float player center — the supersampled texture + float sprite draw
-    // let both glide sub-pixel, so no integer snapping is needed here.
-    px := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE + gs.cam_pan.x
-    // X follows the player exactly; Y tracks the deadzoned anchor (update_camera)
-    // so jumping doesn't slide the view up and down.
-    py := gs.cam_y + gs.cam_pan.y
+    zoom := max(gs.zoom, ZOOM_MIN)
+    px   := cam_track_x(gs)
+    py   := cam_track_y(gs)
     return rl.Camera2D{
-        target   = {clamp(px, half_w, f32(SCREEN_W) - half_w),
-                    clamp(py, half_h, f32(SCREEN_H) - half_h)},
+        target   = {cam_glide_axis(gs, px, f32(SCREEN_W), gs.cam_glide_from.x, gs.cam_ease_c.x),
+                    cam_glide_axis(gs, py, f32(SCREEN_H), gs.cam_glide_from.y, gs.cam_ease_c.y)},
         offset   = {f32(SCREEN_W)*0.5, f32(SCREEN_H)*0.5},
         rotation = 0,
         zoom     = zoom,
     }
+}
+
+// Begin (or restart) a wheel notch's glide. gs.zoom_target must already hold the
+// new zoom; from_target is the camera target as it was under the OLD glide,
+// sampled before that write.
+//
+// Two things make a mid-spin retarget continuous, and both were wrong before:
+//
+//   · POSITION. The framing origin is the offset of the LIVE camera target from
+//     the tracked point, never re-derived from the live zoom. A notch would
+//     otherwise restart the framing from where the live zoom says the camera
+//     ought to REST — which is not where it is, because the edge clamp
+//     saturates early in a notch and its resting point runs ahead of the eased
+//     framing. Closing that gap threw the view up to 7 px sideways in one
+//     frame, worse than the lurch this glide exists to remove.
+//   · SPEED. Each quantity keeps the pace it already had, via cam_ease_from.
+//     Restarting smoothstep at zero slope made every notch brake and re-launch.
+camera_begin_zoom_glide :: proc(gs: ^Game_State, from_target: [2]f32) {
+    px, py := cam_track_x(gs), cam_track_y(gs)
+    gs.cam_glide_from = {from_target.x - px, from_target.y - py}
+    gs.cam_ease_c = {
+        cam_glide_c(gs.cam_glide_vel.x, cam_rest_axis(px, f32(SCREEN_W), gs.zoom_target) - from_target.x),
+        cam_glide_c(gs.cam_glide_vel.y, cam_rest_axis(py, f32(SCREEN_H), gs.zoom_target) - from_target.y),
+    }
+    // The zoom itself glides in 1/zoom space (see update_camera), so its carried
+    // speed is measured there too.
+    gs.zoom_ease_c = cam_glide_c(gs.zoom_inv_vel, 1/gs.zoom_target - 1/max(gs.zoom, ZOOM_MIN))
+    gs.zoom_from   = gs.zoom
+    gs.zoom_t      = 0
 }
 
 // The camera Y anchor: snap it straight to the player (level entry, spawn,
@@ -57,6 +154,13 @@ game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
 camera_snap_y :: proc(gs: ^Game_State) {
     gs.cam_y = (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
     gs.cam_pan = {}
+    // A cut, not a slide: any in-flight glide restarts centred and at a
+    // standstill here, so no motion carries across the seam.
+    gs.cam_glide_from = {}
+    gs.cam_glide_vel  = {}
+    gs.cam_ease_c     = {}
+    gs.zoom_inv_vel   = 0
+    gs.zoom_ease_c    = 0
     gs.zoom_cursor_active = false
     gs.cam_recentering = false
     gs.cam_dragging = false
@@ -69,15 +173,32 @@ camera_snap_y :: proc(gs: ^Game_State) {
 // player moves.  At zoom 1.0 game_camera clamps Y to level-center anyway, so
 // this is only felt when zoomed in.
 update_camera :: proc(gs: ^Game_State) {
+    // Sampled before anything moves, so the pace this frame ends up carrying can
+    // be handed to the next wheel notch (camera_begin_zoom_glide).
+    was_target := game_camera(gs).target
+    was_inv    := 1 / max(gs.zoom, ZOOM_MIN)
+
     py := (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE
     if py < gs.cam_y - CAM_DEADZONE_Y do gs.cam_y = py + CAM_DEADZONE_Y
     if py > gs.cam_y + CAM_DEADZONE_Y do gs.cam_y = py - CAM_DEADZONE_Y
 
-    // Ease the live zoom toward the wheel-set target. Because half_w/half_h (and
-    // thus the edge clamp) are derived from zoom, gliding zoom also glides the
-    // Y lurch you'd otherwise get when the clamp releases on the first notch.
-    next_zoom := gs.zoom + (gs.zoom_target - gs.zoom) * (1 - math.exp(-ZOOM_EASE * gs.delta_time))
-    if abs(gs.zoom_target - next_zoom) < 0.0001 do next_zoom = gs.zoom_target
+    // Glide the live zoom to the wheel-set target: smoothstep over a fixed time
+    // (not exponential decay, whose first frames are its fastest), interpolating
+    // 1/zoom — the view half-width — rather than the zoom factor, so the scale
+    // and the edge clamp advance in step. The framing itself is eased by
+    // cam_glide_axis on the same curve; see there for why zoom easing alone
+    // still leaves a sideways jerk.
+    next_zoom := gs.zoom
+    if gs.zoom_t < 1 {
+        gs.zoom_t += gs.delta_time / ZOOM_TIME
+        if gs.zoom_t >= 1 {
+            gs.zoom_t = 1
+            next_zoom = gs.zoom_target
+        } else {
+            k := cam_ease_from(gs.zoom_t, gs.zoom_ease_c)
+            next_zoom = 1 / (1/gs.zoom_from + (1/gs.zoom_target - 1/gs.zoom_from)*k)
+        }
+    }
 
     if gs.zoom_cursor_active {
         // ALT zoom: target = anchor_world - cursor displacement / zoom.
@@ -107,12 +228,17 @@ update_camera :: proc(gs: ^Game_State) {
             } else {
                 // smoothstep: zero slope at both ends, so the glide neither
                 // snaps off the inspected spot nor slams into the player.
-                t := gs.cam_recenter_t
-                gs.cam_pan = gs.cam_pan_from * (1 - t*t*(3 - 2*t))
+                gs.cam_pan = gs.cam_pan_from * (1 - cam_ease(gs.cam_recenter_t))
             }
         }
     }
     gs.zoom = next_zoom
+
+    if gs.delta_time > 0 {
+        gs.cam_glide_vel = (game_camera(gs).target - was_target) / gs.delta_time
+        gs.zoom_inv_vel  = (1/max(gs.zoom, ZOOM_MIN) - was_inv) / gs.delta_time
+    }
+    log_camera(gs)  // diagnostic: one cam_loc.log row per frame (cam_log.odin)
 }
 
 // Start the smooth glide from the current ALT offset back to the player. Also

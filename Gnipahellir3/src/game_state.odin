@@ -590,6 +590,13 @@ Game_State :: struct {
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved
+    zoom_from:    f32,    // zoom the current glide started from; not saved
+    zoom_t:       f32,    // 0..1 progress of that glide (1 = settled); not saved
+    cam_glide_from: [2]f32, // camera target minus tracked point when that glide began, so a mid-glide notch retargets from where the view IS; not saved
+    cam_glide_vel: [2]f32,  // camera target speed (px/s) last frame, handed to the next notch so a wheel spin keeps its pace; not saved
+    cam_ease_c:    [2]f32,  // normalised initial slope of the framing curve, per axis (0 = plain smoothstep); not saved
+    zoom_inv_vel:  f32,     // d(1/zoom)/dt last frame — the zoom's carried pace, measured in the space it glides in; not saved
+    zoom_ease_c:   f32,     // same normalised initial slope for the zoom curve; not saved
     cam_y:        f32,    // camera Y anchor (world px); a deadzone keeps jumps from bobbing the view — not saved
     cam_pan:      [2]f32, // world-pixel offset created by ALT cursor zoom; glides home once the player moves; not saved
     cam_pan_from: [2]f32, // pan captured when that glide started, for the smoothstep; not saved
@@ -613,6 +620,7 @@ Game_State :: struct {
 
 
     debug_log:   Debug_Log,
+    cam_log:     Cam_Log,
     debug:       Debug_State,
 }
 
@@ -646,8 +654,9 @@ new_game_world_seed :: proc() -> u32 {
 game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     // Preserved across a reset (audio/assets are live GPU/OS handles set up
     // once in main(); stats and key bindings persist across runs). debug_log
-    // is NOT preserved here: it's a 256KB buffer, too large to stack-copy,
-    // and losing its unflushed tail on a New Game is harmless (diagnostic only).
+    // and cam_log are NOT preserved here: they're multi-hundred-KB buffers, too
+    // large to stack-copy, and losing an unflushed tail on a New Game is
+    // harmless (both are diagnostic only).
     audio    := gs.audio
     assets   := gs.assets
     stats    := gs.stats
@@ -675,6 +684,8 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.player.walk_anim_period = 0.15
     gs.zoom               = 1.0
     gs.zoom_target        = 1.0
+    gs.zoom_from          = 1.0
+    gs.zoom_t             = 1.0   // settled: no glide in flight
     gs.loot_rng           = u64(time.now()._nsec)  // fresh drop rolls each run
     gs.world_seed         = world_seed
     gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu

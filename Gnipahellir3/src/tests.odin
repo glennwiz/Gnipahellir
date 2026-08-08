@@ -634,6 +634,144 @@ alt_wheel_zoom_keeps_world_point_under_cursor :: proc(t: ^testing.T) {
 }
 
 @(test)
+zoom_in_never_lurches_sideways :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // The level is exactly one screen wide, so at zoom 1.0 the camera is pinned
+    // to level centre and an off-centre player forces horizontal travel as the
+    // clamp lets go. That travel must ease in and out, never lurch.
+    gs.player.pos = {30, 50}
+    gs.zoom = 1
+    gs.zoom_target = 1
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+    testing.expect_value(t, game_camera(gs).target.x, f32(SCREEN_W)*0.5)
+
+    request_zoom(gs, 1, {0, 0}, false)
+    prev := game_camera(gs).target.x
+    first_step, max_step, last_step := f32(0), f32(0), f32(0)
+    for i in 0 ..< 30 {
+        update_camera(gs)
+        x := game_camera(gs).target.x
+        step := prev - x
+        testing.expect(t, step >= 0, "the view never reverses direction mid-glide")
+        if i == 0 do first_step = step
+        if step > max_step do max_step = step
+        // The LAST MOVING frame, not the last frame of the loop: the edge clamp
+        // saturates partway through a notch, so the travel finishes long before
+        // the zoom does. Sampling the still frames afterwards would score a
+        // full-speed stop as a perfect ease-out.
+        if step > 0.001 do last_step = step
+        prev = x
+    }
+    testing.expect(t, max_step > 0, "the clamp did release during this zoom")
+    testing.expect(t, first_step*4 < max_step, "zoom starts without a sideways lurch")
+    testing.expect(t, last_step*4 < max_step, "and settles without a stop-jerk")
+
+    // Settled: exactly the wheel-set zoom, and as centred on the player as the
+    // level edges allow.
+    testing.expect_value(t, gs.zoom, f32(1 + ZOOM_STEP))
+    testing.expect_value(t, game_camera(gs).target.x, f32(SCREEN_W)*0.5/gs.zoom)
+}
+
+@(test)
+zoom_travel_spreads_over_the_whole_notch :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // The case the test above misses. There the player is far enough from centre
+    // that the clamp never releases within one notch, so the camera simply IS
+    // half_w and easing 1/zoom eases the framing for free. Here the player sits
+    // just 26 px off centre — a real playtest position — so the clamp lets go
+    // partway through and the framing stops needing to move long before the
+    // zoom finishes. Easing zoom alone put every pixel of travel in the first
+    // third of the glide and then halted at full speed: the sideways jerk.
+    gs.player.pos = {934.01/CELL_SIZE - PLAYER_W*0.5, 50}
+    gs.zoom, gs.zoom_target = 1, 1
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+
+    request_zoom(gs, 1, {0, 0}, false)
+    prev := game_camera(gs).target.x
+    frames := int(ZOOM_TIME*60) + 1
+    moving, peak_at, last_at := 0, 0, 0
+    max_step, last_step := f32(0), f32(0)
+    for i in 0 ..< frames {
+        update_camera(gs)
+        x    := game_camera(gs).target.x
+        step := prev - x
+        prev  = x
+        testing.expect(t, step >= 0, "the view never reverses direction mid-glide")
+        if step <= 0.001 do continue
+        if step > max_step {
+            max_step = step
+            peak_at  = i
+        }
+        last_step = step
+        last_at   = i
+        moving   += 1
+    }
+    testing.expect(t, max_step > 0, "the clamp did release during this zoom")
+
+    // The travel must occupy the notch, not sprint through its opening third.
+    testing.expect(t, moving*10 >= frames*8, "horizontal travel spans the whole glide")
+    testing.expect(t, last_at*10 >= frames*8, "and is still easing out at the end")
+
+    // Symmetric bell: peak speed belongs in the middle, not at the moment the
+    // motion stops. This is what fails when the ease-out gets truncated.
+    testing.expect(t, peak_at*3 > frames && peak_at*3 < frames*2,
+        "peak speed falls mid-glide, not against the stop")
+    testing.expect(t, last_step*4 < max_step, "settles without a stop-jerk")
+
+    // Same resting framing as before — smoother, not different.
+    testing.expect_value(t, game_camera(gs).target.x, f32(934.01))
+}
+
+@(test)
+fast_wheel_spin_never_snaps_the_view :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Spinning the wheel lands notches faster than a glide can finish, so every
+    // one of them retargets mid-flight. The glide has to pick up from where the
+    // view IS: restarting it from where the live zoom says the view should be
+    // resting threw it sideways on every notch, because the edge clamp
+    // saturates early and its resting point runs ahead of the eased framing.
+    gs.player.pos = {934.01/CELL_SIZE - PLAYER_W*0.5, 50}
+    gs.zoom, gs.zoom_target = 1, 1
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+
+    prev := game_camera(gs).target.x
+    step := f32(0)
+    for i in 0 ..< 45 {
+        notch := i % 3 == 0 && i < 24
+        if notch do request_zoom(gs, 1, {0, 0}, false)
+        update_camera(gs)
+        x     := game_camera(gs).target.x
+        moved := prev - x
+        prev   = x
+        testing.expect(t, moved >= 0, "the view never reverses direction mid-spin")
+        // The property, stated scale-free: taking a notch must barely disturb
+        // the pace the view already has. Too fast means the retarget SNAPPED
+        // (it restarted from where the live zoom rests, not from where the view
+        // is); too slow means it BRAKED (smoothstep restarting at zero slope),
+        // which sawtoothed the speed ~5x every few frames.
+        if notch && i > 0 {
+            testing.expect(t, moved <= step*2,
+                "a notch mid-glide retargets without jumping the view")
+            testing.expect(t, moved >= step*0.7,
+                "and without braking the pace it already had")
+        }
+        step = moved
+    }
+    // And it still arrives exactly where the wheel asked, centred as the edges allow.
+    testing.expect_value(t, gs.zoom, f32(1 + 8*ZOOM_STEP))
+    testing.expect_value(t, game_camera(gs).target.x, f32(934.01))
+}
+
+@(test)
 alt_drag_pans_the_view_and_it_glides_back :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
@@ -694,6 +832,32 @@ plain_wheel_notch_glides_a_panned_view_home :: proc(t: ^testing.T) {
     for _ in 0 ..< 60 do update_camera(gs)
     testing.expect_value(t, gs.cam_pan.x, f32(0))
     testing.expect_value(t, gs.cam_pan.y, f32(0))
+}
+
+@(test)
+cam_log_records_frames_and_rings :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {90, 50}
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+    gs.cam_log = {}
+
+    for _ in 0 ..< 10 do update_camera(gs)
+    testing.expect(t, gs.cam_log.pos > 0, "update_camera writes a row per frame")
+    testing.expect_value(t, gs.cam_log.end, 0)   // nowhere near a wrap yet
+    // The sample is the clamped target the renderer actually gets, not raw state.
+    testing.expect_value(t, gs.cam_log.last.x, game_camera(gs).target.x)
+    testing.expect_value(t, gs.cam_log.last.y, game_camera(gs).target.y)
+
+    // A playtest outlives the buffer, so the oldest rows must give way to the
+    // newest rather than the log falling silent.
+    gs.cam_log.pos = CAM_LOG_CAP - CAM_LOG_LINE + 1
+    filled := gs.cam_log.pos
+    update_camera(gs)
+    testing.expect_value(t, gs.cam_log.end, filled)
+    testing.expect(t, gs.cam_log.pos < CAM_LOG_LINE, "wrapped back to the start")
 }
 
 @(test)
