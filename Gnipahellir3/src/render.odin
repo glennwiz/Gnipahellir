@@ -77,6 +77,7 @@ Draw_Style :: enum u8 {
     Pixel_Clay,
     Pixel_Flower_Bed,
     Pixel_Rune_Scroll_Chest,
+    Pixel_Steam,
 }
 
 @(rodata)
@@ -99,6 +100,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Rune_Scroll_Chest_B   = .Pixel_Rune_Scroll_Chest,
     .Rune_Scroll_Chest_C   = .Pixel_Rune_Scroll_Chest,
     .Rune_Coffer           = .Pixel_Rune_Scroll_Chest,
+    .Steam       = .Pixel_Steam,
     // all others default to .Solid (zero value)
 }
 
@@ -548,6 +550,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Dirt:       draw_pixel_dirt(px, py)
     case .Pixel_Clay:       draw_pixel_clay(px, py, x, y)
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
+    case .Pixel_Steam:      draw_pixel_steam(gs, px, py, x, y)
     case .Pixel_Rune_Scroll_Chest:
         bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
@@ -558,6 +561,24 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[.Air].color)
     case .Solid:
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
+    }
+}
+
+// ─── Pixel Art: Steam ─────────────────────────────────────────────────────────
+//
+//  Translucent vapour: the flat semi-transparent body plus a few paler wisps
+//  that climb slowly, hashed per cell so a pooled cloud shimmers instead of
+//  reading as one flat block.  Derived from elapsed_time only — read-only.
+
+draw_pixel_steam :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Steam].color)
+    wisp := rl.Color{245, 247, 252, 95}
+    h := i32(x*31 + y*57)
+    climb := i32(gs.elapsed_time * 3) // wisps rise a pixel every third of a second
+    for i in i32(0) ..< 3 {
+        wx := bx + (h*7 + i*13) %% CELL_SIZE
+        wy := by + (h*11 + i*29 - climb) %% CELL_SIZE
+        rl.DrawRectangle(wx, wy, 2, 1, wisp)
     }
 }
 

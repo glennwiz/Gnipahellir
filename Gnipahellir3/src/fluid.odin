@@ -21,6 +21,11 @@ package game
 //    3. one step toward the nearest hole it can see along its own row
 //    4. sideways, but ONLY while buried under more of its own fluid
 //
+//  A GAS runs the exact same rules with "down" mirrored to up (Fluid_Rule.rise)
+//  and a finite lifetime: it climbs the shaft you dug, pools under whatever
+//  ceiling you leave it, and fades if it escapes.  The dug terrain is the
+//  plumbing.
+//
 //  Rules 3 and 4 are what stop a body of fluid churning forever.  Rule 3 only
 //  ever moves a cell TOWARD somewhere it could genuinely fall — a puddle finds
 //  the shaft you dug four tiles away and runs to it, but a pool with no drop in
@@ -40,16 +45,32 @@ package game
 // tuned for readability rather than realism: water advances a tile a second so
 // you can watch a flood arrive and get out of its way, and lava creeps at a
 // third of that.  Lava must stay slower than water.
+//
+// A GAS is the same sim mirrored (`rise`): "down" becomes up, and it pools
+// under a ceiling instead of on a floor.  Gases also fade (`lifetime`), so an
+// escaped cloud is an event you wait out, not permanent litter — the per-cell
+// step count lives in `Fluid_State.age`, which is transient: a save/load
+// resets every age and loaded vapour lives one extra lifetime.  Cosmetic.
 Fluid_Rule :: struct {
-	tile:   Tile_Type,
-	period: f32, // seconds between flow steps — one tile per period
+	tile:     Tile_Type,
+	period:   f32, // seconds between flow steps — one tile per period
+	rise:     bool, // gas: flows up, pools under ceilings
+	springs:  bool, // may the spring stencil fire for this fluid?
+	lifetime: f32, // 0 = forever; >0 = seconds before a cell fades back to open
 }
 
+// Do not reorder existing rows: Fluid_State.timers/flip are indexed by rule
+// position (transient, but tests index them too).
 @(rodata)
 fluid_rules := [?]Fluid_Rule {
-	{.Water, 1.0},
-	{.Lava, 3.0},
-	{.Magic_Lava, 3.0},
+	{tile = .Water, period = 1.0, springs = true},
+	{tile = .Lava, period = 3.0, springs = true},
+	{tile = .Magic_Lava, period = 3.0, springs = true},
+	// Steam is fast (gas is light) and lives 20 s — long enough to cross a real
+	// steam room, short enough that a leak visibly bleeds you dry.  `springs`
+	// stays OFF for every gas: a steam spring would be free infinite power and
+	// would delete the boiler from the game.
+	{tile = .Steam, period = 0.25, rise = true, lifetime = 20.0},
 }
 
 // How far along its row a blocked cell can spot somewhere to fall.  Bigger =
@@ -58,9 +79,16 @@ fluid_rules := [?]Fluid_Rule {
 FLUID_SPREAD :: 8
 
 // Is this tile one of the flowing kinds?  Keyed off the same table the flow
-// runs from, so anything that flows is also something the bucket can carry.
+// runs from.
 is_fluid_tile :: proc(t: Tile_Type) -> bool {
 	for rule in fluid_rules do if rule.tile == t do return true
+	return false
+}
+
+// The falling kinds only — what the bucket can carry.  A gas would just rise
+// out of it.
+is_liquid_tile :: proc(t: Tile_Type) -> bool {
+	for rule in fluid_rules do if rule.tile == t do return !rule.rise
 	return false
 }
 
@@ -73,13 +101,14 @@ fluid_open :: #force_inline proc(w: ^World_Grid, x, y: int) -> bool {
 }
 
 // Looking along row y from (x,y) in direction d, how many cells away is the
-// nearest column this fluid could fall down?  Walls stop the search dead — a
-// puddle cannot see through stone.  0 = nothing in reach.
-fluid_drop_distance :: proc(w: ^World_Grid, x, y, d: int) -> int {
+// nearest column this fluid could keep flowing down (or up, for a gas — dy is
+// the flow direction)?  Walls stop the search dead — a puddle cannot see
+// through stone.  0 = nothing in reach.
+fluid_drop_distance :: proc(w: ^World_Grid, x, y, d, dy: int) -> int {
 	for i in 1 ..= FLUID_SPREAD {
 		cx := x + d * i
 		if !fluid_open(w, cx, y) do return 0
-		if fluid_open(w, cx, y + 1) do return i
+		if fluid_open(w, cx, y + dy) do return i
 	}
 	return 0
 }
@@ -111,36 +140,61 @@ update_fluid :: proc(gs: ^Game_State) {
 		gs.fluid.timers[i] += gs.delta_time
 		if gs.fluid.timers[i] < rule.period do continue
 		gs.fluid.timers[i] = 0
-		fluid_step(gs, rule.tile, gs.fluid.flip[i])
+		fluid_step(gs, rule, gs.fluid.flip[i])
 		gs.fluid.flip[i] = !gs.fluid.flip[i]
 	}
 }
 
-// One flow step for every cell of one fluid.  Rows are walked bottom-up so a
-// cell that falls lands in a row this step has already settled and cannot fall
-// twice; `moved` catches the sideways case, the only move that can land in a
-// cell the scan has yet to reach.
-fluid_step :: proc(gs: ^Game_State, fluid: Tile_Type, flip: bool) {
+// One flow step for every cell of one fluid.  Rows are walked so that a cell
+// which moves in the flow direction lands in a row this step has already
+// settled and cannot move twice — bottom-up for a falling liquid, TOP-DOWN for
+// a rising gas; `moved` catches the sideways case, the only move that can land
+// in a cell the scan has yet to reach.
+fluid_step :: proc(gs: ^Game_State, rule: Fluid_Rule, flip: bool) {
 	w := &gs.world
+	fluid := rule.tile
 	moved: [GRID_W * GRID_H]bool
+
+	// The whole liquid/gas mirror is this one sign: "down" for a gas is up.
+	dy := 1
+	if rule.rise do dy = -1
+
+	// A fading fluid's cells are aged in steps, not seconds, so the count fits
+	// a u8.  0 = immortal (every liquid).
+	life_steps := 0
+	if rule.lifetime > 0 do life_steps = int(rule.lifetime / rule.period)
 
 	// Which side is tried first flips every step, so a spreading pool has no
 	// permanent lean to one direction.
 	dir := 1
 	if !flip do dir = -1
 
-	for y := GRID_H - 1; y >= 0; y -= 1 {
+	for row in 0 ..< GRID_H {
+		y := GRID_H - 1 - row
+		if rule.rise do y = row
 		for x in 0 ..< GRID_W {
 			idx := grid_idx(x, y)
 			if w.terrain[idx] != fluid do continue
 			if moved[idx] do continue
 
+			// A gas ages every step and finally fades back to open — a vented
+			// cloud must never fill a ceiling forever.
+			if life_steps > 0 {
+				gs.fluid.age[idx] += 1
+				if int(gs.fluid.age[idx]) >= life_steps {
+					gs.fluid.age[idx] = 0
+					set_tile(w, x, y, gravity_open_tile(gs, y))
+					continue
+				}
+			}
+
 			// A spring COPIES itself downward and stays put — the one place
 			// fluid enters the world.  Checked before the fall rule, which
 			// would otherwise just move this cell into the gap.  It refills
 			// only while that gap is open, so a spring feeding a sealed pocket
-			// quietly stops: one tile per step, never a runaway.
-			if fluid_is_spring(w, x, y, fluid) {
+			// quietly stops: one tile per step, never a runaway.  Gated per
+			// fluid: no gas may ever spring.
+			if rule.springs && fluid_is_spring(w, x, y, fluid) {
 				// Row y+1 is already finished this step (rows run bottom-up),
 				// so the newborn cell needs no `moved` guard.
 				set_tile(w, x, y + 1, fluid)
@@ -151,23 +205,23 @@ fluid_step :: proc(gs: ^Game_State, fluid: Tile_Type, flip: bool) {
 				continue
 			}
 
-			if fluid_open(w, x, y + 1) {
-				fluid_move(gs, x, y, x, y + 1, fluid, &moved)
+			if fluid_open(w, x, y + dy) {
+				fluid_move(gs, x, y, x, y + dy, fluid, &moved)
 				continue
 			}
-			if fluid_open(w, x + dir, y) && fluid_open(w, x + dir, y + 1) {
-				fluid_move(gs, x, y, x + dir, y + 1, fluid, &moved)
+			if fluid_open(w, x + dir, y) && fluid_open(w, x + dir, y + dy) {
+				fluid_move(gs, x, y, x + dir, y + dy, fluid, &moved)
 				continue
 			}
-			if fluid_open(w, x - dir, y) && fluid_open(w, x - dir, y + 1) {
-				fluid_move(gs, x, y, x - dir, y + 1, fluid, &moved)
+			if fluid_open(w, x - dir, y) && fluid_open(w, x - dir, y + dy) {
+				fluid_move(gs, x, y, x - dir, y + dy, fluid, &moved)
 				continue
 			}
 			// Run for the nearest hole in reach along this row.  Only ever a
-			// step toward somewhere it could actually fall, so it closes
-			// distance monotonically and can never slosh back and forth.
-			d, best := dir, fluid_drop_distance(w, x, y, dir)
-			if alt := fluid_drop_distance(w, x, y, -dir); alt != 0 && (best == 0 || alt < best) {
+			// step toward somewhere it could actually keep flowing, so it
+			// closes distance monotonically and can never slosh back and forth.
+			d, best := dir, fluid_drop_distance(w, x, y, dir, dy)
+			if alt := fluid_drop_distance(w, x, y, -dir, dy); alt != 0 && (best == 0 || alt < best) {
 				d, best = -dir, alt
 			}
 			if best != 0 {
@@ -176,9 +230,9 @@ fluid_step :: proc(gs: ^Game_State, fluid: Tile_Type, flip: bool) {
 			}
 
 			// Pressure: nowhere to drain, so only a cell with more of its own
-			// fluid stacked on top pushes sideways, flattening the heap.  A
-			// settled pool's surface stays put.
-			if get_tile(w, x, y - 1) != fluid do continue
+			// fluid stacked against it (above for a liquid, below for a gas)
+			// pushes sideways, flattening the heap.  A settled surface stays put.
+			if get_tile(w, x, y - dy) != fluid do continue
 			if fluid_open(w, x + dir, y) {
 				fluid_move(gs, x, y, x + dir, y, fluid, &moved)
 				continue
@@ -192,7 +246,7 @@ fluid_step :: proc(gs: ^Game_State, fluid: Tile_Type, flip: bool) {
 
 // The vacated cell opens exactly as a mined one does (air above the surface
 // line and in the sky, void underground), so a drained channel reads the same
-// as a dug one.
+// as a dug one.  A cell's age travels with it — moving does not renew a gas.
 fluid_move :: proc(
 	gs: ^Game_State,
 	fx, fy, tx, ty: int,
@@ -201,5 +255,7 @@ fluid_move :: proc(
 ) {
 	set_tile(&gs.world, tx, ty, fluid)
 	set_tile(&gs.world, fx, fy, gravity_open_tile(gs, fy))
+	gs.fluid.age[grid_idx(tx, ty)] = gs.fluid.age[grid_idx(fx, fy)]
+	gs.fluid.age[grid_idx(fx, fy)] = 0
 	moved[grid_idx(tx, ty)] = true
 }

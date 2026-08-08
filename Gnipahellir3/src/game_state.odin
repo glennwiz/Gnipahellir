@@ -367,6 +367,10 @@ Gravity_State :: struct {
 Fluid_State :: struct {
     timers: [len(fluid_rules)]f32,
     flip:   [len(fluid_rules)]bool,
+    // Gas only: flow steps each cell has existed, for dissipation.  Transient
+    // like the clocks — a save/load resets it, so loaded vapour lives one
+    // extra lifetime.  Cosmetic; not worth a save bump.
+    age:    [GRID_W * GRID_H]u8,
 }
 
 // ─── Event Queue ──────────────────────────────────────────────────────────────

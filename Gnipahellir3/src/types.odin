@@ -132,6 +132,10 @@ Tile_Type :: enum u8 {
     // without a tier seal, storing like an ordinary barrel.  (appended:
     // terrain ordinals are serialized)
     Rune_Coffer,
+    // Scalding vapour — the first gas: the fluid sim mirrored, so it rises,
+    // pools under whatever ceiling you leave it, and fades if it escapes.
+    // (appended: terrain ordinals are serialized)
+    Steam,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────

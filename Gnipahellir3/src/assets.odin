@@ -101,6 +101,8 @@ tile_sprite :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) -> (Tile_Sprite, b
 	// fully transparent), which made water tiles invisible wherever the atlas
 	// loaded successfully. Falls through to the flat terrain_table color
 	// instead (draw_tile's Solid style), same as Clay and other atlas-less tiles.
+	// .Steam is likewise deliberately atlas-less (it has its own draw style);
+	// do not "fix" either by adding an atlas entry.
 	}
 	return .Granite, false
 }

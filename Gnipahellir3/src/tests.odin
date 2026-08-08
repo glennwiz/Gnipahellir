@@ -6518,6 +6518,75 @@ the_bucket_scoops_and_pours :: proc(t: ^testing.T) {
 	testing.expect_value(t, inventory_count(inv, .Iron_Bucket), 1)
 }
 
+// ─── Steam: the first gas (fluid.odin, mirrored sim) ─────────────────────────
+
+@(test)
+steam_is_never_a_spring :: proc(t: ^testing.T) {
+	// THE guard rail of the steam economy: the spring stencil is gated per
+	// fluid (Fluid_Rule.springs), and no gas may spring — a steam spring would
+	// be free infinite power and would delete the boiler from the game.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	cx, cy := 100, 70
+	fluid_build_spring(gs, cx, cy, .Steam)
+
+	// The stencil itself matches — it is the per-fluid gate that must refuse.
+	testing.expect(t, fluid_is_spring(w, cx, cy, .Steam), "the built stencil matches the spring shape")
+
+	for _ in 0 ..< 1500 {   // 100 steam steps, past its 80-step lifetime
+		update_fluid(gs)
+		if get_tile(w, cx, cy + 1) == .Steam {
+			testing.fail_now(t, "the mouth filled: a steam spring must never fire")
+		}
+	}
+	// Nothing was ever created — the trapped cells just aged away entirely.
+	testing.expect_value(t, fluid_count(gs, .Steam), 0)
+}
+
+@(test)
+steam_rises_and_pools_under_a_ceiling :: proc(t: ^testing.T) {
+	// The mirrored sim: steam released at the floor climbs, flattens flush
+	// against the ceiling, and then rests — the dug terrain is the plumbing.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+
+	x0, x1, y0, y1 := 98, 106, 70, 75
+	fluid_carve_box(gs, x0, x1, y0, y1)
+	for i in 0 ..< 3 do set_tile(w, 102, y1 - i, .Steam)   // a 3-tall column on the floor
+	testing.expect_value(t, fluid_count_in(gs, .Steam, x0, x1, y0, y1), 3)
+
+	for _ in 0 ..< 400 do update_fluid(gs)   // ~26 steps: rise + flatten, well inside its lifetime
+
+	// Every cell now hugs the ceiling row; none was lost, none escaped the box.
+	testing.expect_value(t, fluid_count_in(gs, .Steam, x0, x1, y0, y1), 3)
+	on_ceiling := 0
+	for x in x0 ..= x1 do if get_tile(w, x, y0) == .Steam do on_ceiling += 1
+	testing.expect_value(t, on_ceiling, 3)
+
+	// And a pooled cloud rests: the grid is bit-identical between steps.
+	before := w.terrain
+	for _ in 0 ..< 100 do update_fluid(gs)
+	testing.expect(t, before == w.terrain, "a pooled cloud must rest, not slosh")
+}
+
+@(test)
+steam_dissipates_and_leaves_air :: proc(t: ^testing.T) {
+	// A gas is an event you wait out, not permanent litter.  Sealed where it
+	// cannot move at all, a steam cell ages out, and what it leaves behind is
+	// exactly what mining the cell would have left.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+
+	cx, cy := 100, 70
+	fluid_carve_box(gs, cx, cx, cy, cy)   // a 1x1 sealed pocket
+	set_tile(w, cx, cy, .Steam)
+
+	for _ in 0 ..< 1500 do update_fluid(gs)   // 100 steps, past its 80-step lifetime
+
+	testing.expect_value(t, get_tile(w, cx, cy), gravity_open_tile(gs, cy))
+	testing.expect_value(t, fluid_count(gs, .Steam), 0)
+}
+
 // ─── Scroll of Waters + the v23 save migration ───────────────────────────────
 
 @(test)

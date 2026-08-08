@@ -191,7 +191,7 @@ bucket_use :: proc(gs: ^Game_State, x, y: int) {
 
     if gs.player.bucket_fluid == .Air {
         t := get_tile(&gs.world, x, y)
-        if !is_fluid_tile(t) {
+        if !is_liquid_tile(t) {
             notify(gs, "The bucket carries only water or lava")
             return
         }

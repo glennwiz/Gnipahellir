@@ -484,6 +484,17 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Sand,
 		0,
 	},
+	// The first gas.  This row is where a craft track's vapour effect lives:
+	// steam scalds via damage_per_second, read generically by the hazard pass.
+	.Steam                   = {
+		"Steam",
+		{.Walkable, .Damaging},
+		rl.Color{225, 228, 235, 110},
+		1,
+		2,
+		.None,
+		0,
+	},
 }
 
 // ─── Terrain Descriptions ─────────────────────────────────────────────────────
@@ -500,6 +511,7 @@ terrain_desc := #partial [Tile_Type]string {
 	.Grass      = "Turf-capped surface soil. Mines into a placeable square of turf.",
 	.Water      = "Swimmable water — it slows you down. Scoop it with an iron bucket.",
 	.Lava       = "Molten rock. It burns while you stand in it; an iron bucket moves it.",
+	.Steam      = "Scalding vapour. It rises, it leaks, and it fades - cap your chamber or lose your pressure.",
 	.Magic_Lava = "Cursed molten rock — it burns far harder than plain lava.",
 	// Gateways: the label should say where the step leads.
 	.Cave_Entrance  = "A mouth into the caves. Walk into it to descend.",
