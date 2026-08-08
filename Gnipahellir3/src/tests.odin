@@ -546,7 +546,36 @@ camera_clamps_to_level_bounds :: proc(t: ^testing.T) {
 }
 
 @(test)
-wheel_zoom_keeps_world_point_under_cursor :: proc(t: ^testing.T) {
+wheel_zoom_stays_centered_on_the_player :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Stay clear of every level edge so this measures player-following rather
+    // than the intentional camera clamp taking priority.
+    gs.player.pos = {90, 50}
+    gs.zoom = 2
+    gs.zoom_target = 2
+    camera_snap_y(gs)
+
+    request_zoom(gs, 1, {1200, 400}, false)
+    gs.delta_time = 1.0/60.0
+    for _ in 0 ..< 120 do update_camera(gs)
+
+    testing.expect_value(t, gs.zoom, f32(2 + ZOOM_STEP))
+    cam := game_camera(gs)
+    px := (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE
+    testing.expect_value(t, cam.target.x, px)
+    testing.expect(t, abs(cam.target.y - gs.cam_y) < 0.01, "zoomed view keeps the player's Y anchor")
+
+    // Walking while zoomed in: the view tracks the player, no lingering offset.
+    gs.player.pos.x += 4
+    update_camera(gs)
+    moved := game_camera(gs)
+    testing.expect_value(t, moved.target.x, (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE)
+}
+
+@(test)
+alt_wheel_zoom_keeps_world_point_under_cursor :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
@@ -564,7 +593,7 @@ wheel_zoom_keeps_world_point_under_cursor :: proc(t: ^testing.T) {
         (cursor.y - before.offset.y)/before.zoom + before.target.y,
     }
 
-    request_zoom(gs, 1, cursor)
+    request_zoom(gs, 1, cursor, true)
     gs.delta_time = 1.0/60.0
     for _ in 0 ..< 120 do update_camera(gs)
 
@@ -573,17 +602,98 @@ wheel_zoom_keeps_world_point_under_cursor :: proc(t: ^testing.T) {
         (cursor.x - after.offset.x)/after.zoom + after.target.x,
         (cursor.y - after.offset.y)/after.zoom + after.target.y,
     }
-    testing.expect(t, abs(under_cursor.x - anchor.x) < 0.01, "wheel zoom preserves cursor world X")
-    testing.expect(t, abs(under_cursor.y - anchor.y) < 0.01, "wheel zoom preserves cursor world Y")
-    testing.expect(t, gs.cam_pan.x != 0 || gs.cam_pan.y != 0, "cursor zoom offsets the player-centered camera")
+    testing.expect(t, abs(under_cursor.x - anchor.x) < 0.01, "ALT zoom preserves cursor world X")
+    testing.expect(t, abs(under_cursor.y - anchor.y) < 0.01, "ALT zoom preserves cursor world Y")
+    testing.expect(t, gs.cam_pan.x != 0 || gs.cam_pan.y != 0, "ALT zoom offsets the player-centered camera")
 
-    // Starting to move gently recenters; it must shrink rather than snap away.
-    pan_before := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
+    // Starting to move glides home: it must shrink rather than snap away, and
+    // ease IN — the first frames move far less than the middle of the glide,
+    // which is the whole point of smoothstep over exponential decay.
+    pan_start := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
     gs.player.vel.x = 1
     update_camera(gs)
-    pan_after := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
-    testing.expect(t, pan_after > 0, "movement recenter is gradual")
-    testing.expect(t, pan_after < pan_before, "movement pulls cursor pan back toward the player")
+    pan_1 := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
+    testing.expect(t, pan_1 > 0, "movement recenter is gradual")
+    testing.expect(t, pan_1 < pan_start, "movement pulls cursor pan back toward the player")
+
+    first_step := pan_start - pan_1
+    for _ in 0 ..< 17 do update_camera(gs)   // ~halfway through CAM_RECENTER_TIME
+    mid := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
+    update_camera(gs)
+    mid_step := mid - (abs(gs.cam_pan.x) + abs(gs.cam_pan.y))
+    testing.expect(t, first_step*4 < mid_step, "the glide eases in instead of whipping back")
+
+    // It runs to completion and lands exactly on the player, even if the player
+    // stops moving partway through.
+    gs.player.vel.x = 0
+    for _ in 0 ..< 60 do update_camera(gs)
+    testing.expect_value(t, gs.cam_pan.x, f32(0))
+    testing.expect_value(t, gs.cam_pan.y, f32(0))
+    home := game_camera(gs)
+    testing.expect_value(t, home.target.x, (gs.player.pos.x + PLAYER_W*0.5) * CELL_SIZE)
+}
+
+@(test)
+alt_drag_pans_the_view_and_it_glides_back :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {90, 50}
+    gs.zoom = 2
+    gs.zoom_target = 2
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+
+    before := game_camera(gs)
+    // Drag the world right and down: the view moves the opposite way, so the
+    // grabbed spot follows the pointer.
+    camera_pan_drag(gs, {60, 40})
+    after := game_camera(gs)
+    testing.expect_value(t, after.target.x, before.target.x - 60/gs.zoom)
+    testing.expect_value(t, after.target.y, before.target.y - 40/gs.zoom)
+
+    // A pan cannot bank offset the edge clamp would swallow: dragging far past
+    // the level edge stops, and one small drag back moves immediately.
+    for _ in 0 ..< 200 do camera_pan_drag(gs, {400, 0})
+    pinned := game_camera(gs)
+    testing.expect_value(t, pinned.target.x, f32(SCREEN_W)*0.5/gs.zoom)
+    camera_pan_drag(gs, {-20, 0})
+    testing.expect_value(t, game_camera(gs).target.x, pinned.target.x + 20/gs.zoom)
+
+    // Same homecoming rule as the ALT zoom offset: moving glides it back.
+    gs.player.vel.x = 1
+    update_camera(gs)
+    testing.expect(t, gs.cam_recentering, "walking starts the glide home from a pan")
+    for _ in 0 ..< 60 do update_camera(gs)
+    testing.expect_value(t, gs.cam_pan.x, f32(0))
+    testing.expect_value(t, gs.cam_pan.y, f32(0))
+}
+
+@(test)
+plain_wheel_notch_glides_a_panned_view_home :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {90, 50}
+    gs.zoom = 2
+    gs.zoom_target = 2
+    camera_snap_y(gs)
+    gs.delta_time = 1.0/60.0
+
+    // ALT-zoom away from the player, then ask for an ordinary notch: it is the
+    // explicit "back to the hero" command, but it must not jerk either.
+    request_zoom(gs, 1, {1200, 400}, true)
+    for _ in 0 ..< 120 do update_camera(gs)
+    panned := abs(gs.cam_pan.x) + abs(gs.cam_pan.y)
+    testing.expect(t, panned > 0, "ALT zoom left an offset to return from")
+
+    request_zoom(gs, -1, {1200, 400}, false)
+    update_camera(gs)
+    testing.expect(t, abs(gs.cam_pan.x) + abs(gs.cam_pan.y) > 0, "plain notch glides, never snaps")
+
+    for _ in 0 ..< 60 do update_camera(gs)
+    testing.expect_value(t, gs.cam_pan.x, f32(0))
+    testing.expect_value(t, gs.cam_pan.y, f32(0))
 }
 
 @(test)

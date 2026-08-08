@@ -27,19 +27,26 @@ golem_queue_paint_line :: proc(gs:^Game_State,a,b:[2]i32,mark:bool) {
 	}
 }
 
-// Wheel zoom request. Capture the world point beneath the cursor so
-// update_camera can preserve it throughout the eased zoom.
-request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32) {
+// Wheel zoom request. A plain notch zooms the player-centered view and glides
+// any ALT offset home, so the hero is never left off screen. With ALT held, capture
+// the world point beneath the cursor so update_camera can keep that pixel under
+// the pointer throughout the eased zoom.
+request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: bool) {
     next := clamp(gs.zoom_target + wheel*ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
     if next == gs.zoom_target do return
 
-    cam := game_camera(gs)
-    gs.zoom_anchor_screen = cursor
-    gs.zoom_anchor_world = {
-        (cursor.x - cam.offset.x)/cam.zoom + cam.target.x,
-        (cursor.y - cam.offset.y)/cam.zoom + cam.target.y,
+    if to_cursor {
+        cam := game_camera(gs)
+        gs.zoom_anchor_screen = cursor
+        gs.zoom_anchor_world = {
+            (cursor.x - cam.offset.x)/cam.zoom + cam.target.x,
+            (cursor.y - cam.offset.y)/cam.zoom + cam.target.y,
+        }
+        gs.zoom_cursor_active = true
+    } else {
+        gs.zoom_cursor_active = false
+        camera_begin_recenter(gs)
     }
-    gs.zoom_cursor_active = true
     gs.zoom_target = next
 }
 
@@ -55,10 +62,27 @@ update_input :: proc(gs: ^Game_State) {
     vy := (mouse.y - offset.y) / scale
     inp.mouse_screen = {vx / UI_SCALE, vy / UI_SCALE}
 
-    // Mouse wheel captures the exact world point beneath the pointer and eases
-    // toward/away from it. Shift remains free for deliberate structure reclaim.
+    // ALT is the camera modifier: wheel zooms toward the cursor instead of the
+    // player, and a held mouse button drags the view.  Shift stays free for
+    // deliberate reclaim.  A plain wheel notch keeps the view on the player.
+    alt_down := rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)
     if wheel := rl.GetMouseWheelMove(); wheel != 0 {
-        request_zoom(gs, wheel, {vx, vy})
+        request_zoom(gs, wheel, {vx, vy}, alt_down)
+    }
+
+    // ALT+drag pan (either button — both their world actions are suppressed
+    // while ALT is held, below).  Releasing leaves the view where you put it;
+    // it glides back to the player as soon as you move.
+    mouse_held := rl.IsMouseButtonDown(.LEFT) || rl.IsMouseButtonDown(.RIGHT)
+    if gs.cam_dragging && (!alt_down || !mouse_held) do gs.cam_dragging = false
+    if alt_down && !gs.cam_dragging && !cursor_over_ui(gs) && gs.ui.drag_item == .None &&
+       (rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT)) {
+        gs.cam_dragging  = true
+        gs.cam_drag_last = {vx, vy}
+    }
+    if gs.cam_dragging {
+        camera_pan_drag(gs, {vx - gs.cam_drag_last.x, vy - gs.cam_drag_last.y})
+        gs.cam_drag_last = {vx, vy}
     }
 
     // World-space mouse: invert the (same) game camera.
@@ -155,7 +179,9 @@ update_input :: proc(gs: ^Game_State) {
     // and space stay as fixed movement/jump alternates.
     bind := gs.bindings
     shift_down := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
-    world_mouse := !cursor_over_ui(gs) && gs.ui.drag_item == .None
+    // ALT claims the mouse for the camera, so no mining/placing/zone painting
+    // happens under a pan drag.
+    world_mouse := !cursor_over_ui(gs) && gs.ui.drag_item == .None && !alt_down
     command_active := equipped_command_wand(gs) != .None
 	if !command_active {
 		gs.ui.golem_zone_press=false
@@ -246,7 +272,7 @@ update_input :: proc(gs: ^Game_State) {
 
     // The command-wand strip chooses a monument plan; selecting the active
     // plan again returns the wand to Gather-zone painting.
-    if command_active && rl.IsMouseButtonPressed(.LEFT) {
+    if command_active && rl.IsMouseButtonPressed(.LEFT) && !alt_down {
         if plan := golem_plan_button_at_cursor(gs); plan != .None {
             gs.ui.golem_plan = .None if gs.ui.golem_plan == plan else plan
         }
@@ -577,9 +603,9 @@ update_input :: proc(gs: ^Game_State) {
     // stack hits zero).  Fires on a fresh press or when the cursor crosses into a
     // new tile, so holding still doesn't re-fire (which would spam the
     // special-item rejection toasts and churn the event queue).
-    if command_active && !shift_down && rl.IsMouseButtonPressed(.RIGHT) && !cursor_over_ui(gs) {
+    if command_active && !shift_down && !alt_down && rl.IsMouseButtonPressed(.RIGHT) && !cursor_over_ui(gs) {
         eq_push(&gs.events, Event{type = .Golem_Deploy, tile = inp.mouse_tile})
-    } else if !command_active && rl.IsMouseButtonDown(.RIGHT) && !cursor_over_ui(gs) {
+    } else if !command_active && !alt_down && rl.IsMouseButtonDown(.RIGHT) && !cursor_over_ui(gs) {
         if rl.IsMouseButtonPressed(.RIGHT) || inp.mouse_tile != inp.place_last {
             eq_push(&gs.events, Event{type = .Place_Request, tile = inp.mouse_tile})
             inp.place_last = inp.mouse_tile

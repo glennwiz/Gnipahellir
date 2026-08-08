@@ -591,9 +591,14 @@ Game_State :: struct {
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved
     cam_y:        f32,    // camera Y anchor (world px); a deadzone keeps jumps from bobbing the view — not saved
-    cam_pan:      [2]f32, // world-pixel offset created by cursor zoom; eases home while the player moves; not saved
+    cam_pan:      [2]f32, // world-pixel offset created by ALT cursor zoom; glides home once the player moves; not saved
+    cam_pan_from: [2]f32, // pan captured when that glide started, for the smoothstep; not saved
+    cam_recenter_t: f32,  // 0..1 progress of the glide back to the player; not saved
+    cam_recentering: bool, // true while that glide is running; not saved
+    cam_dragging:  bool,   // true while ALT+mouse is panning the view; not saved
+    cam_drag_last: [2]f32, // previous virtual-screen cursor pos of that drag; not saved
     zoom_anchor_world:  [2]f32, // world point kept beneath zoom_anchor_screen while easing; not saved
-    zoom_anchor_screen: [2]f32, // virtual-screen cursor captured by wheel zoom; not saved
+    zoom_anchor_screen: [2]f32, // virtual-screen cursor captured by an ALT wheel zoom; not saved
     zoom_cursor_active: bool,   // true while the live zoom is easing around that cursor anchor; not saved
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
