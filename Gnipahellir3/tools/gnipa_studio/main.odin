@@ -93,7 +93,10 @@ main :: proc() {
 				drift = true
 				continue
 			}
-			if string(have) != want {
+			// Compare CRLF-insensitively: git's autocrlf may rewrite the
+			// working copy, and that alone is not drift.
+			have_n, _ := strings.remove_all(string(have), "\r", context.temp_allocator)
+			if have_n != want {
 				fmt.eprintfln("DRIFT    %s (%d bytes on disk, %d emitted)", gf.name, len(have), len(want))
 				drift = true
 			} else {
