@@ -1583,6 +1583,40 @@ ritual_swirls_then_leaves_a_tome :: proc(t: ^testing.T) {
 }
 
 @(test)
+standing_in_the_altar_swirl_grants_flight :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    ax, ay := 60, 40
+    gs.level_index = LEVEL_SKY
+    set_tile(&gs.world, ax, ay, .Sky_Altar)
+    // Body centered on the swirl's heart, 2 tiles above the capstone.
+    gs.player.pos = {f32(ax) + 0.5 - PLAYER_W*0.5, f32(ay) - 2 - PLAYER_H*0.5}
+
+    // No ritual done yet: the altar gives nothing.
+    update_ritual(gs)
+    testing.expect_value(t, gs.flight_t, 0)
+
+    // First ritual complete: standing in the swirl grants the blessing.
+    gs.progression.sky_structure_complete[0] = true
+    update_ritual(gs)
+    testing.expect_value(t, gs.flight_t, FLIGHT_BUFF_TIME)
+    testing.expect_value(t, buff_remaining(gs, .Flight), FLIGHT_BUFF_TIME)
+
+    // While it holds, gravity lets go entirely: no input, no falling.
+    gs.delta_time = 0.1
+    update_player(gs)
+    testing.expect_value(t, gs.player.vel.y, 0)
+
+    // Away from the swirl the clock runs down and the blessing expires.
+    gs.player.pos.x += 20
+    gs.delta_time = FLIGHT_BUFF_TIME
+    update_player(gs)
+    update_ritual(gs)
+    testing.expect(t, gs.flight_t <= 0, "blessing expires away from the swirl")
+}
+
+@(test)
 debug_altar_kit_stamps_and_completes_rituals :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

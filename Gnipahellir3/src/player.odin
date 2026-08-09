@@ -53,13 +53,13 @@ update_player :: proc(gs: ^Game_State) {
 
     inp := &gs.input
 
-    flying := false
-    when GAME_DEBUG do flying = gs.debug.fly
+    flying := gs.flight_t > 0   // the altar swirl's blessing (levels.odin)
+    when GAME_DEBUG do flying = flying || gs.debug.fly
 
     submerged := !flying && player_in_water(gs)
 
     if flying {
-        // ── Debug fly: directional movement, no gravity, no jump ──
+        // ── Flight (debug fly / flight buff): directional movement, no gravity, no jump ──
         p.vel = {}
         if inp.move_left  { p.vel.x = -FLY_SPEED; p.facing = -1 }
         if inp.move_right { p.vel.x =  FLY_SPEED; p.facing =  1 }
@@ -94,6 +94,7 @@ update_player :: proc(gs: ^Game_State) {
     prev_y        := p.pos.y
 
     if gs.leaf_fall_t > 0 do gs.leaf_fall_t -= dt
+    if gs.flight_t > 0 do gs.flight_t -= dt
 
     gravity  := flying ? f32(0) : GRAVITY
     max_fall := MAX_FALL_SPEED

@@ -640,6 +640,9 @@ update_input :: proc(gs: ^Game_State) {
             inp.place_last = inp.mouse_tile
         }
     }
+    // Flight steering — shared by debug fly mode and the altar-swirl buff.
+    inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
+    inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
     when GAME_DEBUG {
         if rl.IsKeyPressed(.F3) {
             gs.ui.show_debug = !gs.ui.show_debug
@@ -650,8 +653,6 @@ update_input :: proc(gs: ^Game_State) {
         if rl.IsKeyPressed(.F2) {
             gs.debug.altar_menu = !gs.debug.altar_menu
         }
-        inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
-        inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
 
         // Armed stamp: the next world click sets the armed tile where it lands
         // (the arming click itself is over the menu, which cursor_over_ui eats).

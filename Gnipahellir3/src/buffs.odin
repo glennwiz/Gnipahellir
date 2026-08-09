@@ -11,6 +11,7 @@ package game
 
 Buff :: enum u8 {
 	Leaf_Fall,
+	Flight,
 }
 
 Buff_Info :: struct {
@@ -26,6 +27,11 @@ buff_table := [Buff]Buff_Info{
 		"You drift down like a leaf: slow fall, and no landing ever hurts.",
 		.GreenBerrie,
 	},
+	.Flight = {
+		"Flight",
+		"The altar's swirl bears you aloft: move freely in any direction.",
+		.Sky_Altar,
+	},
 }
 
 // Seconds left on a buff; 0 = not running.
@@ -33,6 +39,8 @@ buff_remaining :: proc(gs: ^Game_State, b: Buff) -> f32 {
 	switch b {
 	case .Leaf_Fall:
 		return gs.leaf_fall_t
+	case .Flight:
+		return gs.flight_t
 	}
 	return 0
 }

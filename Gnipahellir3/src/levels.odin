@@ -421,12 +421,49 @@ start_ritual :: proc(gs: ^Game_State, tier: int, altar: [2]i32) {
     log_action(gs, "Ritual tier %d begun", tier)
 }
 
+// The eternal swirl's gift: stand inside the ring over a blessed altar and it
+// bears you aloft — FLIGHT_BUFF_TIME of free flight, kept topped up while you
+// stay in the swirl.  Same gates as draw_altar_eternal_swirl, so the buff can
+// only come from a swirl the player can see.
+FLIGHT_BUFF_TIME :: f32(20.0)
+ALTAR_BLESS_R    :: f32(2.5)  // tiles from the swirl's center — the ring's reach
+
+altar_blessing :: proc(gs: ^Game_State) {
+    if gs.player.dead do return
+    if gs.level_index != LEVEL_SKY do return
+    if !gs.progression.sky_structure_complete[0] do return
+    pc := [2]f32{gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y + PLAYER_H*0.5}
+    cx := int(pc.x)
+    cy := int(pc.y)
+    // The swirl hangs 2 tiles above its altar, so hovering at the ring's top
+    // puts the altar up to ~4.5 tiles below the body — scan deeper than wide.
+    for dy in -1 ..= 5 {
+        for dx in -3 ..= 3 {
+            if get_tile(&gs.world, cx+dx, cy+dy) != .Sky_Altar do continue
+            center := [2]f32{f32(cx+dx) + 0.5, f32(cy+dy) - 2}
+            d := center - pc
+            if d.x*d.x + d.y*d.y > ALTAR_BLESS_R*ALTAR_BLESS_R do continue
+            if gs.flight_t <= 0 {
+                notify(gs, "The swirl bears you aloft - flight!")
+                log_action(gs, "Flight blessing granted at the altar")
+                audio_play(&gs.audio, .Wand_Fire)
+            }
+            gs.flight_t = FLIGHT_BUFF_TIME
+            return
+        }
+    }
+}
+
 // Step 5e — advances the offering animation.  Spawns the rainbow swirl each
 // frame; at RITUAL_DURATION it consumes the materials, raises the structure
 // (Structure_Complete) and opens the instruction tome.  Pushes an event, so it
-// must run before process_events.
+// must run before process_events.  While no offering runs, the completed
+// altar's eternal swirl hands out its flight blessing instead.
 update_ritual :: proc(gs: ^Game_State) {
-    if !gs.ritual.active do return
+    if !gs.ritual.active {
+        altar_blessing(gs)
+        return
+    }
     gs.ritual.timer += gs.delta_time
     spawn_ritual_swirl(gs, gs.ritual.altar, gs.ritual.timer)
 

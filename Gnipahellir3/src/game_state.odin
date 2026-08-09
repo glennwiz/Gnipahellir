@@ -404,7 +404,7 @@ Input_State :: struct {
     attack:       bool,   // discrete press — sword swing
     reclaim:      bool,   // Shift + held mine button — deliberate structure removal
     interact:     bool,
-    fly_up:       bool,   // debug fly mode only (W/S held)
+    fly_up:       bool,   // flight steering: debug fly mode and the altar-swirl buff
     fly_down:     bool,
     mouse_tile:   [2]i32,
     mouse_world:  [2]f32,   // world-pixel space (camera-inverse) — mining/placement
@@ -607,6 +607,7 @@ Game_State :: struct {
     floating_text: Floating_Text_Store,   // damage numbers (floating_text.odin)
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     leaf_fall_t: f32,             // GreenBerrie slow-fall buff seconds left (player.odin); transient, not saved
+    flight_t:    f32,             // altar-swirl flight buff seconds left (levels.odin grants, player.odin ticks); transient, not saved
     fluid:       Fluid_State,     // water/lava flow clocks (fluid.odin); transient, not saved
     power:       Power_State,     // live engine charge field (sim.odin); transient, not saved
     ritual:      Ritual_State,    // the Sky Altar offering animation (levels.odin); transient, not saved
