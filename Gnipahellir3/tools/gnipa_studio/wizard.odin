@@ -108,8 +108,8 @@ types_append_item :: proc(ident: string) -> (ok: bool, msg: string) {
 	if err != nil do return false, "cannot read types.odin"
 	text := string(data)
 	marker := "// <gen:item-append>"
-	if strings.count(text, marker) != 1 {
-		return false, fmt.aprintf("expected exactly one %s marker in types.odin", marker)
+	if n := strings.count(text, marker); n != 1 {
+		return false, fmt.aprintf("expected exactly one %s marker in types.odin, found %d", marker, n)
 	}
 	idx := strings.index(text, marker)
 	// Back up to the start of the marker's line so the insert lands above it.

@@ -267,6 +267,7 @@ Item :: enum u8 {
     Magic_Lava_Bucket,
     // The gem farm (appended: item ordinals are serialized)
     Gem_Replicator,
+    // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 
 // Which text the full-screen tome is showing.  `Seal` is the ritual's passage
