@@ -398,6 +398,19 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         if n^ < len(trans) { trans[n^] = {{x, y}, cost, bridge}; n^ += 1 }
     }
 
+    // protect_placed marks a golem plan, and golem_mine_tile refuses player
+    // masonry AND structures outright — so a golem route must never dig
+    // through either, or the worker stalls forever at the waypoint it can't
+    // clear (seen live: a plan through a rune scroll chest, .Mineable for the
+    // player's reclaim but a structure the golem may not touch).
+    dig_allowed :: proc(w: ^World_Grid, x, y: int, protect_placed: bool) -> bool {
+        if !in_bounds(x, y) { return false }
+        if !protect_placed { return true }
+        flags := w.tile_flags[grid_idx(x, y)]
+        if .Placed in flags && .Golem_Placed not_in flags { return false }
+        return !is_structure_tile[w.terrain[grid_idx(x, y)]]
+    }
+
     // Seed the open set with the start node.
     nodes[0]  = {pos = sf, g = 0, parent = -1}
     g_cost[grid_idx(fx, fy)] = 0
@@ -444,11 +457,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         nt := 0
 
         // Dig through the floor (only when landing one tile down).
-        floor_mineable := false
-        if in_bounds(x,y+1) {
-            floor_flags := w.tile_flags[grid_idx(x, y+1)]
-            floor_mineable = !protect_placed || .Placed not_in floor_flags || .Golem_Placed in floor_flags
-        }
+        floor_mineable := dig_allowed(w, x, y+1, protect_placed)
         if allow_mining && floor_mineable && is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_protected(gs, x, y+1, owner) {
             push_trans(&trans, &nt, i32(x), i32(y+1), COST_MINE)
         }
@@ -510,11 +519,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             }
 
             // Tunnel into a mineable wall (needs a floor under the mined tile).
-            wall_mineable := false
-            if in_bounds(nx,y) {
-                wall_flags := w.tile_flags[grid_idx(nx, y)]
-                wall_mineable = !protect_placed || .Placed not_in wall_flags || .Golem_Placed in wall_flags
-            }
+            wall_mineable := dig_allowed(w, nx, y, protect_placed)
             if allow_mining && wall_mineable && is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_protected(gs, nx, y, owner) {
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
             }
@@ -531,8 +536,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 climbable := true
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
-                    cell_flags := w.tile_flags[grid_idx(c.x, c.y)]
-                    cell_mineable := !protect_placed || .Placed not_in cell_flags || .Golem_Placed in cell_flags
+                    cell_mineable := dig_allowed(w, c.x, c.y, protect_placed)
                     if cell_mineable && is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y, owner) {
                         mines += 1
                     } else {

@@ -131,6 +131,11 @@ golem_pack_take :: proc(g: ^Golem, item: Item) -> bool {
 	return false
 }
 
+golem_pack_has :: proc(g: ^Golem, item: Item) -> bool {
+	for slot in g.pack do if slot == item do return true
+	return false
+}
+
 golem_pack_pop :: proc(g: ^Golem) -> Item {
 	for &slot in g.pack do if slot != .None {item:=slot; slot=.None; return item}
 	return .None
@@ -1347,8 +1352,26 @@ golem_project_reserve :: proc(gs: ^Game_State, id: int) -> bool {
 	p := &gs.golems.projects[g.level]
 	if !p.active || p.complete do return false
 	info := &golem_plan_table[p.plan]
+	// A cell whose material is nowhere to be had must not hold up the cells
+	// behind it: reserve only work this golem can actually source (carried,
+	// packed, or findable in storage / on the ground), so a missing Clay
+	// leaves the Plank courses buildable instead of stalling the whole
+	// monument.  The source scan walks the whole grid, so remember items
+	// that already failed — one scan per distinct missing item, not per cell.
+	failed: [8]Item
+	n_failed := 0
 	for ci in 0 ..< len(info.cells) {
 		if golem_project_cell_done(gs, p, ci) || p.reserved[ci] != 0 do continue
+		item := info.cells[ci].item
+		if g.carry != item && !golem_pack_has(g, item) {
+			known_dry := false
+			for i in 0 ..< n_failed do if failed[i] == item {known_dry = true; break}
+			if known_dry do continue
+			if _, ok := golem_find_item_source(gs, golem_tile(g), item); !ok {
+				if n_failed < len(failed) {failed[n_failed] = item; n_failed += 1}
+				continue
+			}
+		}
 		p.reserved[ci] = u8(id+1)
 		g.project_cell = i16(ci)
 		return true
@@ -1405,6 +1428,11 @@ golem_assign_build :: proc(gs: ^Game_State, id: int) {
 	if src, ok := golem_find_item_source(gs, golem_tile(g), c.item); ok {
 		g.job = .Fetch_Build
 		_ = golem_set_target(gs, g, src)
+	} else {
+		// The source dried up after this cell was reserved (another worker
+		// took the last one). Let go so the next tick can reserve a cell
+		// that still has material instead of holding the queue hostage.
+		golem_release_reservation(gs, id)
 	}
 }
 

@@ -6280,6 +6280,120 @@ build_mode_crew_fetches_and_places_a_hearth :: proc(t: ^testing.T) {
 }
 
 @(test)
+a_golem_never_plans_a_dig_through_a_structure :: proc(t: ^testing.T) {
+	// Glenn's live save froze a Build-mode golem forever beside the Sky Rune
+	// Scroll Chest: making the sealed chests .Mineable (for the player's
+	// Shift+hold reclaim) silently made is_builder_mineable true for them, so
+	// astar_dig planned a dig straight through a structure that
+	// golem_mine_tile refuses — obstructed, unclearable, and every replan
+	// produced the same route.  The planner must honor the executor's law:
+	// a golem plan never digs a structure.  Enemy builders keep the dig —
+	// their executor (smash_tile) really can demolish machines.
+	gs := test_state(); defer free(gs)
+
+	// A sealed two-room box high in the sky air, walls of Quick_Clay (solid,
+	// never mineable, so no route can tunnel around), split by a divider
+	// whose only doorway cell is a rune scroll chest.
+	for x in 60..=70 {
+		set_tile(&gs.world,x,41,.Quick_Clay)
+		set_tile(&gs.world,x,45,.Quick_Clay)
+		for y in 42..=44 do set_tile(&gs.world,x,y,.Air)
+	}
+	for y in 42..=44 {
+		set_tile(&gs.world,60,y,.Quick_Clay)
+		set_tile(&gs.world,70,y,.Quick_Clay)
+	}
+	set_tile(&gs.world,65,42,.Quick_Clay)
+	set_tile(&gs.world,65,43,.Quick_Clay)
+	set_tile(&gs.world,65,44,.Rune_Scroll_Chest_A)
+
+	path: Nav_Path
+	complete: bool
+
+	// A golem plan (protect_placed) must refuse the chest: no complete route
+	// exists, and no waypoint may ever land on a structure tile.
+	_ = astar_dig(gs,{62,44},{68,44},0,MAX_NAV_PATH,&path,
+		allow_mining=true,complete=&complete,protect_placed=true)
+	testing.expect(t,!complete,"the chest is the only way through - a golem plan must not have a complete route")
+	for i in 0..<path.len {
+		w := path.tiles[i]
+		testing.expect(t,!is_structure_tile[get_tile(&gs.world,int(w.x),int(w.y))],
+			"a golem waypoint must never require mining a structure")
+	}
+
+	// The deliberate asymmetry: an enemy builder may still dig through — its
+	// executor really can smash the structure loose.
+	path = {}
+	complete = false
+	_ = astar_dig(gs,{62,44},{68,44},0,MAX_NAV_PATH,&path,
+		allow_mining=true,complete=&complete,protect_placed=false)
+	testing.expect(t,complete,"a builder plan may dig through the chest doorway")
+}
+
+@(test)
+a_missing_material_does_not_stall_the_rest_of_the_build :: proc(t: ^testing.T) {
+	// The same live save's second stall: the crew's one worker reserved the
+	// first Clay cell of the Hearth, found no Clay anywhere on the level
+	// (Glenn was carrying it), and held that reservation forever — with
+	// Plank cells fully stocked right behind it in the queue.  Reservation
+	// now skips cells whose material can't be sourced, so the crew builds
+	// everything it can and only the truly starved cells wait.
+	gs := test_state(); defer free(gs)
+	gs.delta_time=.05
+	gs.player.equipment[.Weapon]=.Command_Wand
+	gs.player.pos={119,f32(SURFACE_Y)-PLAYER_H}
+	anchor := [2]i32{120,i32(SURFACE_Y-1)}
+	for y in SURFACE_Y-6..<SURFACE_Y do for x in 114..=126 do set_tile(&gs.world,x,y,.Air)
+	for x in 114..=126 do set_tile(&gs.world,x,SURFACE_Y,.Grass)
+	testing.expect(t,golem_project_start(gs,.Clay_Hearth,anchor),"hearth project should start")
+
+	// Stone and Planks stocked; no Clay, no Iron Bar.
+	store := [2]i32{116,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(store.x),int(store.y),.Barrel)
+	barrel_on_placed(gs,store)
+	b:=barrel_at(gs,gs.level_index,store)
+	barrel_deposit(b,.Stone_Block,4)
+	barrel_deposit(b,.Plank,4)
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={117,f32(SURFACE_Y)-GOLEM_H},
+		hp=GOLEM_HP,mode=.Build,facing=1,project_cell=-1}
+
+	p := &gs.golems.projects[gs.level_index]
+	info := &golem_plan_table[p.plan]
+	for _ in 0..<8000 {
+		update_golems(gs)
+		update_gravity(gs)
+		n := 0
+		for ci in 0..<len(info.cells) do if golem_project_cell_done(gs,p,ci) do n += 1
+		if n == 8 do break   // every stocked (Stone + Wood) cell is up
+	}
+	// A short settled wait: the starved cells must hold, not churn.
+	for _ in 0..<200 {
+		update_golems(gs)
+		update_gravity(gs)
+	}
+	for ci in 0..<len(info.cells) {
+		c := info.cells[ci]
+		done := golem_project_cell_done(gs,p,ci)
+		#partial switch c.tile {
+		case .Stone, .Wood: testing.expect(t,done,"stocked cells must be built despite the missing Clay")
+		case:               testing.expect(t,!done,"unsourceable cells wait for material")
+		}
+	}
+	testing.expect(t,!p.complete,"the monument still waits for its Clay and Iron Bar")
+
+	// Restock — the waiting crew resumes and finishes.
+	barrel_deposit(b,.Clay,3)
+	barrel_deposit(b,.Iron_Bar,1)
+	for _ in 0..<8000 {
+		update_golems(gs)
+		update_gravity(gs)
+		if p.complete do break
+	}
+	testing.expect(t,p.complete,"restocking the barrel lets the crew finish the Hearth")
+	testing.expect_value(t,get_tile(&gs.world,int(anchor.x),int(anchor.y)),Tile_Type.Clay_Hearth)
+}
+
+@(test)
 broken_golem_is_recalled_and_repaired :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	gs.player.equipment[.Weapon]=.Command_Wand
