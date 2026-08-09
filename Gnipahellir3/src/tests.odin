@@ -6492,30 +6492,63 @@ the_bucket_scoops_and_pours :: proc(t: ^testing.T) {
 
 	inventory_insert(inv, .Iron_Bucket, 1)
 	for s, i in inv.slots do if s.item == .Iron_Bucket { inv.selected = i; break }
-	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Air)   // starts empty
 
 	// Scooping stone does nothing.
 	bucket_use(gs, px - 3, py + 1)
-	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Air)
+	testing.expect_value(t, inventory_count(inv, .Water_Bucket), 0)
 
-	// Scoop the water: the cell opens and the bucket carries it.
+	// Scoop the water: the cell opens and the empty bucket becomes a filled one.
 	bucket_use(gs, px + 2, py)
-	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Water)
+	testing.expect_value(t, inventory_count(inv, .Water_Bucket), 1)
+	testing.expect_value(t, inventory_count(inv, .Iron_Bucket), 0)
 	testing.expect(t, get_tile(w, px + 2, py) != .Water, "the scooped cell is emptied")
+
+	for s, i in inv.slots do if s.item == .Water_Bucket { inv.selected = i; break }
 
 	// Pouring into solid rock is refused and loses nothing.
 	bucket_use(gs, px, py + 1)
-	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Water)
+	testing.expect_value(t, inventory_count(inv, .Water_Bucket), 1)
 
 	// Out of reach is refused too.
 	bucket_use(gs, px + 40, py)
-	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Water)
+	testing.expect_value(t, inventory_count(inv, .Water_Bucket), 1)
 
-	// Pour it into an open cell: water appears, bucket empties, stack survives.
+	// Pour it into an open cell: water appears, the emptied bucket comes back.
 	bucket_use(gs, px - 2, py)
 	testing.expect_value(t, get_tile(w, px - 2, py), Tile_Type.Water)
-	testing.expect_value(t, gs.player.bucket_fluid, Tile_Type.Air)
+	testing.expect_value(t, inventory_count(inv, .Water_Bucket), 0)
 	testing.expect_value(t, inventory_count(inv, .Iron_Bucket), 1)
+}
+
+@(test)
+every_bucket_carries_its_own_load :: proc(t: ^testing.T) {
+	// Regression (2026-08-09 playtest): three buckets in the bag could still
+	// carry only ONE load between them, because the load rode on the player
+	// (bucket_fluid).  Now each scoop turns one empty bucket into a filled-
+	// bucket item, so a stack of buckets hauls a stack of lava.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	inv := &gs.player.inventory
+
+	px, py := 100, 70
+	for y in py - 2 ..= py + 2 do for x in px - 4 ..= px + 4 do set_tile(w, x, y, .Void)
+	set_tile(w, px, py + 1, .Stone)                      // something to stand on
+	gs.player.pos = {f32(px), f32(py) - PLAYER_H + 1}
+	for x in px + 1 ..= px + 3 do set_tile(w, x, py + 1, .Lava)
+
+	inventory_insert(inv, .Iron_Bucket, 3)
+	for s, i in inv.slots do if s.item == .Iron_Bucket { inv.selected = i; break }
+
+	for x in px + 1 ..= px + 3 do bucket_use(gs, x, py + 1)
+	testing.expect_value(t, inventory_count(inv, .Lava_Bucket), 3)
+	testing.expect_value(t, inventory_count(inv, .Iron_Bucket), 0)
+
+	// A fourth scoop with nothing but filled buckets selected does nothing.
+	set_tile(w, px + 1, py + 1, .Lava)
+	for s, i in inv.slots do if s.item == .Lava_Bucket { inv.selected = i; break }
+	bucket_use(gs, px + 1, py + 1)
+	testing.expect_value(t, inventory_count(inv, .Lava_Bucket), 3)
+	testing.expect_value(t, get_tile(w, px + 1, py + 1), Tile_Type.Lava)
 }
 
 // ─── Steam: the first gas (fluid.odin, mirrored sim) ─────────────────────────

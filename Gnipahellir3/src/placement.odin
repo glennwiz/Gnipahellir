@@ -90,9 +90,9 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     x := int(e.tile.x)
     y := int(e.tile.y)
 
-    // The bucket places no tile of its own (place_tile is .Air), so it would
-    // fall straight through placement_ok and do nothing — it gets the click first.
-    if slot.item == .Iron_Bucket {
+    // Buckets place no tile of their own (place_tile is .Air), so they would
+    // fall straight through placement_ok and do nothing — they get the click first.
+    if slot.item == .Iron_Bucket || bucket_fluid_for(slot.item) != .Air {
         bucket_use(gs, x, y)
         return
     }
@@ -174,13 +174,37 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     }
 }
 
-// The Iron Bucket: right-click a water/lava cell to scoop it up, right-click an
-// open cell to pour it back out.  The load rides on the player rather than the
-// stack, so it is one bucketful at a time however many buckets you own.  The
+// Each liquid pairs with a filled-bucket item; the load lives on the stack, so
+// three buckets haul three loads (retired the one-load Player.bucket_fluid).
+@(rodata)
+bucket_loads := [?]struct {
+    fluid: Tile_Type,
+    item:  Item,
+}{
+    {.Water, .Water_Bucket},
+    {.Lava, .Lava_Bucket},
+    {.Magic_Lava, .Magic_Lava_Bucket},
+}
+
+filled_bucket_for :: proc(fluid: Tile_Type) -> Item {
+    for l in bucket_loads do if l.fluid == fluid do return l.item
+    return .None
+}
+
+bucket_fluid_for :: proc(it: Item) -> Tile_Type {
+    for l in bucket_loads do if l.item == it do return l.fluid
+    return .Air
+}
+
+// The Iron Bucket: right-click a water/lava cell to scoop it up — the selected
+// empty bucket becomes its filled variant — and right-click an open cell with a
+// filled bucket selected to pour it out and get the empty bucket back.  The
 // scooped cell opens exactly as a mined one does, so a lifted tile leaves the
 // same hole digging it would.
 bucket_use :: proc(gs: ^Game_State, x, y: int) {
     if !in_bounds(x, y) do return
+    inv  := &gs.player.inventory
+    slot := &inv.slots[inv.selected]
 
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
@@ -189,26 +213,44 @@ bucket_use :: proc(gs: ^Game_State, x, y: int) {
         return
     }
 
-    if gs.player.bucket_fluid == .Air {
+    if slot.item == .Iron_Bucket {
         t := get_tile(&gs.world, x, y)
         if !is_liquid_tile(t) {
             notify(gs, "The bucket carries only water or lava")
             return
         }
+        // Swap one empty bucket for the filled variant before touching the
+        // world, so a full bag refuses without losing the fluid.
+        slot.count -= 1
+        if slot.count == 0 do slot.item = .None
+        if !inventory_insert(inv, filled_bucket_for(t)) {
+            slot.item = .Iron_Bucket
+            slot.count += 1
+            notify(gs, "No room in the bag for a filled bucket")
+            return
+        }
         set_tile(&gs.world, x, y, gravity_open_tile(gs, y))
-        gs.player.bucket_fluid = t
         notify(gs, "The bucket fills with %s", terrain_table[t].name)
         audio_play(&gs.audio, .Pickup)
         return
     }
 
+    fluid := bucket_fluid_for(slot.item)
+    if fluid == .Air do return
     if !fluid_open(&gs.world, x, y) {
         notify(gs, "Pour the bucket into an open cell")
         return
     }
-    notify(gs, "You pour out the %s", terrain_table[gs.player.bucket_fluid].name)
-    set_tile(&gs.world, x, y, gs.player.bucket_fluid)
-    gs.player.bucket_fluid = .Air
+    slot.count -= 1
+    if slot.count == 0 do slot.item = .None
+    if !inventory_insert(inv, .Iron_Bucket) {
+        slot.item = filled_bucket_for(fluid)
+        slot.count += 1
+        notify(gs, "No room in the bag for the emptied bucket")
+        return
+    }
+    notify(gs, "You pour out the %s", terrain_table[fluid].name)
+    set_tile(&gs.world, x, y, fluid)
     audio_play(&gs.audio, .Place)
 }
 

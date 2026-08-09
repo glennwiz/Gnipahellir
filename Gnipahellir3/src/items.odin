@@ -36,7 +36,7 @@ item_table := [Item]Item_Info{
     .Tree_Grower    = { "Tree Grower",     {0,   140, 0,   255}, .Tree_Grower, "Plant it to sprout and grow a new tree over time." },
     .Smelter        = { "Smelter",         {200, 100, 0,   255}, .Smelter, "Casts ore into bars; feed it wood to keep the fire lit." },
     .Scroll_Of_Waters = { "Scroll of Waters", {150, 190, 225, 255}, .Air, "A waterlogged scroll from the pond shore. Right-click to read it." },
-    .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air, "Carries one load of water or lava. Right-click a pool to fill it, an open cell to pour. Wall a 3-wide pool in stone and leave a gap under its middle: that middle cell becomes a spring that never runs dry." },
+    .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air, "Right-click a pool to fill it - each bucket becomes a filled bucket, so a stack of them hauls a stack of loads. Wall a 3-wide pool in stone and leave a gap under its middle: that middle cell becomes a spring that never runs dry." },
     .Hell_Key       = { "Hell Key",        {220, 30,  60,  255}, .Air, "Garm's key. Opens whatever door awaits the final seal." },
     // Rune Scroll seal color echoes its ritual's material cost — bronze/silver/
     // gold — so the three tiers read apart at a glance instead of sharing one
@@ -105,6 +105,11 @@ item_table := [Item]Item_Info{
     .Rune_Coffer       = { "Rune Coffer",       {150, 138, 120, 255}, .Rune_Coffer, "An emptied rune chest, prised loose. Re-place it as a 4x4 store." },
     .Boiler            = { "Boiler",            {96, 102, 116, 255},  .Boiler, "Boils an adjacent water cell into steam, one puff at a time. Stoke it with wood - or set it against lava and it needs no fuel. Its steam rises up whatever shaft you leave above." },
     .Steam_Engine      = { "Steam Engine",      {150, 122, 62, 255},  .Steam_Engine, "Set it in pooled steam: while it drinks, every machine within 3 tiles runs three times as fast on no fuel at all. A leak in your ceiling is power lost." },
+    // Filled buckets: the pour is handled by bucket_use (place_tile stays .Air
+    // so the empty bucket can return to the bag).
+    .Water_Bucket      = { "Water Bucket",      {48, 128, 200, 255},  .Air, "An iron bucket brimming with water. Right-click an open cell to pour it out." },
+    .Lava_Bucket       = { "Lava Bucket",       {220, 80, 0, 255},    .Air, "An iron bucket of molten rock. Right-click an open cell to pour it out - mind your feet." },
+    .Magic_Lava_Bucket = { "Magic Lava Bucket", {160, 0, 220, 255},   .Air, "An iron bucket of cursed lava. Right-click an open cell to pour it out." },
 }
 
 is_rune_scroll :: proc(it: Item) -> bool {

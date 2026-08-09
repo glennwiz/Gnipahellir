@@ -251,8 +251,10 @@ Player :: struct {
     chip_hits:        u8,    // chips landed on it (PICK_HITS breaks it)
     inventory:        Inventory,
     equipment:        [Equip_Slot]Item,   // equipped gear; [.None] unused
-    bucket_fluid:     Tile_Type, // what the Iron Bucket is carrying; .Air = empty
-                                 // (u8 like the bool it replaced — Save_Data layout is unchanged)
+    bucket_fluid:     Tile_Type, // RETIRED: the load now lives on the stack as a
+                                 // filled-bucket item.  Kept (always .Air) so the
+                                 // Save_Data layout is unchanged; load_game_from
+                                 // converts a carried load into the filled item.
     grounded:         bool,
     facing:           int,
     dead:             bool,

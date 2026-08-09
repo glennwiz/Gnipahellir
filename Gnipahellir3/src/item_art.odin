@@ -320,6 +320,23 @@ BUCKET_GRID :: Icon_Grid{
 	"............",
 }
 
+// The bucket brimming: the rim course and surface row read as fluid (accent,
+// with an accent2 glint), plus a slosh bump peeking over the rim.
+BUCKET_FULL_GRID :: Icon_Grid{
+	"............",
+	".D........D.",
+	"..D..Aa..D..",
+	"..DAAAAAAD..",
+	".DAAaAAAAAD.",
+	".DBBBBBBBBD.",
+	".DBBBBBBBBD.",
+	"..DBBBBBBD..",
+	"..DBBBBBBD..",
+	"...DDDDDD...",
+	"............",
+	"............",
+}
+
 KEY_GRID :: Icon_Grid{
 	"....BBBB....",
 	"...BB..BB...",
@@ -671,6 +688,10 @@ item_icons := [Item]Item_Icon{
 	.Boiler           = {SMELTER_GRID, {{96, 102, 116, 255}, {58, 62, 74, 255}, {}, {90, 160, 220, 255}, {200, 230, 250, 255}}},
 	// Steam Engine — the machine box in iron with a brass flywheel window
 	.Steam_Engine     = {SMELTER_GRID, {{104, 100, 92, 255}, {62, 58, 52, 255}, {}, {200, 160, 60, 255}, {240, 212, 120, 255}}},
+	// Filled buckets — the iron bucket body with the fluid's own colors on top
+	.Water_Bucket      = {BUCKET_FULL_GRID, {{150, 150, 165, 255}, {100, 100, 115, 255}, {198, 198, 212, 255}, {48, 128, 200, 255}, {150, 205, 245, 255}}},
+	.Lava_Bucket       = {BUCKET_FULL_GRID, {{150, 150, 165, 255}, {100, 100, 115, 255}, {198, 198, 212, 255}, {230, 105, 20, 255}, {255, 200, 60, 255}}},
+	.Magic_Lava_Bucket = {BUCKET_FULL_GRID, {{150, 150, 165, 255}, {100, 100, 115, 255}, {198, 198, 212, 255}, {160, 0, 220, 255}, {230, 140, 255, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

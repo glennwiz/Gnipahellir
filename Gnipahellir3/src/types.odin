@@ -255,6 +255,12 @@ Item :: enum u8 {
     Boiler,
     // (appended: item ordinals are serialized)
     Steam_Engine,
+    // Filled buckets — the load lives on the stack, so every bucket you own
+    // carries its own fluid (retired Player.bucket_fluid).  (appended: item
+    // ordinals are serialized)
+    Water_Bucket,
+    Lava_Bucket,
+    Magic_Lava_Bucket,
 }
 
 // Which text the full-screen tome is showing.  `Seal` is the ritual's passage

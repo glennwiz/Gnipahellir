@@ -171,6 +171,18 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
         if gs.levels.generated[i] do seal_loose_rune_scrolls(&gs.levels.worlds[i])
     }
 
+    // The bucket load used to ride on the player (bucket_fluid); it now lives
+    // on the stack as a filled-bucket item.  Convert a carried load in place —
+    // same byte layout, so no version bump.  (v23 saves predate the bucket
+    // carrying anything, so only this path needs it.)
+    if gs.player.bucket_fluid != .Air {
+        if inventory_remove(&gs.player.inventory, .Iron_Bucket, 1) {
+            inventory_insert(&gs.player.inventory, filled_bucket_for(gs.player.bucket_fluid))
+        }
+        gs.player.bucket_fluid = .Air
+        gs.save_dirty = true
+    }
+
     log_action(gs, "run continued from save")
     return true
 }
