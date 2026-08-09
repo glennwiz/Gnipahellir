@@ -110,6 +110,10 @@ player_validate :: proc() -> (ok: bool, msg: string) {
 }
 
 player_save :: proc() {
+	if wizard_lock {
+		pwork.status = "waiting for the rebuild after item creation"
+		return
+	}
 	if vok, msg := player_validate(); !vok {
 		pwork.status = fmt.aprintf("REFUSED - %s", msg)
 		return

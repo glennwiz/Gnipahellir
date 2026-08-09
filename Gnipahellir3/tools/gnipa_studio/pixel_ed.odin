@@ -105,11 +105,15 @@ validate_views :: proc() -> (ok: bool, msg: string) {
 }
 
 work_save :: proc() {
+	if wizard_lock {
+		work.status = "waiting for the rebuild after item creation"
+		return
+	}
 	if vok, msg := validate_views(); !vok {
 		work.status = fmt.aprintf("REFUSED - %s", msg)
 		return
 	}
-	content := emit_icons(&g_notes, &work.views, work.shapes[:])
+	content := emit_icons(&g_notes, &work.views, work.shapes[:], nil)
 	if write_gen_file("gen_item_icons.odin", content) {
 		work.dirty = false
 		work.status = "saved - the watcher rebuild lands you back here"

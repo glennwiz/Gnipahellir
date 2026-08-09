@@ -83,9 +83,9 @@ emit_all :: proc(notes: ^Notes) -> [4]Gen_Out {
 	unlock: [game.Item]game.Item
 	for gate, it in game.recipe_unlock do unlock[it] = gate
 	return {
-		{"gen_items.odin", emit_items(notes)},
-		{"gen_item_icons.odin", emit_icons(notes, &views, shapes[:])},
-		{"gen_recipes.odin", emit_recipes(notes, recipes[:], &unlock, smelts[:])},
+		{"gen_items.odin", emit_items(notes, nil)},
+		{"gen_item_icons.odin", emit_icons(notes, &views, shapes[:], nil)},
+		{"gen_recipes.odin", emit_recipes(notes, recipes[:], &unlock, smelts[:], nil)},
 		{"gen_player_art.odin", emit_player(notes, &pframes)},
 	}
 }
@@ -126,6 +126,8 @@ main :: proc() {
 		studio_run(shot = true)
 	case "--test-save":
 		os.exit(test_save() ? 0 : 1)
+	case "--test-wizard":
+		os.exit(test_wizard() ? 0 : 1)
 	case "":
 		studio_run()
 	case:

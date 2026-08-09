@@ -96,11 +96,15 @@ recipe_validate :: proc() -> (ok: bool, msg: string) {
 }
 
 recipe_save :: proc() {
+	if wizard_lock {
+		rwork.status = "waiting for the rebuild after item creation"
+		return
+	}
 	if vok, msg := recipe_validate(); !vok {
 		rwork.status = fmt.aprintf("REFUSED - %s", msg)
 		return
 	}
-	content := emit_recipes(&g_notes, rwork.recipes[:rwork.recipe_count], &rwork.unlock, rwork.smelt[:rwork.smelt_count])
+	content := emit_recipes(&g_notes, rwork.recipes[:rwork.recipe_count], &rwork.unlock, rwork.smelt[:rwork.smelt_count], nil)
 	if write_gen_file("gen_recipes.odin", content) {
 		rwork.dirty = false
 		rwork.status = "saved - the watcher rebuild lands you back here"

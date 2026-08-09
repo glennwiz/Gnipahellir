@@ -60,6 +60,22 @@ shapes_from_registry :: proc(shapes: []Shape_View) {
 	}
 }
 
+// A new item mid-creation: it has no game.Item ordinal yet (the enum line is
+// written in the same Save), so its rows are keyed by identifier string and
+// appended after the enum-keyed rows — append-only makes it the highest
+// ordinal, which is exactly where the enum insert puts it.
+Pending_Item :: struct {
+	ident:        string, // Odin identifier, e.g. "Mana_Crystal"
+	info:         game.Item_Info,
+	icon:         Icon_View,
+	equip:        game.Equip_Slot,
+	has_recipe:   bool,
+	result_count: int,
+	station:      game.Station,
+	ings:         [3]game.Ingredient,
+	unlock:       game.Item,
+}
+
 // ─── Small pieces ─────────────────────────────────────────────────────────────
 
 escape_odin_string :: proc(s: string, allocator := context.allocator) -> string {
@@ -104,7 +120,7 @@ write_cells_body :: proc(b: ^strings.Builder, cells: Icon_Cells, indent: string)
 
 // ─── gen_items.odin ───────────────────────────────────────────────────────────
 
-emit_items :: proc(notes: ^Notes, allocator := context.allocator) -> string {
+emit_items :: proc(notes: ^Notes, pending: []Pending_Item, allocator := context.allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
 
@@ -121,6 +137,14 @@ emit_items :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 			info.place_tile,
 			escape_odin_string(info.desc, context.temp_allocator))
 	}
+	for p in pending {
+		fmt.sbprintf(&b, "\t.%s = {{ \"%s\", %s, .%v, \"%s\" }},\n",
+			p.ident,
+			escape_odin_string(p.info.name, context.temp_allocator),
+			color_str(p.info.color),
+			p.info.place_tile,
+			escape_odin_string(p.info.desc, context.temp_allocator))
+	}
 	fmt.sbprintf(&b, "}}\n\n")
 
 	fmt.sbprintf(&b, "// Which equip slot an item occupies; absent (= .None) is not equippable.\n")
@@ -131,6 +155,10 @@ emit_items :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 		notes_write(&b, notes, "equip", fmt.tprintf("%v", it), "\t")
 		fmt.sbprintf(&b, "\t.%v = .%v,\n", it, slot)
 	}
+	for p in pending {
+		if p.equip == .None do continue
+		fmt.sbprintf(&b, "\t.%s = .%v,\n", p.ident, p.equip)
+	}
 	fmt.sbprintf(&b, "}}\n")
 
 	return strings.to_string(b)
@@ -138,7 +166,7 @@ emit_items :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 
 // ─── gen_item_icons.odin ──────────────────────────────────────────────────────
 
-emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, shapes: []Shape_View, allocator := context.allocator) -> string {
+emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, shapes: []Shape_View, pending: []Pending_Item, allocator := context.allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
 
@@ -184,6 +212,15 @@ emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, shapes: []Shape_
 		}
 		fmt.sbprintf(&b, ", %s}},\n", pal_str(v.pal))
 	}
+	for p in pending {
+		fmt.sbprintf(&b, "\t.%s = {{", p.ident)
+		if name := shape_of(shapes, p.icon.cells); name != "" {
+			fmt.sbprintf(&b, "%s", name)
+		} else {
+			write_cells_body(&b, p.icon.cells, "\t")
+		}
+		fmt.sbprintf(&b, ", %s}},\n", pal_str(p.icon.pal))
+	}
 	fmt.sbprintf(&b, "}}\n")
 
 	return strings.to_string(b)
@@ -228,7 +265,7 @@ emit_player :: proc(notes: ^Notes, frames: ^Player_Frames, allocator := context.
 
 // ─── gen_recipes.odin ─────────────────────────────────────────────────────────
 
-emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]game.Item, smelts: []game.Smelt_Rule, allocator := context.allocator) -> string {
+emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]game.Item, smelts: []game.Smelt_Rule, pending: []Pending_Item, allocator := context.allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
 
@@ -245,6 +282,12 @@ emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]
 			ingredient_str(r.ingredients[0]),
 			ingredient_str(r.ingredients[1]),
 			ingredient_str(r.ingredients[2]))
+	}
+	for p in pending {
+		if !p.has_recipe do continue
+		fmt.sbprintf(&b, "\t{{ .%s, %d, .%v, {{%s, %s, %s}} }},\n",
+			p.ident, p.result_count, p.station,
+			ingredient_str(p.ings[0]), ingredient_str(p.ings[1]), ingredient_str(p.ings[2]))
 	}
 	fmt.sbprintf(&b, "}}\n\n")
 
@@ -268,6 +311,10 @@ emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]
 		if gate == .None || emitted[it] do continue
 		notes_write(&b, notes, "unlock", fmt.tprintf("%v", it), "\t")
 		fmt.sbprintf(&b, "\t.%v = .%v,\n", it, gate)
+	}
+	for p in pending {
+		if !p.has_recipe || p.unlock == .None do continue
+		fmt.sbprintf(&b, "\t.%s = .%v,\n", p.ident, p.unlock)
 	}
 	fmt.sbprintf(&b, "}}\n\n")
 

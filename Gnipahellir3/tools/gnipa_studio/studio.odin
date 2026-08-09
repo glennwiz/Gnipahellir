@@ -31,6 +31,7 @@ Tab :: enum i32 {
 	Pixel,
 	Player,
 	Recipes,
+	Wizard,
 }
 
 // ─── Cross-references (who makes what, who uses what) ─────────────────────────
@@ -141,6 +142,7 @@ studio_run :: proc(shot := false) {
 	work_init()
 	player_work_init()
 	recipe_work_init()
+	wizard_work_init()
 	xref_init(rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
 
 	s: Studio
@@ -155,11 +157,14 @@ studio_run :: proc(shot := false) {
 		sw, sh := f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())
 		mouse := rl.GetMousePosition()
 
-		if rl.IsKeyPressed(.ONE) do s.tab = .Items
-		if rl.IsKeyPressed(.TWO) do s.tab = .DAG
-		if rl.IsKeyPressed(.THREE) do s.tab = .Pixel
-		if rl.IsKeyPressed(.FOUR) do s.tab = .Player
-		if rl.IsKeyPressed(.FIVE) do s.tab = .Recipes
+		if !wizard_typing() {
+			if rl.IsKeyPressed(.ONE) do s.tab = .Items
+			if rl.IsKeyPressed(.TWO) do s.tab = .DAG
+			if rl.IsKeyPressed(.THREE) do s.tab = .Pixel
+			if rl.IsKeyPressed(.FOUR) do s.tab = .Player
+			if rl.IsKeyPressed(.FIVE) do s.tab = .Recipes
+			if rl.IsKeyPressed(.SIX) do s.tab = .Wizard
+		}
 
 		// Recipe edits ripple into the DAG and the inspector cross-refs.
 		if rwork.gen != s.dag_gen {
@@ -183,6 +188,8 @@ studio_run :: proc(shot := false) {
 			player_frame_ui(&s, sw, sh, mouse)
 		case .Recipes:
 			recipe_frame(&s, sw, sh, mouse)
+		case .Wizard:
+			wizard_frame(&s, sw, sh, mouse)
 		}
 
 		draw_top_bar(&s, sw, mouse)
@@ -211,6 +218,9 @@ studio_run :: proc(shot := false) {
 				s.tab = .Recipes
 			} else if frames == 25 {
 				rl.TakeScreenshot("studio_shot_recipes.png")
+				s.tab = .Wizard
+			} else if frames == 30 {
+				rl.TakeScreenshot("studio_shot_wizard.png")
 				break
 			}
 		}
@@ -221,7 +231,7 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 	rl.DrawRectangle(0, 0, i32(sw), i32(TOP_BAR), {18, 20, 26, 255})
 	rl.DrawLine(0, i32(TOP_BAR), i32(sw), i32(TOP_BAR), {60, 64, 76, 255})
 
-	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]", .Recipes = "RECIPES [5]"}
+	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]", .Recipes = "RECIPES [5]", .Wizard = "WIZARD [6]"}
 	x := i32(16)
 	for tab in Tab {
 		w := rl.MeasureText(labels[tab], 16) + 28
