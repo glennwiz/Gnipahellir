@@ -1892,8 +1892,59 @@ draw_hud :: proc(gs: ^Game_State) {
 	fmt.bprintf(hint_buf[:47], "[%v] Bag / Craft", gs.bindings[.Inventory])
 	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
 
+	draw_buffs(gs)
 	draw_sel_chip(gs)
 	draw_rs_chip(gs)
+}
+
+// Active-buff row beside the HP bar: one icon per running buff with the
+// seconds it has left; hovering shows the name and what it does.  Pure
+// display — the icons never take clicks, so cursor_over_ui ignores them.
+BUFF_X    :: 232
+BUFF_Y    :: 16
+BUFF_CELL :: 28
+
+draw_buffs :: proc(gs: ^Game_State) {
+	x := i32(BUFF_X)
+	for b in Buff {
+		t := buff_remaining(gs, b)
+		if t <= 0 do continue
+
+		rl.DrawRectangle(x, BUFF_Y, BUFF_CELL, BUFF_CELL, slot_bg)
+		rl.DrawRectangleLines(x, BUFF_Y, BUFF_CELL, BUFF_CELL, panel_border)
+		draw_item_icon(buff_table[b].icon, x + 3, BUFF_Y + 3, BUFF_CELL - 6)
+
+		tb: [8]u8
+		fmt.bprintf(tb[:7], "%.0fs", t)
+		rl.DrawText(cstring(raw_data(tb[:])), x + 4, BUFF_Y + BUFF_CELL + 2, 10, rl.WHITE)
+
+		m := gs.input.mouse_screen
+		if m.x >= f32(x) && m.x < f32(x + BUFF_CELL) &&
+		   m.y >= f32(BUFF_Y) && m.y < f32(BUFF_Y + BUFF_CELL) {
+			draw_buff_tooltip(b, t)
+		}
+		x += BUFF_CELL + 8
+	}
+}
+
+// Fixed box under the buff row (a stable spot reads better than chasing the
+// cursor for a one-line tooltip).
+draw_buff_tooltip :: proc(b: Buff, t: f32) {
+	info := buff_table[b]
+	title_buf: [48]u8
+	fmt.bprintf(title_buf[:47], "%s - %.0fs left", info.name, t)
+	title := cstring(raw_data(title_buf[:]))
+	desc_buf: [128]u8
+	fmt.bprintf(desc_buf[:127], "%s", info.desc)
+	desc := cstring(raw_data(desc_buf[:]))
+
+	w := max(rl.MeasureText(title, 11), rl.MeasureText(desc, 10)) + 16
+	x := i32(BUFF_X)
+	y := i32(BUFF_Y + BUFF_CELL + 16)
+	rl.DrawRectangle(x, y, w, 40, rl.Color{18, 20, 26, 235})
+	rl.DrawRectangleLines(x, y, w, 40, panel_border)
+	rl.DrawText(title, x + 8, y + 6, 11, rl.Color{245, 205, 90, 255})
+	rl.DrawText(desc, x + 8, y + 22, 10, rl.WHITE)
 }
 
 // The rune scroll chip: shows the carried rune scroll's icon, tinted gold once
