@@ -142,6 +142,19 @@ audio_tile_gain :: proc(gs: ^Game_State, tile: [2]i32) -> f32 {
 	return clamp(1 - dist / BUILDER_HEAR_RANGE, BUILDER_MIN_GAIN, 1)
 }
 
+// Machine sounds are strictly local: full at the machine, SILENT past hear
+// range — no faint floor, because a boiler puffing every two seconds would
+// ping the whole map forever.  (Builders keep their floor above: a distant
+// enemy digging toward you is worth a faint warning; a working machine is not.)
+MACHINE_HEAR_RANGE :: 16.0 // tiles
+
+audio_machine_gain :: proc(gs: ^Game_State, tile: [2]i32) -> f32 {
+	dx := f32(tile.x) + 0.5 - (gs.player.pos.x + PLAYER_W * 0.5)
+	dy := f32(tile.y) + 0.5 - (gs.player.pos.y + PLAYER_H * 0.5)
+	dist := math.sqrt(dx * dx + dy * dy)
+	return clamp(1 - dist / MACHINE_HEAR_RANGE, 0, 1)
+}
+
 // Step 8 in game_update: refills the synthesized ambience stream; its gain and
 // character follow the player's depth (surface is silent).
 update_audio :: proc(gs: ^Game_State) {

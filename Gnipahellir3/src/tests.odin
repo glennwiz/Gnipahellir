@@ -6956,6 +6956,27 @@ a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
 	}
 }
 
+@(test)
+machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
+	// A boiler puffing every two seconds must not ping the whole map: a
+	// tile-stamped Play_Sound attenuates through audio_machine_gain, which
+	// reaches genuine SILENCE past MACHINE_HEAR_RANGE.  Builder sounds keep
+	// their faint far floor — a distant enemy digging toward you is a warning
+	// worth hearing; a working machine is not.
+	gs := test_state()
+	defer free(gs)
+	gs.player.pos = {96, 54}
+
+	px := i32(gs.player.pos.x + PLAYER_W * 0.5)
+	py := i32(gs.player.pos.y + PLAYER_H * 0.5)
+	near := [2]i32{px, py}
+	far := [2]i32{px + 60, py}   // past both hear ranges (16 and 48)
+
+	testing.expect(t, audio_machine_gain(gs, near) > 0.9, "at the machine the puff is full volume")
+	testing.expect_value(t, audio_machine_gain(gs, far), 0)
+	testing.expect_value(t, audio_tile_gain(gs, far), f32(BUILDER_MIN_GAIN))
+}
+
 // ─── Gem Replicator (sim.odin) ────────────────────────────────────────────────
 //
 //  Fixtures sit in the x=76 pond-free band (a lesson learned twice) and below

@@ -219,7 +219,12 @@ process_events :: proc(gs: ^Game_State) {
             // impact particles land in Phase 7
 
         case .Play_Sound:
-            audio_play(&gs.audio, Sound_ID(e.payload.int_val))
+            // A tile-stamped Play_Sound is a world sound (a machine's puff,
+            // golem work) and dies away with distance; a tile-less one is a
+            // deliberate global cue (a shriek, the boss roar) at full gain.
+            gain := f32(1)
+            if e.tile != {0, 0} do gain = audio_machine_gain(gs, e.tile)
+            audio_play(&gs.audio, Sound_ID(e.payload.int_val), gain)
 
         case .Play_Music:
             // music tracks land in Phase 7
