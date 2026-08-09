@@ -30,14 +30,6 @@ Smelt_Rule :: struct {
     ore_per_bar: int,
 }
 
-@(rodata)
-smelt_table := [?]Smelt_Rule{
-    { .Iron_Ore,      .Iron_Bar,   1 },
-    { .Silver_Ore,    .Silver_Bar, 2 },
-    { .Gold_Ore,      .Gold_Bar,   2 },
-    { .Gold_Rare_Ore, .Gold_Bar,   1 },  // rare ore is rich: one is enough
-}
-
 // ─── The Boiler archetype ─────────────────────────────────────────────────────
 //
 //  There will be TWO craft tracks — steam and magic — with the same inputs and

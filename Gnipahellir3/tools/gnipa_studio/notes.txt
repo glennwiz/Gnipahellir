@@ -1,0 +1,112 @@
+# Row comments for the generated tables, re-emitted as // lines above their
+# row by tools/gnipa_studio/emit.odin.  Format: table<TAB>key<TAB>text — one
+# line per comment line, repeated keys stack in order.  Tables: item, icon,
+# equip, recipe, unlock, smelt, grid.  Lines starting with # are ignored.
+
+item	Rune_Scroll_A	Rune Scroll seal color echoes its ritual's material cost — bronze/silver/
+item	Rune_Scroll_A	gold — so the three tiers read apart at a glance instead of sharing one
+item	Rune_Scroll_A	blue swatch (icon seal wax mirrors these).
+item	Water_Bucket	Filled buckets: the pour is handled by bucket_use (place_tile stays .Air
+item	Water_Bucket	so the empty bucket can return to the bag).
+
+equip	Mine_Wand	Wands and swords compete for the weapon slot. The pickaxe has its own
+equip	Mine_Wand	Tool slot, so changing combat/ranged gear never puts the pick away.
+
+recipe	Dvergr_Forge	The station ladder: forge is smithed at the bench from smelted iron,
+recipe	Dvergr_Forge	the altar raised at the forge — its cloud stone means reaching the sky
+recipe	Dvergr_Forge	first.  Forge-tier and up runs on bars: the smelter casts them from
+recipe	Dvergr_Forge	ore stacks dropped beside it (1 iron ore = 1 bar; silver/gold 2 = 1).
+recipe	Mine_Wand	The miner's ladder: each wand tier consumes the one before it.
+recipe	Silver_Sword	Weapon ladder — same pattern as the wands.
+recipe	Iron_Helm	Armor: forge iron pieces, then upgrade each through silver into gold
+recipe	Iron_Helm	(right-click a piece in the bag to wear it).
+recipe	Aether_Charm	Trinkets
+recipe	Silo	Bulk storage: the first machine that counts past 99 (draft1 §7.6 step 1).
+recipe	Silo	Q-drop stacks beside it to feed it; a smelter next door casts bars
+recipe	Silo	straight in.
+recipe	Dimension_Spawner	Parallel dimensions: the metal you pay is the metal the world is rich
+recipe	Dimension_Spawner	in — each theme's recipe mirrors its riches.
+recipe	Dimension_Spawner_Runic	The endgame sink: 500 bars is roughly a strip-mined Gold world — one
+recipe	Dimension_Spawner_Runic	whole dimension traded for the door to the runic tier.
+recipe	Auto_Miner	The snake miner: strips a dimension on its own.  The emerald is the
+recipe	Auto_Miner	first gem sink — nature seeds the machine that industrializes worlds.
+recipe	Mine_Wand_Runic	Runic tier: gold gear reforged with sky runes at the altar.
+recipe	Door	A 2-tall wooden door, buildable from the very first bench — E toggles it
+recipe	Door	open (walk through) or shut (solid).  One log's worth of planks.
+recipe	Potion_Health	Healing: surface flowers, foraged by walking through them, brew into a
+recipe	Potion_Health	Health Potion at the bench — early-game recovery.
+recipe	Flower_Bed	Flower farming: sow seeds into a bed (with soil + a plank frame) — it
+recipe	Flower_Bed	grows 5 flowers you harvest by walking through it.
+recipe	Barrel	Storage: a wooden 4×4 barrel — early overflow for a 24-slot bag.
+recipe	Barrel	Cheap on purpose (2 logs' worth of planks).
+recipe	Void_Charm	A recoverable trash buffer: the newest offered stack replaces and
+recipe	Void_Charm	permanently erases the previous one. Forged from all three tier-2 riches.
+recipe	Command_Wand	Clay automation begins after the first cast iron.  Each worker is a
+recipe	Command_Wand	material investment; the Hearth upgrades the wand itself later.
+recipe	Jade_Ring	A cheap early recall charm: forged at the bench with an iron bar and
+recipe	Jade_Ring	a jade.  Worn in a charm slot, not spent — while equipped, the
+recipe	Jade_Ring	inventory's "Return to Surface" button warps straight home.
+recipe	Boiler	Steam industry, machine one: the kettle.
+recipe	Gem_Replicator	The gem farm: gems appear in cave 1, but the Rune Altar needs Cloud
+recipe	Gem_Replicator	Stone (sky, post-ritual-A) — the farm is the industrialisation step.
+
+unlock	Smelter	Iron tier — reward for reaching the first ore
+unlock	Tree_Grower	Domestic tier — the moment you can work wood / forage
+unlock	Dvergr_Forge	Smelted tier — opens once you cast your first bar.  The Jade Ring
+unlock	Dvergr_Forge	shows up here too, ungated by Jade itself, so the recipe card (and its
+unlock	Dvergr_Forge	Jade cost) is the player's cue to go look for the gem.
+unlock	Silver_Sword	Silver / gold ladders
+unlock	Steam_Engine	power is a real mid-game gate
+unlock	Rune_Altar	Sky tier
+unlock	Gem_Replicator	The card appears the moment you hold your first gem — it TELLS the
+unlock	Gem_Replicator	player the farm exists before the recipe is affordable.
+unlock	Mine_Wand_Runic	Runic endgame
+
+smelt	Gold_Rare_Ore	rare ore is rich: one is enough
+
+grid	SEED_GRID	A scatter of seeds — each a body pixel with a shadow (B body, D shadow).
+grid	FLOWER_GRID	A five-petal bloom on a green stem (A/L petals, B center, D stem).
+grid	WAND_GRID	Diagonal shaft, crystal tip — the tip's accent is the wand's tier.
+grid	GRASS_TURF_GRID	Grass cap (B/D) over a dirt block (A/a).
+grid	DIRT_GRID	A loose clod of earth (B) with dark clumps (D) and lit crumbs (L).
+grid	DOOR_GRID	A plank door (B leaf, D frame/seams, L rail highlight) with an iron knob (A).
+grid	BARREL_GRID	Bulging oak staves (B/L) bound by three dark hoops (D).
+grid	PLANK_GRID	Two boards, grain (D) and nails (A).
+grid	ORE_GRID	Rock chunk (B/D) with metal veins (A/a) and a sparkle.
+grid	BUCKET_FULL_GRID	The bucket brimming: the rim course and surface row read as fluid (accent,
+grid	BUCKET_FULL_GRID	with an accent2 glint), plus a slosh bump peeking over the rim.
+grid	KEY_GRID	Garm's key — bow, shaft and bit.
+grid	CHARM_GRID	Cord (h), gold setting (g), gem (A) with a shine (L).
+grid	BENCH_GRID	Workbench: mallet resting on a plank top, two legs.
+grid	TREE_GROWER_GRID	Sapling (B/D) in a pot (A/a).
+grid	GEM_REPLICATOR_GRID	Faceted crystal (L/A/a) on a gold-collared stone plinth — the gem farm.
+grid	SMELTER_GRID	Furnace body (B/D) with a fire window (A/a) and a gold cap.
+grid	SKY_ALTAR_GRID	Blue crystal floating over a stone pedestal.
+grid	RUNE_SCROLL_GRID	Rolled parchment tube lying flat — wide, not tall, unlike a square box (B
+grid	RUNE_SCROLL_GRID	body, L upper highlight, D outline/rolled-end caps).  A dark binding cord
+grid	RUNE_SCROLL_GRID	crosses the middle with a wax-seal rune (A) stamped beside it.
+grid	FORGE_GRID	Anvil (B/D/L dark iron) with an ember glint (A) on the face.
+grid	RUNE_ALTAR_GRID	Stone altar carved with glowing runes (A).
+grid	BAR_GRID	Cast ingot: trapezoid slab, lit top edge — tier palettes color the metal.
+
+icon	Rune_Scroll_A	Same rolled-scroll shape for all three; the seal wax (accent) carries the
+icon	Rune_Scroll_A	tier's material — bronze (Plank), silver (Silver Bar), gold (Gold Bar) —
+icon	Rune_Scroll_A	so A/B/C stop being pixel-identical (ground colors in item_table match).
+icon	Scroll_Of_Waters	Lore, not progression — a damp pond-shore parchment with a deep-water seal.
+icon	Auto_Miner	Machine box in dimensional teal — the snake miner's base.
+icon	Emerald	Gem ladder — one crystal per depth layer, the palette carries the tier.
+icon	Silo	Machine box in iron gray — the bulk store that counts past 99.
+icon	Dirt	Clod of loose earth dug from the shaft-mouth stratum.
+icon	Door	Wooden door — leaf, frame, rail highlight, iron knob.
+icon	Flower	Foraged flower — petals, center, stem.
+icon	Flower_Seed	Flower seeds — tan bodies with shadows.
+icon	Flower_Bed	Flower bed — reuse the bloom icon (a planted crop).
+icon	Barrel	Oak barrel — staves, highlight, hoops.
+icon	Void_Charm	Void charm — amethyst shell around an emerald-lit abyss.
+icon	Jade_Ring	Jade Ring — silver band, jade-lit charm.
+icon	Sand	Pond shore sand — same clod shape as Dirt/Clay, pale sandy palette.
+icon	Rune_Coffer	Rune Coffer — the barrel silhouette in the chest's darker oak and iron.
+icon	Boiler	Boiler — the machine box in riveted iron, its window a water sight-glass.
+icon	Steam_Engine	Steam Engine — the machine box in iron with a brass flywheel window.
+icon	Water_Bucket	Filled buckets — the iron bucket body with the fluid's own colors on top.
+icon	Gem_Replicator	Gem Replicator — a faceted crystal in prismatic violet over a stone plinth.

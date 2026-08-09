@@ -13,106 +13,6 @@ Item_Info :: struct {
     desc:       string,      // shown under MATERIALS in the crafting detail panel
 }
 
-@(rodata)
-item_table := [Item]Item_Info{
-    .None             = { "None",             {0,   0,   0,   0  }, .Air, "" },
-    .Sword            = { "Sword",            {200, 200, 210, 255}, .Air, "A basic blade for melee combat." },
-    .Pickaxe          = { "Pickaxe",          {150, 110, 70,  255}, .Air, "Mines terrain by hand — slow, but free and works anywhere." },
-    .Potion_Health    = { "Health Potion",    {220, 40,  40,  255}, .Air, "Restores health when drunk. Right-click in the bag to use it." },
-    .Potion_Mana      = { "Mana Potion",      {40,  40,  220, 255}, .Air, "Restores mana when drunk." },
-    .Mine_Wand        = { "Mine Wand",        {160, 60,  200, 255}, .Air, "Fires a mining bolt at range; costs mana per swing." },
-    .Mine_Wand_Silver = { "Silver Mine Wand", {210, 210, 235, 255}, .Air, "A silver-forged mine wand — hits harder, same range." },
-    .Mine_Wand_Gold   = { "Gold Mine Wand",   {235, 195, 60,  255}, .Air, "A gold-forged mine wand — hits harder still." },
-    .Wood_Log       = { "Wood Log",        {139, 90,  43,  255}, .Wood,   "Raw timber, felled from trees. Split at the bench into planks." },
-    .Leaf           = { "Leaf",            {30,  160, 30,  255}, .Leaves, "Leaves shaken loose from a tree canopy." },
-    .Stone_Block    = { "Stone Block",     {128, 128, 128, 255}, .Stone,  "Common building stone, mined from the world." },
-    .Grass_Turf     = { "Grass Turf",      {34,  139, 34,  255}, .Grass,  "A cut square of turf, placeable as ground cover." },
-    .Plank          = { "Plank",           {180, 140, 90,  255}, .Wood,   "Sawn lumber — the base of most early builds." },
-    .Iron_Ore       = { "Iron Ore",        {180, 130, 100, 255}, .Air, "Raw iron, ready for the smelter." },
-    .Silver_Ore     = { "Silver Ore",      {200, 200, 220, 255}, .Silver_Ore, "Raw silver, ready for the smelter." },
-    .Gold_Ore       = { "Gold Ore",        {220, 180, 0,   255}, .Gold_Ore,   "Raw gold, ready for the smelter." },
-    .Gold_Rare_Ore  = { "Rare Gold Ore",   {255, 215, 50,  255}, .Air, "A richer seam of gold ore." },
-    .Crafting_Bench = { "Crafting Bench",  {160, 120, 60,  255}, .Crafting_Bench, "Your first station — most early recipes start here." },
-    .Tree_Grower    = { "Tree Grower",     {0,   140, 0,   255}, .Tree_Grower, "Plant it to sprout and grow a new tree over time." },
-    .Smelter        = { "Smelter",         {200, 100, 0,   255}, .Smelter, "Casts ore into bars; feed it wood to keep the fire lit." },
-    .Scroll_Of_Waters = { "Scroll of Waters", {150, 190, 225, 255}, .Air, "A waterlogged scroll from the pond shore. Right-click to read it." },
-    .Iron_Bucket    = { "Iron Bucket",     {120, 120, 140, 255}, .Air, "Right-click a pool to fill it - each bucket becomes a filled bucket, so a stack of them hauls a stack of loads. Wall a 3-wide pool in stone and leave a gap under its middle: that middle cell becomes a spring that never runs dry." },
-    .Hell_Key       = { "Hell Key",        {220, 30,  60,  255}, .Air, "Garm's key. Opens whatever door awaits the final seal." },
-    // Rune Scroll seal color echoes its ritual's material cost — bronze/silver/
-    // gold — so the three tiers read apart at a glance instead of sharing one
-    // blue swatch (icon seal wax in item_art.odin mirrors these).
-    .Rune_Scroll_A    = { "Rune Scroll A",     {182, 108, 58,  255}, .Air, "A ritual seal — build its structure to progress." },
-    .Rune_Scroll_B    = { "Rune Scroll B",     {205, 205, 225, 255}, .Air, "A ritual seal — build its structure to progress." },
-    .Rune_Scroll_C    = { "Rune Scroll C",     {235, 195, 60,  255}, .Air, "A ritual seal — build its structure to progress." },
-    .Sky_Rune_Scroll  = { "Sky Rune Scroll",   {120, 200, 255, 255}, .Air, "The seal for the sky altar's structure." },
-    .Sky_Altar      = { "Sky Altar",       {200, 200, 255, 255}, .Sky_Altar, "Raises a portal to the low sky once its ritual is built." },
-    .Cloud_Stone    = { "Cloud Stone",     {200, 220, 255, 255}, .Air, "Light stone gathered from the clouds above." },
-    .Aether_Crystal = { "Aether Crystal",  {180, 255, 200, 255}, .Air, "A crystallized wisp of sky magic." },
-    .Runic_Sky_Ore  = { "Runic Sky Ore",   {255, 180, 255, 255}, .Air, "Runic ore found only in the deepest sky pockets." },
-    .Aether_Charm   = { "Aether Charm",    {150, 255, 210, 255}, .Air, "A worn charm that quickens your step." },
-    .Silver_Sword   = { "Silver Sword",    {210, 210, 235, 255}, .Air, "A silver-forged blade — sharper than iron." },
-    .Gold_Sword     = { "Gold Sword",      {235, 195, 60,  255}, .Air, "A gold-forged blade — sharper still." },
-    .Iron_Helm         = { "Iron Helm",         {150, 150, 165, 255}, .Air, "Basic head armor." },
-    .Silver_Helm       = { "Silver Helm",       {205, 205, 225, 255}, .Air, "Silver head armor — sturdier than iron." },
-    .Gold_Helm         = { "Gold Helm",         {235, 195, 60,  255}, .Air, "Gold head armor — sturdier still." },
-    .Iron_Chestplate   = { "Iron Chestplate",   {150, 150, 165, 255}, .Air, "Basic chest armor." },
-    .Silver_Chestplate = { "Silver Chestplate", {205, 205, 225, 255}, .Air, "Silver chest armor — sturdier than iron." },
-    .Gold_Chestplate   = { "Gold Chestplate",   {235, 195, 60,  255}, .Air, "Gold chest armor — sturdier still." },
-    .Iron_Gauntlets    = { "Iron Gauntlets",    {150, 150, 165, 255}, .Air, "Basic hand armor." },
-    .Silver_Gauntlets  = { "Silver Gauntlets",  {205, 205, 225, 255}, .Air, "Silver hand armor — sturdier than iron." },
-    .Gold_Gauntlets    = { "Gold Gauntlets",    {235, 195, 60,  255}, .Air, "Gold hand armor — sturdier still." },
-    .Iron_Greaves      = { "Iron Greaves",      {150, 150, 165, 255}, .Air, "Basic leg armor." },
-    .Silver_Greaves    = { "Silver Greaves",    {205, 205, 225, 255}, .Air, "Silver leg armor — sturdier than iron." },
-    .Gold_Greaves      = { "Gold Greaves",      {235, 195, 60,  255}, .Air, "Gold leg armor — sturdier still." },
-    .Iron_Boots        = { "Iron Boots",        {150, 150, 165, 255}, .Air, "Basic footwear." },
-    .Silver_Boots      = { "Silver Boots",      {205, 205, 225, 255}, .Air, "Silver footwear — lighter on your feet than iron." },
-    .Gold_Boots        = { "Gold Boots",        {235, 195, 60,  255}, .Air, "Gold footwear — lighter still." },
-    .Dvergr_Forge      = { "Dvergr Forge",      {105, 105, 125, 255}, .Dvergr_Forge, "The silver/gold-tier station, built at the bench." },
-    .Rune_Altar        = { "Rune Altar",        {150, 90,  220, 255}, .Rune_Altar, "The sky-magic station, raised at the forge." },
-    .Mine_Wand_Runic   = { "Runic Mine Wand",   {230, 150, 255, 255}, .Air, "A runic-forged mine wand — the strongest mining tool." },
-    .Runic_Sword       = { "Runic Sword",       {210, 130, 255, 255}, .Air, "A runic-forged blade — the strongest weapon." },
-    .Runic_Helm        = { "Runic Helm",        {210, 130, 255, 255}, .Air, "Runic head armor — the strongest helm." },
-    .Runic_Chestplate  = { "Runic Chestplate",  {210, 130, 255, 255}, .Air, "Runic chest armor — the strongest plate." },
-    .Runic_Gauntlets   = { "Runic Gauntlets",   {210, 130, 255, 255}, .Air, "Runic hand armor — the strongest gauntlets." },
-    .Runic_Greaves     = { "Runic Greaves",     {210, 130, 255, 255}, .Air, "Runic leg armor — the strongest greaves." },
-    .Runic_Boots       = { "Runic Boots",       {210, 130, 255, 255}, .Air, "Runic footwear — the strongest boots." },
-    .Iron_Bar          = { "Iron Bar",          {172, 172, 188, 255}, .Air, "Smelted iron, ready to forge." },
-    .Silver_Bar        = { "Silver Bar",        {222, 222, 240, 255}, .Air, "Smelted silver, ready to forge." },
-    .Gold_Bar          = { "Gold Bar",          {245, 205, 70,  255}, .Air, "Smelted gold, ready to forge." },
-    .Dimension_Spawner      = { "Metal Dimension Spawner", {40,  200, 180, 255}, .Dimension_Spawner, "Opens a portal to a fresh, iron-rich manufactured world." },
-    .Dimension_Spawner_Gold = { "Gold Dimension Spawner",  {235, 195, 60,  255}, .Dimension_Spawner_Gold, "Opens a portal to a fresh, gold-rich manufactured world." },
-    .Emerald           = { "Emerald",           {60,  220, 130, 255}, .Air, "A green gem, mined from cave 1's deep rows." },
-    .Jade              = { "Jade",              {150, 210, 165, 255}, .Air, "A pale green gem, mined from cave 2's deep rows." },
-    .Diamond           = { "Diamond",           {190, 235, 255, 255}, .Air, "A brilliant gem, mined from cave 3's deep rows." },
-    .Hel_Gem           = { "Hel Gem",           {220, 50,  80,  255}, .Air, "A blood-red gem, found only near the boss arena." },
-    .Auto_Miner        = { "Auto-Miner",        {90,  200, 190, 255}, .Auto_Miner, "Deploy in a dimension: strips ore on its own, unwatched." },
-    .Dimension_Spawner_Runic = { "Runic Dimension Spawner", {200, 120, 255, 255}, .Dimension_Spawner_Runic, "Opens a portal to a fresh, runic-rich manufactured world." },
-    .Silo              = { "Silo",              {170, 180, 200, 255}, .Silo, "Bulk storage — counts far past a bag stack's 99 limit." },
-    .Dirt              = { "Dirt",              {110, 78,  46,  255}, .Dirt, "Loose earth, dug from the shaft mouth." },
-    .Door              = { "Door",              {150, 100, 55,  255}, .Door, "A 2-tall wooden door. Press E to open or shut it." },
-    .Flower            = { "Flower",            {255, 220, 50,  255}, .Air, "Foraged by walking through a wild patch. Brews into potions." },
-    .Flower_Seed       = { "Flower Seed",       {150, 120, 60,  255}, .Air, "Shaken from a harvested flower. Sow it into a flower bed." },
-    .Flower_Bed        = { "Flower Bed",        {120, 90,  50,  255}, .Flower_Bed, "Grows flowers over time — walk through to harvest." },
-    .Barrel            = { "Barrel",            {150, 100, 55,  255}, .Barrel, "A 4x4 storage grid — early overflow for a full bag." },
-    .Void_Charm        = { "Void Charm",        {105, 55,  150, 255}, .Air, "A worn charm: opens a one-slot recoverable trash buffer." },
-    .Clay              = { "Clay",              {166, 105, 72,  255}, .Clay, "Soft mineable clay, shaped into golems." },
-    .Command_Wand      = { "Clay Command Wand", {190, 125, 80,  255}, .Air, "Directs a deployed clay crew: paint zones, load golems." },
-    .Command_Wand_Emerald = { "Emerald Command Wand", {70, 220, 135, 255}, .Air, "An emerald-set command wand — commands more golems at once." },
-    .Command_Wand_Hel  = { "Hel Command Wand",  {225, 55,  85,  255}, .Air, "A Hel-forged command wand — commands even more golems." },
-    .Clay_Golem        = { "Clay Golem",        {178, 116, 78,  255}, .Air, "Loads into the command wand; deploy it to gather or build." },
-    .Jade_Ring         = { "Jade Ring",         {150, 210, 165, 255}, .Air, "A worn charm: teleports you straight to the surface on demand." },
-    .Sand              = { "Sand",              {225, 205, 150, 255}, .Sand, "Fine shore sand, dug from the pond's rim." },
-    .Rune_Coffer       = { "Rune Coffer",       {150, 138, 120, 255}, .Rune_Coffer, "An emptied rune chest, prised loose. Re-place it as a 4x4 store." },
-    .Boiler            = { "Boiler",            {96, 102, 116, 255},  .Boiler, "Boils an adjacent water cell into steam, one puff at a time. Stoke it with wood - or set it against lava and it needs no fuel. Its steam rises up whatever shaft you leave above." },
-    .Steam_Engine      = { "Steam Engine",      {150, 122, 62, 255},  .Steam_Engine, "Set it in pooled steam: while it drinks, every machine within 3 tiles runs three times as fast on no fuel at all. A leak in your ceiling is power lost." },
-    .Gem_Replicator    = { "Gem Replicator",    {168, 120, 205, 255}, .Gem_Replicator, "Drop a gem beside it: the seed stays forever and copies of it slowly grow. It only wakes in the crushing deep where gems themselves form - carry it down before placing it." },
-    // Filled buckets: the pour is handled by bucket_use (place_tile stays .Air
-    // so the empty bucket can return to the bag).
-    .Water_Bucket      = { "Water Bucket",      {48, 128, 200, 255},  .Air, "An iron bucket brimming with water. Right-click an open cell to pour it out." },
-    .Lava_Bucket       = { "Lava Bucket",       {220, 80, 0, 255},    .Air, "An iron bucket of molten rock. Right-click an open cell to pour it out - mind your feet." },
-    .Magic_Lava_Bucket = { "Magic Lava Bucket", {160, 0, 220, 255},   .Air, "An iron bucket of cursed lava. Right-click an open cell to pour it out." },
-}
-
 is_rune_scroll :: proc(it: Item) -> bool {
     return it == .Rune_Scroll_A || it == .Rune_Scroll_B || it == .Rune_Scroll_C || it == .Sky_Rune_Scroll
 }
@@ -121,32 +21,6 @@ is_rune_scroll :: proc(it: Item) -> bool {
 //
 //  Which slot an item occupies (.None = not equippable) and what it grants.
 //  New gear = one entry in each table; no code changes elsewhere.
-
-@(rodata)
-item_equip_slot := #partial [Item]Equip_Slot{
-    .Pickaxe      = .Tool,
-    .Sword        = .Weapon,
-    .Silver_Sword = .Weapon,
-    .Gold_Sword   = .Weapon,
-    .Runic_Sword  = .Weapon,
-    // Wands and swords compete for the weapon slot. The pickaxe has its own
-    // Tool slot, so changing combat/ranged gear never puts the pick away.
-    .Mine_Wand        = .Weapon,
-    .Mine_Wand_Silver = .Weapon,
-    .Mine_Wand_Gold   = .Weapon,
-    .Mine_Wand_Runic  = .Weapon,
-    .Command_Wand         = .Weapon,
-    .Command_Wand_Emerald = .Weapon,
-    .Command_Wand_Hel     = .Weapon,
-    .Aether_Charm  = .Charm,
-    .Void_Charm    = .Charm,
-    .Jade_Ring     = .Charm,
-    .Iron_Helm       = .Head,  .Silver_Helm       = .Head,  .Gold_Helm       = .Head,  .Runic_Helm       = .Head,
-    .Iron_Chestplate = .Chest, .Silver_Chestplate = .Chest, .Gold_Chestplate = .Chest, .Runic_Chestplate = .Chest,
-    .Iron_Gauntlets  = .Hands, .Silver_Gauntlets  = .Hands, .Gold_Gauntlets  = .Hands, .Runic_Gauntlets  = .Hands,
-    .Iron_Greaves    = .Legs,  .Silver_Greaves    = .Legs,  .Gold_Greaves    = .Legs,  .Runic_Greaves    = .Legs,
-    .Iron_Boots      = .Feet,  .Silver_Boots      = .Feet,  .Gold_Boots      = .Feet,  .Runic_Boots      = .Feet,
-}
 
 @(rodata)
 charm_slot_order := [3]Equip_Slot{.Charm, .Charm_2, .Charm_3}
