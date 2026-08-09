@@ -3,8 +3,10 @@
 **Status:** design agreed with Glenn 2026-08-08; **implemented in full
 2026-08-09** exactly per §4's build steps — tests 241 → 246, save probe
 unchanged at 3,171,512, not yet eyeballed in-game (see `context.md`, the
-source of truth, for current state). §6 (the sink half) remains open and is
-parked in `ideas.md`. The sections below are kept as the design record.
+source of truth, for current state). §6 (the sink half) was designed the same
+day in **`mana_industry.md`** — gems become the fuel of the magic track; the
+other §6 items stay parked in `ideas.md`. The sections below are kept as the
+design record.
 
 **Companion docs:** `gem_progression.md` (the original 2026-07-13 gem ladder
 design — this closes its missing "bulk" half), `context.md` (source of truth),
@@ -288,8 +290,10 @@ odin test src -all-packages       # 226 existing + 5 new
 
 ## 6. Explicitly NOT in scope
 
-This change is the **source** half of the gem economy. The **sink** half is
-still open and was deliberately left out:
+This change is the **source** half of the gem economy. The **sink** half was
+deliberately left out — and was then designed 2026-08-09 in
+**`mana_industry.md`** (gems fuel the magic track); the rest of this list is
+parked in `ideas.md`:
 
 - **Gem conversion** — e.g. 3 Emerald → 1 Jade at the Rune Altar. Would give the
   lower tiers a floor and make a surplus meaningful.
