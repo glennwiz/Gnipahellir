@@ -6,6 +6,7 @@
 # Odin build artifacts
 build/
 bin/
+tools/recipe_viz/recipe_dag.png
 
 # Claude memory (local only)
 .claude/
