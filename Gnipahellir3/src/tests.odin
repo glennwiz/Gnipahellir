@@ -145,6 +145,18 @@ mining_the_shaft_apron_yields_rock_and_dirt :: proc(t: ^testing.T) {
     testing.expect(t, drop_near(gs, fx, fy, .Stone_Block), "normal stone still drops a rock on the ground")
     testing.expect(t, !drop_near(gs, fx, fy, .Dirt), "normal stone must not drop dirt")
     testing.expect_value(t, inventory_count(inv, .Dirt), 1)  // unchanged by the far dig
+
+    // That far dig left a fresh one-deep Void on the cap band — a player hole,
+    // not a shaft.  Only a Void column running the WHOLE cap band qualifies, so
+    // the hole must not scuff an apron onto its own neighbours (the regression:
+    // ordinary surface digging used to spread the dirt fade everywhere).
+    testing.expect_value(t, get_tile(&gs.world, fx, fy), Tile_Type.Void)
+    testing.expect(t, !is_shaft_column(&gs.world, fx), "a one-deep dig is not a shaft column")
+    testing.expect(t, !in_shaft_apron(&gs.world, fx + 1, fy), "a shallow dig aprons no neighbour")
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(fx + 1), i32(fy)}})
+    process_events(gs)
+    testing.expect(t, !drop_near(gs, fx + 1, fy, .Dirt), "digging beside a shallow hole pays no dirt")
+    testing.expect_value(t, inventory_count(inv, .Dirt), 1)  // still only the shaft's clod
 }
 
 @(test)

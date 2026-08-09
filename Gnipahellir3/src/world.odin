@@ -708,11 +708,25 @@ in_shaft_apron :: proc(w: ^World_Grid, x, y: int) -> bool {
 			nx := x + dir * step
 			if nx < 0 || nx >= GRID_W do break
 			t := w.terrain[grid_idx(nx, y)]
-			if t == .Void do return true
+			if t == .Void {
+				if is_shaft_column(w, nx) do return true
+				break // a shallow dig — no apron, and a gap besides
+			}
 			if t == .Air do break
 		}
 	}
 	return false
+}
+
+// A Void column running the entire surface cap band — the entrance shaft
+// punches clean through to the cave.  A shallow surface dig leaves solid rows
+// below it and does not qualify, so ordinary digging never spawns a new apron;
+// a hand-dug full-depth shaft earns the dressed mouth and the dirt yield.
+is_shaft_column :: proc(w: ^World_Grid, x: int) -> bool {
+	for y in SURFACE_Y ..< CAVE_TOP {
+		if w.terrain[grid_idx(x, y)] != .Void do return false
+	}
+	return true
 }
 CAVE_BOT :: GRID_H - 2 // two-row stone floor at world bottom
 CAVE_LEFT :: 1

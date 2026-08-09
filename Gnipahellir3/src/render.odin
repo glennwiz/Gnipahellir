@@ -344,9 +344,10 @@ draw_golem_monuments :: proc(gs: ^Game_State) {
 // earthen throat walls that darken into the dark, a cut-soil lip where the grass
 // is sheared open, a lit grass rim, and an apron of scuffed earth that spreads
 // onto the neighboring blocks and diminishes the further you are from the shaft
-// on the X axis.  It keys off the terrain itself — Void bordered by ground in
-// the surface-cap band — so it dresses any surface shaft, not a hardcoded
-// column.  Reads state, never mutates.
+// on the X axis.  It keys off the terrain itself — a Void column running the
+// whole surface-cap band, bordered by ground (is_shaft_column) — so it dresses
+// any full-depth shaft, even a hand-dug one, not a hardcoded column; a shallow
+// player dig stays undressed.  Reads state, never mutates.
 draw_shaft_mouth :: proc(gs: ^Game_State) {
     w := &gs.world
     WALL_PX   :: i32(3)
@@ -360,6 +361,7 @@ draw_shaft_mouth :: proc(gs: ^Game_State) {
     for y in SURFACE_Y ..< CAVE_TOP {
         for x in 0 ..< GRID_W {
             if w.terrain[grid_idx(x, y)] != .Void do continue
+            if !is_shaft_column(w, x) do continue // a shallow dig, not a shaft mouth
             px := i32(x * CELL_SIZE)
             py := i32(y * CELL_SIZE)
             // Throat wall darkens with depth: fresh topsoil at the rim sinking
