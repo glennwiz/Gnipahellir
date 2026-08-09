@@ -2301,6 +2301,11 @@ eating_a_greenberrie_grants_leaf_fall :: proc(t: ^testing.T) {
         "buffed fall must accelerate at the leaf-fall rate")
     testing.expect(t, gs.leaf_fall_t < LEAF_FALL_TIME, "the buff clock must tick down")
 
+    // While the buff holds, the fall peak keeps resetting — the same
+    // break-the-fall rule water uses — so landing can never deal fall damage,
+    // and a berry eaten mid-fall saves you.
+    testing.expect_value(t, gs.player.fall_peak_y, gs.player.pos.y)
+
     // Expired: plain gravity is back.
     gs.leaf_fall_t = 0
     gs.player.vel = {}

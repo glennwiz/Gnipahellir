@@ -33,7 +33,8 @@ SWORD_DAMAGE   :: 2
 SWORD_COOLDOWN :: f32(0.35)
 
 // Fall damage: safe up to SAFE_FALL_TILES of drop (a full jump arc is ~3),
-// then 1 hp per FALL_TILES_PER_HP beyond.  Water breaks any fall.
+// then 1 hp per FALL_TILES_PER_HP beyond.  Water breaks any fall, and so does
+// an active leaf-fall buff — a drifting leaf never lands hard.
 SAFE_FALL_TILES   :: f32(5)
 FALL_TILES_PER_HP :: f32(2)
 
@@ -123,8 +124,10 @@ update_player :: proc(gs: ^Game_State) {
     // true→false), so boot/load/teleport frames — which start airborne
     // with a stale peak — can never register a phantom fall (the
     // fall_peak_y > 0 guard covers the boot state, where it is zero).
-    if flying || player_in_water(gs) {
-        p.fall_peak_y = p.pos.y   // fly mode and water break any fall
+    if flying || player_in_water(gs) || gs.leaf_fall_t > 0 {
+        p.fall_peak_y = p.pos.y   // fly mode, water and leaf fall break any fall
+        // (leaf fall resetting the peak also means a mid-fall berry saves you,
+        // and a buff expiring mid-drift only counts the drop from where it died)
     } else if prev_grounded && !p.grounded {
         p.fall_peak_y = p.pos.y   // left the ground: arm the fall
     } else if !p.grounded {
