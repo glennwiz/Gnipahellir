@@ -448,7 +448,6 @@ UI_State :: struct {
     barrel_tile:     [2]i32,  // barrel the barrel window is looking at
     active_station:  Station, // station the crafting window was opened at (.None = hand crafting)
     focus_station:   Station, // nearest interactable station in range this frame (.None = none)
-    focus_tile:      [2]i32,  // its tile — anchor for the highlight and prompt
     hover_tile:      [2]i32,
     // Cursor description line: shown once, the first time you point at a kind
     // of thing you have never pointed at before, then it holds and fades and

@@ -25,7 +25,6 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
     draw_placement_ghost(gs)
     draw_wand_target(gs)
     draw_reclaim_target(gs)
-    draw_station_focus(gs)
     draw_golem_orders(gs)
     draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
     draw_enemies(&gs.enemies)
@@ -2357,15 +2356,6 @@ draw_enemies_debug :: proc(gs: ^Game_State) {
 //  we know each one's destination and lock state.  Sky-bound gates glow bright
 //  and pull in pale motes; cave gates are ominous black-red maws veined with
 //  green that spew red motes inward once unlocked.
-
-// Gold outline on the station tile the player can interact with (read-only;
-// the focus is computed in update_station_focus).
-draw_station_focus :: proc(gs: ^Game_State) {
-    if gs.player.dead || gs.ui.focus_station == .None do return
-    rl.DrawRectangleLinesEx(
-        {f32(gs.ui.focus_tile.x * CELL_SIZE), f32(gs.ui.focus_tile.y * CELL_SIZE), CELL_SIZE, CELL_SIZE},
-        1, NORSE_GOLD_HOT)
-}
 
 // Translucent preview of the selected placeable tile under the cursor — green
 // where it would place, red where it wouldn't.  Mirrors placement_ok exactly.

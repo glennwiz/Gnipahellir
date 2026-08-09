@@ -282,13 +282,13 @@ nearest_station :: proc(gs: ^Game_State) -> (st: Station, tile: [2]i32) {
 }
 
 // Per-frame station focus: the station the player could interact with right
-// now, read by the hover prompt, tile highlight and click handler.
+// now, read by the hover prompt and click handler.
 update_station_focus :: proc(gs: ^Game_State) {
     if gs.player.dead {
         gs.ui.focus_station = .None
         return
     }
-    gs.ui.focus_station, gs.ui.focus_tile = nearest_station(gs)
+    gs.ui.focus_station, _ = nearest_station(gs)
 }
 
 // Recipes shown in the crafting window: hand recipes plus those of the
