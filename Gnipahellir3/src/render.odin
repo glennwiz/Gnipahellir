@@ -514,32 +514,50 @@ draw_ritual :: proc(gs: ^Game_State) {
 // lives on over the altar forever — smaller, slower, dimmer.  Driven purely by
 // elapsed_time and the saved progression flag, so it needs no state and
 // survives save/load.  Silent while a full ritual owns the stage.
+// Everything moves on float coordinates — a slow orbit quantized to whole
+// world pixels reads as jerky steps.
 draw_altar_eternal_swirl :: proc(gs: ^Game_State, altar_x, altar_y: int) {
     if gs.level_index != LEVEL_SKY do return
     if !gs.progression.sky_structure_complete[0] do return
     if gs.ritual.active do return
-    t    := gs.elapsed_time
-    cx   := i32(altar_x*CELL_SIZE) + CELL_SIZE/2
-    cy   := i32((altar_y-2)*CELL_SIZE)
-    tick := int(t*12)
+    t  := gs.elapsed_time
+    cx := f32(altar_x*CELL_SIZE) + CELL_SIZE/2
+    cy := f32((altar_y-2)*CELL_SIZE)
 
-    // A faint breathing bloom above the capstone, stepped like the ritual's.
-    pulse := i32((math.sin(t*1.6)+1)*2)
+    // A faint breathing bloom above the capstone.
+    pulse := (math.sin(t*1.6)+1)*2
     rl.BeginBlendMode(.ADDITIVE)
-    rl.DrawRectangle(cx-5-pulse, cy-4-pulse, 10+pulse*2, 8+pulse*2, rl.Color{120, 190, 255, 14})
-    rl.DrawRectangle(cx-3, cy-2, 6, 4, rl.Color{185, 230, 255, 26})
+    rl.DrawRectangleV({cx-5-pulse, cy-4-pulse}, {10+pulse*2, 8+pulse*2}, rl.Color{120, 190, 255, 14})
+    rl.DrawRectangleV({cx-3, cy-2}, {6, 4}, rl.Color{185, 230, 255, 26})
     rl.EndBlendMode()
 
-    rune_r := f32(2.0) * CELL_SIZE
-    RUNES  :: 4
+    rune_r := f32(2.0 * CELL_SIZE)
+
+    // Blue motes drifting through the swirl, each breathing in and out of the
+    // ring with a bright light core.
+    MOTES :: 8
+    for i in 0 ..< MOTES {
+        phase := f32(i) * (2*math.PI / MOTES)
+        ang   := t*(0.5 + f32(i%3)*0.12) + phase
+        r     := rune_r * (0.45 + 0.35*math.sin(t*0.9 + phase*1.7))
+        mx    := cx + math.cos(ang)*r
+        my    := cy + math.sin(ang)*r
+        a     := 0.5 + 0.5*math.sin(t*2.0 + phase)
+        rl.DrawRectangleV({mx-1.5, my-1.5}, {3, 3}, rl.Color{130, 200, 255, u8(60 + a*90)})
+        rl.DrawRectangleV({mx-0.5, my-0.5}, {1, 1}, rl.Color{225, 245, 255, u8(130 + a*110)})
+    }
+
+    // Four rune tiles counter-rotate; glyph and color are fixed per rune —
+    // the ring turns, the runes themselves don't shift.
+    RUNES :: 4
     for i in 0 ..< RUNES {
         ang := -t*0.8 + f32(i) * (2*math.PI / RUNES)
-        rx  := cx+i32(math.cos(ang)*rune_r)-2
-        ry  := cy+i32(math.sin(ang)*rune_r)-2
+        rx  := cx + math.cos(ang)*rune_r - 2.5
+        ry  := cy + math.sin(ang)*rune_r - 2.5
         cols:=[3]rl.Color{{100,220,255,150},{255,205,90,150},{210,120,255,150}}
-        col:=cols[(i+tick/6)%len(cols)]
-        rl.DrawRectangle(rx,ry,5,5,rl.Color{18,22,34,140})
-        draw_pixel_rune_mark(rx,ry,col,i+tick/10)
+        col := cols[i%len(cols)]
+        rl.DrawRectangleV({rx, ry}, {5, 5}, rl.Color{18,22,34,140})
+        draw_pixel_rune_mark_v({rx+0.5, ry}, col, i)
     }
 }
 
@@ -998,6 +1016,25 @@ draw_pixel_stone_wood_altar_base :: proc(gs:^Game_State,bx,by:i32,x,y:int) {
 	for rx in ([2]i32{cx-19,cx+16}) {
 		rl.DrawRectangle(rx,stone_y+3,4,4,stone_d)
 		draw_pixel_rune_mark(rx,stone_y+3,rune,tick/5+int(rx&1))
+	}
+}
+
+// Float-position twin of draw_pixel_rune_mark: same glyphs, sub-pixel world
+// coordinates so a slow-moving mark glides instead of stepping.
+draw_pixel_rune_mark_v :: proc(pos:[2]f32,col:rl.Color,variant:int) {
+	r :: proc(pos:[2]f32,dx,dy,w,h:f32,col:rl.Color) {
+		rl.DrawRectangleV({pos.x+dx,pos.y+dy},{w,h},col)
+	}
+	switch variant%4 {
+	case 0: // angular Ansuz-like spark
+		r(pos,1,0,1,5,col); r(pos,2,1,2,1,col); r(pos,2,3,2,1,col)
+	case 1: // diamond
+		r(pos,1,0,2,1,col); r(pos,0,1,1,2,col); r(pos,3,1,1,2,col); r(pos,1,3,2,1,col)
+	case 2: // fork
+		r(pos,1,1,1,4,col); r(pos,0,0,1,2,col); r(pos,2,0,1,2,col)
+	case 3: // stepped lightning
+		r(pos,2,0,2,1,col); r(pos,1,1,2,2,col); r(pos,0,3,2,1,col)
+	case:
 	}
 }
 
