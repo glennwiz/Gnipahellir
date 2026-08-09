@@ -413,7 +413,7 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_pixel_editor {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_pixel_editor || gs.debug.item_palette {
             // First ESC sweeps every window closed; the next one opens the menu.
             gs.ui.show_inventory    = false
             gs.ui.show_crafting     = false
@@ -421,6 +421,7 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.show_smelter      = false
             gs.ui.show_barrel       = false
             gs.ui.show_pixel_editor = false
+            gs.debug.item_palette   = false
             gs.ui.drag_item      = .None
             gs.ui.drag_tray      = false
             gs.ui.drag_input     = false
@@ -731,6 +732,22 @@ update_input :: proc(gs: ^Game_State) {
             case 13:
                 gs.ui.show_pixel_editor = !gs.ui.show_pixel_editor
                 gs.debug.menu_open      = false
+            case 14:
+                gs.debug.item_palette = !gs.debug.item_palette
+                gs.debug.menu_open    = false
+            }
+        }
+
+        // Item Palette: click bags one of the pointed-at item, SHIFT+click a
+        // full stack.  Same debug exception as the menu actions above.
+        if gs.debug.item_palette && rl.IsMouseButtonPressed(.LEFT) && !gs.debug.menu_open {
+            if it := item_palette_item_at_cursor(gs); it != .None {
+                n := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) ? MAX_STACK : 1
+                if inventory_insert(&gs.player.inventory, it, n) {
+                    notify(gs, "Debug: %s x%d added to the bag", item_table[it].name, n)
+                } else {
+                    notify(gs, "Debug: bag full - %s not added", item_table[it].name)
+                }
             }
         }
 

@@ -194,6 +194,40 @@ shaft_mouth_is_dressable :: proc(t: ^testing.T) {
 }
 
 @(test)
+item_palette_maps_cursor_to_item :: proc(t: ^testing.T) {
+    // The F1 admin palette: cell (0,0) is the first real item (.None is
+    // skipped), the last cell is the last item, pad cells past it and the
+    // title strip resolve to nothing, and the open window owns the cursor.
+    gs := test_state()
+    defer free(gs)
+    gs.ui.show_menu       = false
+    gs.ui.show_title      = false
+    gs.ui.show_charselect = false
+    gs.ui.show_settings   = false
+    gs.debug.item_palette = true
+
+    gs.input.mouse_screen = {f32(IPAL_GX) + 5, f32(IPAL_GY) + 5}
+    testing.expect_value(t, item_palette_item_at_cursor(gs), Item(1))
+
+    last := len(Item) - 1
+    lx := IPAL_GX + ((last - 1) % IPAL_COLS) * IPAL_CELL
+    ly := IPAL_GY + ((last - 1) / IPAL_COLS) * IPAL_CELL
+    gs.input.mouse_screen = {f32(lx) + 5, f32(ly) + 5}
+    testing.expect_value(t, item_palette_item_at_cursor(gs), Item(last))
+
+    // One cell past the last item is an empty pad cell.
+    gs.input.mouse_screen = {f32(lx + IPAL_CELL) + 5, f32(ly) + 5}
+    testing.expect_value(t, item_palette_item_at_cursor(gs), Item.None)
+
+    // The title strip above the grid resolves to nothing.
+    gs.input.mouse_screen = {f32(IPAL_GX) + 5, f32(IPAL_Y) + 5}
+    testing.expect_value(t, item_palette_item_at_cursor(gs), Item.None)
+
+    // While open, the palette blocks mining/placing behind it.
+    testing.expect(t, cursor_over_ui(gs), "open palette owns the cursor")
+}
+
+@(test)
 rune_scroll_overlay_tracks_the_active_objective :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

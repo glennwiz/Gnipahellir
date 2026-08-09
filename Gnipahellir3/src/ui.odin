@@ -713,7 +713,7 @@ DBG_MENU_X :: 24
 DBG_MENU_Y :: 80
 DBG_MENU_W :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS :: 14 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor
+DBG_MENU_ROWS :: 15 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor; 14:item palette
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -831,6 +831,15 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 		pe_col,
 	)
 
+	ip_col := gs.debug.item_palette ? rl.GREEN : rl.YELLOW
+	rl.DrawText(
+		"Item Palette >",
+		DBG_MENU_X,
+		DBG_MENU_Y + 14 * DBG_MENU_ROW_H + 7,
+		10,
+		ip_col,
+	)
+
 	if r := debug_menu_row_at_cursor(gs); r >= 0 {
 		rl.DrawRectangleLines(
 			DBG_MENU_X - 2,
@@ -839,6 +848,53 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 			DBG_MENU_ROW_H - 2,
 			rl.YELLOW,
 		)
+	}
+}
+
+// ─── Item Palette (F1 admin tool, debug builds only) ──────────────────────────
+//
+//  Every item in the game in one grid, drawn with its real pixel-art icon.
+//  Click a cell to bag one; SHIFT+click bags a full stack.  Admin build tool —
+//  the click handler lives in input.odin with the other debug-menu actions.
+
+IPAL_COLS :: 16
+IPAL_CELL :: 40                                            // cell pitch; icon centered inside
+IPAL_ROWS :: (len(Item) - 1 + IPAL_COLS - 1) / IPAL_COLS   // .None is skipped
+IPAL_GX   :: IPAL_X + 8                                    // grid origin inside the panel
+IPAL_GY   :: IPAL_Y + 34
+IPAL_W    :: IPAL_COLS * IPAL_CELL + 12
+IPAL_H    :: IPAL_ROWS * IPAL_CELL + 56
+IPAL_X    :: (UI_W - IPAL_W) / 2
+IPAL_Y    :: (UI_H - IPAL_H) / 2
+
+// Item under the cursor in the palette grid, or .None.
+item_palette_item_at_cursor :: proc(gs: ^Game_State) -> Item {
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	if mx < IPAL_GX || my < IPAL_GY do return .None
+	c := int(mx - IPAL_GX) / IPAL_CELL
+	r := int(my - IPAL_GY) / IPAL_CELL
+	if c >= IPAL_COLS || r >= IPAL_ROWS do return .None
+	idx := r * IPAL_COLS + c + 1  // +1 skips .None
+	if idx >= len(Item) do return .None
+	return Item(idx)
+}
+
+draw_item_palette :: proc(gs: ^Game_State) {
+	rl.DrawRectangle(IPAL_X, IPAL_Y, IPAL_W, IPAL_H, panel_bg)
+	rl.DrawRectangleLines(IPAL_X, IPAL_Y, IPAL_W, IPAL_H, panel_border)
+	rl.DrawText("ITEM PALETTE - click +1, SHIFT+click a stack", IPAL_X + 8, IPAL_Y + 12, 12, rl.YELLOW)
+	hov := item_palette_item_at_cursor(gs)
+	for i in 1 ..< len(Item) {
+		it := Item(i)
+		x := i32(IPAL_GX + ((i - 1) % IPAL_COLS) * IPAL_CELL)
+		y := i32(IPAL_GY + ((i - 1) / IPAL_COLS) * IPAL_CELL)
+		rl.DrawRectangle(x, y, IPAL_CELL - 4, IPAL_CELL - 4, slot_bg)
+		rl.DrawRectangleLines(x, y, IPAL_CELL - 4, IPAL_CELL - 4, it == hov ? NORSE_GOLD_HOT : panel_border)
+		draw_item_icon(it, x + 2, y + 2, IPAL_CELL - 8)
+	}
+	if hov != .None {
+		rl.DrawText(cstring(raw_data(item_table[hov].name)), IPAL_X + 8, IPAL_Y + IPAL_H - 18, 12, NORSE_GOLD_HOT)
 	}
 }
 
@@ -1084,6 +1140,11 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 		   my >= PXED_Y && my < PXED_Y + PXED_H {
 			return true
 		}
+		if gs.debug.item_palette &&
+		   mx >= IPAL_X && mx < IPAL_X + IPAL_W &&
+		   my >= IPAL_Y && my < IPAL_Y + IPAL_H {
+			return true
+		}
 	}
 	for w in UI_Window {
 		if cursor_in_window(gs, w) do return true
@@ -1246,6 +1307,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	when GAME_DEBUG {
 		if gs.debug.menu_open do draw_debug_menu(gs)
 		if gs.debug.altar_menu do draw_altar_menu(gs)
+		if gs.debug.item_palette do draw_item_palette(gs)
 		if gs.ui.show_pixel_editor do draw_pixel_editor(gs)
 	}
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top

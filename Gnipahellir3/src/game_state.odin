@@ -500,6 +500,7 @@ Debug_State :: struct {
     life:       bool,   // easter egg: Conway's Game of Life eats the world (life.odin)
     life_timer: f32,
     life_gen:   int,
+    item_palette: bool, // F1 admin tool: every item's pixel art, click to bag
 }
 
 // ─── Sim ──────────────────────────────────────────────────────────────────────
