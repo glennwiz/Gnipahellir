@@ -510,6 +510,39 @@ draw_ritual :: proc(gs: ^Game_State) {
     }
 }
 
+// The eternal minor swirl: once the first Sky ritual is done, its rune ring
+// lives on over the altar forever — smaller, slower, dimmer.  Driven purely by
+// elapsed_time and the saved progression flag, so it needs no state and
+// survives save/load.  Silent while a full ritual owns the stage.
+draw_altar_eternal_swirl :: proc(gs: ^Game_State, altar_x, altar_y: int) {
+    if gs.level_index != LEVEL_SKY do return
+    if !gs.progression.sky_structure_complete[0] do return
+    if gs.ritual.active do return
+    t    := gs.elapsed_time
+    cx   := i32(altar_x*CELL_SIZE) + CELL_SIZE/2
+    cy   := i32((altar_y-2)*CELL_SIZE)
+    tick := int(t*12)
+
+    // A faint breathing bloom above the capstone, stepped like the ritual's.
+    pulse := i32((math.sin(t*1.6)+1)*2)
+    rl.BeginBlendMode(.ADDITIVE)
+    rl.DrawRectangle(cx-5-pulse, cy-4-pulse, 10+pulse*2, 8+pulse*2, rl.Color{120, 190, 255, 14})
+    rl.DrawRectangle(cx-3, cy-2, 6, 4, rl.Color{185, 230, 255, 26})
+    rl.EndBlendMode()
+
+    rune_r := f32(2.0) * CELL_SIZE
+    RUNES  :: 4
+    for i in 0 ..< RUNES {
+        ang := -t*0.8 + f32(i) * (2*math.PI / RUNES)
+        rx  := cx+i32(math.cos(ang)*rune_r)-2
+        ry  := cy+i32(math.sin(ang)*rune_r)-2
+        cols:=[3]rl.Color{{100,220,255,150},{255,205,90,150},{210,120,255,150}}
+        col:=cols[(i+tick/6)%len(cols)]
+        rl.DrawRectangle(rx,ry,5,5,rl.Color{18,22,34,140})
+        draw_pixel_rune_mark(rx,ry,col,i+tick/10)
+    }
+}
+
 draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     px := i32(x * CELL_SIZE)
     py := i32(y * CELL_SIZE)
@@ -886,6 +919,7 @@ draw_sky_altars :: proc(gs:^Game_State) {
 				draw_pixel_stone_wood_altar_base(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
 			}
 			draw_pixel_sky_altar(gs,i32(x*CELL_SIZE),i32(y*CELL_SIZE),x,y)
+			draw_altar_eternal_swirl(gs,x,y)
 		}
 	}
 }

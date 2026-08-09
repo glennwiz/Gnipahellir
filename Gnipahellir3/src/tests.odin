@@ -1569,6 +1569,17 @@ ritual_swirls_then_leaves_a_tome :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.ui.book_tier, 0)
     testing.expect(t, gs.progression.sky_structure_complete[0], "structure raised")
     testing.expect_value(t, inventory_count(inv, .Cloud_Stone), 0)
+
+    // The rebirth burst is pending: the flash leaves delayed (age < 0) blue
+    // particles that pop after the white/gold climax fades.
+    rebirth_pending := false
+    for p in gs.particles.data {
+        if p.active && p.age < 0 {
+            rebirth_pending = true
+            break
+        }
+    }
+    testing.expect(t, rebirth_pending, "delayed rebirth flash queued at completion")
 }
 
 @(test)

@@ -192,6 +192,24 @@ spawn_ritual_flash :: proc(gs: ^Game_State, altar: [2]i32) {
     }
 }
 
+// The swirl's rebirth: a beat after the finishing flash fades, a blue burst
+// in the altar's own glow color — the eternal minor swirl igniting.  Every
+// particle spawns delayed so the white/gold climax gets the stage first.
+RITUAL_REBIRTH_DELAY :: f32(0.45)
+spawn_ritual_rebirth :: proc(gs: ^Game_State, altar: [2]i32) {
+    center := [2]f32{f32(altar.x) + 0.5, f32(altar.y) - 1.5}
+    RING :: 20
+    for i in 0 ..< RING {
+        ang   := f32(i) * (2 * math.PI / RING)
+        seed  := u32(gs.frame)*17 + u32(i)*577
+        speed := 5 + jitter(seed, 2)
+        vel   := [2]f32{math.cos(ang) * speed, math.sin(ang) * speed}
+        col   := rl.Color{130, 200, 255, 255} if i % 2 == 0 else rl.Color{210, 240, 255, 255}
+        spawn_particle(&gs.particles, center, vel, col,
+            0.4 + jitter(seed + 1, 0.12), RITUAL_REBIRTH_DELAY)
+    }
+}
+
 // A worker's temporary Quick Clay foothold dissolving after use: a few damp
 // motes sag downward and fade, reading as melting away rather than breaking.
 spawn_clay_drip :: proc(gs: ^Game_State, T: [2]i32) {

@@ -449,6 +449,7 @@ update_ritual :: proc(gs: ^Game_State) {
         inventory_remove(&gs.player.inventory, ing.item, ing.count)
     }
     spawn_ritual_flash(gs, altar)
+    spawn_ritual_rebirth(gs, altar)
     eq_push(&gs.events, Event{type = .Structure_Complete, payload = {int_val = i32(tier)}})
     gs.ui.show_book       = true
     gs.ui.book_page       = .Seal
