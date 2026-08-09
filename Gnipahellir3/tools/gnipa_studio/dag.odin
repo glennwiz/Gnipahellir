@@ -92,10 +92,13 @@ build_graph :: proc(g: ^Graph, recipes: []game.Recipe, smelts: []game.Smelt_Rule
 		add_edge(g, r.ore, r.bar, r.ore_per_bar, .Smelter)
 	}
 
-	for {
+	// Longest-path layering, capped: a recipe CYCLE (A needs B needs A) would
+	// otherwise never converge.  The editor refuses to save cycles, but the
+	// preview must survive drawing one mid-edit.
+	for _ in 0 ..< len(game.Item) {
 		changed := false
 		for e in g.edges[:g.edge_count] {
-			if g.layer[e.to] < g.layer[e.from] + 1 {
+			if g.layer[e.to] < g.layer[e.from] + 1 && g.layer[e.to] < DAG_MAX_LAYERS - 1 {
 				g.layer[e.to] = g.layer[e.from] + 1
 				changed = true
 			}
@@ -183,10 +186,11 @@ Dag_State :: struct {
 	bounds_max:   rl.Vector2,
 }
 
-dag_init :: proc(d: ^Dag_State, sw, sh: f32) {
-	build_graph(&d.g, game.recipe_table[:], game.smelt_table[:])
+// Rebuild the graph/layout/bounds from a recipe slice, keeping the camera —
+// called at init and whenever the recipe editor's working copy changes.
+dag_refresh :: proc(d: ^Dag_State, recipes: []game.Recipe, smelts: []game.Smelt_Rule) {
+	build_graph(&d.g, recipes, smelts)
 	layout_graph(&d.g)
-
 	min_p, max_p := rl.Vector2{1e9, 1e9}, rl.Vector2{-1e9, -1e9}
 	for it in game.Item {
 		if !d.g.used[it] do continue
@@ -195,6 +199,11 @@ dag_init :: proc(d: ^Dag_State, sw, sh: f32) {
 		max_p.x = max(max_p.x, p.x + DAG_NODE_W); max_p.y = max(max_p.y, p.y + DAG_NODE_H)
 	}
 	d.bounds_min, d.bounds_max = min_p, max_p
+}
+
+dag_init :: proc(d: ^Dag_State, sw, sh: f32, recipes: []game.Recipe, smelts: []game.Smelt_Rule) {
+	dag_refresh(d, recipes, smelts)
+	min_p, max_p := d.bounds_min, d.bounds_max
 	d.cam = {
 		target = (min_p + max_p) * 0.5,
 		offset = {sw*0.5, sh*0.5 + 20},
@@ -319,7 +328,7 @@ draw_dag_tooltip :: proc(d: ^Dag_State, it: game.Item, mouse: rl.Vector2, sw, sh
 		if p.out_count > 1 do s = fmt.tprintf("%s  -> x%d", s, p.out_count)
 		push(&lines, &n, s)
 	}
-	if gate := game.recipe_unlock[it]; gate != .None {
+	if gate := rwork.unlock[it]; gate != .None {
 		push(&lines, &n, fmt.tprintf("unlocked by holding: %s", item_name(gate)))
 	}
 

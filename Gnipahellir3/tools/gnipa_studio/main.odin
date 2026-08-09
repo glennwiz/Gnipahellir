@@ -78,10 +78,14 @@ emit_all :: proc(notes: ^Notes) -> [4]Gen_Out {
 	views_from_game(&views)
 	shapes_from_registry(shapes[:])
 	pframes := game.player_form_frames
+	recipes := game.recipe_table
+	smelts := game.smelt_table
+	unlock: [game.Item]game.Item
+	for gate, it in game.recipe_unlock do unlock[it] = gate
 	return {
 		{"gen_items.odin", emit_items(notes)},
 		{"gen_item_icons.odin", emit_icons(notes, &views, shapes[:])},
-		{"gen_recipes.odin", emit_recipes(notes)},
+		{"gen_recipes.odin", emit_recipes(notes, recipes[:], &unlock, smelts[:])},
 		{"gen_player_art.odin", emit_player(notes, &pframes)},
 	}
 }

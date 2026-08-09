@@ -30,6 +30,7 @@ Tab :: enum i32 {
 	DAG,
 	Pixel,
 	Player,
+	Recipes,
 }
 
 // ─── Cross-references (who makes what, who uses what) ─────────────────────────
@@ -48,7 +49,9 @@ xref_prod_len:  [game.Item]int
 xref_users:     [game.Item][MAX_USERS]game.Item
 xref_user_len:  [game.Item]int
 
-xref_init :: proc() {
+xref_init :: proc(recipes: []game.Recipe, smelts: []game.Smelt_Rule) {
+	xref_prod_len = {}
+	xref_user_len = {}
 	add_prod :: proc(it: game.Item, p: Producer) {
 		if xref_prod_len[it] < MAX_PRODUCERS {
 			xref_producers[it][xref_prod_len[it]] = p
@@ -62,11 +65,11 @@ xref_init :: proc() {
 			xref_user_len[ing] += 1
 		}
 	}
-	for r in game.recipe_table {
+	for r in recipes {
 		add_prod(r.result, {station_ex(r.station), r.result_count, r.ingredients})
 		for ing in r.ingredients do if ing.item != .None do add_user(ing.item, r.result)
 	}
-	for r in game.smelt_table {
+	for r in smelts {
 		add_prod(r.bar, {.Smelter, 1, {{r.ore, r.ore_per_bar}, {}, {}}})
 		add_user(r.ore, r.bar)
 	}
@@ -124,6 +127,7 @@ Studio :: struct {
 	tab:      Tab,
 	selected: game.Item,
 	dag:      Dag_State,
+	dag_gen:  int, // rwork.gen the DAG/xref were last built from
 }
 
 studio_run :: proc(shot := false) {
@@ -134,14 +138,16 @@ studio_run :: proc(shot := false) {
 	rl.SetTargetFPS(60)
 	rl.SetExitKey(.KEY_NULL) // ESC clears selection; close via the window X
 
-	xref_init()
 	work_init()
 	player_work_init()
+	recipe_work_init()
+	xref_init(rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
 
 	s: Studio
 	s.selected = .Sword
 	session_load(&s)
-	dag_init(&s.dag, STUDIO_W, STUDIO_H)
+	dag_init(&s.dag, STUDIO_W, STUDIO_H, rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
+	s.dag_gen = rwork.gen
 	last_saved := Session{}
 	frames := 0
 
@@ -153,6 +159,14 @@ studio_run :: proc(shot := false) {
 		if rl.IsKeyPressed(.TWO) do s.tab = .DAG
 		if rl.IsKeyPressed(.THREE) do s.tab = .Pixel
 		if rl.IsKeyPressed(.FOUR) do s.tab = .Player
+		if rl.IsKeyPressed(.FIVE) do s.tab = .Recipes
+
+		// Recipe edits ripple into the DAG and the inspector cross-refs.
+		if rwork.gen != s.dag_gen {
+			xref_init(rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
+			dag_refresh(&s.dag, rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
+			s.dag_gen = rwork.gen
+		}
 
 		rl.BeginDrawing()
 		rl.ClearBackground({24, 26, 32, 255})
@@ -167,6 +181,8 @@ studio_run :: proc(shot := false) {
 			pixel_frame(&s, sw, sh, mouse)
 		case .Player:
 			player_frame_ui(&s, sw, sh, mouse)
+		case .Recipes:
+			recipe_frame(&s, sw, sh, mouse)
 		}
 
 		draw_top_bar(&s, sw, mouse)
@@ -192,6 +208,9 @@ studio_run :: proc(shot := false) {
 				s.tab = .Player
 			} else if frames == 20 {
 				rl.TakeScreenshot("studio_shot_player.png")
+				s.tab = .Recipes
+			} else if frames == 25 {
+				rl.TakeScreenshot("studio_shot_recipes.png")
 				break
 			}
 		}
@@ -202,7 +221,7 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 	rl.DrawRectangle(0, 0, i32(sw), i32(TOP_BAR), {18, 20, 26, 255})
 	rl.DrawLine(0, i32(TOP_BAR), i32(sw), i32(TOP_BAR), {60, 64, 76, 255})
 
-	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]"}
+	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]", .Recipes = "RECIPES [5]"}
 	x := i32(16)
 	for tab in Tab {
 		w := rl.MeasureText(labels[tab], 16) + 28
@@ -218,7 +237,7 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 
 	title :: "GNIPA STUDIO"
 	rl.DrawText(title, i32(sw) - rl.MeasureText(title, 20) - 16, 16, 20, {235, 235, 240, 255})
-	if work.dirty || pwork.dirty {
+	if work.dirty || pwork.dirty || rwork.dirty {
 		rl.DrawText("unsaved edits", i32(sw) - rl.MeasureText(title, 20) - 130, 20, 13, {245, 205, 90, 255})
 	}
 }

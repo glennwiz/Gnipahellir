@@ -132,7 +132,13 @@ test_save :: proc() -> bool {
 	pwork.dirty = true
 	player_save()
 	fmt.printfln("test-save player: %s", pwork.status)
-	return !work.dirty && !pwork.dirty
+
+	recipe_work_init()
+	rwork.recipes[0].result_count += 1
+	rwork.dirty = true
+	recipe_save()
+	fmt.printfln("test-save recipes: %s", rwork.status)
+	return !work.dirty && !pwork.dirty && !rwork.dirty
 }
 
 draw_view_icon :: proc(v: ^Icon_View, x, y, size: i32) {

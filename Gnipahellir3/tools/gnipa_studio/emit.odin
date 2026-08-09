@@ -228,7 +228,7 @@ emit_player :: proc(notes: ^Notes, frames: ^Player_Frames, allocator := context.
 
 // ─── gen_recipes.odin ─────────────────────────────────────────────────────────
 
-emit_recipes :: proc(notes: ^Notes, allocator := context.allocator) -> string {
+emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]game.Item, smelts: []game.Smelt_Rule, allocator := context.allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
 
@@ -238,7 +238,7 @@ emit_recipes :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// tests — never insert, delete or reorder rows.  Types and craft logic live\n")
 	fmt.sbprintf(&b, "// in crafting.odin.\n")
 	fmt.sbprintf(&b, "@(rodata)\nrecipe_table := [?]Recipe{{\n")
-	for r in game.recipe_table {
+	for r in recipes {
 		notes_write(&b, notes, "recipe", fmt.tprintf("%v", r.result), "\t")
 		fmt.sbprintf(&b, "\t{{ .%v, %d, .%v, {{%s, %s, %s}} }},\n",
 			r.result, r.result_count, r.station,
@@ -255,15 +255,15 @@ emit_recipes :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// Tuning the pace of the early game = editing this table.\n")
 	fmt.sbprintf(&b, "@(rodata)\nrecipe_unlock := #partial [Item]Item{{\n")
 	emitted: [game.Item]bool
-	for r in game.recipe_table {
+	for r in recipes {
 		if emitted[r.result] do continue
 		emitted[r.result] = true
-		gate := game.recipe_unlock[r.result]
+		gate := unlock[r.result]
 		if gate == .None do continue
 		notes_write(&b, notes, "unlock", fmt.tprintf("%v", r.result), "\t")
 		fmt.sbprintf(&b, "\t.%v = .%v,\n", r.result, gate)
 	}
-	for gate, it in game.recipe_unlock {
+	for gate, it in unlock {
 		// Defensive: gates on items that are not recipe results still emit.
 		if gate == .None || emitted[it] do continue
 		notes_write(&b, notes, "unlock", fmt.tprintf("%v", it), "\t")
@@ -274,7 +274,7 @@ emit_recipes :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// What a smelter eats and what it casts.  New smeltable = new row.\n")
 	fmt.sbprintf(&b, "// Smelt_Rule and the smelter logic live in sim.odin.\n")
 	fmt.sbprintf(&b, "@(rodata)\nsmelt_table := [?]Smelt_Rule{{\n")
-	for r in game.smelt_table {
+	for r in smelts {
 		notes_write(&b, notes, "smelt", fmt.tprintf("%v", r.ore), "\t")
 		fmt.sbprintf(&b, "\t{{ .%v, .%v, %d }},\n", r.ore, r.bar, r.ore_per_bar)
 	}
