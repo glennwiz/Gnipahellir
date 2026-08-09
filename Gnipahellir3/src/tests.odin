@@ -6381,6 +6381,19 @@ a_missing_material_does_not_stall_the_rest_of_the_build :: proc(t: ^testing.T) {
 	}
 	testing.expect(t,!p.complete,"the monument still waits for its Clay and Iron Bar")
 
+	// The wait explains itself: the starved-item list is exact (cell order),
+	// and the notify fired exactly once — a silent wait reads as a stuck
+	// worker (the bug report), a per-frame notify would be spam.
+	testing.expect_value(t,gs.golem_need_n,2)
+	testing.expect_value(t,gs.golem_need[0],Item.Clay)
+	testing.expect_value(t,gs.golem_need[1],Item.Iron_Bar)
+	waits := 0
+	for i in 0..<gs.notify.count {
+		n := &gs.notify.items[i]
+		if strings.contains(string(n.text[:n.len]),"the crew needs") do waits += 1
+	}
+	testing.expect_value(t,waits,1)
+
 	// Restock — the waiting crew resumes and finishes.
 	barrel_deposit(b,.Clay,3)
 	barrel_deposit(b,.Iron_Bar,1)

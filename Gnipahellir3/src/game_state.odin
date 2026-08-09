@@ -601,6 +601,8 @@ Game_State :: struct {
     golem_grace: Golem_Grace_State,
     golem_marks: Golem_Mark_Index,
     golem_quick_clay: Golem_Quick_Clay_State,
+    golem_need:   [8]Item, // items the active Build project can't source (golem_project_reserve); transient, not saved — drives the crew's NEEDS feedback
+    golem_need_n: int,
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,

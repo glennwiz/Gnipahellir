@@ -1376,7 +1376,36 @@ golem_project_reserve :: proc(gs: ^Game_State, id: int) -> bool {
 		g.project_cell = i16(ci)
 		return true
 	}
+	golem_note_starved(gs, failed[:n_failed])
 	return false
+}
+
+// A crew waiting for material it cannot source must say so, or the wait reads
+// as a stuck worker (Glenn reported exactly that, twice — the Clay was in his
+// bag the whole time).  Reported only from reserve's full-pass failure, so
+// every starved worker computes the same list and the notify fires once per
+// distinct starvation set, not per frame.  The list feeds the command strip's
+// NEEDS line and is gated there on an active incomplete project.
+golem_note_starved :: proc(gs: ^Game_State, failed: []Item) {
+	changed := len(failed) != gs.golem_need_n
+	if !changed do for it, i in failed do if gs.golem_need[i] != it {changed = true; break}
+	if !changed do return
+	gs.golem_need_n = len(failed)
+	for it, i in failed do gs.golem_need[i] = it
+	if len(failed) == 0 do return
+	buf: [96]u8
+	// Keep it inside NOTIFY_TEXT_LEN (64) with a two-item list.
+	notify(gs, "the crew needs %s - drop it nearby", golem_need_text(gs, buf[:]))
+}
+
+// "Clay, Iron Bar" — joined display names of the wanted items.
+golem_need_text :: proc(gs: ^Game_State, buf: []u8) -> string {
+	n := 0
+	for i in 0 ..< gs.golem_need_n {
+		if i > 0 do n += copy(buf[n:], ", ")
+		n += copy(buf[n:], item_table[gs.golem_need[i]].name)
+	}
+	return string(buf[:n])
 }
 
 golem_project_finish_if_done :: proc(gs: ^Game_State, p: ^Golem_Project) {

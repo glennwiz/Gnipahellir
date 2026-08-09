@@ -1350,8 +1350,15 @@ draw_golem_command_strip :: proc(gs: ^Game_State) {
 	p:=gs.golems.projects[gs.level_index]
 	for g in gs.golems.data do if g.status==.Deployed && g.level==gs.level_index && g.mode==.Build &&
 		(!p.active || p.complete) {build_waiting=true; break}
+	need_buf: [96]u8
 	if gs.ui.golem_plan==.None && build_waiting {
 		mode=cstring("BUILD: select monument, then click its anchor")
+	} else if gs.ui.golem_plan==.None && p.active && !p.complete && gs.golem_need_n > 0 {
+		// The crew is starved, not stuck — say what it waits for.
+		list_buf: [64]u8
+		fmt.bprintf(need_buf[:95], "NEEDS: %s - drop nearby or stock a barrel",
+			golem_need_text(gs, list_buf[:]))
+		mode = cstring(raw_data(need_buf[:]))
 	} else if deployed > 0 && gs.ui.golem_plan == .None && !gs.golems.work[gs.level_index].active {
 		mode = cstring("WAITING: drag zone or SHIFT+L paint blocks")
 	}
