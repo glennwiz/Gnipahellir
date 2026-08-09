@@ -19,7 +19,9 @@ package game
 //                                  open too, so fluid can never squeeze through
 //                                  the diagonal seam between two solid blocks.
 //    3. one step toward the nearest hole it can see along its own row
-//    4. sideways, but ONLY while buried under more of its own fluid
+//    4. sideways, but ONLY while buried under more of its own fluid — and the
+//       push carries THROUGH the body, surfacing at the first open cell past
+//       the end of its own run
 //
 //  A GAS runs the exact same rules with "down" mirrored to up (Fluid_Rule.rise)
 //  and a finite lifetime: it climbs the shaft you dug, pools under whatever
@@ -31,7 +33,10 @@ package game
 //  the shaft you dug four tiles away and runs to it, but a pool with no drop in
 //  reach never twitches.  Rule 4 is the pressure rule: it flattens a heap that
 //  has nowhere to drain, and only a cell buried under more of its own fluid
-//  pushes, so a settled surface has nothing to make it slither.  Every move
+//  pushes, so a settled surface has nothing to make it slither.  The push must
+//  carry through the cell's own fluid: a heap fed from one column otherwise
+//  freezes as a tower, its buried cell walled in by its neighbours and its
+//  dry-topped edge cells never pushing at all.  Every move
 //  either goes down, closes distance to a drop, or fills open space beneath a
 //  load — so flow always terminates, and a body ends up flat and completely
 //  still.
@@ -111,6 +116,19 @@ fluid_drop_distance :: proc(w: ^World_Grid, x, y, d, dy: int) -> int {
 		if fluid_open(w, cx, y + dy) do return i
 	}
 	return 0
+}
+
+// Where does a buried cell's push surface?  Pressure transmits through the
+// body: walk along the row THROUGH the cell's own fluid and come out at the
+// first open cell, up to FLUID_SPREAD away.  A run that ends in anything else
+// (a wall, another fluid) pushes nothing.
+fluid_push_target :: proc(w: ^World_Grid, x, y, d: int, fluid: Tile_Type) -> (int, bool) {
+	for i in 1 ..= FLUID_SPREAD {
+		cx := x + d * i
+		if fluid_open(w, cx, y) do return cx, true
+		if get_tile(w, cx, y) != fluid do return 0, false
+	}
+	return 0, false
 }
 
 // Is (x,y) — already known to hold `fluid` — the mouth of a spring?  The shape
@@ -231,14 +249,17 @@ fluid_step :: proc(gs: ^Game_State, rule: Fluid_Rule, flip: bool) {
 
 			// Pressure: nowhere to drain, so only a cell with more of its own
 			// fluid stacked against it (above for a liquid, below for a gas)
-			// pushes sideways, flattening the heap.  A settled surface stays put.
+			// pushes sideways, flattening the heap.  The push carries through
+			// the cell's own run and surfaces at its open end — the cell this
+			// one is pressed against fills the gap it leaves, so the whole
+			// body creeps as one.  A settled surface stays put.
 			if get_tile(w, x, y - dy) != fluid do continue
-			if fluid_open(w, x + dir, y) {
-				fluid_move(gs, x, y, x + dir, y, fluid, &moved)
+			if tx, ok := fluid_push_target(w, x, y, dir, fluid); ok {
+				fluid_move(gs, x, y, tx, y, fluid, &moved)
 				continue
 			}
-			if fluid_open(w, x - dir, y) {
-				fluid_move(gs, x, y, x - dir, y, fluid, &moved)
+			if tx, ok := fluid_push_target(w, x, y, -dir, fluid); ok {
+				fluid_move(gs, x, y, tx, y, fluid, &moved)
 			}
 		}
 	}

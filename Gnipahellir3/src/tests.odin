@@ -6425,6 +6425,46 @@ lava_flows_like_water_but_creeps :: proc(t: ^testing.T) {
 	testing.expect_value(t, fluid_count_in(gs, .Lava, 120, 120, top, bottom), 1)
 }
 
+@(test)
+pressure_pushes_through_the_body_to_reach_the_boiler :: proc(t: ^testing.T) {
+	// Glenn's live save froze exactly like this: a spring fed a one-wide walled
+	// shaft onto a chamber floor, the water heaped `w w w` under the drip and
+	// STOPPED, two tiles short of the boiler.  The heap was a stable tower —
+	// its one buried cell was walled in by its own fluid on both sides, and
+	// the dry-topped edge cells never push — because the old pressure rule
+	// only looked one cell sideways.  The push must carry through the body.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+
+	//        98 99 100 101 102 103 104
+	//   72       w                        <- shaft, walled both sides
+	//   73    #  w  #
+	//   74    #  w  #
+	//   75    w  w  w   .   .   B   .    <- floor: heap under the drip, boiler at 103
+	x0, x1, y0, yf := 98, 104, 72, 75
+	fluid_carve_box(gs, x0, x1, y0, yf)
+	set_tile(w, 98, 73, .Stone); set_tile(w, 100, 73, .Stone)
+	set_tile(w, 98, 74, .Stone); set_tile(w, 100, 74, .Stone)
+	for y in 72 ..= 74 do set_tile(w, 99, y, .Water)
+	for x in 98 ..= 100 do set_tile(w, x, yf, .Water)
+	set_tile(w, 103, yf, .Boiler)
+	testing.expect_value(t, fluid_count_in(gs, .Water, x0, x1, y0, yf), 6)
+
+	for _ in 0 ..< 600 do update_fluid(gs)   // ~10 s
+
+	// Every unit the shaft held has surfaced onto the floor and the front has
+	// crept up against the boiler — the drink cell the machine actually reads.
+	testing.expect_value(t, get_tile(w, 102, yf), Tile_Type.Water)
+	for x in 98 ..= 102 do testing.expect_value(t, get_tile(w, x, yf), Tile_Type.Water)
+	testing.expect_value(t, fluid_count_in(gs, .Water, x0, x1, y0, yf), 6)
+
+	// And having levelled, it is genuinely settled — the wider push must not
+	// have bought reach at the price of a churning body.
+	before := gs.world.terrain
+	for _ in 0 ..< 600 do update_fluid(gs)
+	testing.expect(t, before == gs.world.terrain, "a levelled body must lie still")
+}
+
 // ─── Fluid springs + the Iron Bucket ─────────────────────────────────────────
 
 // Build Glenn's exact spring stencil centred on (cx,cy), inside a sealed
