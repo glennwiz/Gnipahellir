@@ -104,7 +104,11 @@ main :: proc() {
 			}
 		}
 		if drift do os.exit(1)
+	case "--shot":
+		studio_run(shot = true)
+	case "":
+		studio_run()
 	case:
-		fmt.println("gnipa_studio --extract | --emit-check")
+		fmt.println("gnipa_studio [--extract | --emit-check | --shot]  (no args = open the studio)")
 	}
 }

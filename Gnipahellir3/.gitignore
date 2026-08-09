@@ -7,6 +7,8 @@
 build/
 bin/
 tools/recipe_viz/recipe_dag.png
+tools/gnipa_studio/session.dat
+tools/gnipa_studio/studio_shot_*.png
 
 # Claude memory (local only)
 .claude/
