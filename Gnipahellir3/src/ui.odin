@@ -468,7 +468,7 @@ draw_charselect :: proc(gs: ^Game_State) {
 
 		// Sprite preview, centered in the card's upper area (uses the new-game
 		// default tints so it matches the in-world look).
-		ps := f32(13)
+		ps := f32(6)  // 16×22 grid → 96×132 px preview, fits the 160×240 card
 		sw := f32(FRAME_WIDTH) * ps
 		sx := f32(x) + (CSEL_CARD_W - sw) / 2
 		sy := f32(y) + 36
