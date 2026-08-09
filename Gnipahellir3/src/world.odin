@@ -513,6 +513,15 @@ terrain_table := [Tile_Type]Terrain_Behavior {
 		.Steam_Engine,
 		0,
 	},
+	.Gem_Replicator          = {
+		"Gem Replicator",
+		{.Solid, .Placeable, .Mineable},
+		rl.Color{168, 120, 205, 255},
+		0,
+		0,
+		.Gem_Replicator,
+		0,
+	},
 }
 
 // ─── Terrain Descriptions ─────────────────────────────────────────────────────
@@ -594,6 +603,7 @@ is_structure_tile := #partial [Tile_Type]bool {
 	.Rune_Coffer             = true,
 	.Boiler                  = true,
 	.Steam_Engine            = true,
+	.Gem_Replicator          = true,
 }
 
 // ─── Grid Helpers ─────────────────────────────────────────────────────────────

@@ -127,3 +127,29 @@ this is a small per-frame buffer or a periodic full-state checkpoint. Also
 worth deciding before building: none of these rewind transient state (camera,
 particles, gravity falling-block pool, notifications, ritual swirl) since it
 isn't in `Save_Data` — a restore reads as a jump-cut, not a smooth rewind.
+
+---
+
+## 2026-08-09 — gem economy: the SINK half (parked when the Replicator shipped)
+
+The Gem Replicator (`gem_industry.md`, built 2026-08-09) closed the SOURCE
+half — gems are now renewable, so future gem sinks stop being one-shot traps.
+The sink half was deliberately left out of that build (its §6); parked here so
+it isn't lost:
+
+1. **Gem conversion** — e.g. 3 Emerald → 1 Jade at the Rune Altar. Gives the
+   lower tiers a floor and makes a surplus meaningful.
+2. **A gem socket on every machine** — generalise `miner_gem_tier`
+   (miner.odin) into sim.odin so the Smelter / Tree Grower / Flower Bed each
+   accept a gem to permanently tier up. This is Glenn's north star ("the gem
+   you feed a machine is the speed you get back") spelled out, and the
+   natural next step now that gems are farmable.
+3. **Gem-tier gear above runic**, or socketed upgrades on existing gear
+   (`gem_progression.md` §"Gem sinks").
+4. **Gem dimensions** (`gem_progression.md` steps 2–4) — the *other* bulk
+   route, with the "richer world = nastier world" hazard table. Still blocked
+   on enemy variety.
+5. **Fix the contradictory gem ladders** — miner speed uses
+   Emerald/Jade/Diamond/Hel, golem slots only Emerald/Hel: Jade and Diamond
+   still do nothing for golems. (A gem socket on the wand/hearth, or a
+   conversion floor, both address it.)

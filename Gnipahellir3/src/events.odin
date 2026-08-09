@@ -105,6 +105,8 @@ process_events :: proc(gs: ^Game_State) {
                 notify(gs, "Set it beside water and stoke it with wood - its steam rises")
             case .Steam_Engine:
                 notify(gs, "Feed it pooled steam - machines within 3 tiles run fast and free")
+            case .Gem_Replicator:
+                notify(gs, "Drop a gem beside it - it grows more of that gem")
             }
 
         case .Lava_Spread:
@@ -552,12 +554,13 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         }
     }
 
-    // A mined smelter or boiler spills its tray, its loaded ore AND its fuel —
-    // nothing in the furnace is lost.  Timers and buffers die with the tile so
-    // a future machine here starts fresh.
+    // A mined smelter, boiler or gem replicator spills its tray, its loaded
+    // input AND its fuel — nothing in the machine is lost.  (The replicator's
+    // in_* is its seed gem; its fuel_count is always 0, a harmless no-op.)
+    // Timers and buffers die with the tile so a future machine starts fresh.
     sd := &gs.world.sim_data[idx]
     boiler_rule, is_boiler := boiler_rule_for(old_tile)
-    if old_tile == .Smelter || is_boiler {
+    if old_tile == .Smelter || old_tile == .Gem_Replicator || is_boiler {
         fuel := is_boiler ? boiler_rule.fuel_item : FUEL_ITEM
         if sd.store_count > 0 {
             spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))

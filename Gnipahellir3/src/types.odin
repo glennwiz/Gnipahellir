@@ -143,6 +143,10 @@ Tile_Type :: enum u8 {
     // The steam track's power take-off: drinks pooled steam, stamps a powered
     // field on nearby cells.  (appended: terrain ordinals are serialized)
     Steam_Engine,
+    // The gem farm: seed it with one gem and it grows copies forever — the
+    // gem economy's renewal path, Tree Grower parity.  (appended: terrain
+    // ordinals are serialized)
+    Gem_Replicator,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -261,6 +265,8 @@ Item :: enum u8 {
     Water_Bucket,
     Lava_Bucket,
     Magic_Lava_Bucket,
+    // The gem farm (appended: item ordinals are serialized)
+    Gem_Replicator,
 }
 
 // Which text the full-screen tome is showing.  `Seal` is the ritual's passage

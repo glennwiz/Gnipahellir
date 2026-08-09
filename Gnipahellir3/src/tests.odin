@@ -6955,3 +6955,160 @@ a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
 		testing.expect(t, !gs.progression.recipe_unlocked[i], "new recipe slots start locked")
 	}
 }
+
+// ─── Gem Replicator (sim.odin) ────────────────────────────────────────────────
+//
+//  Fixtures sit in the x=76 pond-free band (a lesson learned twice) and below
+//  REPLICATOR_DEPTH_Y, where the machine is allowed to live.  The periods are
+//  minutes long, so these tests coarsen delta_time rather than run hours of
+//  frames — the sim is purely dt-driven.
+
+@(test)
+gem_replicator_copies_its_seed :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A replicator deep in the cave with a 3-gem pile beside it.
+    rx, ry := 76, REPLICATOR_DEPTH_Y + 5
+    for dy in -1 ..= 1 do for dx in -1 ..= 1 do set_tile(&gs.world, rx + dx, ry + dy, .Void)
+    set_tile(&gs.world, rx, ry, .Gem_Replicator)
+    pile := grid_idx(rx - 1, ry)
+    gs.world.items[pile]       = .Emerald
+    gs.world.item_counts[pile] = 3
+
+    gs.delta_time = 0.5
+    steps := int(gem_replicate_time[.Emerald] / gs.delta_time) + 4
+    for _ in 0 ..< steps {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+
+    // Exactly ONE gem was pulled in as the seed — a stack never vanishes in.
+    sd := &gs.world.sim_data[grid_idx(rx, ry)]
+    testing.expect_value(t, sd.in_item, Item.Emerald)
+    testing.expect_value(t, int(sd.in_count), 1)
+    testing.expect_value(t, int(gs.world.item_counts[pile]), 2)
+
+    // After the emerald period the tray holds a COPY; the seed is still there.
+    testing.expect_value(t, sd.store_item, Item.Emerald)
+    testing.expect(t, int(sd.store_count) >= 1, "a copy grew into the tray")
+
+    // And it keeps copying forever — Tree Grower parity, never consume-and-double.
+    first := int(sd.store_count)
+    for _ in 0 ..< steps {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, int(sd.store_count) > first, "the seed keeps copying")
+    testing.expect_value(t, int(sd.in_count), 1)
+}
+
+@(test)
+gem_replicator_needs_depth :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A shallow pocket above the gem depth, otherwise perfectly valid: open
+    // cell, solid stone all around, player in reach.
+    sx, sy := 76, REPLICATOR_DEPTH_Y - 8
+    set_tile(&gs.world, sx, sy, .Void)
+    gs.player.pos = {f32(sx - 2), f32(sy)}
+    testing.expect(t, !placement_ok(gs, .Gem_Replicator, sx, sy),
+        "no gem farm above the depth gems form at")
+    testing.expect(t, placement_ok(gs, .Stone_Block, sx, sy),
+        "the spot itself is placeable — the refusal is the depth gate")
+
+    // The same build below REPLICATOR_DEPTH_Y is welcome.
+    dx, dy := 76, REPLICATOR_DEPTH_Y + 5
+    set_tile(&gs.world, dx, dy, .Void)
+    set_tile(&gs.world, dx - 1, dy, .Stone)
+    gs.player.pos = {f32(dx - 3), f32(dy)}
+    testing.expect(t, placement_ok(gs, .Gem_Replicator, dx, dy),
+        "deep placement should pass")
+}
+
+@(test)
+gem_replicator_casts_into_a_silo :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Replicator with a silo out-chute on its right, seeded with an emerald.
+    rx, ry := 76, REPLICATOR_DEPTH_Y + 5
+    for dy in -1 ..= 1 do for dx in -1 ..= 2 do set_tile(&gs.world, rx + dx, ry + dy, .Void)
+    set_tile(&gs.world, rx, ry, .Gem_Replicator)
+    tile := [2]i32{i32(rx + 1), i32(ry)}
+    set_tile(&gs.world, rx + 1, ry, .Silo)
+    silo_on_placed(gs, tile)
+    sd := &gs.world.sim_data[grid_idx(rx, ry)]
+    sd.in_item  = .Emerald
+    sd.in_count = 1
+
+    gs.delta_time = 0.5
+    steps := int(gem_replicate_time[.Emerald] / gs.delta_time) + 4
+    for _ in 0 ..< steps {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+
+    // The copy lands in the silo's wide slots; the tray stays empty.
+    testing.expect_value(t, int(sd.store_count), 0)
+    s := silo_at(gs, gs.level_index, tile)
+    testing.expect(t, s != nil, "silo record registered")
+    testing.expect_value(t, s.slots[0].item, Item.Emerald)
+    testing.expect(t, s.slots[0].count >= 1, "the silo received the copy")
+}
+
+@(test)
+gem_replicator_rate_scales_with_gem :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Two farms, far enough apart to see nothing of each other: one seeded
+    // with an Emerald (180 s), one with a Hel Gem (1200 s).
+    ry := REPLICATOR_DEPTH_Y + 5
+    ex, hx := 70, 82
+    set_tile(&gs.world, ex, ry, .Gem_Replicator)
+    set_tile(&gs.world, hx, ry, .Gem_Replicator)
+    esd := &gs.world.sim_data[grid_idx(ex, ry)]
+    hsd := &gs.world.sim_data[grid_idx(hx, ry)]
+    esd.in_item, esd.in_count = Item.Emerald, 1
+    hsd.in_item, hsd.in_count = Item.Hel_Gem, 1
+
+    gs.delta_time = 0.5
+    steps := int(gem_replicate_time[.Emerald] / gs.delta_time) + 4
+    for _ in 0 ..< steps {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+
+    // In the window the emerald completes, the hel gem yields nothing — but
+    // it is working, not stalled: the cost mirrors the reward.
+    testing.expect(t, int(esd.store_count) >= 1, "the emerald farm completed")
+    testing.expect_value(t, int(hsd.store_count), 0)
+    testing.expect(t, hsd.growth_timer > 0, "the hel farm is climbing, just slower")
+}
+
+@(test)
+mined_gem_replicator_spills_seed_and_tray :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A loaded farm: the seed in its slot and three copies waiting in the tray.
+    rx, ry := 76, REPLICATOR_DEPTH_Y + 5
+    set_tile(&gs.world, rx, ry, .Gem_Replicator)
+    sd := &gs.world.sim_data[grid_idx(rx, ry)]
+    sd.in_item,    sd.in_count    = Item.Emerald, 1
+    sd.store_item, sd.store_count = Item.Emerald, 3
+
+    handle_tile_mined(gs, Event{tile = {i32(rx), i32(ry)}})
+
+    // Both the seed and the tray land as ground piles — nothing is ever lost.
+    testing.expect_value(t, int(sd.in_count), 0)
+    testing.expect_value(t, int(sd.store_count), 0)
+    gems := 0
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        idx := grid_idx(rx + dx, ry + dy)
+        if gs.world.items[idx] == .Emerald do gems += int(gs.world.item_counts[idx])
+    }
+    testing.expect_value(t, gems, 4)
+}

@@ -1,8 +1,10 @@
-# gem_industry.md — the Gem Replicator (design agreed, NOT yet built)
+# gem_industry.md — the Gem Replicator (BUILT 2026-08-09)
 
-**Status:** design agreed with Glenn 2026-08-08. Nothing implemented. This file
-is the full brief — a cold agent should be able to build it from here without
-re-deriving anything.
+**Status:** design agreed with Glenn 2026-08-08; **implemented in full
+2026-08-09** exactly per §4's build steps — tests 241 → 246, save probe
+unchanged at 3,171,512, not yet eyeballed in-game (see `context.md`, the
+source of truth, for current state). §6 (the sink half) remains open and is
+parked in `ideas.md`. The sections below are kept as the design record.
 
 **Companion docs:** `gem_progression.md` (the original 2026-07-13 gem ladder
 design — this closes its missing "bulk" half), `context.md` (source of truth),

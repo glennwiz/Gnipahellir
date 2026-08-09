@@ -123,6 +123,7 @@ station_glow := #partial [Tile_Type]rl.Color{
     .Barrel                 = {190, 140, 80,  255}, // warm oak
     .Boiler                 = {200, 225, 240, 255}, // steam white
     .Steam_Engine           = {235, 200, 110, 255}, // working brass
+    .Gem_Replicator         = {215, 170, 255, 255}, // prismatic violet-white
 }
 
 // ─── World / Terrain ──────────────────────────────────────────────────────────
@@ -1092,6 +1093,25 @@ draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
             rl.DrawRectangle(wx, wy - 2, 2, 2, brass)
             rl.DrawRectangle(wx - 2, wy, 2, 2, brass)
         }
+    case .Gem_Replicator:
+        sd := gs.world.sim_data[grid_idx(x, y)]
+        period, seeded := gem_replicate_time_for(sd.in_item)
+        if !seeded || sd.growth_timer <= 0 do return
+        // The growing copy climbs out of the plinth in the SEED's own color
+        // (read from item_table), so the machine visibly reads as "growing an
+        // emerald" — the sapling stalk's pacing, in crystal.
+        p    := clamp(sd.growth_timer / period, 0, 1)
+        c    := item_table[sd.in_item].color
+        h    := i32(2 + p*6)
+        gx   := px + CELL_SIZE/2 - 1
+        rl.DrawRectangle(gx, py - h, 2, h, c)
+        // Facets widen as the shard lengthens.
+        if h > 4 {
+            rl.DrawRectangle(gx - 1, py - h + 2, 1, h - 3, c)
+            rl.DrawRectangle(gx + 2, py - h + 3, 1, h - 4, c)
+        }
+        // A glinting tip.
+        rl.DrawRectangle(gx, py - h, 2, 1, rl.Color{255, 255, 255, 200})
     case .Tree_Grower:
         p := gs.world.sim_data[grid_idx(x, y)].growth_timer / TREE_GROW_TIME
         if p <= 0 do return

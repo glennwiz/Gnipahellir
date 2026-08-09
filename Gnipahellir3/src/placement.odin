@@ -40,6 +40,13 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
         return false
     }
 
+    // The Gem Replicator only works at the pressure gems form under: the deep
+    // rows, never the sky.  Trees need open sky; gems need pressure.
+    if place_tile == .Gem_Replicator &&
+       (gs.level_index == LEVEL_SKY || y < REPLICATOR_DEPTH_Y) {
+        return false
+    }
+
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)     // within reach
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return false
@@ -128,6 +135,11 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
             } else if !barrel_slot_free(gs) {
                 notify(gs, "Every container is spoken for - reclaim one first")
             }
+        }
+        // Explain the replicator's depth gate.
+        if place_tile == .Gem_Replicator &&
+           (gs.level_index == LEVEL_SKY || y < REPLICATOR_DEPTH_Y) {
+            notify(gs, "Gems take root only under pressure - carry it deeper")
         }
         return
     }

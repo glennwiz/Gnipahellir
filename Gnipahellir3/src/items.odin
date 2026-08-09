@@ -105,6 +105,7 @@ item_table := [Item]Item_Info{
     .Rune_Coffer       = { "Rune Coffer",       {150, 138, 120, 255}, .Rune_Coffer, "An emptied rune chest, prised loose. Re-place it as a 4x4 store." },
     .Boiler            = { "Boiler",            {96, 102, 116, 255},  .Boiler, "Boils an adjacent water cell into steam, one puff at a time. Stoke it with wood - or set it against lava and it needs no fuel. Its steam rises up whatever shaft you leave above." },
     .Steam_Engine      = { "Steam Engine",      {150, 122, 62, 255},  .Steam_Engine, "Set it in pooled steam: while it drinks, every machine within 3 tiles runs three times as fast on no fuel at all. A leak in your ceiling is power lost." },
+    .Gem_Replicator    = { "Gem Replicator",    {168, 120, 205, 255}, .Gem_Replicator, "Drop a gem beside it: the seed stays forever and copies of it slowly grow. It only wakes in the crushing deep where gems themselves form - carry it down before placing it." },
     // Filled buckets: the pour is handled by bucket_use (place_tile stays .Air
     // so the empty bucket can return to the bag).
     .Water_Bucket      = { "Water Bucket",      {48, 128, 200, 255},  .Air, "An iron bucket brimming with water. Right-click an open cell to pour it out." },

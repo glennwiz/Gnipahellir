@@ -65,6 +65,16 @@ structure_interact :: proc(gs: ^Game_State, tile: [2]i32) {
         }
     case .Tree_Grower:
         notify(gs, "The grower works while open sky waits above")
+    case .Gem_Replicator:
+        // E empties the tray; an idle or empty machine explains itself instead.
+        sd := &gs.world.sim_data[grid_idx(int(tile.x), int(tile.y))]
+        if sd.store_count > 0 {
+            replicator_collect(gs, tile)
+        } else if sd.in_count == 0 {
+            notify(gs, "Drop a gem beside it - the seed stays and copies grow")
+        } else {
+            notify(gs, "The %s seed is taking - the copies gather here", item_table[sd.in_item].name)
+        }
     case .Clay_Hearth:
         eq_push(&gs.events, Event{type = .Golem_Hearth_Use, tile = tile})
     case .Golem_Depot:

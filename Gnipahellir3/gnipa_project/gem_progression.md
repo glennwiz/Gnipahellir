@@ -69,6 +69,11 @@ Dimension_Hazard :: struct {
    `Pixel_Gem` draw style (crystal-in-rock, color from terrain_table).
    `gem_ladder_generation` test pins counts + drops. No save bump needed
    (append-only enums).
+1b. ~~Gem renewal — the "bulk" half, machine route~~ — **SHIPPED 2026-08-09**
+   as the **Gem Replicator** (`gem_industry.md`, designed 2026-08-08): one
+   natural gem seeds a depth-gated farm that copies it forever (seed never
+   spent, Tree Grower parity). Gem *dimensions* (steps 2–4 below) remain the
+   other, unbuilt bulk route — still blocked on enemy variety.
 2. `Poison_Gas` tile + hazard struct in `Dimension_Theme`; lava pass in
    `gen_dimension`.
 3. **Dimension Blocks (§7.6 step 3) before the 3rd theme** — spawner-per-theme

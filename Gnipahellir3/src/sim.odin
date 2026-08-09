@@ -18,6 +18,12 @@ TREE_GROW_TIME :: f32(20.0)  // seconds per tree
 FLOWER_BED_GROW_TIME :: f32(120.0)  // seconds for a bed to bloom (~2 min)
 TREE_MAX_H     :: 5          // tallest grown trunk; clearance is checked to here
 
+// The Gem Replicator only works as deep as gems actually form: caves 2/3 roll
+// gems at depth > 60 below CAVE_LVL_TOP (levels.odin), so this is that exact
+// row.  Checked at placement — the condition is static per cell, so a refusal
+// with a reason beats a machine that silently never ticks.
+REPLICATOR_DEPTH_Y :: CAVE_LVL_TOP + 60
+
 // What a smelter eats and what it casts.  New smeltable = new row.
 Smelt_Rule :: struct {
     ore, bar:    Item,
@@ -138,6 +144,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Golem_Depot = tick_golem_depot,
     .Boiler      = tick_boiler,
     .Steam_Engine = tick_engine,
+    .Gem_Replicator = tick_gem_replicator,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
@@ -501,4 +508,136 @@ tick_grower :: proc(gs: ^Game_State, x, y: int) {
     height := 3 + int(whash(u32(idx)*31 + u32(gs.frame)) % 3)
     place_tree(w, x, y, height)
     eq_push(&gs.events, Event{type = .Tree_Grew, tile = {i32(x), i32(y)}})
+}
+
+// ─── The Gem Replicator ───────────────────────────────────────────────────────
+//
+//  Feed it one gem: the SEED STAYS FOREVER and copies of it slowly grow —
+//  Tree Grower parity, never consume-and-double.  This is the gem economy's
+//  renewal path: one gem found in nature seeds a farm, so the gem ladder can
+//  no longer dead-end and future gem sinks stop being one-shot traps.
+
+// Seconds to grow one copy of each seed — the north star ("the gem you feed a
+// machine is the speed you get back") as a table, same shape as
+// miner_gem_tier.  A nonzero row is also the "is this a gem" test.  Rarer gem
+// = longer wait: the cost mirrors the reward.
+@(rodata)
+gem_replicate_time := #partial [Item]f32{
+    .Emerald = 180,
+    .Jade    = 300,
+    .Diamond = 600,
+    .Hel_Gem = 1200,
+}
+
+gem_replicate_time_for :: proc(it: Item) -> (f32, bool) {
+    t := gem_replicate_time[it]
+    return t, t > 0
+}
+
+// Draw ONE gem from an adjacent pile into the empty seed slot — drop a gem
+// beside the machine and it takes it, the same drag-to-drop primitive the
+// smelter hopper uses (so golems can seed it too).  Seed capacity is 1: a
+// whole stack must never vanish into it.
+replicator_autopull :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data) {
+    if sd.in_count > 0 do return
+    w := &gs.world
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 {
+            if dx == 0 && dy == 0 do continue
+            nx, ny := x + dx, y + dy
+            if !in_bounds(nx, ny) do continue
+            n  := grid_idx(nx, ny)
+            it := w.items[n]
+            if w.item_counts[n] == 0 do continue
+            if _, ok := gem_replicate_time_for(it); !ok do continue
+            sd.in_item  = it
+            sd.in_count = 1
+            w.item_counts[n] -= 1
+            if w.item_counts[n] == 0 do w.items[n] = .None
+            return  // one pile per tick keeps it cheap
+        }
+    }
+}
+
+// One tick of the gem farm.  While seeded and the output has room, the timer
+// climbs toward the seed's own period; on fill one COPY lands silo -> depot
+// -> tray in that priority (the smelter's out-chute, verbatim) and the seed
+// stays at 1, forever.
+tick_gem_replicator :: proc(gs: ^Game_State, x, y: int) {
+    w   := &gs.world
+    idx := grid_idx(x, y)
+    sd  := &w.sim_data[idx]
+
+    replicator_autopull(gs, x, y, sd)
+
+    period, seeded := gem_replicate_time_for(sd.in_item)
+    if !seeded || sd.in_count == 0 {
+        sd.growth_timer = 0  // no seed — nothing to copy
+        return
+    }
+
+    out_silo := silo_adjacent(gs, x, y)
+    if out_silo != nil && !silo_has_room_for(out_silo, sd.in_item) do out_silo = nil
+    out_depot := golem_depot_adjacent(gs, x, y)
+    if out_depot != nil && !golem_depot_has_room(out_depot, sd.in_item) do out_depot = nil
+
+    tray_ok := out_silo != nil || out_depot != nil ||
+               sd.store_count == 0 ||
+               (sd.store_item == sd.in_item && int(sd.store_count) < MAX_STACK)
+    if !tray_ok {
+        sd.growth_timer = 0  // the tray is full — the copy has nowhere to land
+        return
+    }
+
+    sd.growth_timer += gs.delta_time
+    if sd.growth_timer < period do return
+    sd.growth_timer = 0
+
+    // Deposit the copy, never the seed: in_count stays at 1.
+    if out_silo != nil {
+        silo_add(out_silo, sd.in_item, 1)
+    } else if out_depot != nil {
+        _ = golem_depot_add(out_depot, sd.in_item, 1)
+    } else {
+        sd.store_item  = sd.in_item
+        sd.store_count += 1
+    }
+    spawn_smelt_burst(gs, {i32(x), i32(y)})
+    eq_push(&gs.events, Event{
+        type    = .Play_Sound,
+        tile    = {i32(x), i32(y)},
+        payload = {int_val = i32(Sound_ID.Place)},
+    })
+    log_action(gs, "Gem Replicator at (%d,%d) grows a %v", x, y, sd.in_item)
+}
+
+// Emptying the replicator's tray into the bag (press E beside it, or let a
+// silo next door take the output directly).  Whatever the bag cannot hold
+// stays in the tray.
+replicator_collect :: proc(gs: ^Game_State, tile: [2]i32) -> bool {
+    if gs.player.dead do return false
+    if !in_bounds(int(tile.x), int(tile.y)) do return false
+    sd := &gs.world.sim_data[grid_idx(int(tile.x), int(tile.y))]
+    if sd.store_count == 0 do return false
+
+    px := i32(gs.player.pos.x + PLAYER_W*0.5)
+    py := i32(gs.player.pos.y + PLAYER_H*0.5)
+    if max(abs(tile.x - px), abs(tile.y - py)) > BENCH_RANGE {
+        notify(gs, "Too far from the replicator")
+        return false
+    }
+
+    inv    := &gs.player.inventory
+    before := inventory_count(inv, sd.store_item)
+    fit    := inventory_insert(inv, sd.store_item, int(sd.store_count))
+    taken  := inventory_count(inv, sd.store_item) - before
+    sd.store_count -= u8(taken)
+    item := sd.store_item
+    if sd.store_count == 0 do sd.store_item = .None
+    if !fit do notify(gs, "The bag is full")
+    if taken > 0 {
+        audio_play(&gs.audio, .Pickup)
+        log_action(gs, "Player takes %v x%d from the gem replicator at (%d,%d)", item, taken, tile.x, tile.y)
+    }
+    return taken > 0
 }

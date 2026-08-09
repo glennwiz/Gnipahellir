@@ -475,6 +475,22 @@ TREE_GROWER_GRID :: Icon_Grid{
 	"............",
 }
 
+// Faceted crystal (L/A/a) on a gold-collared stone plinth — the gem farm.
+GEM_REPLICATOR_GRID :: Icon_Grid{
+	"......W.....",
+	".....LA.....",
+	"....LLAA....",
+	"...ALLAAa...",
+	"....LLAA....",
+	".....AA.....",
+	"....gggg....",
+	"...sSSSSs...",
+	"...SSSSSS...",
+	"..sSSSSSSs..",
+	"..SSSSSSSS..",
+	"............",
+}
+
 // Furnace body (B/D) with a fire window (A/a) and a gold cap.
 SMELTER_GRID :: Icon_Grid{
 	".....gg.....",
@@ -692,6 +708,8 @@ item_icons := [Item]Item_Icon{
 	.Water_Bucket      = {BUCKET_FULL_GRID, {{150, 150, 165, 255}, {100, 100, 115, 255}, {198, 198, 212, 255}, {48, 128, 200, 255}, {150, 205, 245, 255}}},
 	.Lava_Bucket       = {BUCKET_FULL_GRID, {{150, 150, 165, 255}, {100, 100, 115, 255}, {198, 198, 212, 255}, {230, 105, 20, 255}, {255, 200, 60, 255}}},
 	.Magic_Lava_Bucket = {BUCKET_FULL_GRID, {{150, 150, 165, 255}, {100, 100, 115, 255}, {198, 198, 212, 255}, {160, 0, 220, 255}, {230, 140, 255, 255}}},
+	// Gem Replicator — a faceted crystal in prismatic violet over a stone plinth
+	.Gem_Replicator    = {GEM_REPLICATOR_GRID, {{}, {}, {235, 210, 255, 255}, {190, 130, 250, 255}, {120, 70, 180, 255}}},
 }
 
 // ─── Drawing ─────────────────────────────────────────────────────────────────

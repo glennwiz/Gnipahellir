@@ -145,6 +145,10 @@ recipe_table := [?]Recipe{
     // are load-bearing for tests.)
     { .Boiler,           1, .Bench, {{.Iron_Bar, 4},       {.Stone_Block, 6},   {}} },
     { .Steam_Engine,     1, .Forge, {{.Iron_Bar, 10},      {.Silver_Bar, 2},    {}} },
+    // The gem farm: gems appear in cave 1, but the Rune Altar needs Cloud
+    // Stone (sky, post-ritual-A) — the farm is the industrialisation step.
+    // (Appended — recipe indices are load-bearing for tests.)
+    { .Gem_Replicator,   1, .Rune_Altar, {{.Iron_Bar, 8},  {.Gold_Bar, 4},      {.Cloud_Stone, 10}} },
 }
 
 // ─── Recipe unlock tree ───────────────────────────────────────────────────────
@@ -189,6 +193,9 @@ recipe_unlock := #partial [Item]Item{
     .Aether_Charm = .Aether_Crystal,
     .Auto_Miner = .Emerald,
     .Void_Charm = .Emerald,
+    // The card appears the moment you hold your first gem — it TELLS the
+    // player the farm exists before the recipe is affordable.
+    .Gem_Replicator = .Emerald,
     .Command_Wand = .Clay,
     .Clay_Golem   = .Command_Wand,
     // Runic endgame
