@@ -13,6 +13,10 @@ WATER_DRAG   :: f32(0.5)   // horizontal speed multiplier while submerged
 WATER_SINK   :: f32(0.35)  // gravity/terminal multiplier — you sink slowly
 WATER_STROKE :: f32(0.55)  // swim-stroke height, as a fraction of JUMP_VEL
 
+// Leaf fall: eat a GreenBerrie and you drift down like a leaf for a while.
+LEAF_FALL_TIME :: f32(20.0)  // seconds of slow-fall per berry
+LEAF_FALL_SINK :: f32(0.25)  // gravity/terminal multiplier while it lasts
+
 PLAYER_W :: f32(0.8)   // tile units
 PLAYER_H :: f32(1.8)   // tile units
 
@@ -88,11 +92,17 @@ update_player :: proc(gs: ^Game_State) {
     prev_grounded := p.grounded
     prev_y        := p.pos.y
 
+    if gs.leaf_fall_t > 0 do gs.leaf_fall_t -= dt
+
     gravity  := flying ? f32(0) : GRAVITY
     max_fall := MAX_FALL_SPEED
     if submerged {
         gravity  *= WATER_SINK   // you sink, slowly
         max_fall *= WATER_SINK
+    } else if gs.leaf_fall_t > 0 {
+        // Not stacked with water: both together would near-freeze the sink.
+        gravity  *= LEAF_FALL_SINK
+        max_fall *= LEAF_FALL_SINK
     }
     move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
         gravity, max_fall, &p.grounded, is_player = true,

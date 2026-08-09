@@ -159,9 +159,9 @@ FLOWER_SEED_MIN   :: 2
 FLOWER_SEED_MAX   :: 5
 FLOWER_BED_BLOOMS :: 5
 
-// A consumable is used (drunk) from the bag rather than equipped.
+// A consumable is used (drunk or eaten) from the bag rather than equipped.
 item_is_consumable :: proc(it: Item) -> bool {
-    return it == .Potion_Health
+    return it == .Potion_Health || it == .GreenBerrie
 }
 
 // A readable opens the tome overlay from the bag instead of equipping.  It is
@@ -182,26 +182,37 @@ player_read :: proc(gs: ^Game_State, inv_slot: int) {
     audio_play(&gs.audio, .Pickup)
 }
 
-// Drink a consumable from a bag slot.  A Health Potion restores POTION_HEAL,
-// never past the cap; refused (nothing spent) at full health.
+// Use a consumable from a bag slot.  A Health Potion restores POTION_HEAL,
+// never past the cap, refused (nothing spent) at full health; a GreenBerrie
+// grants the leaf-fall buff (player.odin), re-eating just restarts the clock.
 player_consume :: proc(gs: ^Game_State, inv_slot: int) {
     p := &gs.player
     if inv_slot < 0 || inv_slot >= MAX_INVENTORY do return
     s := &p.inventory.slots[inv_slot]
-    if s.item != .Potion_Health || s.count <= 0 do return
+    if s.count <= 0 do return
 
-    if p.hp >= p.hp_max {
-        notify(gs, "Already at full health")
+    #partial switch s.item {
+    case .Potion_Health:
+        if p.hp >= p.hp_max {
+            notify(gs, "Already at full health")
+            return
+        }
+        heal := min(POTION_HEAL, p.hp_max - p.hp)
+        p.hp += heal
+        spawn_damage_number(&gs.floating_text, {p.pos.x + PLAYER_W*0.5, p.pos.y}, heal, HEAL_COLOR)
+        log_action(gs, "Player drinks a Health Potion (+%d hp)", heal)
+    case .GreenBerrie:
+        gs.leaf_fall_t = LEAF_FALL_TIME
+        notify(gs, "You feel light as a falling leaf")
+        log_action(gs, "Player eats a GreenBerrie (leaf fall %.0fs)", LEAF_FALL_TIME)
+    case:
         return
     }
-    heal := min(POTION_HEAL, p.hp_max - p.hp)
-    p.hp += heal
+
     s.count -= 1
     if s.count == 0 do s.item = .None
-    spawn_damage_number(&gs.floating_text, {p.pos.x + PLAYER_W*0.5, p.pos.y}, heal, HEAL_COLOR)
     audio_play(&gs.audio, .Pickup)
     gs.save_dirty = true
-    log_action(gs, "Player drinks a Health Potion (+%d hp)", heal)
 }
 
 // Worn, not spent: while a Jade Ring sits in any charm slot, the bag's

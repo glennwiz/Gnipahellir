@@ -2276,6 +2276,40 @@ drinking_a_health_potion_heals :: proc(t: ^testing.T) {
 }
 
 @(test)
+eating_a_greenberrie_grants_leaf_fall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    inv := &gs.player.inventory
+    inventory_insert(inv, .GreenBerrie, 1)
+    bslot := -1
+    for s, i in inv.slots do if s.item == .GreenBerrie { bslot = i; break }
+
+    // Eating spends the berry and starts the clock.
+    player_consume(gs, bslot)
+    testing.expect_value(t, gs.leaf_fall_t, LEAF_FALL_TIME)
+    testing.expect_value(t, inventory_count(inv, .GreenBerrie), 0)
+
+    // Falling under the buff is slower than plain gravity, and the clock runs
+    // down as it works.
+    gs.delta_time = 1.0 / 60.0
+    gs.player.pos = {76, 40}   // open air in the pond-free band
+    gs.player.vel = {}
+    gs.player.grounded = false
+    update_player(gs)
+    testing.expect(t, gs.player.vel.y <= GRAVITY * LEAF_FALL_SINK * gs.delta_time + 0.001,
+        "buffed fall must accelerate at the leaf-fall rate")
+    testing.expect(t, gs.leaf_fall_t < LEAF_FALL_TIME, "the buff clock must tick down")
+
+    // Expired: plain gravity is back.
+    gs.leaf_fall_t = 0
+    gs.player.vel = {}
+    update_player(gs)
+    testing.expect(t, gs.player.vel.y > GRAVITY * LEAF_FALL_SINK * gs.delta_time + 0.001,
+        "expired buff must fall at full gravity")
+}
+
+@(test)
 jade_ring_recipe_and_warp_home :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
