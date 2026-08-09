@@ -267,6 +267,7 @@ Item :: enum u8 {
     Magic_Lava_Bucket,
     // The gem farm (appended: item ordinals are serialized)
     Gem_Replicator,
+    GreenBerrie, // (appended via gnipa_studio: item ordinals are serialized)
     // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

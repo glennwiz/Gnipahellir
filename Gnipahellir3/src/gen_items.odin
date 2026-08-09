@@ -104,6 +104,7 @@ item_table := [Item]Item_Info{
 	.Lava_Bucket = { "Lava Bucket", {220, 80, 0, 255}, .Air, "An iron bucket of molten rock. Right-click an open cell to pour it out - mind your feet." },
 	.Magic_Lava_Bucket = { "Magic Lava Bucket", {160, 0, 220, 255}, .Air, "An iron bucket of cursed lava. Right-click an open cell to pour it out." },
 	.Gem_Replicator = { "Gem Replicator", {168, 120, 205, 255}, .Gem_Replicator, "Drop a gem beside it: the seed stays forever and copies of it slowly grow. It only wakes in the crushing deep where gems themselves form - carry it down before placing it." },
+	.GreenBerrie = { "GreenBerrie", {4, 176, 1, 255}, .Air, "LEaf fall" },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.
