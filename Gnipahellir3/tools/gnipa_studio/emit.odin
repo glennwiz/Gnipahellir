@@ -189,6 +189,43 @@ emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, shapes: []Shape_
 	return strings.to_string(b)
 }
 
+// ─── gen_player_art.odin ──────────────────────────────────────────────────────
+
+Player_Frames :: [game.Player_Form][2][game.FRAME_HEIGHT][game.FRAME_WIDTH]rune
+
+emit_player :: proc(notes: ^Notes, frames: ^Player_Frames, allocator := context.allocator) -> string {
+	b: strings.Builder
+	strings.builder_init(&b, allocator)
+
+	fmt.sbprintf(&b, "package game\n\n%s\n", GEN_HEADER)
+	fmt.sbprintf(&b, "// 16x22 ascii sprites, two walk frames each, shading baked into the art\n")
+	fmt.sbprintf(&b, "// (light from above, near-black 'x' outline everywhere).  Legend: h/H/L\n")
+	fmt.sbprintf(&b, "// clothing shadow/mid/rim and y/Y hair shadow/mid (player-tinted); k/K skin,\n")
+	fmt.sbprintf(&b, "// m/M/N steel, f/F fur, b/B leather, w/W bone, s/S stone (shadow/mid, N =\n")
+	fmt.sbprintf(&b, "// highlight); v void/black cloth, E eye glow, O/Q orb core/halo, G/g glowing\n")
+	fmt.sbprintf(&b, "// core/ember ring, T gold trim.  Resolution: player_pixel_color (render.odin).\n")
+	fmt.sbprintf(&b, "player_form_frames := [Player_Form][2][FRAME_HEIGHT][FRAME_WIDTH]rune{{\n")
+	for form_frames, form in frames {
+		fmt.sbprintf(&b, "\t.%v = {{\n", form)
+		for frame, fi in form_frames {
+			notes_write(&b, notes, "pform", fmt.tprintf("%v_%d", form, fi), "\t\t")
+			fmt.sbprintf(&b, "\t\t{{\n")
+			for row in frame {
+				fmt.sbprintf(&b, "\t\t\t{{")
+				for ch, x in row {
+					fmt.sbprintf(&b, "%s'%c'", x > 0 ? "," : "", ch)
+				}
+				fmt.sbprintf(&b, "}},\n")
+			}
+			fmt.sbprintf(&b, "\t\t}},\n")
+		}
+		fmt.sbprintf(&b, "\t}},\n")
+	}
+	fmt.sbprintf(&b, "}}\n")
+
+	return strings.to_string(b)
+}
+
 // ─── gen_recipes.odin ─────────────────────────────────────────────────────────
 
 emit_recipes :: proc(notes: ^Notes, allocator := context.allocator) -> string {

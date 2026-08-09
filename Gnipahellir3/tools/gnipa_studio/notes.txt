@@ -110,3 +110,6 @@ icon	Boiler	Boiler — the machine box in riveted iron, its window a water sight
 icon	Steam_Engine	Steam Engine — the machine box in iron with a brass flywheel window.
 icon	Water_Bucket	Filled buckets — the iron bucket body with the fluid's own colors on top.
 icon	Gem_Replicator	Gem Replicator — a faceted crystal in prismatic violet over a stone plinth.
+
+pform	Wizard_0	frame 0 — idle, orb held out
+pform	Wizard_1	frame 1 — mid-stride, hem sways

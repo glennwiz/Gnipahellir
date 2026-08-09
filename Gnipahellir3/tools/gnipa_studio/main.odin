@@ -72,15 +72,17 @@ Gen_Out :: struct {
 	content: string,
 }
 
-emit_all :: proc(notes: ^Notes) -> [3]Gen_Out {
+emit_all :: proc(notes: ^Notes) -> [4]Gen_Out {
 	views: [game.Item]Icon_View
 	shapes: [len(shape_registry)]Shape_View
 	views_from_game(&views)
 	shapes_from_registry(shapes[:])
+	pframes := game.player_form_frames
 	return {
 		{"gen_items.odin", emit_items(notes)},
 		{"gen_item_icons.odin", emit_icons(notes, &views, shapes[:])},
 		{"gen_recipes.odin", emit_recipes(notes)},
+		{"gen_player_art.odin", emit_player(notes, &pframes)},
 	}
 }
 

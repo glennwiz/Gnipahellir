@@ -29,6 +29,7 @@ Tab :: enum i32 {
 	Items,
 	DAG,
 	Pixel,
+	Player,
 }
 
 // ─── Cross-references (who makes what, who uses what) ─────────────────────────
@@ -135,6 +136,7 @@ studio_run :: proc(shot := false) {
 
 	xref_init()
 	work_init()
+	player_work_init()
 
 	s: Studio
 	s.selected = .Sword
@@ -150,6 +152,7 @@ studio_run :: proc(shot := false) {
 		if rl.IsKeyPressed(.ONE) do s.tab = .Items
 		if rl.IsKeyPressed(.TWO) do s.tab = .DAG
 		if rl.IsKeyPressed(.THREE) do s.tab = .Pixel
+		if rl.IsKeyPressed(.FOUR) do s.tab = .Player
 
 		rl.BeginDrawing()
 		rl.ClearBackground({24, 26, 32, 255})
@@ -162,6 +165,8 @@ studio_run :: proc(shot := false) {
 			if focus != .None do s.selected = focus
 		case .Pixel:
 			pixel_frame(&s, sw, sh, mouse)
+		case .Player:
+			player_frame_ui(&s, sw, sh, mouse)
 		}
 
 		draw_top_bar(&s, sw, mouse)
@@ -184,6 +189,9 @@ studio_run :: proc(shot := false) {
 				s.tab = .Pixel
 			} else if frames == 15 {
 				rl.TakeScreenshot("studio_shot_pixel.png")
+				s.tab = .Player
+			} else if frames == 20 {
+				rl.TakeScreenshot("studio_shot_player.png")
 				break
 			}
 		}
@@ -194,7 +202,7 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 	rl.DrawRectangle(0, 0, i32(sw), i32(TOP_BAR), {18, 20, 26, 255})
 	rl.DrawLine(0, i32(TOP_BAR), i32(sw), i32(TOP_BAR), {60, 64, 76, 255})
 
-	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]"}
+	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]"}
 	x := i32(16)
 	for tab in Tab {
 		w := rl.MeasureText(labels[tab], 16) + 28
@@ -210,7 +218,7 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 
 	title :: "GNIPA STUDIO"
 	rl.DrawText(title, i32(sw) - rl.MeasureText(title, 20) - 16, 16, 20, {235, 235, 240, 255})
-	if work.dirty {
+	if work.dirty || pwork.dirty {
 		rl.DrawText("unsaved edits", i32(sw) - rl.MeasureText(title, 20) - 130, 20, 13, {245, 205, 90, 255})
 	}
 }

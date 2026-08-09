@@ -118,14 +118,21 @@ work_save :: proc() {
 	}
 }
 
-// --test-save: headless write-path smoke test — paint one Dirt pixel, save.
+// --test-save: headless write-path smoke test — paint one Dirt pixel and one
+// Wizard pixel, save both files.
 test_save :: proc() -> bool {
 	work_init()
 	work.views[game.Item.Dirt].cells[0][0] = 'B'
 	work.dirty = true
 	work_save()
-	fmt.printfln("test-save: %s", work.status)
-	return !work.dirty
+	fmt.printfln("test-save icons:  %s", work.status)
+
+	player_work_init()
+	pwork.frames[game.Player_Form.Wizard][0][0][0] = 'x'
+	pwork.dirty = true
+	player_save()
+	fmt.printfln("test-save player: %s", pwork.status)
+	return !work.dirty && !pwork.dirty
 }
 
 draw_view_icon :: proc(v: ^Icon_View, x, y, size: i32) {
