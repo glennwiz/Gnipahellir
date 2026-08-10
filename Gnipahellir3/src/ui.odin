@@ -86,6 +86,19 @@ GOLEM_CMD_W :: i32(390)
 GOLEM_CMD_H :: i32(66)
 GOLEM_PLAN_W :: i32(104)
 
+// Golem roster window — one row per bound golem, five command buttons each.
+// Opens on a wand click that never became a zone drag (input.odin).
+ROSTER_W      :: i32(580)
+ROSTER_ROW_H  :: i32(32)
+ROSTER_BTN_W  :: i32(58)
+ROSTER_BTN_H  :: i32(20)
+ROSTER_BTN_GAP :: i32(4)
+ROSTER_ROWS_Y :: i32(46)  // content top, below the title band
+ROSTER_X :: (UI_W - ROSTER_W) / 2 // default position (draggable)
+ROSTER_Y :: 120
+
+Roster_Button :: enum u8 { Gather, Build, Fight, Call, Pickup }
+
 // ─── Floating Windows (draggable) ─────────────────────────────────────────────
 //
 //  Each floating window's top-left lives in UI_State.win_pos (defaults below);
@@ -98,6 +111,7 @@ UI_Window :: enum u8 {
 	Smelter,
 	Barrel,
 	Rune_Scroll,
+	Golem_Roster,
 }
 
 WINDOW_HEADER_H :: 40
@@ -109,11 +123,12 @@ default_window_pos := [UI_Window][2]i32 {
 	.Smelter   = {SMELT_X, SMELT_Y},
 	.Barrel    = {BARREL_X, BARREL_Y},
 	.Rune_Scroll = {RS_X, RS_Y},
+	.Golem_Roster = {ROSTER_X, ROSTER_Y},
 }
 
 // draw_ui stacks windows in enum order; drag hit-testing walks this top-down.
 @(rodata)
-window_top_down := [5]UI_Window{.Rune_Scroll, .Barrel, .Smelter, .Crafting, .Inventory}
+window_top_down := [6]UI_Window{.Golem_Roster, .Rune_Scroll, .Barrel, .Smelter, .Crafting, .Inventory}
 
 // Outer bounds of a floating window at its current position, and whether it
 // is open.  Crafting's height tracks its recipe list.
@@ -130,6 +145,8 @@ window_rect :: proc(gs: ^Game_State, w: UI_Window) -> (x, y, ww, wh: i32, open: 
 		return p.x, p.y, BARREL_W, BARREL_H, gs.ui.show_barrel
 	case .Rune_Scroll:
 		return p.x, p.y, RS_W, RS_H, gs.ui.show_rune_scroll
+	case .Golem_Roster:
+		return p.x, p.y, ROSTER_W, golem_roster_height(gs), gs.ui.show_golem_roster
 	}
 	return
 }
@@ -1293,6 +1310,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	if gs.ui.show_crafting do draw_crafting(gs)
 	if gs.ui.show_smelter do draw_smelter(gs)
 	if gs.ui.show_barrel do draw_barrel(gs)
+	if gs.ui.show_golem_roster do draw_golem_roster(gs)
 	if gs.ui.show_inventory || gs.ui.show_crafting do draw_tile_tooltip(gs)
 	if gs.ui.drag_item != .None {
 		mx := i32(gs.input.mouse_screen.x)
@@ -1363,6 +1381,163 @@ draw_golem_command_strip :: proc(gs: ^Game_State) {
 		mode = cstring("WAITING: drag zone or SHIFT+L paint blocks")
 	}
 	rl.DrawText(mode, GOLEM_CMD_X+322, GOLEM_CMD_Y+37, 9, text_dim)
+}
+
+// ─── Golem Roster Window ──────────────────────────────────────────────────────
+//
+//  One row per bound golem: id, status, mode, health pips, and five command
+//  buttons.  Buttons push events (input.odin); draw and hit-test share the
+//  same row/rect procs so they can never disagree.
+
+@(rodata)
+roster_button_label := [Roster_Button]cstring {
+	.Gather = "GATHER", .Build = "BUILD", .Fight = "FIGHT",
+	.Call = "CALL", .Pickup = "PICK UP",
+}
+
+@(rodata)
+golem_mode_name := [Golem_Mode]cstring {
+	.Gather = "GATHER", .Build = "BUILD", .Fight = "FIGHT",
+}
+
+// Roster slots with a golem in them, in slot order.
+golem_roster_rows :: proc(gs: ^Game_State) -> (slots: [MAX_GOLEMS]int, n: int) {
+	for g, i in gs.golems.data {
+		if g.status == .Empty do continue
+		slots[n] = i
+		n += 1
+	}
+	return
+}
+
+golem_roster_height :: proc(gs: ^Game_State) -> i32 {
+	_, n := golem_roster_rows(gs)
+	return ROSTER_ROWS_Y + i32(max(n, 1))*ROSTER_ROW_H + 24
+}
+
+golem_roster_button_rect :: proc(gs: ^Game_State, row: int, btn: Roster_Button) -> (x, y: i32) {
+	p := gs.ui.win_pos[.Golem_Roster]
+	strip := 5*ROSTER_BTN_W + 4*ROSTER_BTN_GAP
+	x = p.x + ROSTER_W - 12 - strip + i32(btn)*(ROSTER_BTN_W + ROSTER_BTN_GAP)
+	y = p.y + ROSTER_ROWS_Y + i32(row)*ROSTER_ROW_H + (ROSTER_ROW_H - ROSTER_BTN_H)/2
+	return
+}
+
+golem_roster_button_at_cursor :: proc(gs: ^Game_State) -> (slot: int, btn: Roster_Button, ok: bool) {
+	if !gs.ui.show_golem_roster do return
+	rows, n := golem_roster_rows(gs)
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	for r in 0 ..< n {
+		for b in Roster_Button {
+			x, y := golem_roster_button_rect(gs, r, b)
+			if mx >= x && mx < x+ROSTER_BTN_W && my >= y && my < y+ROSTER_BTN_H {
+				return rows[r], b, true
+			}
+		}
+	}
+	return
+}
+
+// The single source of truth for button dimming: carried and off-level golems
+// take no roster orders (RMB deploys a carried one), a broken golem can only
+// be picked up in reach (it cannot walk), and the active mode's own button is
+// inert.
+golem_roster_button_enabled :: proc(gs: ^Game_State, slot: int, btn: Roster_Button) -> bool {
+	g := &gs.golems.data[slot]
+	if g.status != .Deployed && g.status != .Broken do return false
+	if g.level != gs.level_index do return false
+	if g.status == .Broken {
+		return btn == .Pickup && chebyshev(golem_tile(g), player_tile(&gs.player)) <= PLAYER_REACH
+	}
+	switch btn {
+	case .Gather: return g.mode != .Gather
+	case .Build:  return g.mode != .Build
+	case .Fight:  return g.mode != .Fight
+	case .Call, .Pickup: return true
+	}
+	return false
+}
+
+draw_golem_roster :: proc(gs: ^Game_State) {
+	px := gs.ui.win_pos[.Golem_Roster].x
+	py := gs.ui.win_pos[.Golem_Roster].y
+	wh := golem_roster_height(gs)
+
+	rl.DrawRectangle(px, py, ROSTER_W, wh, NORSE_PANEL)
+	rl.DrawRectangleLinesEx({f32(px), f32(py), f32(ROSTER_W), f32(wh)}, 2, NORSE_GOLD)
+	rl.DrawText("CLAY CREW ROSTER", px + 12, py + 12, 20, NORSE_GOLD_HOT)
+	rl.DrawText("[ESC] close", px + ROSTER_W - 96, py + 16, 12, NORSE_GOLD)
+	rl.DrawRectangle(px + 12, py + 38, ROSTER_W - 24, 2, NORSE_BORDER)
+
+	rows, n := golem_roster_rows(gs)
+	if n == 0 {
+		rl.DrawText("no golems bound - craft a Clay Golem and right-click it in the bag",
+			px + 12, py + ROSTER_ROWS_Y + 10, 10, text_dim)
+	}
+	for r in 0 ..< n {
+		id := rows[r]
+		g := &gs.golems.data[id]
+		ry := py + ROSTER_ROWS_Y + i32(r)*ROSTER_ROW_H
+		here := g.level == gs.level_index
+
+		id_buf: [8]u8
+		fmt.bprintf(id_buf[:7], "G%d", id + 1)
+		rl.DrawText(cstring(raw_data(id_buf[:])), px + 12, ry + 4, 11, rl.WHITE)
+
+		status := cstring("here")
+		status_col := rl.WHITE
+		status_buf: [24]u8
+		switch {
+		case g.status == .Carried:
+			status = cstring("in wand")
+			status_col = text_dim
+		case g.status == .Broken:
+			status = cstring("BROKEN")
+			status_col = rl.Color{220, 80, 70, 255}
+		case !here:
+			fmt.bprintf(status_buf[:23], "elsewhere (level %d)", g.level + 1)
+			status = cstring(raw_data(status_buf[:]))
+			status_col = text_dim
+		}
+		rl.DrawText(status, px + 44, ry + 4, 10, status_col)
+
+		// Mode on the second line, with the live call order beside it.
+		mode_buf: [24]u8
+		tag := ""
+		#partial switch gs.golem_calls[id] {
+		case .Come:        tag = " - coming"
+		case .Come_Pickup: tag = " - coming"
+		case .Waiting:     tag = " - waiting"
+		}
+		fmt.bprintf(mode_buf[:23], "%s%s", golem_mode_name[g.mode], tag)
+		rl.DrawText(cstring(raw_data(mode_buf[:])), px + 44, ry + 18, 9, text_dim)
+
+		// Health pips: filled green per hp of GOLEM_HP.
+		for pip in 0 ..< int(GOLEM_HP) {
+			pxx := px + 170 + i32(pip)*14
+			rl.DrawRectangle(pxx, ry + 11, 10, 10, slot_bg)
+			if pip < int(g.hp) {
+				rl.DrawRectangle(pxx + 1, ry + 12, 8, 8, rl.Color{75, 235, 145, 255})
+			}
+			rl.DrawRectangleLines(pxx, ry + 11, 10, 10, NORSE_BORDER)
+		}
+
+		for b in Roster_Button {
+			x, y := golem_roster_button_rect(gs, r, b)
+			enabled := golem_roster_button_enabled(gs, id, b)
+			active := g.status != .Broken && int(b) == int(g.mode) && b <= .Fight
+			col := NORSE_GOLD_HOT if active else (NORSE_BORDER if enabled else rl.Color{65, 60, 58, 180})
+			rl.DrawRectangle(x, y, ROSTER_BTN_W, ROSTER_BTN_H, NORSE_ROW)
+			rl.DrawRectangleLinesEx({f32(x), f32(y), f32(ROSTER_BTN_W), f32(ROSTER_BTN_H)}, active ? 2 : 1, col)
+			label := roster_button_label[b]
+			lw := rl.MeasureText(label, 9)
+			rl.DrawText(label, x + (ROSTER_BTN_W - lw)/2, y + 6, 9, enabled || active ? rl.WHITE : text_dim)
+		}
+	}
+
+	footer := cstring("click a state, CALL to summon, PICK UP to return one to the wand")
+	rl.DrawText(footer, px + 12, py + wh - 18, 10, text_dim)
 }
 
 // ─── Ritual Instruction Tome ──────────────────────────────────────────────────

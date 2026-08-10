@@ -370,6 +370,7 @@ golem_toggle :: proc(gs: ^Game_State, id: int) {
 	golem_release_reservation(gs, id)
 	g.mode = .Build if g.mode == .Gather else .Gather
 	golem_reset_job(g)
+	gs.golem_calls[id] = .None
 	gs.save_dirty = true
 	if g.mode==.Build && !gs.golems.projects[gs.level_index].active {
 		notify(gs,"Golem %d: BUILD - choose a monument plan, then mark its anchor",id+1)
@@ -404,6 +405,7 @@ golem_recall :: proc(gs: ^Game_State, id: int) {
 	g.carry = .None
 	g.recovering = false
 	golem_reset_job(g)
+	gs.golem_calls[id] = .None
 	gs.save_dirty = true
 	if broken do notify(gs, "The cracked golem returns to the wand - repair it at a Clay Hearth")
 }
@@ -419,6 +421,7 @@ golem_crew_toggle :: proc(gs: ^Game_State) {
 		golem_release_reservation(gs, i)
 		g.mode = .Build if to_build else .Gather
 		golem_reset_job(&g)
+		gs.golem_calls[i] = .None
 	}
 	gs.save_dirty = true
 	if to_build && !gs.golems.projects[gs.level_index].active {
@@ -426,6 +429,56 @@ golem_crew_toggle :: proc(gs: ^Game_State) {
 	} else {
 		notify(gs, "Crew: %s", "BUILD" if to_build else "GATHER")
 	}
+}
+
+// Roster-window commands. Each one is the target of an event pushed by a
+// window button (input.odin never calls these directly).
+
+golem_set_mode :: proc(gs: ^Game_State, id: int, mode: Golem_Mode) {
+	if id < 0 || id >= MAX_GOLEMS do return
+	g := &gs.golems.data[id]
+	if g.status != .Deployed || g.level != gs.level_index do return
+	golem_release_reservation(gs, id)
+	g.mode = mode
+	golem_reset_job(g)
+	gs.golem_calls[id] = .None
+	gs.save_dirty = true
+	switch mode {
+	case .Gather: notify(gs, "Golem %d: GATHER", id+1)
+	case .Build:
+		if !gs.golems.projects[gs.level_index].active {
+			notify(gs, "Golem %d: BUILD - choose a monument plan, then mark its anchor", id+1)
+		} else {
+			notify(gs, "Golem %d: BUILD", id+1)
+		}
+	case .Fight: notify(gs, "Golem %d: FIGHT - stands guard", id+1)
+	}
+}
+
+golem_call :: proc(gs: ^Game_State, id: int) {
+	if id < 0 || id >= MAX_GOLEMS do return
+	g := &gs.golems.data[id]
+	if g.status != .Deployed || g.level != gs.level_index do return
+	golem_release_reservation(gs, id)
+	golem_reset_job(g)
+	gs.golem_calls[id] = .Come
+	notify(gs, "Golem %d comes to you", id+1)
+}
+
+golem_pickup :: proc(gs: ^Game_State, id: int) {
+	if id < 0 || id >= MAX_GOLEMS do return
+	g := &gs.golems.data[id]
+	if (g.status != .Deployed && g.status != .Broken) || g.level != gs.level_index do return
+	if chebyshev(golem_tile(g), player_tile(&gs.player)) <= PLAYER_REACH {
+		golem_recall(gs, id)
+		return
+	}
+	// A broken golem cannot walk; the roster dims its PICK UP out of reach.
+	if g.status != .Deployed do return
+	golem_release_reservation(gs, id)
+	golem_reset_job(g)
+	gs.golem_calls[id] = .Come_Pickup
+	notify(gs, "Golem %d returns to your hand", id+1)
 }
 
 golem_set_zone :: proc(gs: ^Game_State, a, b: [2]i32) {
@@ -1538,10 +1591,40 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 		return
 	}
 
+	// A roster call overrides work: walk to the player (normal .Seek path
+	// following below), then either recall or stand down beside them until
+	// given a new state. One-shot — Waiting never re-targets a moving player.
+	if call := gs.golem_calls[id]; call != .None {
+		pt := player_tile(&gs.player)
+		if call != .Waiting && chebyshev(golem_tile(g), pt) <= PLAYER_REACH {
+			if call == .Come_Pickup {
+				gs.golem_calls[id] = .None
+				golem_recall(gs, id)
+				return
+			}
+			gs.golem_calls[id] = .Waiting
+			golem_reset_job(g)
+		} else if call != .Waiting && !g.has_target {
+			g.job = .Seek
+			if !golem_set_target(gs, g, pt) {
+				gs.golem_calls[id] = .None
+				golem_reset_job(g)
+				notify(gs, "Golem %d can't find a way to you", id+1)
+			}
+		}
+		if gs.golem_calls[id] == .Waiting {
+			g.vel.x = 0
+			move_body(&gs.world, &g.pos, &g.vel, {GOLEM_W, GOLEM_H}, gs.delta_time,
+				GRAVITY, MAX_FALL_SPEED, &g.grounded, step_up = true)
+			return
+		}
+	}
+
 	if !g.has_target {
-		if g.mode==.Gather {
+		switch g.mode {
+		case .Gather:
 			golem_assign_gather(gs,id)
-		} else {
+		case .Build:
 			p:=&gs.golems.projects[g.level]
 			if !p.active || p.complete {
 				// Build means Build: finish unloading old cargo, then wait for a
@@ -1554,6 +1637,9 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 			} else {
 				golem_assign_build(gs,id)
 			}
+		case .Fight:
+			// Stands guard; combat is a later system.
+			g.vel.x=0
 		}
 	}
 	if g.recovering {

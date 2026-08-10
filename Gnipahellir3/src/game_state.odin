@@ -461,6 +461,7 @@ UI_State :: struct {
     hover_seen_item:  [Item]bool,
     tooltip_text:    [64]u8,
     golem_plan:       Golem_Plan, // selected command-wand construction ghost
+    show_golem_roster: bool,      // wand click (no drag): the per-golem command window
 	golem_zone_press: bool,       // empty-world press waiting to become a deliberate drag
     golem_zone_drag:  bool,
     golem_zone_start: [2]i32,
@@ -603,6 +604,7 @@ Game_State :: struct {
     golem_quick_clay: Golem_Quick_Clay_State,
     golem_need:   [8]Item, // items the active Build project can't source (golem_project_reserve); transient, not saved — drives the crew's NEEDS feedback
     golem_need_n: int,
+    golem_calls:  [MAX_GOLEMS]Golem_Call, // roster CALL/PICK UP orders; transient, not saved — a reload drops the call and the golem resumes its mode
 
     projectiles: Projectile_Store,
     particles:   Particle_Store,

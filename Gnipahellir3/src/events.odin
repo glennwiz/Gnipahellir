@@ -36,7 +36,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Rune_Scroll_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark:
+        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Rune_Scroll_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark, .Golem_Set_Mode, .Golem_Pickup:
             gs.save_dirty = true
         }
 
@@ -387,6 +387,16 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Golem_Unmark:
             golem_set_block_mark(gs,e.tile,false)
+
+        case .Golem_Set_Mode:
+            v := e.payload.int_val
+            golem_set_mode(gs, int(v & 0xff), Golem_Mode(v >> 8))
+
+        case .Golem_Call_To_Me:
+            golem_call(gs, int(e.payload.int_val))
+
+        case .Golem_Pickup:
+            golem_pickup(gs, int(e.payload.int_val))
 
         case .Pixel_Art_Save:
             if save_pixel_art(gs) {

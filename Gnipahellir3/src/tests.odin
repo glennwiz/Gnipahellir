@@ -5503,6 +5503,139 @@ command_wand_golem_hitbox_matches_the_visible_worker :: proc(t:^testing.T) {
 }
 
 @(test)
+golem_roster_hit_test_and_enable_rules :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.player.equipment[.Weapon]=.Command_Wand
+	gs.player.pos={90,f32(SURFACE_Y)-PLAYER_H}
+	gs.ui.show_golem_roster=true
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={92,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,mode=.Gather,project_cell=-1}
+	gs.golems.data[1]={status=.Carried,hp=GOLEM_HP,mode=.Gather,project_cell=-1}
+	gs.golems.data[2]={status=.Broken,level=gs.level_index,pos={140,f32(SURFACE_Y)-GOLEM_H},project_cell=-1}
+	gs.golems.data[3]={status=.Deployed,level=gs.level_index+1,pos={92,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,mode=.Build,project_cell=-1}
+
+	rows,n:=golem_roster_rows(gs)
+	testing.expect_value(t,n,4)
+	for r in 0..<n do for b in Roster_Button {
+		x,y:=golem_roster_button_rect(gs,r,b)
+		gs.input.mouse_screen={f32(x+ROSTER_BTN_W/2),f32(y+ROSTER_BTN_H/2)}
+		slot,btn,ok:=golem_roster_button_at_cursor(gs)
+		testing.expect(t,ok,"every row button must hit-test at its own center")
+		testing.expect_value(t,slot,rows[r])
+		testing.expect_value(t,btn,b)
+	}
+	p:=gs.ui.win_pos[.Golem_Roster]
+	gs.input.mouse_screen={f32(p.x+20),f32(p.y+10)}
+	_,_,on_header:=golem_roster_button_at_cursor(gs)
+	testing.expect(t,!on_header,"the title band is not a button")
+
+	// Enable rules: the active mode's own button is inert, everything else works.
+	testing.expect(t,!golem_roster_button_enabled(gs,0,.Gather),"a Gather golem's GATHER button is inert")
+	testing.expect(t,golem_roster_button_enabled(gs,0,.Build),"mode change allowed")
+	testing.expect(t,golem_roster_button_enabled(gs,0,.Fight),"fight state allowed")
+	testing.expect(t,golem_roster_button_enabled(gs,0,.Call),"call allowed on a deployed local golem")
+	testing.expect(t,golem_roster_button_enabled(gs,0,.Pickup),"pickup allowed on a deployed local golem")
+	for b in Roster_Button do testing.expect(t,!golem_roster_button_enabled(gs,1,b),"a carried golem takes no roster orders")
+	testing.expect(t,!golem_roster_button_enabled(gs,2,.Pickup),"a far broken golem cannot be picked up - it cannot walk")
+	gs.golems.data[2].pos={92,f32(SURFACE_Y)-GOLEM_H}
+	testing.expect(t,golem_roster_button_enabled(gs,2,.Pickup),"a broken golem in reach can be picked up")
+	testing.expect(t,!golem_roster_button_enabled(gs,2,.Call),"a broken golem cannot be called")
+	for b in Roster_Button do testing.expect(t,!golem_roster_button_enabled(gs,3,b),"an off-level golem takes no roster orders")
+
+	gs.ui.show_golem_roster=false
+	_,_,closed:=golem_roster_button_at_cursor(gs)
+	testing.expect(t,!closed,"a closed roster hit-tests nothing")
+}
+
+@(test)
+golem_call_walks_to_player_then_waits :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in SURFACE_Y-4..<SURFACE_Y do for x in 108..=126 do set_tile(&gs.world,x,y,.Air)
+	for x in 108..=126 do set_tile(&gs.world,x,SURFACE_Y,.Grass)
+	gs.player.pos={110,f32(SURFACE_Y)-PLAYER_H}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={124,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,facing=1,grounded=true,project_cell=-1}
+
+	golem_call(gs,0)
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.Come)
+	for _ in 0..<5000 {
+		update_golems(gs)
+		if gs.golem_calls[0]==.Waiting do break
+	}
+	g:=&gs.golems.data[0]
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.Waiting)
+	testing.expect(t,chebyshev(golem_tile(g),player_tile(&gs.player))<=PLAYER_REACH,"the called golem arrives beside the player")
+	testing.expect_value(t,g.job,Golem_Job.Idle)
+	testing.expect(t,!g.has_target,"a waiting golem holds no work target")
+
+	// One-shot: the golem waits where it stopped when the player walks away.
+	gs.player.pos={126,f32(SURFACE_Y)-PLAYER_H}
+	stood:=golem_tile(g)
+	for _ in 0..<500 do update_golems(gs)
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.Waiting)
+	testing.expect_value(t,golem_tile(g),stood)
+	testing.expect_value(t,g.mode,Golem_Mode.Gather)
+}
+
+@(test)
+golem_pickup_far_walks_then_recalls :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in SURFACE_Y-4..<SURFACE_Y do for x in 108..=126 do set_tile(&gs.world,x,y,.Air)
+	for x in 108..=126 do set_tile(&gs.world,x,SURFACE_Y,.Grass)
+	gs.player.pos={110,f32(SURFACE_Y)-PLAYER_H}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={124,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,facing=1,grounded=true,project_cell=-1}
+	gs.golems.data[0].pack[0]=.Clay
+
+	golem_pickup(gs,0)
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.Come_Pickup)
+	for _ in 0..<5000 {
+		update_golems(gs)
+		if gs.golems.data[0].status==.Carried do break
+	}
+	testing.expect_value(t,gs.golems.data[0].status,Golem_Status.Carried)
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.None)
+	testing.expect_value(t,inventory_count(&gs.player.inventory,.Clay),1)
+}
+
+@(test)
+golem_pickup_in_reach_recalls_immediately :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.player.pos={90,f32(SURFACE_Y)-PLAYER_H}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={92,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,project_cell=-1}
+	golem_pickup(gs,0)
+	testing.expect_value(t,gs.golems.data[0].status,Golem_Status.Carried)
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.None)
+}
+
+@(test)
+golem_fight_mode_stands_guard :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in SURFACE_Y-4..<SURFACE_Y do for x in 108..=126 do set_tile(&gs.world,x,y,.Air)
+	for x in 108..=126 do set_tile(&gs.world,x,SURFACE_Y,.Grass)
+	target:=[2]i32{124,i32(SURFACE_Y-1)}
+	set_tile(&gs.world,int(target.x),int(target.y),.Clay)
+	gs.golems.work[gs.level_index]={active=true,min={118,i32(SURFACE_Y-3)},max={125,i32(SURFACE_Y-1)}}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={118,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,facing=1,grounded=true,project_cell=-1}
+	gs.golem_calls[0]=.Come
+
+	golem_set_mode(gs,0,.Fight)
+	g:=&gs.golems.data[0]
+	testing.expect_value(t,g.mode,Golem_Mode.Fight)
+	testing.expect_value(t,gs.golem_calls[0],Golem_Call.None)
+	stood:=golem_tile(g)
+	for _ in 0..<500 do update_golems(gs)
+	testing.expect_value(t,g.job,Golem_Job.Idle)
+	testing.expect(t,!g.has_target,"a guard never takes zone work")
+	testing.expect_value(t,golem_tile(g),stood)
+	testing.expect_value(t,get_tile(&gs.world,int(target.x),int(target.y)),Tile_Type.Clay)
+}
+
+@(test)
 hearth_upgrades_one_to_five_to_fifteen_slots :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	gs.player.equipment[.Weapon]=.Command_Wand

@@ -153,3 +153,58 @@ it isn't lost:
    Emerald/Jade/Diamond/Hel, golem slots only Emerald/Hel: Jade and Diamond
    still do nothing for golems. (A gem socket on the wand/hearth, or a
    conversion floor, both address it.)
+
+---
+
+## 2026-08-10 — input recording for true replay (dev tool, feasibility checked)
+
+Grew out of explaining the save-replay debugging pattern: the save is a
+single-frame snapshot (zero seconds of history), so today's playback is
+"logs hold the past, the save holds the present, the deterministic sim
+manufactures the future." Input recording would add the missing piece:
+**re-run Glenn's exact playtest session, keystroke for keystroke** — the whole
+evening becomes an attachable repro, watchable at 1× or replayed headless at
+max speed. A diagnostic tool, not game content (though it's the same tech the
+time-rewind brainstorm's #5 echo/decoy would need).
+
+**Feasibility was checked 2026-08-10 — the codebase passes the three usual
+killers clean:**
+
+1. **The sim has zero RNG.** No `core:math/rand`, no `GetRandomValue` anywhere
+   in `src/` — all "randomness" is position/seed hashing. Bit-deterministic
+   given state + inputs + dt, for free.
+2. **Hardware input has one chokepoint.** All raylib input reads live in
+   `input.odin` (64 calls) + exactly 1 in `main.odin`. Nothing else polls
+   hardware.
+3. **The only other nondeterminism is dt** — `gs.delta_time = rl.GetFrameTime()`
+   (`main.odin:69`), so record dt per frame. `rl.GetTime` appears only in draw
+   code (read-only), wall clock never touches the sim.
+
+**Design sketch:**
+
+- **Recording file** = a `Save_Data` snapshot at record-start (keyframe zero)
+  + one record per frame: `{dt, key/button bitfield, mouse pos, wheel}` —
+  everything `input.odin` consumes. ~25 bytes/frame ≈ 5–6 MB per hour of play
+  before compression.
+- **The refactor (bulk of the work):** funnel the ~65 raw
+  `rl.IsKeyDown`/`GetMousePosition`/etc. calls through a thin shim
+  (`inp_down(.Jump)`, `inp_mouse()`) that reads live hardware (and records) or
+  the current replay frame. Mechanical change to input.odin; sim untouched.
+- **Playback:** `load_game_from` the embedded snapshot, feed recorded frames
+  through the shim — headless at max speed for diagnosis, windowed at 1× to
+  watch.
+- **Desync tripwire (essential, cheap):** hash `Save_Data` every N seconds
+  into the recording; replay compares and pinpoints the exact frame
+  determinism broke. State is one POD blob, so the hash is one call. A soak
+  test (record a scripted session, replay, assert hashes match) makes
+  determinism CI-enforceable.
+
+**Tradeoffs, stated honestly:** recordings are only valid against the binary
+that recorded them (any behavior change desyncs — stricter than save
+versioning), so replays are a diagnostic artifact of the current build, not a
+durable format. And it's a standing discipline cost: any future hardware/clock
+read sneaking into the sim silently breaks recording (the checkpoint hashes
+turn that from mystery into a pinpointed frame). Estimated 1–2 sessions.
+**Not an unblocker** — save-replay + action.log has cracked every bug so far;
+this is leverage, not need. Build if/when a playtest bug resists the current
+workflow.

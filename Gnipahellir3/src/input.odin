@@ -200,6 +200,7 @@ update_input :: proc(gs: ^Game_State) {
 	if !command_active {
 		gs.ui.golem_zone_press=false
 		gs.ui.golem_zone_drag=false
+		gs.ui.show_golem_roster=false  // the roster follows the wand
 	}
 	if command_active && shift_down {
 		gs.ui.golem_zone_press=false
@@ -320,11 +321,6 @@ update_input :: proc(gs: ^Game_State) {
             eq_push(&gs.events, Event{type = .Barrel_Interact, tile = inp.mouse_tile})
         } else if !shift_down && is_structure_tile[hover_t] {
             eq_push(&gs.events, Event{type = .Structure_Interact, tile = inp.mouse_tile})
-		} else if gid:=golem_at_world_point(gs,inp.mouse_world); command_active && gid>=0 {
-			eq_push(&gs.events,Event{
-				type=.Golem_Recall if shift_down else .Golem_Toggle,
-				payload={int_val=i32(gid)},
-			})
         } else if command_active && !shift_down {
             if gs.ui.golem_plan != .None {
                 eq_push(&gs.events, Event{type = .Golem_Project, tile = inp.mouse_tile,
@@ -347,20 +343,23 @@ update_input :: proc(gs: ^Game_State) {
 			packed:=u32(a.x)|(u32(a.y)<<16)
 			eq_push(&gs.events,Event{type=.Golem_Zone,tile=inp.mouse_tile,
 				payload={int_val=i32(packed)}})
+		} else if command_active && !gs.ui.golem_zone_drag {
+			// A wand click that never became a drag: the golem roster window.
+			// Opening on RELEASE means the press was already consumed, so the
+			// fresh window cannot swallow the click that opened it.
+			gs.ui.show_golem_roster = !gs.ui.show_golem_roster
 		}
 		gs.ui.golem_zone_press=false
 		gs.ui.golem_zone_drag=false
 	}
 
 	// Precision excavation brush. Shift keeps normal rectangle painting out of
-	// the way; left tags blocks and right erases tags. A direct Shift-click on a
-	// golem remains Recall and is deliberately not also painted beneath it.
+	// the way; left tags blocks and right erases tags.
 	paint_button:=i8(0)
 	if rl.IsMouseButtonDown(.LEFT) do paint_button=1
 	if rl.IsMouseButtonDown(.RIGHT) do paint_button=2
 	if command_active && shift_down && world_mouse && paint_button!=0 {
-		left_on_golem:=paint_button==1 && golem_at_world_point(gs,inp.mouse_world)>=0
-		if !left_on_golem && (inp.golem_paint_button!=paint_button || inp.golem_paint_last!=inp.mouse_tile) {
+		if inp.golem_paint_button!=paint_button || inp.golem_paint_last!=inp.mouse_tile {
 			start:=inp.mouse_tile
 			if inp.golem_paint_button==paint_button do start=inp.golem_paint_last
 			golem_queue_paint_line(gs,start,inp.mouse_tile,paint_button==1)
@@ -380,12 +379,13 @@ update_input :: proc(gs: ^Game_State) {
     // crafting has no key of its own — it's the panel beside the bag, and the
     // recipe list grows to whatever station is in range.
     if rl.IsKeyPressed(bind[.Inventory]) {
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_golem_roster {
             gs.ui.show_inventory = false
             gs.ui.show_crafting  = false
             gs.ui.show_rune_scroll = false
             gs.ui.show_smelter   = false
             gs.ui.show_barrel    = false
+            gs.ui.show_golem_roster = false
             gs.ui.drag_item      = .None
             gs.ui.drag_tray      = false
             gs.ui.drag_input     = false
@@ -413,13 +413,14 @@ update_input :: proc(gs: ^Game_State) {
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
-        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_pixel_editor || gs.debug.item_palette {
+        if gs.ui.show_inventory || gs.ui.show_crafting || gs.ui.show_rune_scroll || gs.ui.show_smelter || gs.ui.show_barrel || gs.ui.show_golem_roster || gs.ui.show_pixel_editor || gs.debug.item_palette {
             // First ESC sweeps every window closed; the next one opens the menu.
             gs.ui.show_inventory    = false
             gs.ui.show_crafting     = false
             gs.ui.show_rune_scroll    = false
             gs.ui.show_smelter      = false
             gs.ui.show_barrel       = false
+            gs.ui.show_golem_roster = false
             gs.ui.show_pixel_editor = false
             gs.debug.item_palette   = false
             gs.ui.drag_item      = .None
@@ -434,6 +435,20 @@ update_input :: proc(gs: ^Game_State) {
 
     // Clicks on open UI panels (skipped while a window is being dragged)
     if rl.IsMouseButtonPressed(.LEFT) && gs.ui.win_drag < 0 {
+        if gs.ui.show_golem_roster && gs.ui.drag_item == .None {
+            if slot, btn, ok := golem_roster_button_at_cursor(gs); ok && golem_roster_button_enabled(gs, slot, btn) {
+                switch btn {
+                case .Gather, .Build, .Fight:
+                    mode := Golem_Mode(int(btn))  // the three mode buttons mirror Golem_Mode's order
+                    eq_push(&gs.events, Event{type = .Golem_Set_Mode,
+                        payload = {int_val = i32(slot) | i32(mode) << 8}})
+                case .Call:
+                    eq_push(&gs.events, Event{type = .Golem_Call_To_Me, payload = {int_val = i32(slot)}})
+                case .Pickup:
+                    eq_push(&gs.events, Event{type = .Golem_Pickup, payload = {int_val = i32(slot)}})
+                }
+            }
+        }
         if gs.ui.show_inventory {
             if slot := slot_at_cursor(gs); slot >= 0 {
                 if gs.player.inventory.selected == slot {

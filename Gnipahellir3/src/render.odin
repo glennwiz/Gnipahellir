@@ -241,6 +241,21 @@ draw_golem_orders :: proc(gs: ^Game_State) {
 	if gs.ui.golem_plan != .None do draw_plan(gs,gs.ui.golem_plan,gs.input.mouse_tile,false)
 }
 
+// Per-mode command ring around each worker while the wand is held. Exhaustive
+// so a future mode cannot silently miss its color.
+@(rodata)
+golem_mode_ring := [Golem_Mode]rl.Color {
+	.Gather = {75, 235, 145, 160},
+	.Build  = {235, 180, 75, 180},
+	.Fight  = {235, 85, 75, 180},
+}
+@(rodata)
+golem_mode_ring_hot := [Golem_Mode]rl.Color {
+	.Gather = {135, 255, 185, 255},
+	.Build  = {255, 215, 95, 255},
+	.Fight  = {255, 120, 100, 255},
+}
+
 draw_golems :: proc(gs: ^Game_State) {
 	hovered:=-1
 	if equipped_command_wand(gs)!=.None do hovered=golem_at_world_point(gs,gs.input.mouse_world)
@@ -281,11 +296,9 @@ draw_golems :: proc(gs: ^Game_State) {
 			}
 		}
 		if equipped_command_wand(gs) != .None {
-			mc := rl.Color{75,235,145,160} if g.mode==.Gather else rl.Color{235,180,75,180}
-			rl.DrawRectangleLines(x,y-1,8,10,mc)
+			rl.DrawRectangleLines(x,y-1,8,10,golem_mode_ring[g.mode])
 			if hovered==i {
-				hot:=rl.Color{135,255,185,255} if g.mode==.Gather else rl.Color{255,215,95,255}
-				rl.DrawRectangleLinesEx({f32(x-2),f32(y-3),12,14},1.5,hot)
+				rl.DrawRectangleLinesEx({f32(x-2),f32(y-3),12,14},1.5,golem_mode_ring_hot[g.mode])
 			}
 		}
 	}

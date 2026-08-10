@@ -37,10 +37,15 @@ INVALID_ENTITY :: max(Entity_ID)
 // Friendly clay workers use their own fixed store rather than Enemy_IDs.
 // All four saved as u8 (Golem.mode/status/job/plan, memcpy'd into Save_Data
 // via Golem_System) — append-only, never reorder or remove a value.
-Golem_Mode :: enum u8 { Gather, Build }
+Golem_Mode :: enum u8 { Gather, Build, Fight }
 Golem_Status :: enum u8 { Empty, Carried, Deployed, Broken }
 Golem_Job :: enum u8 { Idle, Seek, Mine, Deliver, Fetch_Build, Place }
 Golem_Plan :: enum u8 { None, Clay_Hearth, Golem_Depot, World_Anchor }
+
+// Roster-window call orders: walk to the player, optionally recall on arrival,
+// then stand down until given a new state. Transient — never saved; a reload
+// drops the call and the golem resumes its mode.
+Golem_Call :: enum u8 { None, Come, Come_Pickup, Waiting }
 
 // Which store the ALT-click camera follow is indexing into (camera.odin).
 // .None = the ordinary player-centered camera.  Transient — never saved.
@@ -456,6 +461,10 @@ Event_Type :: enum u8 {
     Golem_Unmark,       // Shift+right wand paint: erase excavation tile
     Pixel_Art_Save,     // debug Pixel Art Editor "SAVE" button: writes gs.pixel_art to disk
     Warp_Home_Request,  // inventory "Return to Surface" button (Jade Ring worn)
+    // Golem roster window buttons (appended so existing event values stay stable)
+    Golem_Set_Mode,     // int_val = golem slot | Golem_Mode<<8
+    Golem_Call_To_Me,   // int_val = golem slot; walk to the player, then wait
+    Golem_Pickup,       // int_val = golem slot; recall in reach, else come-then-recall
 }
 
 Event_Payload :: struct #raw_union {
