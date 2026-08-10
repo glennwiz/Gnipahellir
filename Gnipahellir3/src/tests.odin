@@ -2377,8 +2377,7 @@ green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
         testing.expect_value(t, get_tile(w, x, y + 1), Tile_Type.Mossy_Stone)
         mx, my = x, y
     }
-    testing.expect(t, found > 0, "the cave must grow at least one mushroom")
-    log.infof("mushroom gen: %d green cave mushrooms on cave-1 floors", found)
+    testing.expect(t, found >= 1 && found <= 3, "the surface cave grows only 1-3 mushrooms")
 
     // Mining one opens the cell and leaves the mushroom item on the ground.
     handle_tile_mined(gs, Event{tile = {i32(mx), i32(my)}})
@@ -2387,14 +2386,18 @@ green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
     testing.expect_value(t, w.items[idx], Item.Green_Cave_Mushroom)
     testing.expect_value(t, w.item_counts[idx], u8(1))
 
-    // Tree Grower mechanics: the mossy block regrows its mushroom over time.
-    gs.delta_time = 0.5   // coarse ticks — the grow time is a minute
+    // Tree Grower mechanics: the mossy block regrows its mushroom over two
+    // visible minutes, and reaching full size casts the spore-glow burst
+    // (Mushroom_Grew -> spawn_mushroom_glow, so events must drain).
+    gs.delta_time = 0.5   // coarse ticks — the grow time is minutes
+    pc_before := gs.particles.count
     frames := int(MUSHROOM_GROW_TIME / gs.delta_time) + 4
     for _ in 0 ..< frames {
         update_sim(gs)
-        eq_clear(&gs.events)
+        process_events(gs)
     }
     testing.expect_value(t, get_tile(w, mx, my), Tile_Type.Green_Cave_Mushroom)
+    testing.expect(t, gs.particles.count > pc_before, "full size must cast its glow burst")
 
     // A standing mushroom pauses the block until it is picked again.
     update_sim(gs)
@@ -2407,6 +2410,14 @@ green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
         for ing in r.ingredients do if ing.item == .Green_Cave_Mushroom do needs_mushroom = true
     }
     testing.expect(t, needs_mushroom, "the GreenBerrie recipe must ask for a mushroom")
+
+    // And the deep caves are where they thrive — many, not a lucky find.
+    w2 := &gs.levels.worlds[LEVEL_CAVE2]
+    gen_cave_level(w2, 1)
+    deep := 0
+    for i in 0 ..< GRID_W * GRID_H do if w2.terrain[i] == .Green_Cave_Mushroom do deep += 1
+    testing.expect(t, deep >= 5 && deep > found, "the deep caves must grow many mushrooms")
+    log.infof("mushroom gen: %d in the surface cave (want 1-3), %d in cave 2", found, deep)
 }
 
 @(test)

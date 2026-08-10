@@ -16,7 +16,7 @@ FUEL_PER_BAR     :: 2          // wood logs burned to cast one bar
 FUEL_ITEM        :: Item.Wood_Log  // what stokes the fire
 TREE_GROW_TIME :: f32(20.0)  // seconds per tree
 FLOWER_BED_GROW_TIME :: f32(120.0)  // seconds for a bed to bloom (~2 min)
-MUSHROOM_GROW_TIME :: f32(60.0)  // seconds for mossy stone to regrow its mushroom
+MUSHROOM_GROW_TIME :: f32(120.0)  // seconds for mossy stone to regrow its mushroom (~2 min)
 TREE_MAX_H     :: 5          // tallest grown trunk; clearance is checked to here
 
 // The Gem Replicator only works as deep as gems actually form: caves 2/3 roll
@@ -507,8 +507,11 @@ tick_grower :: proc(gs: ^Game_State, x, y: int) {
 // A mossy stone block slowly regrows the mushroom it feeds — Tree Grower
 // mechanics exactly: the timer (saved in sim_data, so progress survives a
 // reload) only runs while the cell above is open, resets when blocked, and
-// the sprout is free.  This is also what makes mushroom farming possible
-// later: any mossy stone that ends up somewhere open grows.
+// the sprout is free.  The timer doubles as the VISIBLE growth clock:
+// draw_pixel_mossy_stone reads it to raise a mini glowing sprout into the
+// cell above, so the whole 2 minutes reads on screen.  This is also what
+// makes mushroom farming possible later: any mossy stone that ends up
+// somewhere open grows.
 tick_mossy_stone :: proc(gs: ^Game_State, x, y: int) {
     w   := &gs.world
     idx := grid_idx(x, y)
@@ -523,6 +526,7 @@ tick_mossy_stone :: proc(gs: ^Game_State, x, y: int) {
     if w.sim_data[idx].growth_timer < MUSHROOM_GROW_TIME do return
     w.sim_data[idx].growth_timer = 0
     set_tile(w, x, y - 1, .Green_Cave_Mushroom)
+    eq_push(&gs.events, Event{type = .Mushroom_Grew, tile = {i32(x), i32(y - 1)}})
 }
 
 // ─── The Gem Replicator ───────────────────────────────────────────────────────

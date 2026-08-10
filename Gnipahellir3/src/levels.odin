@@ -639,6 +639,21 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
     for x in 8 ..= 16 do set_tile(w, x, 102, .Stone)
     bp: Item = depth_tier == 1 ? .Rune_Scroll_B : .Rune_Scroll_C
     place_rune_scroll_chest(w, 12, 101, bp)
+
+    // Green cave mushrooms thrive down here — the deep caves are the real
+    // patch, where the surface cave only hints (gen_cave_1 grows 1–3).
+    // Runs last so a chamber carve can never orphan a sprout from its moss.
+    for y in CAVE_LVL_TOP ..< CAVE_LVL_BOT - 1 {
+        for x in 1 ..< GRID_W - 1 {
+            if get_tile(w, x, y) != .Void do continue
+            if get_tile(w, x, y + 1) != .Stone do continue
+            mh := whash(u32(x) * 374761393 + u32(y) * 668265263 + u32(depth_tier) * 131)
+            if mh % 100 < 4 {
+                set_tile(w, x, y, .Green_Cave_Mushroom)
+                set_tile(w, x, y + 1, .Mossy_Stone)
+            }
+        }
+    }
 }
 
 carve_box :: proc(w: ^World_Grid, x0, y0, x1, y1: int) {

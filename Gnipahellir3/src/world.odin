@@ -318,20 +318,29 @@ gen_cave_1 :: proc(w: ^World_Grid, seed: u32 = 0) {
 		}
 	}
 
-	// ── 10. Green cave mushrooms — sparse forage on cave floors ────
-	// A mushroom sprouts where the cave opens onto stone, and the stone it
-	// roots in furs over with moss; mined for the GreenBerrie's cave-trip
-	// ingredient.
+	// ── 10. Green cave mushrooms — a rare find this shallow ────────
+	// The surface cave grows only 1–3; the deep caves are where they thrive
+	// (gen_cave_level).  Collect every floor spot that rolls, then keep an
+	// evenly spread few — a straight rarity roll either clusters or goes
+	// empty, and picking the first N would bunch them at the cave top.
+	cand: [64][2]int
+	n_cand := 0
 	for y in CAVE_TOP ..< CAVE_BOT - 1 {
 		for x in CAVE_LEFT ..< CAVE_RIGHT {
 			if get_tile(w, x, y) != .Void do continue
 			if get_tile(w, x, y + 1) != .Stone do continue
 			mh := whash(u32(x) * 374761393 + u32(y) * 668265263)
-			if mh % 100 < 2 {
-				set_tile(w, x, y, .Green_Cave_Mushroom)
-				set_tile(w, x, y + 1, .Mossy_Stone)
+			if mh % 100 < 2 && n_cand < len(cand) {
+				cand[n_cand] = {x, y}
+				n_cand += 1
 			}
 		}
+	}
+	want := min(1 + int(whash(555555 + seed) % 3), n_cand)
+	for i in 0 ..< want {
+		c := cand[i * n_cand / want]
+		set_tile(w, c[0], c[1], .Green_Cave_Mushroom)
+		set_tile(w, c[0], c[1] + 1, .Mossy_Stone)
 	}
 
 }

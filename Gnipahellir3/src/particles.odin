@@ -157,6 +157,20 @@ spawn_grow_burst :: proc(gs: ^Game_State, T: [2]i32) {
     }
 }
 
+// A cave mushroom reaching full size: a ring of neon spores shed around the
+// cap, drifting up and outward, staggered in three waves so the glow lingers
+// a beat instead of popping all at once.
+spawn_mushroom_glow :: proc(gs: ^Game_State, T: [2]i32) {
+    for i in 0 ..< 12 {
+        seed := u32(gs.frame)*23 + u32(i)*389
+        pos  := [2]f32{f32(T.x) + 0.5 + jitter(seed, 0.8), f32(T.y) + 0.5 + jitter(seed + 1, 0.8)}
+        vel  := [2]f32{jitter(seed + 3, 0.7), -0.5 + jitter(seed + 5, 0.5)}
+        color := rl.Color{57, 235, 40, 230} if i % 2 == 0 else rl.Color{160, 255, 120, 230}
+        spawn_particle(&gs.particles, pos, vel, color, 0.8 + jitter(seed + 7, 0.4),
+            delay = f32(i % 3) * 0.15)
+    }
+}
+
 // Sky-Altar ritual: each frame of the offering, a few rainbow motes spiral in
 // from a ring toward the point above the altar — reads as the gift being drawn
 // together.  Hue rides the ritual clock so the whole swirl cycles the spectrum.

@@ -601,7 +601,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
     case .Pixel_Steam:      draw_pixel_steam(gs, px, py, x, y)
     case .Pixel_Mushroom:   draw_pixel_mushroom(gs, px, py, x, y)
-    case .Pixel_Mossy_Stone: draw_pixel_mossy_stone(px, py, x, y)
+    case .Pixel_Mossy_Stone: draw_pixel_mossy_stone(gs, px, py, x, y)
     case .Pixel_Rune_Scroll_Chest:
         bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
@@ -1516,7 +1516,7 @@ draw_pixel_mushroom :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
     rl.DrawRectangle(bx+4, by+6, 2, 4, stalk)
 }
 
-draw_pixel_mossy_stone :: proc(bx, by: i32, x, y: int) {
+draw_pixel_mossy_stone :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
     moss := rl.Color{74, 150,  66, 255}
     deep := rl.Color{46, 104,  44, 255}
     rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Stone].color)
@@ -1527,6 +1527,30 @@ draw_pixel_mossy_stone :: proc(bx, by: i32, x, y: int) {
     rl.DrawRectangle(bx+i32((h>>5)%8), by+2, 2, 2, deep)
     rl.DrawRectangle(bx+i32((h>>9)%8), by+5, 2, 1, moss)
     rl.DrawRectangle(bx+i32((h>>13)%7), by+7, 2, 1, deep)
+
+    // The regrow made visible: while the block's clock runs (tick_mossy_stone,
+    // saved sim_data) a mini glowing sprout rises out of the moss into the
+    // cell above — terrain paints top-down, so drawing up overdraws cleanly.
+    // Blocked or bare cells hold the timer at 0, so this costs nothing there.
+    p := clamp(gs.world.sim_data[grid_idx(x, y)].growth_timer / MUSHROOM_GROW_TIME, 0, 1)
+    if p <= 0 do return
+
+    neon  := rl.Color{ 57, 235,  40, 255}
+    lite  := rl.Color{160, 255, 120, 255}
+    stalk := rl.Color{225, 235, 200, 255}
+    rise := i32(1 + p*7)              // sprout tip climbs 1 → 8 px above the moss
+    top  := by - rise
+    capw := i32(2 + p*4)              // cap widens 2 → 6 px
+    capx := bx + (CELL_SIZE - capw)/2
+
+    pulse := (math.sin(gs.elapsed_time*2.6 + f32(x*7 + y*13)) + 1) * 0.5
+    halo  := neon
+    halo.a = u8((20 + pulse*30) * (0.4 + 0.6*p))
+    rl.DrawRectangle(capx - 1, top - 1, capw + 2, rise + 2, halo)
+
+    if rise > 2 do rl.DrawRectangle(bx + 4, top + 2, 2, rise - 2, stalk)
+    rl.DrawRectangle(capx, top, capw, 2, neon)
+    if p > 0.5 do rl.DrawRectangle(capx + 1, top, capw - 2, 1, lite)
 }
 
 // Crack marks on the tile the pick is working: one diagonal per chip landed.

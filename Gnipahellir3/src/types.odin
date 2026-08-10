@@ -465,6 +465,8 @@ Event_Type :: enum u8 {
     Golem_Set_Mode,     // int_val = golem slot | Golem_Mode<<8
     Golem_Call_To_Me,   // int_val = golem slot; walk to the player, then wait
     Golem_Pickup,       // int_val = golem slot; recall in reach, else come-then-recall
+    // (appended so existing event values stay stable)
+    Mushroom_Grew,      // tile = the sprouted mushroom; sound + spore glow burst
 }
 
 Event_Payload :: struct #raw_union {

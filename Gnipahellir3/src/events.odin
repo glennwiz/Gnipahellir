@@ -118,6 +118,10 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Place, audio_tile_gain(gs, e.tile))
             spawn_grow_burst(gs, e.tile)
 
+        case .Mushroom_Grew:
+            audio_play(&gs.audio, .Place, audio_tile_gain(gs, e.tile))
+            spawn_mushroom_glow(gs, e.tile)
+
         case .Item_Pickup:
             audio_play(&gs.audio, .Pickup)
             #partial switch Item(e.payload.int_val) {
