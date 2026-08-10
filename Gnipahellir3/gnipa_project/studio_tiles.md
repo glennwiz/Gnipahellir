@@ -1,12 +1,12 @@
-# studio_tiles.md — the TILES tab: terrain goes studio-owned (T1 SHIPPED, T2/T3 owed)
+# studio_tiles.md — the TILES tab: terrain goes studio-owned (T1+T2 SHIPPED, T3 owed)
 
 **Status:** spec agreed with Glenn 2026-08-09 (the day Studio Phases A–C
 shipped). **T1 (the extraction, §2) SHIPPED 2026-08-10, commit 7e505c8** —
 gen_terrain.odin exists, emit-check covers five files, notes.txt carries the
-tile/tiledesc/struct/glow harvest. T2/T3 (§3/§4) remain the full brief for
-the tab itself. **One stale detail:** this spec predates studio Phases D/E,
-which took keys [5] (RECIPES) and [6] (WIZARD) — the TILES tab lands on
-key **[7]**, not [5].
+tile/tiledesc/struct/glow harvest. **T2 (the tab, §3) SHIPPED the same day,
+commit 35db380** — tiles.odin, browser + joined inspector, session v2, --shot
+coverage — on key **[7]**, not the spec's [5] (this spec predates Phases D/E,
+which took [5]/[6]). §4 (T3, editing + SAVE) is what remains.
 
 **Companion docs:** the studio bullet in `context.md` (Phases A–C: what the
 tool is, the codegen model, the ownership law), `tools/gnipa_studio/main.odin`
