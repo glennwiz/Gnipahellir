@@ -100,7 +100,7 @@ recipe_table := [?]Recipe{
 	// The gem farm: gems appear in cave 1, but the Rune Altar needs Cloud
 	// Stone (sky, post-ritual-A) — the farm is the industrialisation step.
 	{ .Gem_Replicator, 1, .Rune_Altar, {{.Iron_Bar, 8}, {.Gold_Bar, 4}, {.Cloud_Stone, 10}} },
-	{ .GreenBerrie, 1, .Bench, {{.Flower_Seed, 1}, {.Leaf, 1}, {}} },
+	{ .GreenBerrie, 1, .Bench, {{.Flower_Seed, 1}, {.Leaf, 1}, {.Green_Cave_Mushroom, 1}} },
 	{ .Clay, 2, .None, {{.Stone_Block, 1}, {}, {}} },
 }
 

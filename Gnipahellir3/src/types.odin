@@ -147,6 +147,10 @@ Tile_Type :: enum u8 {
     // gem economy's renewal path, Tree Grower parity.  (appended: terrain
     // ordinals are serialized)
     Gem_Replicator,
+    // Cave-floor forage — mines into the Green Cave Mushroom item, the
+    // GreenBerrie's cave-trip ingredient.  (appended: terrain ordinals are
+    // serialized)
+    Green_Cave_Mushroom,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -268,6 +272,9 @@ Item :: enum u8 {
     // The gem farm (appended: item ordinals are serialized)
     Gem_Replicator,
     GreenBerrie, // (appended via gnipa_studio: item ordinals are serialized)
+    // Mined from cave-floor mushrooms — GreenBerrie ingredient (appended:
+    // item ordinals are serialized)
+    Green_Cave_Mushroom,
     // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

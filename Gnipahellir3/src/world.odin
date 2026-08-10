@@ -318,6 +318,20 @@ gen_cave_1 :: proc(w: ^World_Grid, seed: u32 = 0) {
 		}
 	}
 
+	// ── 10. Green cave mushrooms — sparse forage on cave floors ────
+	// A mushroom grows where the cave opens onto solid ground; mined for the
+	// GreenBerrie's cave-trip ingredient.
+	for y in CAVE_TOP ..< CAVE_BOT - 1 {
+		for x in CAVE_LEFT ..< CAVE_RIGHT {
+			if get_tile(w, x, y) != .Void do continue
+			if .Solid not_in terrain_table[get_tile(w, x, y + 1)].flags do continue
+			mh := whash(u32(x) * 374761393 + u32(y) * 668265263)
+			if mh % 100 < 2 {
+				set_tile(w, x, y, .Green_Cave_Mushroom)
+			}
+		}
+	}
+
 }
 
 // ─── World Init ───────────────────────────────────────────────────────────────

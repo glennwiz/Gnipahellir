@@ -94,6 +94,7 @@ terrain_table := [Tile_Type]Terrain_Behavior{
 	.Boiler = { "Boiler", {.Solid, .Mineable, .Placeable}, {96, 102, 116, 255}, 0, 0, .Boiler, 0 },
 	.Steam_Engine = { "Steam Engine", {.Solid, .Mineable, .Placeable}, {150, 122, 62, 255}, 0, 0, .Steam_Engine, 0 },
 	.Gem_Replicator = { "Gem Replicator", {.Solid, .Mineable, .Placeable}, {168, 120, 205, 255}, 0, 0, .Gem_Replicator, 0 },
+	.Green_Cave_Mushroom = { "Green Cave Mushroom", {.Walkable, .Mineable}, {80, 190, 85, 255}, 1, 0, .Green_Cave_Mushroom, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover

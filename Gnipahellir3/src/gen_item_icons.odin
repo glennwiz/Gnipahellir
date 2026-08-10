@@ -679,4 +679,18 @@ item_icons := [Item]Item_Icon{
 	// Gem Replicator — a faceted crystal in prismatic violet over a stone plinth.
 	.Gem_Replicator = {GEM_REPLICATOR_GRID, {{}, {}, {235, 210, 255, 255}, {190, 130, 250, 255}, {120, 70, 180, 255}}},
 	.GreenBerrie = {LEAF_GRID, {{58, 158, 48, 255}, {34, 108, 28, 255}, {112, 208, 88, 255}, {}, {}}},
+	.Green_Cave_Mushroom = {Icon_Grid{
+		"............",
+		"...LLLLLL...",
+		"..LBBBBBBL..",
+		".LBBWBBBBBL.",
+		".BBBBBBWBBB.",
+		".DBBWBBBBBD.",
+		".DDDDDDDDDD.",
+		"....AAAA....",
+		"....AAAA....",
+		"....AAAA....",
+		"...aAAAAa...",
+		"............",
+	}, {{70, 185, 95, 255}, {38, 118, 58, 255}, {150, 235, 160, 255}, {228, 214, 176, 255}, {172, 152, 116, 255}}},
 }

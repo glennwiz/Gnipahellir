@@ -2360,6 +2360,43 @@ eating_a_greenberrie_grants_leaf_fall :: proc(t: ^testing.T) {
 }
 
 @(test)
+green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
+    // The GreenBerrie's cave-trip ingredient: worldgen scatters mushrooms
+    // where the cave opens onto solid ground, and mining one always drops
+    // the item (plain terrain_table row, Leaves pattern).
+    gs := test_state()
+    defer free(gs)
+    w := &gs.world
+
+    found := 0
+    mx, my := -1, -1
+    for y in CAVE_TOP ..< CAVE_BOT do for x in CAVE_LEFT ..< CAVE_RIGHT {
+        if get_tile(w, x, y) != .Green_Cave_Mushroom do continue
+        found += 1
+        testing.expect(t, .Solid in terrain_table[get_tile(w, x, y + 1)].flags,
+            "a mushroom must sit on solid ground")
+        mx, my = x, y
+    }
+    testing.expect(t, found > 0, "the cave must grow at least one mushroom")
+    log.infof("mushroom gen: %d green cave mushrooms on cave-1 floors", found)
+
+    // Mining one opens the cell and leaves the mushroom item on the ground.
+    handle_tile_mined(gs, Event{tile = {i32(mx), i32(my)}})
+    testing.expect_value(t, get_tile(w, mx, my), Tile_Type.Void)
+    idx := grid_idx(mx, my)
+    testing.expect_value(t, w.items[idx], Item.Green_Cave_Mushroom)
+    testing.expect_value(t, w.item_counts[idx], u8(1))
+
+    // And the berry recipe now asks for it.
+    needs_mushroom := false
+    for r in recipe_table {
+        if r.result != .GreenBerrie do continue
+        for ing in r.ingredients do if ing.item == .Green_Cave_Mushroom do needs_mushroom = true
+    }
+    testing.expect(t, needs_mushroom, "the GreenBerrie recipe must ask for a mushroom")
+}
+
+@(test)
 jade_ring_recipe_and_warp_home :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
