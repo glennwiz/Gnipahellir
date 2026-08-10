@@ -2361,9 +2361,10 @@ eating_a_greenberrie_grants_leaf_fall :: proc(t: ^testing.T) {
 
 @(test)
 green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
-    // The GreenBerrie's cave-trip ingredient: worldgen scatters mushrooms
-    // where the cave opens onto solid ground, and mining one always drops
-    // the item (plain terrain_table row, Leaves pattern).
+    // The GreenBerrie's cave-trip ingredient: worldgen sprouts mushrooms
+    // where the cave opens onto stone — and the block each one roots in furs
+    // over with moss.  Mining always drops the item (plain terrain_table
+    // row, Leaves pattern).
     gs := test_state()
     defer free(gs)
     w := &gs.world
@@ -2373,8 +2374,7 @@ green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
     for y in CAVE_TOP ..< CAVE_BOT do for x in CAVE_LEFT ..< CAVE_RIGHT {
         if get_tile(w, x, y) != .Green_Cave_Mushroom do continue
         found += 1
-        testing.expect(t, .Solid in terrain_table[get_tile(w, x, y + 1)].flags,
-            "a mushroom must sit on solid ground")
+        testing.expect_value(t, get_tile(w, x, y + 1), Tile_Type.Mossy_Stone)
         mx, my = x, y
     }
     testing.expect(t, found > 0, "the cave must grow at least one mushroom")

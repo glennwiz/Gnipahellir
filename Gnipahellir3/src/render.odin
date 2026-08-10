@@ -77,6 +77,8 @@ Draw_Style :: enum u8 {
     Pixel_Flower_Bed,
     Pixel_Rune_Scroll_Chest,
     Pixel_Steam,
+    Pixel_Mushroom,
+    Pixel_Mossy_Stone,
 }
 
 @(rodata)
@@ -100,6 +102,8 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Rune_Scroll_Chest_C   = .Pixel_Rune_Scroll_Chest,
     .Rune_Coffer           = .Pixel_Rune_Scroll_Chest,
     .Steam       = .Pixel_Steam,
+    .Green_Cave_Mushroom = .Pixel_Mushroom,
+    .Mossy_Stone         = .Pixel_Mossy_Stone,
     // all others default to .Solid (zero value)
 }
 
@@ -583,6 +587,8 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Clay:       draw_pixel_clay(px, py, x, y)
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
     case .Pixel_Steam:      draw_pixel_steam(gs, px, py, x, y)
+    case .Pixel_Mushroom:   draw_pixel_mushroom(gs, px, py, x, y)
+    case .Pixel_Mossy_Stone: draw_pixel_mossy_stone(px, py, x, y)
     case .Pixel_Rune_Scroll_Chest:
         bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
         rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
@@ -1462,6 +1468,52 @@ draw_pixel_flower :: proc(bx, by: i32) {
     rl.DrawRectangle(bx+2, by+6, 6, 2, petal)
     // Stem
     rl.DrawRectangle(bx+4, by+8, 2, 2, stem)
+}
+
+// ─── Pixel Art: Green Cave Mushroom + Mossy Stone ─────────────────────────────
+//
+//  The mushroom sprouts out of the mossy block beneath it: stalk rooted at the
+//  cell's bottom edge, neon-green cap wrapped in a breathing glow halo.  Pulse
+//  derived from elapsed_time + a per-cell phase hash — read-only, no state.
+
+draw_pixel_mushroom :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Void].color)
+
+    neon  := rl.Color{ 57, 235,  40, 255}
+    lite  := rl.Color{160, 255, 120, 255}
+    dark  := rl.Color{ 28, 130,  30, 255}
+    stalk := rl.Color{225, 235, 200, 255}
+
+    // Breathing halo behind the cap — the glow you spot from across the cave.
+    pulse := (math.sin(gs.elapsed_time*2.2 + f32(x*7 + y*13)) + 1) * 0.5
+    halo := neon
+    halo.a = u8(30 + pulse*45)
+    rl.DrawRectangle(bx+1, by+1, 8, 7, halo)
+    halo.a = u8(50 + pulse*60)
+    rl.DrawRectangle(bx+2, by+2, 6, 5, halo)
+
+    // Cap: lit crown, neon body, dark underside gills
+    rl.DrawRectangle(bx+3, by+2, 4, 1, lite)
+    rl.DrawRectangle(bx+2, by+3, 6, 2, neon)
+    rl.DrawRectangle(bx+2, by+5, 6, 1, dark)
+    // Spots
+    rl.DrawRectangle(bx+4, by+3, 1, 1, rl.WHITE)
+    rl.DrawRectangle(bx+6, by+4, 1, 1, rl.WHITE)
+    // Stalk, rooted in the mossy block below
+    rl.DrawRectangle(bx+4, by+6, 2, 4, stalk)
+}
+
+draw_pixel_mossy_stone :: proc(bx, by: i32, x, y: int) {
+    moss := rl.Color{74, 150,  66, 255}
+    deep := rl.Color{46, 104,  44, 255}
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Stone].color)
+    h := whash(u32(x)*2654435761 ~ u32(y)*668265263)
+    // Moss lip across the top, creeping unevenly down the face
+    rl.DrawRectangle(bx, by, CELL_SIZE, 2, moss)
+    rl.DrawRectangle(bx+i32(h%7), by+2, 3, 1, moss)
+    rl.DrawRectangle(bx+i32((h>>5)%8), by+2, 2, 2, deep)
+    rl.DrawRectangle(bx+i32((h>>9)%8), by+5, 2, 1, moss)
+    rl.DrawRectangle(bx+i32((h>>13)%7), by+7, 2, 1, deep)
 }
 
 // Crack marks on the tile the pick is working: one diagonal per chip landed.

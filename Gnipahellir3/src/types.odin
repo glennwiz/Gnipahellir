@@ -151,6 +151,9 @@ Tile_Type :: enum u8 {
     // GreenBerrie's cave-trip ingredient.  (appended: terrain ordinals are
     // serialized)
     Green_Cave_Mushroom,
+    // The block a cave mushroom sprouts from — stone furred with moss,
+    // mines like stone.  (appended: terrain ordinals are serialized)
+    Mossy_Stone,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────

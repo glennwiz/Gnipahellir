@@ -94,7 +94,8 @@ terrain_table := [Tile_Type]Terrain_Behavior{
 	.Boiler = { "Boiler", {.Solid, .Mineable, .Placeable}, {96, 102, 116, 255}, 0, 0, .Boiler, 0 },
 	.Steam_Engine = { "Steam Engine", {.Solid, .Mineable, .Placeable}, {150, 122, 62, 255}, 0, 0, .Steam_Engine, 0 },
 	.Gem_Replicator = { "Gem Replicator", {.Solid, .Mineable, .Placeable}, {168, 120, 205, 255}, 0, 0, .Gem_Replicator, 0 },
-	.Green_Cave_Mushroom = { "Green Cave Mushroom", {.Walkable, .Mineable}, {80, 190, 85, 255}, 1, 0, .Green_Cave_Mushroom, 0 },
+	.Green_Cave_Mushroom = { "Green Cave Mushroom", {.Walkable, .Mineable}, {57, 235, 40, 255}, 1, 0, .Green_Cave_Mushroom, 0 },
+	.Mossy_Stone = { "Mossy Stone", {.Solid, .Mineable}, {96, 138, 90, 255}, 0, 0, .Stone_Block, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -135,6 +136,7 @@ terrain_desc := #partial [Tile_Type]string{
 	.World_Anchor = "Holds a manufactured world in place so it survives you leaving it.",
 	.Quick_Clay = "A foothold a golem conjured for itself. It dissolves on its own.",
 	.Steam = "Scalding vapour. It rises, it leaks, and it fades - cap your chamber or lose your pressure.",
+	.Mossy_Stone = "Cave stone furred green with moss - something likes growing here.",
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
