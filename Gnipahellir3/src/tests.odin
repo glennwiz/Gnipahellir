@@ -2387,6 +2387,19 @@ green_cave_mushrooms_grow_on_cave_floors :: proc(t: ^testing.T) {
     testing.expect_value(t, w.items[idx], Item.Green_Cave_Mushroom)
     testing.expect_value(t, w.item_counts[idx], u8(1))
 
+    // Tree Grower mechanics: the mossy block regrows its mushroom over time.
+    gs.delta_time = 0.5   // coarse ticks — the grow time is a minute
+    frames := int(MUSHROOM_GROW_TIME / gs.delta_time) + 4
+    for _ in 0 ..< frames {
+        update_sim(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, get_tile(w, mx, my), Tile_Type.Green_Cave_Mushroom)
+
+    // A standing mushroom pauses the block until it is picked again.
+    update_sim(gs)
+    testing.expect_value(t, w.sim_data[grid_idx(mx, my + 1)].growth_timer, f32(0))
+
     // And the berry recipe now asks for it.
     needs_mushroom := false
     for r in recipe_table {
