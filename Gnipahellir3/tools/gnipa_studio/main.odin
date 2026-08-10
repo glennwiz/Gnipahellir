@@ -78,6 +78,7 @@ emit_all :: proc(notes: ^Notes) -> [5]Gen_Out {
 	shapes: [len(shape_registry)]Shape_View
 	views_from_game(&views)
 	shapes_from_registry(shapes[:])
+	anchored := anchors_from_gen_file()
 	pframes := game.player_form_frames
 	recipes := game.recipe_table
 	smelts := game.smelt_table
@@ -85,7 +86,7 @@ emit_all :: proc(notes: ^Notes) -> [5]Gen_Out {
 	for gate, it in game.recipe_unlock do unlock[it] = gate
 	return {
 		{"gen_items.odin", emit_items(notes, nil)},
-		{"gen_item_icons.odin", emit_icons(notes, &views, shapes[:], nil)},
+		{"gen_item_icons.odin", emit_icons(notes, &views, &anchored, shapes[:], nil)},
 		{"gen_recipes.odin", emit_recipes(notes, recipes[:], &unlock, smelts[:], nil)},
 		{"gen_player_art.odin", emit_player(notes, &pframes)},
 		{"gen_terrain.odin", emit_terrain(notes)},

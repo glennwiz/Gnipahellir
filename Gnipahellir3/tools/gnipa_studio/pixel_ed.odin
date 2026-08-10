@@ -6,11 +6,14 @@ package gnipa_studio
 // from the working views.  The run.ps1 watcher rebuilds and swaps the window,
 // which lands back here via session restore with the saved state compiled in.
 //
-// A stroke on a SHARED shape (grid matching a named registry shape) applies
-// to every sharer by default — the shape constant survives the emit.  Switch
-// to THIS ITEM ONLY and the first stroke detaches this item to a unique
-// inline grid.  Palette edits are always per-item (editing an icon that used
-// PAL_IRON detaches its palette to an inline literal the same way).
+// A stroke on a SHARED shape (a grid ANCHORED to a named registry shape —
+// its gen-file row references the constant, not merely equal cells) applies
+// to every anchored sharer by default — the shape constant survives the emit.
+// Switch to THIS ITEM ONLY and the first stroke detaches this item to a
+// unique inline grid, permanently: an inline row never re-attaches, even if
+// painted back to equality.  Palette edits are always per-item (editing an
+// icon that used PAL_IRON detaches its palette to an inline literal the same
+// way).
 
 import "core:fmt"
 import game "../../src"
@@ -21,6 +24,7 @@ PIX_GRID_X :: 16
 
 Work :: struct {
 	views:        [game.Item]Icon_View,
+	anchored:     Icon_Anchors,
 	shapes:       [len(shape_registry)]Shape_View,
 	dirty:        bool,
 	paint:        u8,
@@ -32,6 +36,7 @@ work: Work
 
 work_init :: proc() {
 	views_from_game(&work.views)
+	work.anchored = anchors_from_gen_file()
 	shapes_from_registry(work.shapes[:])
 	work.dirty = false
 	work.paint = 'B'
@@ -47,7 +52,7 @@ shape_index_of :: proc(cells: Icon_Cells) -> int {
 work_shared_count :: proc(cells: Icon_Cells) -> int {
 	n := 0
 	for it in game.Item {
-		if it != .None && !work.views[it].empty && work.views[it].cells == cells do n += 1
+		if it != .None && work.anchored[it] && !work.views[it].empty && work.views[it].cells == cells do n += 1
 	}
 	return n
 }
@@ -55,19 +60,20 @@ work_shared_count :: proc(cells: Icon_Cells) -> int {
 apply_paint :: proc(it: game.Item, x, y: int, ch: u8) {
 	v := &work.views[it]
 	if v.cells[y][x] == ch do return
-	if work.apply_shared {
+	if work.apply_shared && work.anchored[it] {
 		if si := shape_index_of(v.cells); si >= 0 {
 			old := work.shapes[si].cells
 			work.shapes[si].cells[y][x] = ch
 			for jt in game.Item {
 				w := &work.views[jt]
-				if !w.empty && w.cells == old do w.cells[y][x] = ch
+				if !w.empty && work.anchored[jt] && w.cells == old do w.cells[y][x] = ch
 			}
 			work.dirty = true
 			return
 		}
 	}
 	v.cells[y][x] = ch
+	work.anchored[it] = false // a per-item stroke detaches for good
 	work.dirty = true
 }
 
@@ -113,7 +119,7 @@ work_save :: proc() {
 		work.status = fmt.aprintf("REFUSED - %s", msg)
 		return
 	}
-	content := emit_icons(&g_notes, &work.views, work.shapes[:], nil)
+	content := emit_icons(&g_notes, &work.views, &work.anchored, work.shapes[:], nil)
 	if write_gen_file("gen_item_icons.odin", content) {
 		work.dirty = false
 		work.status = "saved - the watcher rebuild lands you back here"
@@ -200,7 +206,7 @@ pixel_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	by := i32(TOP_BAR) + 12
 	rl.DrawText(fmt.ctprintf("%s", item_name(it)), PIX_GRID_X, by, 20, {235, 235, 240, 255})
 	bx := PIX_GRID_X + rl.MeasureText(fmt.ctprintf("%s", item_name(it)), 20) + 24
-	if si := shape_index_of(v.cells); si >= 0 {
+	if si := shape_index_of(v.cells); si >= 0 && work.anchored[it] {
 		rl.DrawText(fmt.ctprintf("shape %s - shared by %d items", work.shapes[si].name, work_shared_count(v.cells)),
 			bx, by + 4, 13, {140, 185, 225, 255})
 		bx += rl.MeasureText(fmt.ctprintf("shape %s - shared by %d items", work.shapes[si].name, work_shared_count(v.cells)), 13) + 20

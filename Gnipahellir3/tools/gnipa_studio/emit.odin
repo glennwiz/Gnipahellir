@@ -11,6 +11,7 @@ package gnipa_studio
 // The emitter is also the formatter: gen files have no other style authority.
 
 import "core:fmt"
+import "core:os"
 import "core:strings"
 import rl "vendor:raylib"
 import game "../../src"
@@ -58,6 +59,43 @@ shapes_from_registry :: proc(shapes: []Shape_View) {
 	for e, i in shape_registry {
 		shapes[i] = {e.name, cells_from_grid(e.grid)}
 	}
+}
+
+// An item is ATTACHED to a registry shape only if its row in the gen file on
+// disk references the constant by name — an inline grid, even byte-identical
+// to a shape, is an independent copy and stays one across sessions.  Grid
+// equality alone no longer attaches (the wizard's copy-art made GreenBerrie a
+// live LEAF_GRID reference that way).  The gen file itself is the record; a
+// missing file (first --extract) attaches everything so equality decides.
+Icon_Anchors :: [game.Item]bool
+
+anchors_from_gen_file :: proc() -> (anchored: Icon_Anchors) {
+	data, err := os.read_entire_file_from_path(SRC_DIR + "gen_item_icons.odin", context.allocator)
+	if err != nil {
+		for &a in anchored do a = true
+		return
+	}
+	defer delete(data)
+	for line in strings.split_lines(string(data)) {
+		l := strings.trim_prefix(line, "\t")
+		if len(l) < 2 || l[0] != '.' do continue
+		eq := strings.index(l, " = {")
+		if eq < 0 do continue
+		rest := l[eq+4:]
+		// A capital identifier right after the brace is a shape constant
+		// name — except "Icon_Grid{", which opens an inline grid; '}'
+		// closes an empty row.
+		if strings.has_prefix(rest, "Icon_Grid{") do continue
+		if len(rest) == 0 || rest[0] < 'A' || rest[0] > 'Z' do continue
+		ident := l[1:eq]
+		for it in game.Item {
+			if fmt.tprintf("%v", it) == ident {
+				anchored[it] = true
+				break
+			}
+		}
+	}
+	return
 }
 
 // A new item mid-creation: it has no game.Item ordinal yet (the enum line is
@@ -189,7 +227,7 @@ emit_items :: proc(notes: ^Notes, pending: []Pending_Item, allocator := context.
 
 // ─── gen_item_icons.odin ──────────────────────────────────────────────────────
 
-emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, shapes: []Shape_View, pending: []Pending_Item, allocator := context.allocator) -> string {
+emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, anchored: ^Icon_Anchors, shapes: []Shape_View, pending: []Pending_Item, allocator := context.allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
 
@@ -228,20 +266,19 @@ emit_icons :: proc(notes: ^Notes, views: ^[game.Item]Icon_View, shapes: []Shape_
 			continue
 		}
 		fmt.sbprintf(&b, "\t.%v = {{", it)
-		if name := shape_of(shapes, v.cells); name != "" {
+		name := anchored[it] ? shape_of(shapes, v.cells) : ""
+		if name != "" {
 			fmt.sbprintf(&b, "%s", name)
 		} else {
 			write_cells_body(&b, v.cells, "\t")
 		}
 		fmt.sbprintf(&b, ", %s}},\n", pal_str(v.pal))
 	}
+	// Pending items always inline: art picked in the wizard is a COPY, never a
+	// reference to the donor's shape constant.
 	for p in pending {
 		fmt.sbprintf(&b, "\t.%s = {{", p.ident)
-		if name := shape_of(shapes, p.icon.cells); name != "" {
-			fmt.sbprintf(&b, "%s", name)
-		} else {
-			write_cells_body(&b, p.icon.cells, "\t")
-		}
+		write_cells_body(&b, p.icon.cells, "\t")
 		fmt.sbprintf(&b, ", %s}},\n", pal_str(p.icon.pal))
 	}
 	fmt.sbprintf(&b, "}}\n")

@@ -94,7 +94,7 @@ first_producer_station :: proc(it: game.Item) -> Station_Ex {
 shape_shared_count :: proc(grid: game.Icon_Grid) -> int {
 	n := 0
 	for icon, it in game.item_icons {
-		if it != .None && icon.grid == grid do n += 1
+		if it != .None && work.anchored[it] && icon.grid == grid do n += 1
 	}
 	return n
 }
@@ -345,7 +345,7 @@ inspector_frame :: proc(s: ^Studio, x0, sw, sh: f32) {
 	// Flat color swatch beside them.
 	rl.DrawRectangle(px, y, 40, 108, info.color)
 	rl.DrawText(fmt.ctprintf("color %d,%d,%d", info.color.r, info.color.g, info.color.b), px + 48, y + 4, 12, {150, 155, 165, 255})
-	if name := shape_name_for(icon.grid); name != "" {
+	if name := shape_name_for(icon.grid); name != "" && work.anchored[it] {
 		rl.DrawText(fmt.ctprintf("shape %s", name), px + 48, y + 24, 12, {150, 155, 165, 255})
 		rl.DrawText(fmt.ctprintf("shared by %d items", shape_shared_count(icon.grid)), px + 48, y + 42, 12, {150, 155, 165, 255})
 	} else if icon.grid[0] != "" {

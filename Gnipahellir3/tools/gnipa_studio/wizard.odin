@@ -153,7 +153,7 @@ wizard_create :: proc() {
 	}
 	pend := []Pending_Item{p}
 	ok := write_gen_file("gen_items.odin", emit_items(&g_notes, pend))
-	ok &&= write_gen_file("gen_item_icons.odin", emit_icons(&g_notes, &work.views, work.shapes[:], pend))
+	ok &&= write_gen_file("gen_item_icons.odin", emit_icons(&g_notes, &work.views, &work.anchored, work.shapes[:], pend))
 	ok &&= write_gen_file("gen_recipes.odin", emit_recipes(&g_notes, rwork.recipes[:rwork.recipe_count], &rwork.unlock, rwork.smelt[:rwork.smelt_count], pend))
 	if !ok {
 		wwork.status = "PARTIAL WRITE - the build will fail loudly; fix via git and re-run"
