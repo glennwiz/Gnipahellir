@@ -32,6 +32,7 @@ Tab :: enum i32 {
 	Player,
 	Recipes,
 	Wizard,
+	Tiles,
 }
 
 // ─── Cross-references (who makes what, who uses what) ─────────────────────────
@@ -100,12 +101,13 @@ shape_shared_count :: proc(grid: game.Icon_Grid) -> int {
 
 // ─── Session ──────────────────────────────────────────────────────────────────
 
-SESSION_VERSION :: i32(1)
+SESSION_VERSION :: i32(2) // v2 appended sel_tile; a stale file just loses the selection
 
 Session :: struct #packed {
 	version:  i32,
 	tab:      Tab,
 	selected: i32,
+	sel_tile: i32,
 }
 
 session_load :: proc(s: ^Studio) {
@@ -114,11 +116,12 @@ session_load :: proc(s: ^Studio) {
 	ses := (^Session)(raw_data(data))^
 	if ses.version != SESSION_VERSION do return
 	if ses.selected >= 0 && int(ses.selected) < len(game.Item) do s.selected = game.Item(ses.selected)
+	if ses.sel_tile >= 0 && int(ses.sel_tile) < len(game.Tile_Type) do s.sel_tile = game.Tile_Type(ses.sel_tile)
 	s.tab = ses.tab
 }
 
 session_save :: proc(s: ^Studio) {
-	ses := Session{SESSION_VERSION, s.tab, i32(s.selected)}
+	ses := Session{SESSION_VERSION, s.tab, i32(s.selected), i32(s.sel_tile)}
 	_ = os.write_entire_file(TOOL_DIR + "session.dat", mem.ptr_to_bytes(&ses))
 }
 
@@ -127,6 +130,7 @@ session_save :: proc(s: ^Studio) {
 Studio :: struct {
 	tab:      Tab,
 	selected: game.Item,
+	sel_tile: game.Tile_Type,
 	dag:      Dag_State,
 	dag_gen:  int, // rwork.gen the DAG/xref were last built from
 }
@@ -147,6 +151,7 @@ studio_run :: proc(shot := false) {
 
 	s: Studio
 	s.selected = .Sword
+	s.sel_tile = .Grass
 	session_load(&s)
 	dag_init(&s.dag, STUDIO_W, STUDIO_H, rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
 	s.dag_gen = rwork.gen
@@ -164,6 +169,7 @@ studio_run :: proc(shot := false) {
 			if rl.IsKeyPressed(.FOUR) do s.tab = .Player
 			if rl.IsKeyPressed(.FIVE) do s.tab = .Recipes
 			if rl.IsKeyPressed(.SIX) do s.tab = .Wizard
+			if rl.IsKeyPressed(.SEVEN) do s.tab = .Tiles
 		}
 
 		// Recipe edits ripple into the DAG and the inspector cross-refs.
@@ -190,13 +196,15 @@ studio_run :: proc(shot := false) {
 			recipe_frame(&s, sw, sh, mouse)
 		case .Wizard:
 			wizard_frame(&s, sw, sh, mouse)
+		case .Tiles:
+			tiles_frame(&s, sw, sh, mouse)
 		}
 
 		draw_top_bar(&s, sw, mouse)
 		rl.EndDrawing()
 		free_all(context.temp_allocator)
 
-		now := Session{SESSION_VERSION, s.tab, i32(s.selected)}
+		now := Session{SESSION_VERSION, s.tab, i32(s.selected), i32(s.sel_tile)}
 		if now != last_saved {
 			session_save(&s)
 			last_saved = now
@@ -221,6 +229,9 @@ studio_run :: proc(shot := false) {
 				s.tab = .Wizard
 			} else if frames == 30 {
 				rl.TakeScreenshot("studio_shot_wizard.png")
+				s.tab = .Tiles
+			} else if frames == 35 {
+				rl.TakeScreenshot("studio_shot_tiles.png")
 				break
 			}
 		}
@@ -231,7 +242,7 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 	rl.DrawRectangle(0, 0, i32(sw), i32(TOP_BAR), {18, 20, 26, 255})
 	rl.DrawLine(0, i32(TOP_BAR), i32(sw), i32(TOP_BAR), {60, 64, 76, 255})
 
-	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]", .Recipes = "RECIPES [5]", .Wizard = "WIZARD [6]"}
+	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]", .Recipes = "RECIPES [5]", .Wizard = "WIZARD [6]", .Tiles = "TILES [7]"}
 	x := i32(16)
 	for tab in Tab {
 		w := rl.MeasureText(labels[tab], 16) + 28
