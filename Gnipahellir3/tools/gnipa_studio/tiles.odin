@@ -10,6 +10,27 @@ import "core:fmt"
 import game "../../src"
 import rl "vendor:raylib"
 
+// Tile cells are wider than the item browser's: each carries its name under
+// the swatch (Glenn's call — a bare palette didn't read), so 6 columns of
+// 100 px instead of 8 of 52.
+TILE_COLS  :: 6
+TCELL_W    :: 100
+TCELL_H    :: 64
+TSWATCH    :: 40
+
+// Ellipsis-truncate text to fit width at font size fs (temp-allocated).
+fit_text :: proc(text: string, width, fs: i32) -> cstring {
+	c := fmt.ctprintf("%s", text)
+	if rl.MeasureText(c, fs) <= width do return c
+	n := len(text)
+	for n > 1 {
+		n -= 1
+		c = fmt.ctprintf("%s..", text[:n])
+		if rl.MeasureText(c, fs) <= width do return c
+	}
+	return c
+}
+
 tiles_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	// Browser grid: every tile, enum order, click to select.
 	gy := i32(TOP_BAR) + 16
@@ -17,9 +38,9 @@ tiles_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	hovered_tile: game.Tile_Type
 	for t in game.Tile_Type {
 		idx := int(t)
-		cx := i32(BROWSER_X + (idx % BROWSER_COLS) * BCELL)
-		cy := gy + i32(idx / BROWSER_COLS) * BCELL
-		cell := rl.Rectangle{f32(cx), f32(cy), BCELL, BCELL}
+		cx := i32(BROWSER_X + (idx % TILE_COLS) * TCELL_W)
+		cy := gy + i32(idx / TILE_COLS) * TCELL_H
+		cell := rl.Rectangle{f32(cx), f32(cy), TCELL_W, TCELL_H}
 		hov := rl.CheckCollisionPointRec(mouse, cell)
 		if hov {
 			hovered = true
@@ -33,15 +54,21 @@ tiles_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 			rl.DrawRectangleLinesEx(cell, 1, {150, 155, 165, 255})
 		}
 		// Checker under the swatch so translucent fluids/gas read as such.
-		draw_checker(cx + (BCELL-BICON)/2, cy + (BCELL-BICON)/2, BICON, BICON)
-		rl.DrawRectangle(cx + (BCELL-BICON)/2, cy + (BCELL-BICON)/2, BICON, BICON, game.terrain_table[t].color)
+		sx := cx + (TCELL_W - TSWATCH)/2
+		draw_checker(sx, cy + 4, TSWATCH, TSWATCH)
+		rl.DrawRectangle(sx, cy + 4, TSWATCH, TSWATCH, game.terrain_table[t].color)
+		// Name under the swatch; the hover footer carries the full text.
+		name := fit_text(game.terrain_table[t].name, TCELL_W - 8, 10)
+		on := t == s.sel_tile || hov
+		rl.DrawText(name, cx + (TCELL_W - rl.MeasureText(name, 10))/2, cy + TSWATCH + 8,
+			10, on ? rl.Color{225, 228, 235, 255} : rl.Color{150, 155, 165, 255})
 	}
 	if hovered {
 		rl.DrawText(fmt.ctprintf("%s  (.%v, ordinal %d)", game.terrain_table[hovered_tile].name, hovered_tile, int(hovered_tile)),
 			BROWSER_X, i32(sh) - 26, 14, {200, 203, 210, 255})
 	}
 
-	tile_inspector_frame(s, f32(BROWSER_X + BROWSER_COLS*BCELL + 28), sw, sh)
+	tile_inspector_frame(s, f32(BROWSER_X + TILE_COLS*TCELL_W + 28), sw, sh)
 }
 
 tile_inspector_frame :: proc(s: ^Studio, x0, sw, sh: f32) {
