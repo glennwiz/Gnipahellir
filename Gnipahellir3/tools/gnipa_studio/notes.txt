@@ -1,7 +1,8 @@
 # Row comments for the generated tables, re-emitted as // lines above their
 # row by tools/gnipa_studio/emit.odin.  Format: table<TAB>key<TAB>text — one
 # line per comment line, repeated keys stack in order.  Tables: item, icon,
-# equip, recipe, unlock, smelt, grid.  Lines starting with # are ignored.
+# equip, recipe, unlock, smelt, grid, pform, tile, tiledesc, struct, glow.
+# Lines starting with # are ignored.
 
 item	Rune_Scroll_A	Rune Scroll seal color echoes its ritual's material cost — bronze/silver/
 item	Rune_Scroll_A	gold — so the three tiers read apart at a glance instead of sharing one
@@ -113,3 +114,57 @@ icon	Gem_Replicator	Gem Replicator — a faceted crystal in prismatic violet ove
 
 pform	Wizard_0	frame 0 — idle, orb held out
 pform	Wizard_1	frame 1 — mid-stride, hem sways
+
+tile	Stone	Natural cave stone never moves; but a PLACED stone block obeys gravity
+tile	Stone	and re-stacks sand-style — .Falls_Placed gates it on the cell's .Placed
+tile	Stone	bit so only player-built stone falls.
+tile	Door	Statically solid + mineable; a cell flagged .Open is passable (that
+tile	Door	override lives in door_open / is_solid / gravity).  Mines to a Door.
+tile	Flower_Bed	A planted crop: walkable like a wild flower, harvested by walking
+tile	Flower_Bed	through it (player_pickup), not mined — so no drop_item.
+tile	Barrel	A placed chest, mined back for its item like any machine (an empty
+tile	Barrel	one — a loaded barrel refuses the pick, guarded in events.odin).
+tile	Sky_Rune_Scroll_Chest	The four sealed coffers are .Mineable only so the deliberate Shift+hold
+tile	Sky_Rune_Scroll_Chest	reclaim can prise them loose once emptied — a wand never strikes them and
+tile	Sky_Rune_Scroll_Chest	an ordinary click still opens them (both gated by is_structure_tile).
+tile	Sky_Rune_Scroll_Chest	They all reclaim into one plain Rune_Coffer: the tier seal is a one-time
+tile	Sky_Rune_Scroll_Chest	in-situ marking, not something you carry around.
+tile	Rune_Coffer	The carried coffer, re-placed: ordinary barrel storage in the chest's
+tile	Rune_Coffer	own silhouette, its lock lit dull rune-stone instead of a tier color.
+tile	Dirt	A building block (like Stone/Grass, not a machine) that obeys gravity:
+tile	Dirt	always player-placed, so .Falls is safe, and .Settles makes it stack
+tile	Dirt	as tiles when it lands (sand-style) rather than crumble to drops.
+tile	Dirt	Mines back into the Dirt item.
+tile	Quick_Clay	Solid to everyone, but deliberately NOT .Mineable — it never yields
+tile	Quick_Clay	material and is never reclaimed by mining. It only ever disappears via
+tile	Quick_Clay	golem.odin's own despawn sweep (golem_dissolve_quick_clay).
+tile	Steam	The first gas.  This row is where a craft track's vapour effect lives:
+tile	Steam	steam scalds via damage_per_second, read generically by the hazard pass.
+
+tiledesc	Cave_Entrance	Gateways: the label should say where the step leads.
+tiledesc	Cloud	Sky
+tiledesc	Flower	Crops: harvested by walking through, never mined, so they drop nothing.
+tiledesc	Miner_Body	The auto-miner's tail, mineable but yielding nothing.
+tiledesc	Clay_Hearth	Golem monuments — solid, unmineable, each with its own job.
+tiledesc	Sky_Rune_Scroll_Chest	Sealed coffers: the Rune Coffer drop line describes the emptied husk, not
+tiledesc	Sky_Rune_Scroll_Chest	the sealed chest you are looking at.
+
+struct	Sky_Rune_Scroll_Chest	Coffers are equipment too: a wand must never strike one, an ordinary
+struct	Sky_Rune_Scroll_Chest	click opens it, and only the deliberate Shift+hold prises it loose.
+struct	Sky_Rune_Scroll_Chest	(Input routes the four sealed variants to their own open path first.)
+
+glow	Crafting_Bench	hearth gold
+glow	Tree_Grower	living green
+glow	Smelter	furnace ember
+glow	Sky_Altar	sky blue
+glow	Dvergr_Forge	forge fire
+glow	Rune_Altar	rune purple
+glow	Dimension_Spawner	dimensional teal
+glow	Dimension_Spawner_Gold	gilded shimmer
+glow	Dimension_Spawner_Runic	runic violet
+glow	Auto_Miner	the snake's beating heart
+glow	Silo	cold iron sheen
+glow	Barrel	warm oak
+glow	Boiler	steam white
+glow	Steam_Engine	working brass
+glow	Gem_Replicator	prismatic violet-white

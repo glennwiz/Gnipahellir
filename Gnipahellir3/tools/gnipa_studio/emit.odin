@@ -108,6 +108,29 @@ ingredient_str :: proc(ing: game.Ingredient) -> string {
 	return fmt.tprintf("{{.%v, %d}}", ing.item, ing.count)
 }
 
+// Flags print in Terrain_Flags' declared bit order, so the text is stable.
+terrain_flags_str :: proc(fl: game.Terrain_Flags) -> string {
+	if fl == {} do return "{}"
+	b: strings.Builder
+	strings.builder_init(&b, context.temp_allocator)
+	strings.write_string(&b, "{")
+	first := true
+	for f in game.Terrain_Flag {
+		if f not_in fl do continue
+		if !first do strings.write_string(&b, ", ")
+		fmt.sbprintf(&b, ".%v", f)
+		first = false
+	}
+	strings.write_string(&b, "}")
+	return strings.to_string(b)
+}
+
+// Minimal float: whole values print as integers, no trailing zeros.
+f32_str :: proc(v: f32) -> string {
+	if v == f32(int(v)) do return fmt.tprintf("%d", int(v))
+	return fmt.tprintf("%v", v)
+}
+
 write_cells_body :: proc(b: ^strings.Builder, cells: Icon_Cells, indent: string) {
 	fmt.sbprintf(b, "Icon_Grid{{\n")
 	for row in cells {
@@ -324,6 +347,70 @@ emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]
 	for r in smelts {
 		notes_write(&b, notes, "smelt", fmt.tprintf("%v", r.ore), "\t")
 		fmt.sbprintf(&b, "\t{{ .%v, .%v, %d }},\n", r.ore, r.bar, r.ore_per_bar)
+	}
+	fmt.sbprintf(&b, "}}\n")
+
+	return strings.to_string(b)
+}
+
+// ─── gen_terrain.odin ─────────────────────────────────────────────────────────
+
+emit_terrain :: proc(notes: ^Notes, allocator := context.allocator) -> string {
+	b: strings.Builder
+	strings.builder_init(&b, allocator)
+
+	fmt.sbprintf(&b, "package game\n\nimport rl \"vendor:raylib\"\n\n%s\n", GEN_HEADER)
+
+	fmt.sbprintf(&b, "// One behavior row per tile: name / flags / color / move_cost /\n")
+	fmt.sbprintf(&b, "// damage_per_second / drop_item / drop_pct (Terrain_Behavior in world.odin).\n")
+	fmt.sbprintf(&b, "@(rodata)\nterrain_table := [Tile_Type]Terrain_Behavior{{\n")
+	for r, t in game.terrain_table {
+		notes_write(&b, notes, "tile", fmt.tprintf("%v", t), "\t")
+		fmt.sbprintf(&b, "\t.%v = {{ \"%s\", %s, %s, %s, %s, .%v, %d }},\n",
+			t,
+			escape_odin_string(r.name, context.temp_allocator),
+			terrain_flags_str(r.flags),
+			color_str(r.color),
+			f32_str(r.move_cost),
+			f32_str(r.damage_per_second),
+			r.drop_item,
+			r.drop_pct)
+	}
+	fmt.sbprintf(&b, "}}\n\n")
+
+	fmt.sbprintf(&b, "// One line of \"what am I pointing at\" prose per tile, read by the cursor hover\n")
+	fmt.sbprintf(&b, "// label (ui.odin).  Sparse on purpose: a tile that mines into an item already\n")
+	fmt.sbprintf(&b, "// has that item's crafting-panel desc, so only tiles that drop nothing — or\n")
+	fmt.sbprintf(&b, "// whose drop reads wrong for the tile in the ground — get their own line.\n")
+	fmt.sbprintf(&b, "// tile_desc (world.odin) resolves the two; the tests keep every tile covered.\n")
+	fmt.sbprintf(&b, "@(rodata)\nterrain_desc := #partial [Tile_Type]string{{\n")
+	for d, t in game.terrain_desc {
+		if d == "" do continue
+		notes_write(&b, notes, "tiledesc", fmt.tprintf("%v", t), "\t")
+		fmt.sbprintf(&b, "\t.%v = \"%s\",\n", t, escape_odin_string(d, context.temp_allocator))
+	}
+	fmt.sbprintf(&b, "}}\n\n")
+
+	fmt.sbprintf(&b, "// Player-built machines, stations, spawners and altars — tiles you interact\n")
+	fmt.sbprintf(&b, "// with, not terrain you dig.  A wand never fires at one (mining.odin): you\n")
+	fmt.sbprintf(&b, "// reclaim a structure with the pick up close, which spills its contents safely.\n")
+	fmt.sbprintf(&b, "@(rodata)\nis_structure_tile := #partial [Tile_Type]bool{{\n")
+	for s, t in game.is_structure_tile {
+		if !s do continue
+		notes_write(&b, notes, "struct", fmt.tprintf("%v", t), "\t")
+		fmt.sbprintf(&b, "\t.%v = true,\n", t)
+	}
+	fmt.sbprintf(&b, "}}\n\n")
+
+	fmt.sbprintf(&b, "// Stations read as magical in-world: a dark base, a breathing glow in the\n")
+	fmt.sbprintf(&b, "// station's color, and the same pixel-art icon the bag shows.  Zero alpha\n")
+	fmt.sbprintf(&b, "// (absent) = not a station.  update_ambience also reads this table to shed\n")
+	fmt.sbprintf(&b, "// rising sparks off station tiles.\n")
+	fmt.sbprintf(&b, "@(rodata)\nstation_glow := #partial [Tile_Type]rl.Color{{\n")
+	for c, t in game.station_glow {
+		if c == {} do continue
+		notes_write(&b, notes, "glow", fmt.tprintf("%v", t), "\t")
+		fmt.sbprintf(&b, "\t.%v = %s,\n", t, color_str(c))
 	}
 	fmt.sbprintf(&b, "}}\n")
 

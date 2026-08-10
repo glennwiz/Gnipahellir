@@ -3,11 +3,12 @@ package gnipa_studio
 // ─── Gnipa Studio — content authoring for Gnipahellir3 ────────────────────────
 //
 //  The pure-literal content tables (item_table, item_equip_slot, the icon
-//  art, recipes, unlocks, smelt rules) live in src/gen_*.odin files that THIS
-//  tool owns: it reads them by importing the game package and writes them by
-//  re-emitting the files.  Tables that reference named constants
-//  (item_stat_bonus, wand_*) stay hand-owned in src — codegen would flatten
-//  the constant and silently break it as a tuning knob.
+//  art, recipes, unlocks, smelt rules, the terrain tables) live in
+//  src/gen_*.odin files that THIS tool owns: it reads them by importing the
+//  game package and writes them by re-emitting the files.  Tables that
+//  reference named constants (item_stat_bonus, wand_*) stay hand-owned in
+//  src — codegen would flatten the constant and silently break it as a
+//  tuning knob.
 //
 //    gnipa_studio                open the studio window (browser / DAG / pixel editor)
 //    gnipa_studio --extract      write src/gen_*.odin from the compiled tables
@@ -72,7 +73,7 @@ Gen_Out :: struct {
 	content: string,
 }
 
-emit_all :: proc(notes: ^Notes) -> [4]Gen_Out {
+emit_all :: proc(notes: ^Notes) -> [5]Gen_Out {
 	views: [game.Item]Icon_View
 	shapes: [len(shape_registry)]Shape_View
 	views_from_game(&views)
@@ -87,6 +88,7 @@ emit_all :: proc(notes: ^Notes) -> [4]Gen_Out {
 		{"gen_item_icons.odin", emit_icons(notes, &views, shapes[:], nil)},
 		{"gen_recipes.odin", emit_recipes(notes, recipes[:], &unlock, smelts[:], nil)},
 		{"gen_player_art.odin", emit_player(notes, &pframes)},
+		{"gen_terrain.odin", emit_terrain(notes)},
 	}
 }
 

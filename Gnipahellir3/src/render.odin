@@ -103,29 +103,6 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     // all others default to .Solid (zero value)
 }
 
-// Stations read as magical in-world: a dark base, a breathing glow in the
-// station's color, and the same pixel-art icon the bag shows.  Zero alpha
-// (absent) = not a station.  update_ambience also reads this table to shed
-// rising sparks off station tiles.
-@(rodata)
-station_glow := #partial [Tile_Type]rl.Color{
-    .Crafting_Bench = {255, 200, 90, 255},   // hearth gold
-    .Tree_Grower    = {110, 230, 110, 255},  // living green
-    .Smelter        = {255, 120, 30, 255},   // furnace ember
-    .Sky_Altar      = {130, 200, 255, 255},  // sky blue
-    .Dvergr_Forge   = {255, 150, 60, 255},   // forge fire
-    .Rune_Altar     = {190, 120, 255, 255},  // rune purple
-    .Dimension_Spawner      = {80, 255, 220, 255},  // dimensional teal
-    .Dimension_Spawner_Gold = {255, 225, 100, 255}, // gilded shimmer
-    .Dimension_Spawner_Runic = {210, 140, 255, 255}, // runic violet
-    .Auto_Miner             = {120, 255, 210, 255}, // the snake's beating heart
-    .Silo                   = {200, 210, 225, 255}, // cold iron sheen
-    .Barrel                 = {190, 140, 80,  255}, // warm oak
-    .Boiler                 = {200, 225, 240, 255}, // steam white
-    .Steam_Engine           = {235, 200, 110, 255}, // working brass
-    .Gem_Replicator         = {215, 170, 255, 255}, // prismatic violet-white
-}
-
 // ─── World / Terrain ──────────────────────────────────────────────────────────
 
 // Outline drawn on every solid tile (not sky/void) — a test grid.  The camera
