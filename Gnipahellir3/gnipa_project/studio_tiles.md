@@ -1,4 +1,4 @@
-# studio_tiles.md — the TILES tab: terrain goes studio-owned (T1+T2 SHIPPED, T3 owed)
+# studio_tiles.md — the TILES tab: terrain goes studio-owned (T1+T2+T3 SHIPPED)
 
 **Status:** spec agreed with Glenn 2026-08-09 (the day Studio Phases A–C
 shipped). **T1 (the extraction, §2) SHIPPED 2026-08-10, commit 7e505c8** —
@@ -6,7 +6,24 @@ gen_terrain.odin exists, emit-check covers five files, notes.txt carries the
 tile/tiledesc/struct/glow harvest. **T2 (the tab, §3) SHIPPED the same day,
 commit 35db380** — tiles.odin, browser + joined inspector, session v2, --shot
 coverage — on key **[7]**, not the spec's [5] (this spec predates Phases D/E,
-which took [5]/[6]). §4 (T3, editing + SAVE) is what remains.
+which took [5]/[6]). **T3 (§4, editing + SAVE) SHIPPED 2026-08-11** —
+`emit_terrain` now takes working-copy pointers (behavior/desc/is_struct/glow)
+instead of reading the compiled tables directly, mirroring how
+`emit_recipes`/`emit_icons` already work; a new `Tile_Work`/`twork` in
+tiles.odin holds the editable copy. Color and glow are the pixel editor's RGB
+sliders verbatim; flags are click-to-toggle checkboxes; move_cost/dps/
+drop_pct reuse the recipe editor's `spinner` through a temp `int` (every value
+on disk is a small whole number); the drop item goes through the shared
+`draw_item_picker` modal. Name and desc stayed non-editable as scoped (no
+text-input widget yet). SAVE validates (nonempty name, `.Damaging` ⇒ dps > 0,
+a glow row can't sit at alpha 0) then re-emits through the same proc
+`--extract` uses. `--test-save` grew a fourth leg (nudges Dirt's color.r).
+Verified: game build green, all 257 tests green untouched (these tables
+aren't saved), `--emit-check` green on all five files, and `--shot` (run from
+the repo root) confirms the layout renders clean at 1600×900 with no overlap.
+**Not yet driven with a mouse in a live session** — the static render is
+confirmed good; a hands-on pass (drag a slider, toggle a flag, pick a drop
+item, SAVE, confirm the watcher rebuild) is the next check.
 
 **Companion docs:** the studio bullet in `context.md` (Phases A–C: what the
 tool is, the codegen model, the ownership law), `tools/gnipa_studio/main.odin`
