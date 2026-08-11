@@ -304,6 +304,144 @@ NORSE_ROW :: rl.Color{30, 26, 20, 225}
 NORSE_ROW_HOT :: rl.Color{62, 46, 26, 235}
 NORSE_BORDER :: rl.Color{115, 88, 52, 255}
 
+// A hard-edged, stepped silhouette used by the large UI windows.  Each band is
+// disjoint so translucent colors keep one even value instead of darkening where
+// rectangles overlap.
+draw_stepped_panel_shape :: proc(x, y, w, h: i32, col: rl.Color) {
+	if w < 16 || h < 16 {
+		rl.DrawRectangle(x, y, w, h, col)
+		return
+	}
+	rl.DrawRectangle(x + 6, y,     w - 12, 2,      col)
+	rl.DrawRectangle(x + 4, y + 2, w - 8,  2,      col)
+	rl.DrawRectangle(x + 2, y + 4, w - 4,  2,      col)
+	rl.DrawRectangle(x,     y + 6, w,      h - 12, col)
+	rl.DrawRectangle(x + 2, y + h - 6, w - 4, 2, col)
+	rl.DrawRectangle(x + 4, y + h - 4, w - 8, 2, col)
+	rl.DrawRectangle(x + 6, y + h - 2, w - 12, 2, col)
+}
+
+// Shared visual shell for every player-facing window.  Bounds deliberately stay
+// identical to window_rect: only the drawn corners step inward, so dragging,
+// overlap ordering, and input hit-tests do not change.
+draw_pixel_window_frame :: proc(x, y, w, h, header_h: i32, accent := NORSE_BORDER) {
+	shadow      := rl.Color{5, 4, 7, 175}
+	outline     := rl.Color{20, 18, 19, 255}
+	iron_dark   := rl.Color{48, 48, 52, 255}
+	iron_light  := rl.Color{92, 92, 96, 255}
+	wood_dark   := rl.Color{58, 31, 20, 255}
+	wood_mid    := rl.Color{94, 49, 25, 255}
+	wood_light  := rl.Color{150, 83, 38, 255}
+	body        := rl.Color{24, 20, 16, 250}
+	body_shadow := rl.Color{14, 12, 12, 255}
+
+	// Weight and depth: a dropped shadow, charcoal contour, iron rim, then the
+	// recessed leather-dark body.
+	draw_stepped_panel_shape(x + 5, y + 6, w, h, shadow)
+	draw_stepped_panel_shape(x, y, w, h, outline)
+	draw_stepped_panel_shape(x + 2, y + 2, w - 4, h - 4, iron_dark)
+	draw_stepped_panel_shape(x + 4, y + 4, w - 8, h - 8, body)
+
+	// The drag band reads as a thick oak beam instead of another flat region.
+	if header_h > 10 {
+		rl.DrawRectangle(x + 6, y + 6, w - 12, header_h - 8, wood_dark)
+		rl.DrawRectangle(x + 8, y + 8, w - 16, 3, wood_light)
+		rl.DrawRectangle(x + 8, y + 11, w - 16, 2, wood_mid)
+		rl.DrawRectangle(x + 6, y + header_h - 4, w - 12, 4, body_shadow)
+		rl.DrawRectangle(x + 10, y + header_h - 4, w - 20, 2, accent)
+	}
+
+	// Asymmetric light makes the rim feel forged; bracket ends and sparse rivets
+	// keep the silhouette Norse and constructed without filling it with noise.
+	rl.DrawRectangle(x + 8, y + 2, w - 16, 2, iron_light)
+	rl.DrawRectangle(x + 2, y + 8, 2, h - 16, iron_light)
+	rl.DrawRectangle(x + 8, y + h - 4, w - 16, 2, outline)
+	rl.DrawRectangle(x + w - 4, y + 8, 2, h - 16, outline)
+
+	BRACKET :: i32(14)
+	rl.DrawRectangle(x + 6, y + 2, BRACKET, 2, accent)
+	rl.DrawRectangle(x + 2, y + 6, 2, BRACKET, accent)
+	rl.DrawRectangle(x + w - 6 - BRACKET, y + 2, BRACKET, 2, accent)
+	rl.DrawRectangle(x + w - 4, y + 6, 2, BRACKET, accent)
+	rl.DrawRectangle(x + 6, y + h - 4, BRACKET, 2, accent)
+	rl.DrawRectangle(x + 2, y + h - 6 - BRACKET, 2, BRACKET, accent)
+	rl.DrawRectangle(x + w - 6 - BRACKET, y + h - 4, BRACKET, 2, accent)
+	rl.DrawRectangle(x + w - 4, y + h - 6 - BRACKET, 2, BRACKET, accent)
+
+	rivet := NORSE_GOLD_HOT
+	rl.DrawRectangle(x + 7, y + 7, 2, 2, rivet)
+	rl.DrawRectangle(x + w - 9, y + 7, 2, 2, rivet)
+	rl.DrawRectangle(x + 7, y + h - 9, 2, 2, rivet)
+	rl.DrawRectangle(x + w - 9, y + h - 9, 2, 2, rivet)
+
+	// Small central iron clasp breaks the long top edge into a crafted shape.
+	cx := x + w / 2
+	rl.DrawRectangle(cx - 10, y, 20, 4, outline)
+	rl.DrawRectangle(cx - 7, y + 2, 14, 3, iron_light)
+	rl.DrawRectangle(cx - 2, y + 2, 4, 2, accent)
+}
+
+// Compact counterpart to the window silhouette for HUD meters.  Two-pixel
+// stepped ends keep even the 10px mana bar crisp instead of rounding it off.
+draw_stepped_meter_shape :: proc(x, y, w, h: i32, col: rl.Color) {
+	if w < 8 || h < 6 {
+		rl.DrawRectangle(x, y, w, h, col)
+		return
+	}
+	rl.DrawRectangle(x + 2, y,     w - 4, 2,     col)
+	rl.DrawRectangle(x,     y + 2, w,     h - 4, col)
+	rl.DrawRectangle(x + 2, y + h - 2, w - 4, 2, col)
+}
+
+draw_pixel_meter :: proc(
+	x, y, w, h: i32,
+	value: f32,
+	fill_dark, fill_mid, fill_light: rl.Color,
+) {
+	shadow     := rl.Color{5, 4, 7, 170}
+	outline    := rl.Color{20, 18, 19, 255}
+	iron_dark  := rl.Color{48, 48, 52, 255}
+	iron_light := rl.Color{100, 98, 98, 255}
+	track      := rl.Color{12, 11, 16, 255}
+
+	draw_stepped_meter_shape(x + 2, y + 2, w, h, shadow)
+	draw_stepped_meter_shape(x, y, w, h, outline)
+	draw_stepped_meter_shape(x + 1, y + 1, w - 2, h - 2, iron_dark)
+
+	inner_x := x + 3
+	inner_y := y + 3
+	inner_w := w - 6
+	inner_h := h - 6
+	rl.DrawRectangle(inner_x, inner_y, inner_w, inner_h, track)
+
+	fill_w := clamp(i32(f32(inner_w) * clamp(value, f32(0), f32(1))), 0, inner_w)
+	if fill_w > 0 {
+		rl.DrawRectangle(inner_x, inner_y, fill_w, inner_h, fill_mid)
+		rl.DrawRectangle(inner_x, inner_y, fill_w, max(inner_h / 4, 1), fill_light)
+		rl.DrawRectangle(inner_x, inner_y + inner_h - max(inner_h / 4, 1), fill_w, max(inner_h / 4, 1), fill_dark)
+		// A bright square leading edge makes changes in the value easy to read.
+		if fill_w < inner_w && fill_w > 2 {
+			rl.DrawRectangle(inner_x + fill_w - 1, inner_y + 1, 1, max(inner_h - 2, 1), fill_light)
+		}
+	}
+
+	// Discrete cells add a forged gauge read without changing the continuous
+	// value underneath. Empty and filled sections share the same divisions.
+	divider := rl.Color{8, 7, 12, 150}
+	for tx := inner_x + 20; tx < inner_x + inner_w; tx += 20 {
+		rl.DrawRectangle(tx, inner_y, 1, inner_h, divider)
+	}
+
+	// Upper-left steel light, dark lower lip, and four tiny brass fasteners tie
+	// the casing back to the large window frames.
+	rl.DrawRectangle(x + 5, y + 1, w - 10, 1, iron_light)
+	rl.DrawRectangle(x + 5, y + h - 2, w - 10, 1, outline)
+	rl.DrawRectangle(x + 3, y + 1, 2, 1, NORSE_GOLD)
+	rl.DrawRectangle(x + w - 5, y + 1, 2, 1, NORSE_GOLD)
+	rl.DrawRectangle(x + 3, y + h - 2, 2, 1, NORSE_BORDER)
+	rl.DrawRectangle(x + w - 5, y + h - 2, 2, 1, NORSE_BORDER)
+}
+
 // ─── Title Screen (boot only; any key → menu) ─────────────────────────────────
 //
 //  Fully procedural: a slowly rotating ring of Elder Futhark runes spelling
@@ -660,8 +798,7 @@ settings_bind_at_cursor :: proc(gs: ^Game_State) -> int {
 
 draw_settings :: proc(gs: ^Game_State) {
 	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{8, 6, 10, 215})
-	rl.DrawRectangle(SET_X, SET_Y, SET_W, SET_H, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({SET_X, SET_Y, SET_W, SET_H}, 2, NORSE_BORDER)
+	draw_pixel_window_frame(SET_X, SET_Y, SET_W, SET_H, 60)
 	rl.DrawText("SETTINGS", SET_X + 24, SET_Y + 20, 30, NORSE_GOLD_HOT)
 	rl.DrawText("[ESC] back", SET_X + SET_W - 110, SET_Y + 28, 14, NORSE_GOLD)
 	// Gold rule under the header.
@@ -1465,8 +1602,7 @@ draw_golem_roster :: proc(gs: ^Game_State) {
 	py := gs.ui.win_pos[.Golem_Roster].y
 	wh := golem_roster_height(gs)
 
-	rl.DrawRectangle(px, py, ROSTER_W, wh, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({f32(px), f32(py), f32(ROSTER_W), f32(wh)}, 2, NORSE_GOLD)
+	draw_pixel_window_frame(px, py, ROSTER_W, wh, 40, NORSE_GOLD)
 	rl.DrawText("CLAY CREW ROSTER", px + 12, py + 12, 20, NORSE_GOLD_HOT)
 	rl.DrawText("[ESC] close", px + ROSTER_W - 96, py + 16, 12, NORSE_GOLD)
 	rl.DrawRectangle(px + 12, py + 38, ROSTER_W - 24, 2, NORSE_BORDER)
@@ -2060,17 +2196,22 @@ draw_item_tooltip :: proc(gs: ^Game_State, item: Item) {
 draw_hud :: proc(gs: ^Game_State) {
 	p := &gs.player
 
-	// HP bar
-	rl.DrawRectangle(24, 16, 200, 14, rl.Color{60, 20, 20, 255})
-	hp_w := i32(200 * f32(p.hp) / f32(max(p.hp_max, 1)))
-	rl.DrawRectangle(24, 16, hp_w, 14, rl.Color{200, 40, 40, 255})
-	rl.DrawRectangleLines(24, 16, 200, 14, panel_border)
-
-	// Mana bar
-	rl.DrawRectangle(24, 34, 200, 10, rl.Color{20, 20, 60, 255})
-	mana_w := i32(200 * p.mana / max(p.mana_max, 1))
-	rl.DrawRectangle(24, 34, mana_w, 10, rl.Color{60, 90, 220, 255})
-	rl.DrawRectangleLines(24, 34, 200, 10, panel_border)
+	// Health and mana use the same stepped ironwork as the large windows, with
+	// discrete shaded fills instead of flat colored rectangles.
+	draw_pixel_meter(
+		24, 16, 200, 14,
+		f32(p.hp) / f32(max(p.hp_max, 1)),
+		rl.Color{92, 18, 25, 255},
+		rl.Color{190, 43, 48, 255},
+		rl.Color{244, 96, 76, 255},
+	)
+	draw_pixel_meter(
+		24, 34, 200, 10,
+		p.mana / max(p.mana_max, 1),
+		rl.Color{18, 25, 88, 255},
+		rl.Color{53, 82, 196, 255},
+		rl.Color{112, 158, 255, 255},
+	)
 
 	// Level name (the selected item now reads off the bottom-center chip).
 	name_buf: [64]u8
@@ -2250,8 +2391,7 @@ draw_inventory :: proc(gs: ^Game_State) {
 	bx, by := inv_bag_origin(gs)
 
 	// Norse panel: header (drag to move), equipment row, bag grid, footer.
-	rl.DrawRectangle(px, py, INV_PANEL_W, INV_PANEL_H, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({f32(px), f32(py), INV_PANEL_W, INV_PANEL_H}, 2, NORSE_BORDER)
+	draw_pixel_window_frame(px, py, INV_PANEL_W, INV_PANEL_H, 54)
 	rl.DrawText("INVENTORY", px + 24, py + 16, 26, NORSE_GOLD_HOT)
 	draw_rune_strip(f32(px) + 295, f32(py) + 30, 11, rl.Color{200, 150, 70, 110})
 	rl.DrawText("[TAB] close", px + INV_PANEL_W - 106, py + 24, 12, NORSE_GOLD)
@@ -2430,13 +2570,7 @@ draw_crafting :: proc(gs: ^Game_State) {
 	cx, cy := craft_origin(gs)
 
 	// Panel + carved frame.
-	rl.DrawRectangle(wx, wy, ww, wh, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({f32(wx), f32(wy), f32(ww), f32(wh)}, 2, NORSE_BORDER)
-	TICK :: i32(7)
-	rl.DrawRectangle(wx, wy, TICK, 2, NORSE_GOLD_HOT)
-	rl.DrawRectangle(wx, wy, 2, TICK, NORSE_GOLD_HOT)
-	rl.DrawRectangle(wx+ww-TICK, wy+wh-2, TICK, 2, NORSE_GOLD_HOT)
-	rl.DrawRectangle(wx+ww-2, wy+wh-TICK, 2, TICK, NORSE_GOLD_HOT)
+	draw_pixel_window_frame(wx, wy, ww, wh, 32)
 
 	// Title band.
 	rl.DrawText(station_title[gs.ui.active_station], wx + CRAFT_PAD, wy + 8, 20,
@@ -2580,8 +2714,7 @@ draw_smelter :: proc(gs: ^Game_State) {
 	pcy := i32(gs.player.pos.y + PLAYER_H * 0.5)
 	in_reach := max(abs(tile.x - pcx), abs(tile.y - pcy)) <= BENCH_RANGE
 
-	rl.DrawRectangle(px, py, SMELT_W, SMELT_H, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({f32(px), f32(py), SMELT_W, SMELT_H}, 2, NORSE_BORDER)
+	draw_pixel_window_frame(px, py, SMELT_W, SMELT_H, 40)
 	rl.DrawText("SMELTER", px + 24, py + 12, 20, in_reach ? NORSE_GOLD_HOT : text_dim)
 	rl.DrawText("[ESC] close", px + SMELT_W - 96, py + 16, 12, NORSE_GOLD)
 	rl.DrawRectangle(px + 24, py + 38, SMELT_W - 48, 2, NORSE_BORDER)
@@ -2710,8 +2843,7 @@ draw_barrel :: proc(gs: ^Game_State) {
 	pcy := i32(gs.player.pos.y + PLAYER_H * 0.5)
 	in_reach := max(abs(tile.x - pcx), abs(tile.y - pcy)) <= BENCH_RANGE
 
-	rl.DrawRectangle(px, py, BARREL_W, BARREL_H, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({f32(px), f32(py), BARREL_W, BARREL_H}, 2, NORSE_BORDER)
+	draw_pixel_window_frame(px, py, BARREL_W, BARREL_H, 40)
 	title := cstring("BARREL")
 	if is_chest do title = cstring("CHEST")
 	rl.DrawText(title, px + BARREL_PAD, py + 12, 20, in_reach ? NORSE_GOLD_HOT : text_dim)
@@ -2766,15 +2898,7 @@ draw_rune_scroll_title :: proc(text: cstring, x, y: i32, font: i32, col: rl.Colo
 draw_rune_scroll :: proc(gs: ^Game_State) {
 	x := gs.ui.win_pos[.Rune_Scroll].x
 	y := gs.ui.win_pos[.Rune_Scroll].y
-	rl.DrawRectangle(x, y, RS_W, RS_H, NORSE_PANEL)
-	rl.DrawRectangleLinesEx({f32(x), f32(y), f32(RS_W), f32(RS_H)}, 2, NORSE_BORDER)
-
-	// Carved corner ticks, matching the crafting/notification frames.
-	TICK :: i32(7)
-	rl.DrawRectangle(x, y, TICK, 2, NORSE_GOLD_HOT)
-	rl.DrawRectangle(x, y, 2, TICK, NORSE_GOLD_HOT)
-	rl.DrawRectangle(x+RS_W-TICK, y+RS_H-2, TICK, 2, NORSE_GOLD_HOT)
-	rl.DrawRectangle(x+RS_W-2, y+RS_H-TICK, 2, TICK, NORSE_GOLD_HOT)
+	draw_pixel_window_frame(x, y, RS_W, RS_H, 44)
 	draw_rune_strip(f32(x + RS_W) - 160, f32(y) + 15, 6, rl.Color{200, 150, 70, 120})
 
 	accent := NORSE_GOLD_HOT
