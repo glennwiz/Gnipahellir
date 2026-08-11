@@ -2168,29 +2168,16 @@ draw_draugr :: proc(e: ^Enemy) {
 
 // ─── Player (pixel-art forms) ───────────────────────────────────────────────
 
-// Selectable player looks — chosen on the startup character-select screen.
-// Cosmetic only; not saved (re-picked each launch). Wizard is the default
-// (enum zero) so an un-set form matches the original mage.
+// The sole player look.  Keep the enum-shaped API so the renderer, startup
+// card, and Gnipa Studio player editor share one table-driven path.
 Player_Form :: enum u8 {
     Wizard,
-    Dwarf,
-    Ranger,
-    Viking,
-    Knight,
-    Golem,
-    Plague,
 }
 
 PLAYER_FORM_COUNT :: len(Player_Form)
 
 player_form_names := [Player_Form]cstring{
     .Wizard = "Wizard",
-    .Dwarf  = "Dwarf",
-    .Ranger = "Ranger",
-    .Viking = "Viking",
-    .Knight = "Knight",
-    .Golem  = "Golem",
-    .Plague = "Plague Dr.",
 }
 
 PLAYER_RENDER_SCALE :: 2  // sprite height in tiles — the one knob for player size
