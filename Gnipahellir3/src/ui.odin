@@ -503,75 +503,232 @@ draw_rune_strip :: proc(cx, cy, size: f32, col: rl.Color) {
 	}
 }
 
-draw_title :: proc(gs: ^Game_State) {
-	t := f32(rl.GetTime())
-	cx := f32(UI_W) / 2
-	cy := f32(UI_H) / 2 - 40
+// Five-by-seven block letters for the boot logo. The title is deliberately
+// drawn from square cells instead of scaling raylib's font to billboard size:
+// every edge, highlight, and drop shadow stays on the UI pixel grid.
+@(rodata)
+title_word_pixels := [11][7]u8{
+	{0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110}, // G
+	{0b10001, 0b11001, 0b11001, 0b10101, 0b10011, 0b10011, 0b10001}, // N
+	{0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111}, // I
+	{0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000}, // P
+	{0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001}, // A
+	{0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001}, // H
+	{0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111}, // E
+	{0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111}, // L
+	{0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111}, // L
+	{0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111}, // I
+	{0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001}, // R
+}
 
-	// Night backdrop, warming toward a fire-lit horizon.
-	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{8, 8, 14, 255})
-	rl.DrawRectangleGradientV(
-		0,
-		UI_H * 2 / 3,
-		UI_W,
-		UI_H / 3,
-		rl.Color{8, 8, 14, 255},
-		rl.Color{42, 20, 10, 255},
-	)
-	// The cave mouth smolders below the horizon.
-	rl.DrawCircleGradient(
-		{cx, f32(UI_H + 100)},
-		420,
-		rl.Color{255, 120, 30, 70},
-		rl.Color{0, 0, 0, 0},
-	)
+title_word_pixel_on :: proc(glyph, row, col: int) -> bool {
+	return (title_word_pixels[glyph][row] & (u8(1) << u8(4 - col))) != 0
+}
 
-	// Embers: stateless — each i hashes to a column/speed, y wraps on time.
-	for i in 0 ..< 70 {
-		h := whash(u32(i) * 7919 + 13)
-		speed := 18 + f32(h % 70)
-		x := f32(h % UI_W) + math.sin(t * 1.3 + f32(i)) * 16
-		y := f32(UI_H) - math.mod(t * speed + f32(h % UI_H), f32(UI_H + 60))
-		rl.DrawRectangle(
-			i32(x),
-			i32(y),
-			3,
-			3,
-			rl.Color{255, u8(110 + h % 90), 40, u8(70 + h % 130)},
-		)
+draw_title_pixel_word :: proc(y: i32) {
+	CELL :: i32(9)
+	GAP  :: i32(6)
+	GLYPH_W :: i32(5 * CELL)
+	word_w := i32(len(title_word_pixels)) * GLYPH_W + i32(len(title_word_pixels) - 1) * GAP
+	x0 := (i32(UI_W) - word_w) / 2
+
+	// One connected charcoal extrusion gives the gold face real pixel-art
+	// weight. Draw all shadow cells first so adjacent face cells merge cleanly.
+	for glyph in 0 ..< len(title_word_pixels) {
+		gx := x0 + i32(glyph) * (GLYPH_W + GAP)
+		for row in 0 ..< 7 {
+			for col in 0 ..< 5 {
+				if title_word_pixel_on(glyph, row, col) {
+					x := gx + i32(col) * CELL
+					py := y + i32(row) * CELL
+					rl.DrawRectangle(x + 4, py + 5, CELL, CELL, rl.Color{14, 11, 13, 255})
+				}
+			}
+		}
 	}
 
-	// The rune ring: GNIPAHELLIR in Elder Futhark, wheeling slowly, each
-	// glyph breathing on its own phase.  Faint rings frame the band.
-	ring_col := rl.Color{200, 150, 70, 45}
-	radius := f32(310)
-	rl.DrawRing({cx, cy}, radius - 54, radius - 50, 0, 360, 96, ring_col)
-	rl.DrawRing({cx, cy}, radius + 50, radius + 54, 0, 360, 96, ring_col)
+	for glyph in 0 ..< len(title_word_pixels) {
+		gx := x0 + i32(glyph) * (GLYPH_W + GAP)
+		for row in 0 ..< 7 {
+			for col in 0 ..< 5 {
+				if !title_word_pixel_on(glyph, row, col) do continue
+				x := gx + i32(col) * CELL
+				py := y + i32(row) * CELL
+
+				// Dark exposed edges are the outline; neighboring cells remain a
+				// single uninterrupted gold mass.
+				if row == 0 || !title_word_pixel_on(glyph, row - 1, col) {
+					rl.DrawRectangle(x, py - 2, CELL, 2, rl.Color{37, 25, 20, 255})
+				}
+				if col == 0 || !title_word_pixel_on(glyph, row, col - 1) {
+					rl.DrawRectangle(x - 2, py, 2, CELL, rl.Color{37, 25, 20, 255})
+				}
+				if row == 6 || !title_word_pixel_on(glyph, row + 1, col) {
+					rl.DrawRectangle(x, py + CELL, CELL, 2, rl.Color{37, 25, 20, 255})
+				}
+				if col == 4 || !title_word_pixel_on(glyph, row, col + 1) {
+					rl.DrawRectangle(x + CELL, py, 2, CELL, rl.Color{37, 25, 20, 255})
+				}
+
+				rl.DrawRectangle(x, py, CELL, CELL, rl.Color{181, 119, 48, 255})
+				if row == 0 || !title_word_pixel_on(glyph, row - 1, col) {
+					rl.DrawRectangle(x, py, CELL, 2, rl.Color{255, 218, 132, 255})
+				}
+				if col == 0 || !title_word_pixel_on(glyph, row, col - 1) {
+					rl.DrawRectangle(x, py + 2, 2, CELL - 2, rl.Color{220, 160, 74, 255})
+				}
+				if row == 6 || !title_word_pixel_on(glyph, row + 1, col) {
+					rl.DrawRectangle(x, py + CELL - 2, CELL, 2, rl.Color{104, 62, 33, 255})
+				}
+				if col == 4 || !title_word_pixel_on(glyph, row, col + 1) {
+					rl.DrawRectangle(x + CELL - 2, py + 2, 2, CELL - 2, rl.Color{104, 62, 33, 255})
+				}
+			}
+		}
+	}
+}
+
+// Rasterize a rune stroke as overlapping square clusters. This retains the
+// Elder Futhark glyphs without the smooth rotated lines used by small UI trim.
+draw_title_pixel_rune :: proc(g: Rune_Glyph, cx, cy, size: i32, col: rl.Color, rot: f32 = 0) {
+	BLOCK :: i32(3)
+	STEPS :: int(12)
+	cr := math.cos(rot)
+	sr := math.sin(rot)
+	for k in 0 ..< g.n {
+		for s in 0 ..= STEPS {
+			amount := f32(s) / f32(STEPS)
+			px := (g.seg[k][0] + (g.seg[k][2] - g.seg[k][0]) * amount - 0.5) * f32(size)
+			py := (g.seg[k][1] + (g.seg[k][3] - g.seg[k][1]) * amount - 0.5) * f32(size)
+			x := cx + i32(px * cr - py * sr)
+			y := cy + i32(px * sr + py * cr)
+			rl.DrawRectangle(x - BLOCK / 2, y - BLOCK / 2, BLOCK, BLOCK, col)
+		}
+	}
+}
+
+draw_title_pixel_circle :: proc(cx, cy, radius: i32, col: rl.Color) {
+	STEPS :: int(512)
+	for i in 0 ..< STEPS {
+		ang := f32(i) * 2 * math.PI / f32(STEPS)
+		x := cx + i32(math.cos(ang) * f32(radius))
+		y := cy + i32(math.sin(ang) * f32(radius))
+		rl.DrawRectangle(x - 2, y - 2, 4, 4, col)
+	}
+}
+
+draw_title_pixel_rune_ring :: proc(cx, cy, tick: i32) {
+	RUNE_RADIUS :: f32(305)
+	rotation := f32(tick) / 80
+	draw_title_pixel_circle(cx + 3, cy + 4, 335, rl.Color{10, 8, 11, 230})
+	draw_title_pixel_circle(cx, cy, 332, rl.Color{111, 74, 39, 220})
+	draw_title_pixel_circle(cx, cy, 328, rl.Color{47, 38, 36, 255})
 	for g, i in title_runes {
-		ang := t * 0.12 + f32(i) * (2 * math.PI / f32(len(title_runes)))
-		rx := cx + math.cos(ang) * radius
-		ry := cy + math.sin(ang) * radius
-		breath := 0.55 + 0.45 * math.sin(t * 1.7 + f32(i) * 2.4)
-		col := rl.Color{255, 200, 110, u8(120 + 135 * breath)}
-		draw_title_rune(g, rx, ry, 40, ang + math.PI / 2, col)
+		ang := rotation + f32(i) * (2 * math.PI / f32(len(title_runes)))
+		x := cx + i32(math.cos(ang) * RUNE_RADIUS)
+		y := cy + i32(math.sin(ang) * RUNE_RADIUS)
+		col := (tick / 6 + i32(i)) % 3 == 0 ? rl.Color{242, 185, 86, 255} : rl.Color{184, 123, 52, 255}
+		draw_title_pixel_rune(g, x + 2, y + 3, 25, rl.Color{13, 10, 12, 255}, ang + math.PI / 2)
+		draw_title_pixel_rune(g, x, y, 25, col, ang + math.PI / 2)
 	}
+}
+
+draw_title :: proc(gs: ^Game_State) {
+	_ = gs
+	tick := i32(rl.GetTime() * 8)
+	cx := i32(UI_W) / 2
+
+	// A cave lit in discrete color bands. There are intentionally no gradients
+	// or smooth curves on the boot screen: broad stepped masses do the shading.
+	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{7, 7, 12, 255})
+	rl.DrawRectangle(0, 390, UI_W, 330, rl.Color{12, 9, 13, 255})
+	rl.DrawRectangle(0, 500, UI_W, 220, rl.Color{23, 13, 12, 255})
+	rl.DrawRectangle(cx - 470, 650, 940, 70, rl.Color{28, 16, 15, 255})
+	rl.DrawRectangle(cx - 360, 610, 720, 110, rl.Color{40, 20, 16, 255})
+	rl.DrawRectangle(cx - 255, 576, 510, 144, rl.Color{56, 24, 16, 255})
+	rl.DrawRectangle(cx - 145, 552, 290, 168, rl.Color{72, 28, 16, 255})
+
+	// Heavy, asymmetrical cave walls crop the warm horizon into a stepped mouth.
+	cave := rl.Color{15, 14, 18, 255}
+	cave_hi := rl.Color{32, 27, 29, 255}
+	rl.DrawRectangle(0, 0, 190, 112, cave)
+	rl.DrawRectangle(0, 112, 150, 105, cave)
+	rl.DrawRectangle(0, 217, 116, 118, cave)
+	rl.DrawRectangle(0, 335, 142, 126, cave)
+	rl.DrawRectangle(0, 461, 205, 259, cave)
+	rl.DrawRectangle(1090, 0, 190, 92, cave)
+	rl.DrawRectangle(1128, 92, 152, 134, cave)
+	rl.DrawRectangle(1158, 226, 122, 137, cave)
+	rl.DrawRectangle(1138, 363, 142, 122, cave)
+	rl.DrawRectangle(1072, 485, 208, 235, cave)
+	rl.DrawRectangle(184, 0, 92, 34, cave)
+	rl.DrawRectangle(244, 0, 46, 66, cave)
+	rl.DrawRectangle(1014, 0, 82, 42, cave)
+	rl.DrawRectangle(990, 0, 42, 75, cave)
+	rl.DrawRectangle(184, 108, 6, 42, cave_hi)
+	rl.DrawRectangle(144, 213, 6, 46, cave_hi)
+	rl.DrawRectangle(110, 331, 6, 52, cave_hi)
+	rl.DrawRectangle(1090, 88, 6, 43, cave_hi)
+	rl.DrawRectangle(1122, 222, 6, 48, cave_hi)
+	rl.DrawRectangle(1152, 359, 6, 50, cave_hi)
+
+	// Snapped embers advance in whole-pixel beats. A few larger sparks make the
+	// animation readable without coating the screen in single-pixel noise.
+	for i in 0 ..< 46 {
+		h := whash(u32(i) * 7919 + 13)
+		travel := (tick * (2 + i32(h % 4)) + i32(h % (UI_H + 50))) % (UI_H + 50)
+		x := i32(h % UI_W) + ((tick / 9 + i32(i)) % 3 - 1) * 2
+		y := i32(UI_H) - travel
+		size := i32(2 + h % 3)
+		col := rl.Color{229, u8(103 + h % 72), 38, u8(105 + h % 130)}
+		rl.DrawRectangle(x, y, size, size, col)
+		if size == 4 do rl.DrawRectangle(x + 1, y, 2, 1, rl.Color{255, 222, 132, col.a})
+	}
+
+	// Central carved plate: charcoal contour, iron rim, warm stone face, and
+	// sparse brass joints follow the same material language as the game windows.
+	PLATE_X :: i32(126)
+	PLATE_Y :: i32(154)
+	PLATE_W :: i32(1028)
+	PLATE_H :: i32(370)
+	draw_stepped_panel_shape(PLATE_X + 8, PLATE_Y + 9, PLATE_W, PLATE_H, rl.Color{4, 3, 6, 210})
+	draw_stepped_panel_shape(PLATE_X, PLATE_Y, PLATE_W, PLATE_H, rl.Color{18, 15, 17, 255})
+	draw_stepped_panel_shape(PLATE_X + 3, PLATE_Y + 3, PLATE_W - 6, PLATE_H - 6, rl.Color{63, 57, 58, 255})
+	draw_stepped_panel_shape(PLATE_X + 7, PLATE_Y + 7, PLATE_W - 14, PLATE_H - 14, rl.Color{30, 23, 22, 252})
+	rl.DrawRectangle(PLATE_X + 14, PLATE_Y + 10, PLATE_W - 28, 3, rl.Color{102, 91, 82, 255})
+	rl.DrawRectangle(PLATE_X + 14, PLATE_Y + PLATE_H - 13, PLATE_W - 28, 3, rl.Color{11, 9, 12, 255})
+	rl.DrawRectangle(PLATE_X + 10, PLATE_Y + 18, 3, PLATE_H - 36, rl.Color{79, 68, 63, 255})
+	rl.DrawRectangle(PLATE_X + PLATE_W - 13, PLATE_Y + 18, 3, PLATE_H - 36, rl.Color{11, 9, 12, 255})
+	for px in ([2]i32{PLATE_X + 17, PLATE_X + PLATE_W - 21}) {
+		for py in ([2]i32{PLATE_Y + 17, PLATE_Y + PLATE_H - 21}) {
+			rl.DrawRectangle(px, py, 4, 4, rl.Color{208, 154, 69, 255})
+			rl.DrawRectangle(px, py, 3, 1, rl.Color{255, 222, 138, 255})
+		}
+	}
+
+	draw_title_pixel_rune_ring(cx, 335, tick)
+	draw_title_pixel_word(283)
 
 	center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
 		tw := rl.MeasureText(text, size)
 		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
 	}
 
-	// Title, haloed in ember-light.
-	ty := i32(cy) - 70
-	pulse := 0.6 + 0.4 * math.sin(t * 1.5)
-	center_text("GNIPAHELLIR", ty + 4, 110, rl.Color{120, 40, 10, u8(140 * pulse)})
-	center_text("GNIPAHELLIR", ty - 4, 110, rl.Color{120, 40, 10, u8(140 * pulse)})
-	center_text("GNIPAHELLIR", ty, 110, rl.Color{240, 205, 130, 255})
-	center_text("- III -", ty + 120, 30, rl.Color{200, 150, 70, 255})
-	center_text("The hound howls before the cliff-cave", ty + 170, 20, text_dim)
+	center_text("- III -", 367, 30, rl.Color{215, 164, 79, 255})
+	center_text("THE HOUND HOWLS BEFORE THE CLIFF-CAVE", 412, 18, rl.Color{157, 144, 134, 255})
 
-	prompt := u8(120 + 135 * (0.5 + 0.5 * math.sin(t * 2.5)))
-	center_text("PRESS ANY KEY", UI_H - 130, 26, rl.Color{255, 240, 180, prompt})
+	// The prompt is a small forged pixel plate instead of floating antialiased
+	// text. Its two-state blink is intentionally stepped, not a smooth pulse.
+	PROMPT_X :: i32(452)
+	PROMPT_Y :: i32(550)
+	PROMPT_W :: i32(376)
+	PROMPT_H :: i32(48)
+	draw_stepped_panel_shape(PROMPT_X + 4, PROMPT_Y + 5, PROMPT_W, PROMPT_H, rl.Color{5, 4, 7, 190})
+	draw_stepped_panel_shape(PROMPT_X, PROMPT_Y, PROMPT_W, PROMPT_H, rl.Color{24, 19, 19, 255})
+	draw_stepped_panel_shape(PROMPT_X + 3, PROMPT_Y + 3, PROMPT_W - 6, PROMPT_H - 6, rl.Color{72, 50, 29, 255})
+	draw_stepped_panel_shape(PROMPT_X + 6, PROMPT_Y + 6, PROMPT_W - 12, PROMPT_H - 12, rl.Color{19, 15, 17, 255})
+	prompt_col := (tick / 5) % 4 == 0 ? rl.Color{165, 118, 54, 255} : rl.Color{255, 218, 132, 255}
+	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
 }
 
 // ─── Character Select (startup form picker) ───────────────────────────────────
