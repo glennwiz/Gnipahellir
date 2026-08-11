@@ -912,6 +912,7 @@ draw_item_palette :: proc(gs: ^Game_State) {
 	}
 	if hov != .None {
 		rl.DrawText(cstring(raw_data(item_table[hov].name)), IPAL_X + 8, IPAL_Y + IPAL_H - 18, 12, NORSE_GOLD_HOT)
+		draw_item_tooltip(gs, hov)
 	}
 }
 
@@ -2025,6 +2026,37 @@ draw_hover_label :: proc(gs: ^Game_State) {
 	}
 }
 
+// Cursor-anchored name+description tooltip for an item icon — the UI-space
+// twin of draw_hover_label (which does the same job for the world cursor).
+// Shared by every item-bearing window: bag, equipment, storage, the smelter,
+// and the F1 item palette. Always full strength — no first-encounter fade,
+// since these are always-available reference windows, not a one-time teach.
+ITEM_TOOLTIP_W :: i32(200)
+
+draw_item_tooltip :: proc(gs: ^Game_State, item: Item) {
+	if item == .None do return
+	FONT :: i32(11)
+	PAD  :: i32(6)
+	name := cstring(raw_data(item_table[item].name))
+	desc := item_table[item].desc
+	tw := rl.MeasureText(name, FONT)
+
+	desc_h := i32(0)
+	if desc != "" do desc_h = draw_wrapped_text(desc, 0, 0, ITEM_TOOLTIP_W, FONT, {}, true) + 2
+
+	pw := max(tw, desc != "" ? ITEM_TOOLTIP_W : 0) + PAD*2
+	ph := PAD*2 + FONT + desc_h
+	x := clamp(i32(gs.input.mouse_screen.x) + 16, 0, i32(UI_W) - pw)
+	y := clamp(i32(gs.input.mouse_screen.y) + 20, 0, i32(UI_H) - ph)
+
+	rl.DrawRectangle(x, y, pw, ph, NORSE_PANEL)
+	rl.DrawRectangleLines(x, y, pw, ph, NORSE_BORDER)
+	rl.DrawText(name, x + PAD, y + PAD, FONT, NORSE_GOLD_HOT)
+	if desc != "" {
+		draw_wrapped_text(desc, x + PAD, y + PAD + FONT + 3, ITEM_TOOLTIP_W, FONT, rl.Color{205, 195, 175, 255})
+	}
+}
+
 draw_hud :: proc(gs: ^Game_State) {
 	p := &gs.player
 
@@ -2065,6 +2097,9 @@ draw_hud :: proc(gs: ^Game_State) {
 		if it := p.equipment[s]; it != .None {
 			draw_item_icon(it, 27, y + 3, 14)
 			rl.DrawText(cstring(raw_data(item_table[it].name)), 82, y + 5, 10, rl.WHITE)
+			if rl.CheckCollisionPointRec(gs.input.mouse_screen, {24, f32(y), 20, 20}) {
+				draw_item_tooltip(gs, it)
+			}
 		}
 	}
 
@@ -2316,14 +2351,17 @@ draw_inventory :: proc(gs: ^Game_State) {
 				12,
 				NORSE_GOLD_HOT,
 			)
+			draw_item_tooltip(gs, s.item)
 		}
 	} else if es := equip_slot_at_cursor(gs); es != .None {
 		if it := gs.player.equipment[es]; it != .None {
 			rl.DrawText(cstring(raw_data(item_table[it].name)), bx, footer_y, 12, NORSE_GOLD_HOT)
+			draw_item_tooltip(gs, it)
 		}
 	} else if void_slot_hovered(gs) {
 		if it := gs.player.void_slot.item; it != .None {
 			rl.DrawText(cstring(raw_data(item_table[it].name)), bx, footer_y, 12, rl.Color{188, 120, 235, 255})
+			draw_item_tooltip(gs, it)
 		}
 	}
 }
@@ -2647,6 +2685,16 @@ draw_smelter :: proc(gs: ^Game_State) {
 	if !in_reach {
 		rl.DrawText("(too far)", px + SMELT_W - 70, py + SMELT_H - 22, 10, text_dim)
 	}
+
+	m := gs.input.mouse_screen
+	switch {
+	case sd.in_count > 0 && rl.CheckCollisionPointRec(m, {f32(ix), f32(iy), SLOT_PX, SLOT_PX}):
+		draw_item_tooltip(gs, sd.in_item)
+	case sd.fuel_count > 0 && rl.CheckCollisionPointRec(m, {f32(fux), f32(fuy), SLOT_PX, SLOT_PX}):
+		draw_item_tooltip(gs, FUEL_ITEM)
+	case sd.store_count > 0 && rl.CheckCollisionPointRec(m, {f32(tx), f32(ty), SLOT_PX, SLOT_PX}):
+		draw_item_tooltip(gs, sd.store_item)
+	}
 }
 
 // Shared normal-storage window: barrels and rune scroll chests both expose the
@@ -2686,6 +2734,13 @@ draw_barrel :: proc(gs: ^Game_State) {
 
 	footer := cstring("drag stacks in from the bag, or a slot out to it")
 	rl.DrawText(footer, px + BARREL_PAD, py + BARREL_H - 20, 10, text_dim)
+
+	if b != nil {
+		if hov := barrel_slot_at_cursor(gs); hov >= 0 {
+			s := b.slots[hov]
+			if s.item != .None && s.count > 0 do draw_item_tooltip(gs, s.item)
+		}
+	}
 }
 
 // The interactive rune scroll overlay (B, or click a rune scroll in the bag):
