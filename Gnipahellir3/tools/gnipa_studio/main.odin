@@ -20,6 +20,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import game "../../src"
+import rl "vendor:raylib"
 
 TOOL_DIR :: #directory
 SRC_DIR :: TOOL_DIR + "../../src/"
@@ -84,12 +85,21 @@ emit_all :: proc(notes: ^Notes) -> [5]Gen_Out {
 	smelts := game.smelt_table
 	unlock: [game.Item]game.Item
 	for gate, it in game.recipe_unlock do unlock[it] = gate
+
+	behavior := game.terrain_table
+	desc: [game.Tile_Type]string
+	for d, t in game.terrain_desc do desc[t] = d
+	is_struct: [game.Tile_Type]bool
+	for sv, t in game.is_structure_tile do is_struct[t] = sv
+	glow: [game.Tile_Type]rl.Color
+	for c, t in game.station_glow do glow[t] = c
+
 	return {
 		{"gen_items.odin", emit_items(notes, nil)},
 		{"gen_item_icons.odin", emit_icons(notes, &views, &anchored, shapes[:], nil)},
 		{"gen_recipes.odin", emit_recipes(notes, recipes[:], &unlock, smelts[:], nil)},
 		{"gen_player_art.odin", emit_player(notes, &pframes)},
-		{"gen_terrain.odin", emit_terrain(notes)},
+		{"gen_terrain.odin", emit_terrain(notes, &behavior, &desc, &is_struct, &glow)},
 	}
 }
 

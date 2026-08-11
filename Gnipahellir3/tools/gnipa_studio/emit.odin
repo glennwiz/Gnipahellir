@@ -392,7 +392,7 @@ emit_recipes :: proc(notes: ^Notes, recipes: []game.Recipe, unlock: ^[game.Item]
 
 // ─── gen_terrain.odin ─────────────────────────────────────────────────────────
 
-emit_terrain :: proc(notes: ^Notes, allocator := context.allocator) -> string {
+emit_terrain :: proc(notes: ^Notes, behavior: ^[game.Tile_Type]game.Terrain_Behavior, desc: ^[game.Tile_Type]string, is_struct: ^[game.Tile_Type]bool, glow: ^[game.Tile_Type]rl.Color, allocator := context.allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
 
@@ -401,7 +401,7 @@ emit_terrain :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// One behavior row per tile: name / flags / color / move_cost /\n")
 	fmt.sbprintf(&b, "// damage_per_second / drop_item / drop_pct (Terrain_Behavior in world.odin).\n")
 	fmt.sbprintf(&b, "@(rodata)\nterrain_table := [Tile_Type]Terrain_Behavior{{\n")
-	for r, t in game.terrain_table {
+	for r, t in behavior {
 		notes_write(&b, notes, "tile", fmt.tprintf("%v", t), "\t")
 		fmt.sbprintf(&b, "\t.%v = {{ \"%s\", %s, %s, %s, %s, .%v, %d }},\n",
 			t,
@@ -421,7 +421,7 @@ emit_terrain :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// whose drop reads wrong for the tile in the ground — get their own line.\n")
 	fmt.sbprintf(&b, "// tile_desc (world.odin) resolves the two; the tests keep every tile covered.\n")
 	fmt.sbprintf(&b, "@(rodata)\nterrain_desc := #partial [Tile_Type]string{{\n")
-	for d, t in game.terrain_desc {
+	for d, t in desc {
 		if d == "" do continue
 		notes_write(&b, notes, "tiledesc", fmt.tprintf("%v", t), "\t")
 		fmt.sbprintf(&b, "\t.%v = \"%s\",\n", t, escape_odin_string(d, context.temp_allocator))
@@ -432,8 +432,8 @@ emit_terrain :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// with, not terrain you dig.  A wand never fires at one (mining.odin): you\n")
 	fmt.sbprintf(&b, "// reclaim a structure with the pick up close, which spills its contents safely.\n")
 	fmt.sbprintf(&b, "@(rodata)\nis_structure_tile := #partial [Tile_Type]bool{{\n")
-	for s, t in game.is_structure_tile {
-		if !s do continue
+	for sv, t in is_struct {
+		if !sv do continue
 		notes_write(&b, notes, "struct", fmt.tprintf("%v", t), "\t")
 		fmt.sbprintf(&b, "\t.%v = true,\n", t)
 	}
@@ -444,7 +444,7 @@ emit_terrain :: proc(notes: ^Notes, allocator := context.allocator) -> string {
 	fmt.sbprintf(&b, "// (absent) = not a station.  update_ambience also reads this table to shed\n")
 	fmt.sbprintf(&b, "// rising sparks off station tiles.\n")
 	fmt.sbprintf(&b, "@(rodata)\nstation_glow := #partial [Tile_Type]rl.Color{{\n")
-	for c, t in game.station_glow {
+	for c, t in glow {
 		if c == {} do continue
 		notes_write(&b, notes, "glow", fmt.tprintf("%v", t), "\t")
 		fmt.sbprintf(&b, "\t.%v = %s,\n", t, color_str(c))
