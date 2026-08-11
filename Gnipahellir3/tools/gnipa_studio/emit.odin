@@ -400,7 +400,7 @@ emit_terrain :: proc(notes: ^Notes, behavior: ^[game.Tile_Type]game.Terrain_Beha
 
 	fmt.sbprintf(&b, "// One behavior row per tile: name / flags / color / move_cost /\n")
 	fmt.sbprintf(&b, "// damage_per_second / drop_item / drop_pct (Terrain_Behavior in world.odin).\n")
-	fmt.sbprintf(&b, "@(rodata)\nterrain_table := [Tile_Type]Terrain_Behavior{{\n")
+	fmt.sbprintf(&b, "@(rodata)\nterrain_table := #partial [Tile_Type]Terrain_Behavior{{\n")
 	for r, t in behavior {
 		notes_write(&b, notes, "tile", fmt.tprintf("%v", t), "\t")
 		fmt.sbprintf(&b, "\t.%v = {{ \"%s\", %s, %s, %s, %s, .%v, %d }},\n",

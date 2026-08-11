@@ -54,6 +54,11 @@ Boiler_Rule :: struct {
 @(rodata)
 boiler_rules := [?]Boiler_Rule{
     {.Boiler, .Water, .Steam, .Lava, .Wood_Log, 2.0, 8.0},
+    // The magic track: no free heat (heat_tile == .Air is the sentinel tick_boiler
+    // checks for — see Seam 1 there), and fuel_item == .None means "consult
+    // gem_burn_time instead" (Seam 2) rather than a fixed single item. burn_time
+    // is unused for this row; the real duration is gem_burn_time[sd.in_item].
+    {.Magic_Kettle, .Magic_Lava, .Mana_Mist, .Air, .None, 2.0, 0},
 }
 
 boiler_rule_for :: proc(t: Tile_Type) -> (Boiler_Rule, bool) {
@@ -76,6 +81,9 @@ Engine_Rule :: struct {
 @(rodata)
 engine_rules := [?]Engine_Rule{
     {.Steam_Engine, .Steam, 1.0, 3, 3.0},
+    // Same numbers as steam's engine — capability parity between tracks is
+    // the point; powered() consumers never learn which track fed them.
+    {.Mana_Wheel, .Mana_Mist, 1.0, 3, 3.0},
 }
 
 engine_rule_for :: proc(t: Tile_Type) -> (Engine_Rule, bool) {
@@ -139,6 +147,8 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Steam_Engine = tick_engine,
     .Gem_Replicator = tick_gem_replicator,
     .Mossy_Stone = tick_mossy_stone,
+    .Magic_Kettle = tick_boiler,
+    .Mana_Wheel   = tick_engine,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
@@ -264,7 +274,19 @@ tick_boiler :: proc(gs: ^Game_State, x, y: int) {
     rule, ok := boiler_rule_for(w.terrain[idx])
     if !ok do return
 
-    _ = machine_autopull_fuel(gs, x, y, sd, rule.fuel_item, BOILER_FUEL_CAP)
+    // Seam 2: fuel_item == .None means tiered gem fuel (gem_burn_time),
+    // tracked in sd.in_item/in_count like the smelter's variable-item ore
+    // slot, instead of the fixed-item fuel_count every other boiler row
+    // uses. Captured once up front so the vapour this tick breathes (if any)
+    // is tinted by whatever gem was observably loaded this frame, even if
+    // that gem's last unit burns out later in this same tick.
+    tiered     := rule.fuel_item == .None
+    tint_gem   := sd.in_item
+    if tiered {
+        _ = machine_autopull_tiered_fuel(gs, x, y, sd, BOILER_FUEL_CAP)
+    } else {
+        _ = machine_autopull_fuel(gs, x, y, sd, rule.fuel_item, BOILER_FUEL_CAP)
+    }
 
     if !fluid_open(w, x, y - 1) {
         sd.growth_timer = 0  // capped — nowhere for the puff to go
@@ -277,15 +299,33 @@ tick_boiler :: proc(gs: ^Game_State, x, y: int) {
     }
 
     // Heat: a heat_tile cell against the kettle boils for free; otherwise the
-    // burn clock eats loaded fuel, one unit per burn_time.
-    if _, _, hot := adjacent_tile_of(w, x, y, rule.heat_tile); !hot {
+    // burn clock eats loaded fuel, one unit per burn_time. Seam 1: heat_tile
+    // == .Air is the "no free-heat tile configured" sentinel — checked
+    // before the match, since .Air would otherwise falsely match nearly
+    // every open-adjacent kettle and grant free heat always.
+    free_heat := false
+    if rule.heat_tile != .Air {
+        _, _, free_heat = adjacent_tile_of(w, x, y, rule.heat_tile)
+    }
+    if !free_heat {
         if sd.spread_timer <= 0 {
-            if sd.fuel_count == 0 {
-                sd.growth_timer = 0  // the fire is cold — feed it
-                return
+            if tiered {
+                if sd.in_item == .None || sd.in_count == 0 {
+                    sd.growth_timer = 0  // the fire is cold — feed it
+                    return
+                }
+                burn_time, _ := gem_burn_time_for(sd.in_item)
+                sd.in_count -= 1
+                if sd.in_count == 0 do sd.in_item = .None
+                sd.spread_timer = burn_time
+            } else {
+                if sd.fuel_count == 0 {
+                    sd.growth_timer = 0  // the fire is cold — feed it
+                    return
+                }
+                sd.fuel_count -= 1
+                sd.spread_timer = rule.burn_time
             }
-            sd.fuel_count -= 1
-            sd.spread_timer = rule.burn_time
         }
         sd.spread_timer -= gs.delta_time
     }
@@ -297,6 +337,7 @@ tick_boiler :: proc(gs: ^Game_State, x, y: int) {
     set_tile(w, sx, sy, gravity_open_tile(gs, sy))
     set_tile(w, x, y - 1, rule.vapour)
     gs.fluid.age[grid_idx(x, y - 1)] = 0
+    if tiered do gs.fluid.gem_tint[grid_idx(x, y - 1)] = gem_tint_index(tint_gem)
     spawn_smelt_burst(gs, {i32(x), i32(y)})
     eq_push(&gs.events, Event{
         type    = .Play_Sound,
@@ -322,6 +363,38 @@ machine_autopull_fuel :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data, it
             take := min(int(w.item_counts[n]), cap - int(sd.fuel_count))
             if take <= 0 do continue
             sd.fuel_count += u8(take)
+            w.item_counts[n] -= u8(take)
+            if w.item_counts[n] == 0 do w.items[n] = .None
+            return true
+        }
+    }
+    return false
+}
+
+// Draw one adjacent pile of ANY tiered-fuel item (gem_burn_time's nonzero
+// rows) into sd.in_item/in_count — the Magic Kettle's fuel slot, styled like
+// the smelter's variable-item ore slot rather than the boiler's fixed-item
+// fuel_count.  Refuses mixing exactly like the smelter's ore buffer: once a
+// gem is loaded, only more of that same gem tops it up until it runs dry.
+// Returns true if it pulled: one pile per tick keeps it cheap.
+machine_autopull_tiered_fuel :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data, cap: int) -> bool {
+    if sd.in_item != .None && int(sd.in_count) >= cap do return false
+    w := &gs.world
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 {
+            if dx == 0 && dy == 0 do continue
+            nx, ny := x + dx, y + dy
+            if !in_bounds(nx, ny) do continue
+            n := grid_idx(nx, ny)
+            it := w.items[n]
+            if w.item_counts[n] == 0 do continue
+            if _, ok := gem_burn_time_for(it); !ok do continue
+            if sd.in_item != .None && sd.in_item != it do continue
+            have := sd.in_item == it ? int(sd.in_count) : 0
+            take := min(int(w.item_counts[n]), cap - have)
+            if take <= 0 do continue
+            sd.in_item  = it
+            sd.in_count = u8(have + take)
             w.item_counts[n] -= u8(take)
             if w.item_counts[n] == 0 do w.items[n] = .None
             return true
@@ -551,6 +624,36 @@ gem_replicate_time := #partial [Item]f32{
 gem_replicate_time_for :: proc(it: Item) -> (f32, bool) {
     t := gem_replicate_time[it]
     return t, t > 0
+}
+
+// Seconds one gem burns in the Magic Kettle — sibling of gem_replicate_time,
+// same shape, same "nonzero row is the is-fuel test."  Burn ≈ 2/3 of that
+// gem's own replicate period (mana_industry.md §4, decision 7): one farm
+// almost feeds one kettle, so a self-sufficient power block always wants
+// one more farm or one better gem — the pressure knob, tuned deliberately.
+@(rodata)
+gem_burn_time := #partial [Item]f32{
+    .Emerald = 120,
+    .Jade    = 240,
+    .Diamond = 480,
+    .Hel_Gem = 900,
+}
+
+gem_burn_time_for :: proc(it: Item) -> (f32, bool) {
+    t := gem_burn_time[it]
+    return t, t > 0
+}
+
+// A small per-cell index (not the Item itself, to keep Fluid_State.gem_tint
+// one byte) recording which gem tinted a Mana Mist cell — 0 means "no gem"
+// (render falls back to a neutral color). gem_tint_color (render.odin) turns
+// this back into a real color by reading item_table[...].color directly, so
+// the tint always matches whatever that gem's color actually is.
+gem_tint_order := [4]Item{.Emerald, .Jade, .Diamond, .Hel_Gem}
+
+gem_tint_index :: proc(it: Item) -> u8 {
+    for g, i in gem_tint_order do if g == it do return u8(i + 1)
+    return 0
 }
 
 // Draw ONE gem from an adjacent pile into the empty seed slot — drop a gem

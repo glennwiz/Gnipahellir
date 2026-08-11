@@ -706,4 +706,23 @@ item_icons := [Item]Item_Icon{
 		"...aAAAAa...",
 		"............",
 	}, {{57, 235, 40, 255}, {28, 130, 30, 255}, {160, 255, 120, 255}, {228, 214, 176, 255}, {172, 152, 116, 255}}},
+	// Magic Kettle - the machine box reusing the smelter silhouette in violet.
+	.Magic_Kettle = {SMELTER_GRID, {{130, 90, 160, 255}, {78, 52, 96, 255}, {}, {210, 140, 255, 255}, {245, 210, 255, 255}}},
+	// Mana Wheel - the machine box reusing the smelter silhouette, lighter violet.
+	.Mana_Wheel = {SMELTER_GRID, {{170, 130, 200, 255}, {100, 74, 122, 255}, {}, {225, 190, 255, 255}, {250, 235, 255, 255}}},
+	// A horizontal pipe segment: iron casing, a glowing fluid core down the middle.
+	.Mana_Pipe = {Icon_Grid{
+		"............",
+		"............",
+		"..DDDDDDDD..",
+		"..DBBBBBBD..",
+		".DBBAAAABBD.",
+		"DBBBAaaaBBBD",
+		"DBBBAaaaBBBD",
+		".DBBAAAABBD.",
+		"..DBBBBBBD..",
+		"..DDDDDDDD..",
+		"............",
+		"............",
+	}, {{160, 130, 190, 255}, {90, 68, 108, 255}, {}, {210, 140, 255, 255}, {245, 210, 255, 255}}},
 }

@@ -102,6 +102,10 @@ recipe_table := [?]Recipe{
 	{ .Gem_Replicator, 1, .Rune_Altar, {{.Iron_Bar, 8}, {.Gold_Bar, 4}, {.Cloud_Stone, 10}} },
 	{ .GreenBerrie, 1, .Bench, {{.Flower_Seed, 1}, {.Leaf, 1}, {.Green_Cave_Mushroom, 1}} },
 	{ .Clay, 2, .None, {{.Stone_Block, 1}, {}, {}} },
+	// Magic industry, the sink half: the kettle burns gems for power.
+	{ .Magic_Kettle, 1, .Rune_Altar, {{.Iron_Bar, 6}, {.Gold_Bar, 3}, {.Cloud_Stone, 8}} },
+	{ .Mana_Wheel, 1, .Forge, {{.Iron_Bar, 10}, {.Silver_Bar, 2}, {}} },
+	{ .Mana_Pipe, 1, .Bench, {{.Iron_Bar, 2}, {.Cloud_Stone, 1}, {}} },
 }
 
 // Recipe unlock tree: a recipe stays hidden until the player first holds its
@@ -174,6 +178,12 @@ recipe_unlock := #partial [Item]Item{
 	// player the farm exists before the recipe is affordable.
 	.Gem_Replicator = .Emerald,
 	.GreenBerrie = .Leaf,
+	// The card appears the moment you hold your first gem, same tell as the
+	// Replicator; the wheel waits on the kettle existing, and the pipe on the
+	// wheel - a built-in build order.
+	.Magic_Kettle = .Emerald,
+	.Mana_Wheel = .Magic_Kettle,
+	.Mana_Pipe = .Mana_Wheel,
 }
 
 // What a smelter eats and what it casts.  New smeltable = new row.

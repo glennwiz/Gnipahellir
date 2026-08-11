@@ -159,6 +159,18 @@ Tile_Type :: enum u8 {
     // The block a cave mushroom sprouts from — stone furred with moss,
     // mines like stone.  (appended: terrain ordinals are serialized)
     Mossy_Stone,
+    // The magic track's kettle: drinks an adjacent Magic_Lava cell, breathes
+    // a Mana_Mist cell into the open tile above — the gem economy's power
+    // sink.  (appended: terrain ordinals are serialized)
+    Magic_Kettle,
+    // The magic track's power take-off: drinks pooled Mana_Mist, stamps the
+    // same powered() field the steam engine does.  (appended: terrain
+    // ordinals are serialized)
+    Mana_Wheel,
+    // Harmless magic vapour — Mana Mist, the Mist twin of Steam: rises,
+    // pools, fades, but deals no damage (comfort is the luxury track's
+    // perk).  (appended: terrain ordinals are serialized)
+    Mana_Mist,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -283,6 +295,14 @@ Item :: enum u8 {
     // Mined from cave-floor mushrooms — GreenBerrie ingredient (appended:
     // item ordinals are serialized)
     Green_Cave_Mushroom,
+    // The magic track: kettle + wheel (appended: item ordinals are serialized)
+    Magic_Kettle,
+    Mana_Wheel,
+    // A pipe fitting: place it on an open cell to mark that cell piped
+    // (Tile_Flag.Piped) — pure decoration over whatever fluid physics is
+    // already doing there, auto-tiled casing art connects into a network.
+    // (appended: item ordinals are serialized)
+    Mana_Pipe,
     // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 
@@ -369,6 +389,10 @@ Tile_Flag :: enum u8 {
               // identical natural terrain so only placed ones obey gravity
     Golem_Placed, // temporary navigation masonry a clay golem may reclaim
     Golem_Marked, // explicit command-wand paint: mine this ordinary block
+    Piped,        // a Mana Pipe fitting sits here — decoration only, set_tile
+                  // never touches this bit, so it survives whatever fluid
+                  // tile-type churns through the cell underneath (fluid.odin
+                  // is completely unaware pipes exist; the 8th and last bit)
 }
 
 Tile_Flags :: bit_set[Tile_Flag; u8]

@@ -10,7 +10,7 @@ import rl "vendor:raylib"
 // One behavior row per tile: name / flags / color / move_cost /
 // damage_per_second / drop_item / drop_pct (Terrain_Behavior in world.odin).
 @(rodata)
-terrain_table := [Tile_Type]Terrain_Behavior{
+terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Air = { "Air", {}, {135, 206, 235, 255}, 1, 0, .None, 0 },
 	.Void = { "Void", {}, {0, 0, 0, 255}, 1, 0, .None, 0 },
 	.Grass = { "Grass", {.Solid, .Mineable}, {34, 139, 34, 255}, 0, 0, .Grass_Turf, 0 },
@@ -96,6 +96,11 @@ terrain_table := [Tile_Type]Terrain_Behavior{
 	.Gem_Replicator = { "Gem Replicator", {.Solid, .Mineable, .Placeable}, {168, 120, 205, 255}, 0, 0, .Gem_Replicator, 0 },
 	.Green_Cave_Mushroom = { "Green Cave Mushroom", {.Walkable, .Mineable}, {57, 235, 40, 255}, 1, 0, .Green_Cave_Mushroom, 0 },
 	.Mossy_Stone = { "Mossy Stone", {.Solid, .Mineable}, {96, 138, 90, 255}, 0, 0, .Stone_Block, 0 },
+	.Magic_Kettle = { "Magic Kettle", {.Solid, .Mineable, .Placeable}, {130, 90, 160, 255}, 0, 0, .Magic_Kettle, 0 },
+	.Mana_Wheel = { "Mana Wheel", {.Solid, .Mineable, .Placeable}, {170, 130, 200, 255}, 0, 0, .Mana_Wheel, 0 },
+	// The magic track's vapour, twin of Steam: rises, pools, fades - but
+	// deals no damage (decision 5: comfort is the luxury track's perk).
+	.Mana_Mist = { "Mana Mist", {.Walkable}, {225, 200, 245, 110}, 1, 0, .None, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -137,6 +142,9 @@ terrain_desc := #partial [Tile_Type]string{
 	.Quick_Clay = "A foothold a golem conjured for itself. It dissolves on its own.",
 	.Steam = "Scalding vapour. It rises, it leaks, and it fades - cap your chamber or lose your pressure.",
 	.Mossy_Stone = "Cave stone furred green with moss - something likes growing here.",
+	.Magic_Kettle = "Burns a gem to breathe Mana Mist - the magic track's power sink.",
+	.Mana_Wheel = "Drinks pooled Mana Mist to power nearby machines.",
+	.Mana_Mist = "Harmless magic vapour, tinted by whatever gem is burning. It rises, it leaks, it fades.",
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
@@ -170,6 +178,8 @@ is_structure_tile := #partial [Tile_Type]bool{
 	.Boiler = true,
 	.Steam_Engine = true,
 	.Gem_Replicator = true,
+	.Magic_Kettle = true,
+	.Mana_Wheel = true,
 }
 
 // Stations read as magical in-world: a dark base, a breathing glow in the
@@ -208,4 +218,8 @@ station_glow := #partial [Tile_Type]rl.Color{
 	.Steam_Engine = {235, 200, 110, 255},
 	// prismatic violet-white
 	.Gem_Replicator = {215, 170, 255, 255},
+	// magic ember - the kettle's own light while it burns a gem
+	.Magic_Kettle = {200, 140, 255, 255},
+	// working violet-brass
+	.Mana_Wheel = {225, 190, 255, 255},
 }

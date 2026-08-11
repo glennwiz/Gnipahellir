@@ -104,6 +104,13 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         return
     }
 
+    // Mana Pipe is a Tile_Flag.Piped overlay, not a Tile_Type (place_tile is
+    // .Air), so it takes the click first too — same reason as buckets.
+    if slot.item == .Mana_Pipe {
+        mana_pipe_use(gs, x, y)
+        return
+    }
+
     if !placement_ok(gs, slot.item, x, y) {
         // Explain the common templated-structure miss (the red ghost shows the rest).
         if tpl := structure_template_for(gs, slot.item); tpl != nil {
@@ -263,6 +270,46 @@ bucket_use :: proc(gs: ^Game_State, x, y: int) {
     }
     notify(gs, "You pour out the %s", terrain_table[fluid].name)
     set_tile(&gs.world, x, y, fluid)
+    audio_play(&gs.audio, .Place)
+}
+
+// Mana Pipe is a Tile_Flag.Piped overlay (types.odin/render.odin), not a
+// Tile_Type — so it can't go through the ordinary place-then-mine cycle
+// every real tile uses. Right-click toggles it: an open (non-solid) cell
+// gets piped, an already-piped cell gets un-piped and the item returned —
+// place and remove share one action, symmetric and easy to find. The
+// underlying tile is never touched either way: fluid physics never learns
+// pipes exist.
+mana_pipe_use :: proc(gs: ^Game_State, x, y: int) {
+    if !in_bounds(x, y) do return
+    inv  := &gs.player.inventory
+    slot := &inv.slots[inv.selected]
+
+    pcx := int(gs.player.pos.x + PLAYER_W*0.5)
+    pcy := int(gs.player.pos.y + PLAYER_H*0.5)
+    if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH {
+        notify(gs, "Too far away to fit a pipe there")
+        return
+    }
+
+    idx := grid_idx(x, y)
+    if .Piped in gs.world.tile_flags[idx] {
+        if !inventory_insert(inv, .Mana_Pipe) {
+            notify(gs, "No room in the bag for the pipe")
+            return
+        }
+        gs.world.tile_flags[idx] -= {.Piped}
+        audio_play(&gs.audio, .Pickup)
+        return
+    }
+
+    if is_solid(&gs.world, x, y) {
+        notify(gs, "A pipe needs an open cell to sit in")
+        return
+    }
+    slot.count -= 1
+    if slot.count == 0 do slot.item = .None
+    gs.world.tile_flags[idx] += {.Piped}
     audio_play(&gs.audio, .Place)
 }
 

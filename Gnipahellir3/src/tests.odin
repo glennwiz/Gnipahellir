@@ -7240,6 +7240,133 @@ a_capped_boiler_idles :: proc(t: ^testing.T) {
 	testing.expect_value(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75), 0)
 }
 
+// ─── The magic track (mana_industry.md) — the gem economy's sink half ────────
+//
+//  Same rule-row archetype as steam, so most of the boiler/engine/fluid
+//  machinery above is already exercised generically; these tests cover only
+//  what the magic track adds: no free heat, tiered gem fuel instead of a
+//  fixed fuel_item, and the gem tint riding the mist.
+
+@(test)
+mana_mist_is_never_a_spring :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	cx, cy := 100, 70
+	fluid_build_spring(gs, cx, cy, .Mana_Mist)
+
+	testing.expect(t, fluid_is_spring(w, cx, cy, .Mana_Mist), "the built stencil matches the spring shape")
+
+	for _ in 0 ..< 1500 {
+		update_fluid(gs)
+		if get_tile(w, cx, cy + 1) == .Mana_Mist {
+			testing.fail_now(t, "the mouth filled: a mist spring must never fire")
+		}
+	}
+	testing.expect_value(t, fluid_count(gs, .Mana_Mist), 0)
+}
+
+@(test)
+a_magic_kettle_burns_any_gem_and_refuses_mixing :: proc(t: ^testing.T) {
+	// Seam 2: fuel_item == .None means tiered gem fuel (gem_burn_time),
+	// tracked in sd.in_item/in_count like the smelter's ore slot — a gem
+	// pile is auto-pulled, burns for exactly its own gem_burn_time, and a
+	// different gem beside it is refused until the loaded one runs dry.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := boiler_rules[1] // Magic_Kettle
+	testing.expect_value(t, rule.tile, Tile_Type.Magic_Kettle)
+	bx, by := boiler_build(gs, rule)
+	spawn_ground_item(w, {i32(bx - 1), i32(by)}, .Emerald, 3)
+
+	for _ in 0 ..< 200 { update_sim(gs); update_fluid(gs) } // one puff, well under Emerald's 120s burn
+
+	sd := &w.sim_data[grid_idx(bx, by)]
+	testing.expect(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75) >= 1, "the kettle must breathe mist")
+	testing.expect_value(t, sd.in_item, Item.Emerald)
+	testing.expect(t, sd.in_count == 2 && sd.spread_timer > 0, "the pile was auto-pulled and one emerald is burning")
+
+	// A Jade pile beside it while an Emerald is loaded and burning: refused,
+	// exactly like the smelter's ore slot refuses a second item mid-load.
+	spawn_ground_item(w, {i32(bx + 1), i32(by - 1)}, .Jade, 5)
+	for _ in 0 ..< 30 { update_sim(gs); update_fluid(gs) }
+	testing.expect_value(t, sd.in_item, Item.Emerald)
+	testing.expect_value(t, w.item_counts[grid_idx(bx + 1, by - 1)], u8(5))
+}
+
+@(test)
+a_magic_kettle_has_no_free_heat_shortcut :: proc(t: ^testing.T) {
+	// Seam 1: heat_tile == .Air is the sentinel — unlike the steam Boiler
+	// (heat_tile = .Lava), the magic track has no adjacent-tile shortcut at
+	// all.  Sitting the kettle against Magic_Lava must NOT count as free
+	// heat; only a burning gem may fire it.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := boiler_rules[1]
+	bx, by := boiler_build(gs, rule)
+	set_tile(w, bx - 1, by, .Magic_Lava) // would be free heat if the sentinel failed
+
+	for _ in 0 ..< 200 { update_sim(gs); update_fluid(gs) }
+
+	sd := &w.sim_data[grid_idx(bx, by)]
+	testing.expect_value(t, fluid_count_in(gs, rule.vapour, 98, 104, 68, 75), 0)
+	testing.expect_value(t, sd.spread_timer, f32(0))
+}
+
+@(test)
+mana_mist_carries_its_burning_gems_tint :: proc(t: ^testing.T) {
+	// Part 2: the mist a kettle breathes is tinted by whichever gem is
+	// loaded, and a drifting plume keeps that tint (Fluid_State.gem_tint,
+	// carried on move exactly like age is).
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	rule := boiler_rules[1]
+	bx, by := boiler_build(gs, rule)
+	spawn_ground_item(w, {i32(bx - 1), i32(by)}, .Diamond, 3)
+
+	for _ in 0 ..< 200 { update_sim(gs); update_fluid(gs) }
+
+	found := false
+	for y in 68 ..= 75 {
+		for x in 98 ..= 104 {
+			if get_tile(w, x, y) == .Mana_Mist {
+				testing.expect_value(t, gs.fluid.gem_tint[grid_idx(x, y)], gem_tint_index(.Diamond))
+				found = true
+			}
+		}
+	}
+	testing.expect(t, found, "the puff must have landed somewhere in the sealed box")
+}
+
+@(test)
+mana_pipe_places_and_removes_via_the_flag :: proc(t: ^testing.T) {
+	// Mana Pipe is Tile_Flag.Piped, not a Tile_Type — placing/removing it
+	// must never touch the underlying tile, and the flag must survive that
+	// cell churning through a fluid and back to open air.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	inv := &gs.player.inventory
+	x, y := 100, 70
+	set_tile(w, x, y, .Air)
+	gs.player.pos = {f32(x) - 1, f32(y)}
+	inventory_insert(inv, .Mana_Pipe, 2)
+	for s, i in inv.slots do if s.item == .Mana_Pipe { inv.selected = i; break }
+
+	mana_pipe_use(gs, x, y)
+	testing.expect(t, .Piped in w.tile_flags[grid_idx(x, y)], "an open cell should take the pipe")
+	testing.expect_value(t, inventory_count(inv, .Mana_Pipe), 1)
+	testing.expect_value(t, get_tile(w, x, y), Tile_Type.Air) // never a tile-type swap
+
+	// A fluid churning through the cell must not disturb the flag.
+	set_tile(w, x, y, .Mana_Mist)
+	set_tile(w, x, y, .Air)
+	testing.expect(t, .Piped in w.tile_flags[grid_idx(x, y)], "the flag must survive the cell's tile-type churning")
+
+	// Right-click again removes it and returns the item.
+	mana_pipe_use(gs, x, y)
+	testing.expect(t, .Piped not_in w.tile_flags[grid_idx(x, y)], "a second use on a piped cell removes it")
+	testing.expect_value(t, inventory_count(inv, .Mana_Pipe), 2)
+}
+
 @(test)
 an_engine_powers_a_smelter :: proc(t: ^testing.T) {
 	// The whole loop closes: pooled vapour -> engine field -> the furnace in

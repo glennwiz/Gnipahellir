@@ -168,3 +168,14 @@ glow	Barrel	warm oak
 glow	Boiler	steam white
 glow	Steam_Engine	working brass
 glow	Gem_Replicator	prismatic violet-white
+tile	Mana_Mist	The magic track's vapour, twin of Steam: rises, pools, fades - but
+tile	Mana_Mist	deals no damage (decision 5: comfort is the luxury track's perk).
+glow	Magic_Kettle	magic ember - the kettle's own light while it burns a gem
+glow	Mana_Wheel	working violet-brass
+recipe	Magic_Kettle	Magic industry, the sink half: the kettle burns gems for power.
+unlock	Magic_Kettle	The card appears the moment you hold your first gem, same tell as the
+unlock	Magic_Kettle	Replicator; the wheel waits on the kettle existing, and the pipe on the
+unlock	Magic_Kettle	wheel - a built-in build order.
+icon	Magic_Kettle	Magic Kettle - the machine box reusing the smelter silhouette in violet.
+icon	Mana_Wheel	Mana Wheel - the machine box reusing the smelter silhouette, lighter violet.
+icon	Mana_Pipe	A horizontal pipe segment: iron casing, a glowing fluid core down the middle.

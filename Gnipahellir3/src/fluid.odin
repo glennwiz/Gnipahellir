@@ -76,6 +76,11 @@ fluid_rules := [?]Fluid_Rule {
 	// stays OFF for every gas: a steam spring would be free infinite power and
 	// would delete the boiler from the game.
 	{tile = .Steam, period = 0.25, rise = true, lifetime = 20.0},
+	// The magic track's vapour — same shape as Steam (a rising, fading gas),
+	// deliberately slower (mana_industry.md §4, a first guess to retune by
+	// feel). springs stays OFF for the same reason it does for every gas: a
+	// mist spring would be free infinite power with zero gems ever burned.
+	{tile = .Mana_Mist, period = 1.0, rise = true, lifetime = 20.0},
 }
 
 // How far along its row a blocked cell can spot somewhere to fall.  Bigger =
@@ -278,5 +283,9 @@ fluid_move :: proc(
 	set_tile(&gs.world, fx, fy, gravity_open_tile(gs, fy))
 	gs.fluid.age[grid_idx(tx, ty)] = gs.fluid.age[grid_idx(fx, fy)]
 	gs.fluid.age[grid_idx(fx, fy)] = 0
+	// Mana Mist only (meaningless, but harmless, for every other fluid): a
+	// drifting plume keeps the tint of whichever gem produced it.
+	gs.fluid.gem_tint[grid_idx(tx, ty)] = gs.fluid.gem_tint[grid_idx(fx, fy)]
+	gs.fluid.gem_tint[grid_idx(fx, fy)] = 0
 	moved[grid_idx(tx, ty)] = true
 }

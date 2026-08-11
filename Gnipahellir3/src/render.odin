@@ -79,6 +79,7 @@ Draw_Style :: enum u8 {
     Pixel_Steam,
     Pixel_Mushroom,
     Pixel_Mossy_Stone,
+    Pixel_Mana_Mist,
 }
 
 @(rodata)
@@ -104,6 +105,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style{
     .Steam       = .Pixel_Steam,
     .Green_Cave_Mushroom = .Pixel_Mushroom,
     .Mossy_Stone         = .Pixel_Mossy_Stone,
+    .Mana_Mist           = .Pixel_Mana_Mist,
     // all others default to .Solid (zero value)
 }
 
@@ -189,6 +191,9 @@ draw_world :: proc(gs: ^Game_State) {
     // neighboring cloud puffs rather than disappear into their broad bulges.
     draw_sky_altars(gs)
     if gs.level_index == LEVEL_SKY do draw_sky_apparition(gs)
+    // Pipe casing over everything — it dresses whatever fluid/gas is already
+    // there, so it must draw last to sit visibly on top.
+    draw_mana_pipes(gs)
 }
 
 // ─── Clay-golem automation visuals ───────────────────────────────────────────
@@ -713,6 +718,7 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
     case .Pixel_Clay:       draw_pixel_clay(px, py, x, y)
     case .Pixel_Flower_Bed: draw_pixel_flower_bed(gs, px, py, x, y)
     case .Pixel_Steam:      draw_pixel_steam(gs, px, py, x, y)
+    case .Pixel_Mana_Mist:  draw_pixel_mana_mist(gs, px, py, x, y)
     case .Pixel_Mushroom:   draw_pixel_mushroom(gs, px, py, x, y)
     case .Pixel_Mossy_Stone: draw_pixel_mossy_stone(gs, px, py, x, y)
     case .Pixel_Rune_Scroll_Chest:
@@ -744,6 +750,98 @@ draw_pixel_steam :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
         wy := by + (h*11 + i*29 - climb) %% CELL_SIZE
         rl.DrawRectangle(wx, wy, 2, 1, wisp)
     }
+}
+
+// gem_tint_index (sim.odin) turned back into a real color — reads
+// item_table[...].color directly so the tint always matches whatever that
+// gem's color actually is.  0 (no gem recorded, e.g. a stale/edge-case cell)
+// falls back to a neutral violet.
+gem_tint_color :: proc(idx: u8) -> rl.Color {
+    if idx == 0 || int(idx) > len(gem_tint_order) do return rl.Color{200, 170, 230, 255}
+    return item_table[gem_tint_order[idx-1]].color
+}
+
+// ─── Pixel Art: Mana Mist ───────────────────────────────────────────────────────
+//
+//  Steam's harmless twin: same translucent-body-plus-rising-wisps shape, but
+//  tinted by whichever gem is currently fueling the Magic Kettle that
+//  breathed it (gem_tint_color) instead of a fixed color — Emerald green,
+//  Jade pale green, Diamond white/blue, Hel Gem red.
+
+draw_pixel_mana_mist :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+    tint := gem_tint_color(gs.fluid.gem_tint[grid_idx(x, y)])
+    body := tint
+    body.a = terrain_table[.Mana_Mist].color.a
+    rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, body)
+    wisp := rl.Color{tint.r, tint.g, tint.b, 130}
+    if wisp.r < 200 do wisp.r = 200 // keep the wisp reading bright against the dimmer body
+    if wisp.g < 200 do wisp.g = 200
+    if wisp.b < 200 do wisp.b = 200
+    h := i32(x*31 + y*57)
+    climb := i32(gs.elapsed_time * 3)
+    for i in i32(0) ..< 3 {
+        wx := bx + (h*7 + i*13) %% CELL_SIZE
+        wy := by + (h*11 + i*29 - climb) %% CELL_SIZE
+        rl.DrawRectangle(wx, wy, 2, 1, wisp)
+    }
+}
+
+// ─── Pixel Art: Mana Pipe ────────────────────────────────────────────────────────
+//
+//  A Tile_Flag.Piped overlay (types.odin), not a Tile_Type — the underlying
+//  cell stays whatever it naturally is (Air normally; Mana_Mist/Magic_Lava/
+//  any other fluid when one is passing through) and fluid physics never
+//  knows pipes exist.  Drawn as a separate pass over the grid (Piped cells
+//  aren't keyed by their own Tile_Type, so they can't ride the main tile
+//  switch), auto-tiled off the 4-neighbor Piped bitmask so a placed run of
+//  pipes reads as a connected straight/corner/T/cross/stub network.  Lit
+//  from within — Mana Mist's own gem tint, or the occupying fluid's flat
+//  color otherwise — when a fluid/gas currently occupies the cell.
+
+piped_at :: proc(w: ^World_Grid, x, y: int) -> bool {
+	if !in_bounds(x, y) do return false
+	return .Piped in w.tile_flags[grid_idx(x, y)]
+}
+
+draw_mana_pipes :: proc(gs: ^Game_State) {
+	w := &gs.world
+	for y in 0 ..< GRID_H {
+		for x in 0 ..< GRID_W {
+			if .Piped in w.tile_flags[grid_idx(x, y)] {
+				draw_pixel_mana_pipe(gs, i32(x*CELL_SIZE), i32(y*CELL_SIZE), x, y)
+			}
+		}
+	}
+}
+
+draw_pixel_mana_pipe :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+	w := &gs.world
+	n  := piped_at(w, x, y-1)
+	s  := piped_at(w, x, y+1)
+	e  := piped_at(w, x+1, y)
+	we := piped_at(w, x-1, y)
+
+	casing := rl.Color{95, 85, 110, 255}
+	dark   := rl.Color{55, 48, 65, 255}
+	band :: i32(4)  // pipe thickness, centered in the 10px cell
+	lo   :: i32(3)  // (CELL_SIZE - band) / 2
+
+	rl.DrawRectangle(bx+lo, by+lo, band, band, casing) // the hub, always drawn
+	if n  do rl.DrawRectangle(bx+lo, by,    band, lo+band, casing)
+	if s  do rl.DrawRectangle(bx+lo, by+lo, band, CELL_SIZE-lo, casing)
+	if e  do rl.DrawRectangle(bx+lo, by+lo, CELL_SIZE-lo, band, casing)
+	if we do rl.DrawRectangle(bx,    by+lo, lo+band, band, casing)
+	rl.DrawRectangleLinesEx({f32(bx+lo), f32(by+lo), f32(band), f32(band)}, 1, dark)
+
+	// Lit from within when a fluid/gas currently occupies this cell.
+	t := get_tile(w, x, y)
+	if is_fluid_tile(t) {
+		glow := t == .Mana_Mist ? gem_tint_color(gs.fluid.gem_tint[grid_idx(x, y)]) : terrain_table[t].color
+		glow.a = 110
+		rl.BeginBlendMode(.ADDITIVE)
+		rl.DrawRectangle(bx+lo, by+lo, band, band, glow)
+		rl.EndBlendMode()
+	}
 }
 
 // ─── Pixel Art: Rune Scroll Chest ───────────────────────────────────────────────
@@ -1261,6 +1359,40 @@ draw_machine_progress :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
         wx, wy := px + CELL_SIZE/2, py + CELL_SIZE/2
         brass := rl.Color{240, 212, 120, 255}
         rl.DrawRectangle(px + 2, py + 2, 6, 6, rl.Color{140, 110, 40, 255})
+        phase := 0
+        if powered(gs, x, y) do phase = int(gs.elapsed_time*10) % 4
+        switch phase {
+        case 0: rl.DrawRectangle(wx - 3, wy - 1, 6, 2, brass)
+        case 1:
+            rl.DrawRectangle(wx - 2, wy - 2, 2, 2, brass)
+            rl.DrawRectangle(wx, wy, 2, 2, brass)
+        case 2: rl.DrawRectangle(wx - 1, wy - 3, 2, 6, brass)
+        case 3:
+            rl.DrawRectangle(wx, wy - 2, 2, 2, brass)
+            rl.DrawRectangle(wx - 2, wy, 2, 2, brass)
+        }
+    case .Magic_Kettle:
+        sd := gs.world.sim_data[grid_idx(x, y)]
+        // The firebox glows in the loaded gem's own color while it burns —
+        // the same "what am I feeding it" tell Boiler's orange flicker gives,
+        // but gem-tinted so a glance says which gem is in the hopper.
+        glow := gem_tint_color(gem_tint_index(sd.in_item))
+        if sd.spread_timer > 0 {
+            flick := (math.sin(gs.elapsed_time*11 + f32(x)) + 1) * 0.5
+            glow.a = u8(110 + flick*80)
+            rl.DrawRectangle(px + 2, py + 5, 6, 3, glow)
+        }
+        if r, ok := boiler_rule_for(t); ok && sd.growth_timer > 0 {
+            p := clamp(sd.growth_timer / r.period, 0, 1)
+            bar := gem_tint_color(gem_tint_index(sd.in_item))
+            rl.DrawRectangle(px, py - 2, i32(f32(CELL_SIZE) * p), 2, bar)
+        }
+    case .Mana_Wheel:
+        // Same tell as Steam_Engine's flywheel — turns while powered, stands
+        // still the moment the field dies — in the track's own violet-brass.
+        wx, wy := px + CELL_SIZE/2, py + CELL_SIZE/2
+        brass := rl.Color{225, 190, 255, 255}
+        rl.DrawRectangle(px + 2, py + 2, 6, 6, rl.Color{95, 70, 120, 255})
         phase := 0
         if powered(gs, x, y) do phase = int(gs.elapsed_time*10) % 4
         switch phase {

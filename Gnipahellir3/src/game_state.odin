@@ -382,6 +382,12 @@ Fluid_State :: struct {
     // like the clocks — a save/load resets it, so loaded vapour lives one
     // extra lifetime.  Cosmetic; not worth a save bump.
     age:    [GRID_W * GRID_H]u8,
+    // Mana Mist only: which gem's own item_table color tints this cell
+    // (gem_tint_index, sim.odin) — carried on move exactly like age is, so a
+    // drifting plume keeps its color.  Transient/cosmetic for the same
+    // reason age is: a reload just loses one cloud's tint, not worth a save
+    // bump.  Meaningless (and unread) for every other fluid.
+    gem_tint: [GRID_W * GRID_H]u8,
 }
 
 // ─── Event Queue ──────────────────────────────────────────────────────────────
