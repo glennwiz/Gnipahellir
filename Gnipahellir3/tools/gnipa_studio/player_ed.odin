@@ -147,15 +147,21 @@ player_frame_ui :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	by := i32(TOP_BAR) + 10
 	bx := i32(PL_GRID_X)
 	for form in game.Player_Form {
-		if button(bx, by, game.player_form_names[form], mouse, true, pwork.form == form) {
+		if button(bx, by, game.player_form_names[form], mouse, true, pwork.form == form,
+			hint = "Switch the canvas to this character form's sprite.") {
 			pwork.form = form
 		}
 		bx += rl.MeasureText(game.player_form_names[form], 14) + 30
 	}
 	bx += 20
-	if button(bx, by, "FRAME 0 idle", mouse, true, pwork.frame == 0) do pwork.frame = 0
+	if button(bx, by, "FRAME 0 idle", mouse, true, pwork.frame == 0, hint = "The standing/idle walk frame.") {
+		pwork.frame = 0
+	}
 	bx += rl.MeasureText("FRAME 0 idle", 14) + 30
-	if button(bx, by, "FRAME 1 stride", mouse, true, pwork.frame == 1) do pwork.frame = 1
+	if button(bx, by, "FRAME 1 stride", mouse, true, pwork.frame == 1,
+		hint = "The mid-stride walk frame - alternates with FRAME 0 while the player moves.") {
+		pwork.frame = 1
+	}
 
 	frame := &pwork.frames[pwork.form][pwork.frame]
 	gy := by + 38
@@ -252,16 +258,19 @@ player_frame_ui :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	py := pv + 22*3 + 24
 	draw_checker(px, py, 16*6 + 12, 22*6 + 12)
 	draw_work_form(pwork.frame == 0 ? pf0 : pf1, f32(px + 6), f32(py + 6), 6)
-	if button(px, py + 22*6 + 24, "CYCLE TINT", mouse) {
+	if button(px, py + 22*6 + 24, "CYCLE TINT", mouse,
+		hint = "Preview only - cycles the hair/clothing tint the h/H/L/y/Y runes resolve to. Does not change any saved data.") {
 		pwork.tint = (pwork.tint + 1) % len(preview_tints)
 	}
 
 	// Save / revert / status.
 	sx := i32(sw) - 260
-	if button(sx, i32(TOP_BAR) + 12, pwork.dirty ? cstring("SAVE  (rewrites gen_player_art.odin)") : cstring("SAVED"), mouse, pwork.dirty) {
+	if button(sx, i32(TOP_BAR) + 12, pwork.dirty ? cstring("SAVE  (rewrites gen_player_art.odin)") : cstring("SAVED"), mouse, pwork.dirty,
+		hint = "Validate every frame (legend runes only) and rewrite gen_player_art.odin. The watcher rebuilds and swaps the window.") {
 		player_save()
 	}
-	if button(sx, i32(TOP_BAR) + 46, "REVERT ALL EDITS", mouse, pwork.dirty) {
+	if button(sx, i32(TOP_BAR) + 46, "REVERT ALL EDITS", mouse, pwork.dirty,
+		hint = "Discard every unsaved sprite edit across all forms/frames and reload from the compiled table.") {
 		player_work_init()
 		pwork.status = "reverted to the compiled table"
 	}

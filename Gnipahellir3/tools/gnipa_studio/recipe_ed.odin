@@ -114,15 +114,16 @@ recipe_save :: proc() {
 }
 
 // [-] value [+]; SHIFT steps by 10.
-spinner :: proc(x, y: i32, val: ^int, minv, maxv: int, mouse: rl.Vector2) -> bool {
+spinner :: proc(x, y: i32, val: ^int, minv, maxv: int, mouse: rl.Vector2, hint := "") -> bool {
+	full_hint := hint != "" ? fmt.tprintf("%s (hold SHIFT to step by 10)", hint) : "hold SHIFT to step by 10"
 	step := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) ? 10 : 1
 	changed := false
-	if button(x, y, "-", mouse, val^ > minv) {
+	if button(x, y, "-", mouse, val^ > minv, hint = full_hint) {
 		val^ = max(val^ - step, minv)
 		changed = true
 	}
 	rl.DrawText(fmt.ctprintf("%d", val^), x + 26, y + 6, 14, {225, 228, 235, 255})
-	if button(x + 52, y, "+", mouse, val^ < maxv) {
+	if button(x + 52, y, "+", mouse, val^ < maxv, hint = full_hint) {
 		val^ = min(val^ + step, maxv)
 		changed = true
 	}
@@ -163,6 +164,7 @@ draw_item_picker :: proc(title: cstring, mouse: rl.Vector2, sw, sh: f32) -> (pic
 	}
 	if hovered != .None {
 		rl.DrawText(fmt.ctprintf("%s", item_name(hovered)), x0 + 12, y0 + ph - 24, 14, {245, 205, 90, 255})
+		draw_hint(mouse, game.item_table[hovered].desc)
 		if rl.IsMouseButtonPressed(.LEFT) do return hovered, true
 	}
 	if rl.IsMouseButtonPressed(.RIGHT) || rl.IsKeyPressed(.ESCAPE) do return .None, true
@@ -270,9 +272,10 @@ recipe_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	ey += 52
 
 	rl.DrawText("result count", ex, ey + 6, 12, {120, 125, 138, 255})
-	if spinner(ex + 110, ey, &r.result_count, 1, 99, emouse) do recipe_touch()
+	if spinner(ex + 110, ey, &r.result_count, 1, 99, emouse, "How many of the result item one craft yields.") do recipe_touch()
 	sb := fmt.ctprintf("station: %s", station_label[station_ex(r.station)])
-	if button(ex + 210, ey, sb, emouse) {
+	if button(ex + 210, ey, sb, emouse,
+		hint = "Cycles the station this recipe is made at: None (hand-craftable anywhere), Bench, Forge, Rune Altar.") {
 		for st, i in station_cycle {
 			if st == r.station {
 				r.station = station_cycle[(i + 1) % len(station_cycle)]
@@ -290,15 +293,15 @@ recipe_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 		if ing.item != .None {
 			game.draw_item_icon(ing.item, ex, ey, 26)
 			rl.DrawText(fmt.ctprintf("%s", item_name(ing.item)), ex + 32, ey + 6, 13, {225, 228, 235, 255})
-			if spinner(ex + 220, ey, &ing.count, 1, 999, emouse) do recipe_touch()
-			if button(ex + 310, ey, "PICK", emouse) do rwork.picker_slot = slot
-			if button(ex + 370, ey, "CLEAR", emouse) {
+			if spinner(ex + 220, ey, &ing.count, 1, 999, emouse, "How many of this ingredient the recipe consumes.") do recipe_touch()
+			if button(ex + 310, ey, "PICK", emouse, hint = "Choose a different ingredient for this slot.") do rwork.picker_slot = slot
+			if button(ex + 370, ey, "CLEAR", emouse, hint = "Empty this ingredient slot.") {
 				ing^ = {}
 				recipe_touch()
 			}
 		} else {
 			rl.DrawText("- empty -", ex + 32, ey + 6, 13, {90, 95, 110, 255})
-			if button(ex + 310, ey, "PICK", emouse) do rwork.picker_slot = slot
+			if button(ex + 310, ey, "PICK", emouse, hint = "Choose an ingredient for this slot.") do rwork.picker_slot = slot
 		}
 		ey += 34
 	}
@@ -309,14 +312,17 @@ recipe_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	if gate := rwork.unlock[r.result]; gate != .None {
 		game.draw_item_icon(gate, ex, ey, 26)
 		rl.DrawText(fmt.ctprintf("hidden until the player holds %s", item_name(gate)), ex + 32, ey + 6, 13, {225, 228, 235, 255})
-		if button(ex + 310, ey, "PICK", emouse) do rwork.picker_slot = PICKER_UNLOCK
-		if button(ex + 370, ey, "CLEAR", emouse) {
+		if button(ex + 310, ey, "PICK", emouse, hint = "Choose which item, once held, reveals this recipe (recipe_unlock is keyed by the result item).") do rwork.picker_slot = PICKER_UNLOCK
+		if button(ex + 370, ey, "CLEAR", emouse, hint = "Remove the gate - this recipe is visible from the start.") {
 			rwork.unlock[r.result] = .None
 			recipe_touch()
 		}
 	} else {
 		rl.DrawText("known from the start", ex + 32, ey + 6, 13, {150, 155, 165, 255})
-		if button(ex + 310, ey, "PICK", emouse) do rwork.picker_slot = PICKER_UNLOCK
+		if button(ex + 310, ey, "PICK", emouse,
+			hint = "Choose a material that, once held, reveals this recipe in the crafting window (a sticky unlock - stays revealed after the material is spent).") {
+			rwork.picker_slot = PICKER_UNLOCK
+		}
 	}
 	ey += 44
 
@@ -329,24 +335,28 @@ recipe_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 		rl.DrawText(fmt.ctprintf("%s ->", item_name(sr.ore)), ex + 30, ey + 5, 12, {225, 228, 235, 255})
 		rl.DrawText(fmt.ctprintf("%s", item_name(sr.bar)), ex + 150, ey + 5, 12, {225, 228, 235, 255})
 		rl.DrawText("ore/bar", ex + 250, ey + 5, 11, {120, 125, 138, 255})
-		if spinner(ex + 310, ey - 2, &sr.ore_per_bar, 1, 99, emouse) do recipe_touch()
+		if spinner(ex + 310, ey - 2, &sr.ore_per_bar, 1, 99, emouse, "How much ore the smelter eats per bar cast.") do recipe_touch()
 		ey += 30
 	}
-	if button(ex, ey, "APPEND SMELT RULE", emouse, rwork.smelt_count < MAX_SMELT) {
+	if button(ex, ey, "APPEND SMELT RULE", emouse, rwork.smelt_count < MAX_SMELT,
+		hint = "Add a new ore -> bar rule: pick the ore, then the bar it casts into at the smelter.") {
 		rwork.picker_slot = PICKER_SMELT_ORE
 	}
 	ey += 40
 
-	if button(ex, ey, "APPEND RECIPE", emouse, rwork.recipe_count < MAX_RECIPES) {
+	if button(ex, ey, "APPEND RECIPE", emouse, rwork.recipe_count < MAX_RECIPES,
+		hint = "Add a new recipe row for a chosen result item. Append-only - recipe indices are load-bearing for the game's tests, so nothing can be inserted, deleted, or reordered.") {
 		rwork.picker_slot = PICKER_APPEND
 	}
 
 	// Save / revert / status.
 	sx := i32(sw) - 260
-	if button(sx, i32(TOP_BAR) + 12, rwork.dirty ? cstring("SAVE  (rewrites gen_recipes.odin)") : cstring("SAVED"), emouse, rwork.dirty) {
+	if button(sx, i32(TOP_BAR) + 12, rwork.dirty ? cstring("SAVE  (rewrites gen_recipes.odin)") : cstring("SAVED"), emouse, rwork.dirty,
+		hint = "Validate every recipe (real ingredients, sane counts, no self-consumption, no cycle) and rewrite gen_recipes.odin. The watcher rebuilds and swaps the window.") {
 		recipe_save()
 	}
-	if button(sx, i32(TOP_BAR) + 46, "REVERT ALL EDITS", emouse, rwork.dirty) {
+	if button(sx, i32(TOP_BAR) + 46, "REVERT ALL EDITS", emouse, rwork.dirty,
+		hint = "Discard every unsaved recipe/unlock/smelt-rule edit and reload from the compiled tables.") {
 		recipe_work_init()
 		rwork.gen += 1
 		rwork.status = "reverted to the compiled tables"

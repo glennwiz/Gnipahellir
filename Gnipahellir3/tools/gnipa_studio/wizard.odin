@@ -167,10 +167,11 @@ wizard_create :: proc() {
 
 // ─── The tab ──────────────────────────────────────────────────────────────────
 
-text_field :: proc(x, y, w: i32, tf: ^Text_Field, id: int, mouse: rl.Vector2) {
+text_field :: proc(x, y, w: i32, tf: ^Text_Field, id: int, mouse: rl.Vector2, hint := "") {
 	r := rl.Rectangle{f32(x), f32(y), f32(w), 26}
+	over := rl.CheckCollisionPointRec(mouse, r)
 	if rl.IsMouseButtonPressed(.LEFT) {
-		if rl.CheckCollisionPointRec(mouse, r) do wwork.focus = id
+		if over do wwork.focus = id
 		else if wwork.focus == id do wwork.focus = -1
 	}
 	focused := wwork.focus == id
@@ -180,6 +181,7 @@ text_field :: proc(x, y, w: i32, tf: ^Text_Field, id: int, mouse: rl.Vector2) {
 	// keep the tail visible when the text outgrows the box
 	for rl.MeasureText(fmt.ctprintf("%s", shown), 13) > w - 16 && len(shown) > 1 do shown = shown[1:]
 	rl.DrawText(fmt.ctprintf("%s%s", shown, focused ? "_" : ""), x + 8, y + 7, 13, {225, 228, 235, 255})
+	if over && !focused do draw_hint(mouse, hint)
 }
 
 wizard_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
@@ -208,7 +210,8 @@ wizard_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	y += 34
 
 	rl.DrawText("enum identifier", x, y + 6, 12, {120, 125, 138, 255})
-	text_field(x + 130, y, 240, &wwork.ident, 0, emouse)
+	text_field(x + 130, y, 240, &wwork.ident, 0, emouse,
+		"The Odin enum member name (Item.<this>). Upper_Snake style: A-Z start, then letters/digits/_. Must be unique.")
 	valid := ident_valid(tf_text(&wwork.ident))
 	if wwork.ident.len > 0 {
 		rl.DrawText(valid ? "ok" : "A-Z start, letters/digits/_", x + 380, y + 7, 12,
@@ -216,31 +219,35 @@ wizard_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	}
 	y += 34
 	rl.DrawText("display name", x, y + 6, 12, {120, 125, 138, 255})
-	text_field(x + 130, y, 240, &wwork.disp, 1, emouse)
-	if button(x + 380, y, "derive from ident", emouse, wwork.ident.len > 0) {
+	text_field(x + 130, y, 240, &wwork.disp, 1, emouse, "The name shown to the player everywhere: bag, tooltips, crafting.")
+	if button(x + 380, y, "derive from ident", emouse, wwork.ident.len > 0,
+		hint = "Fill the display name from the identifier, underscores turned into spaces.") {
 		mirrored, _ := strings.replace_all(tf_text(&wwork.ident), "_", " ", context.temp_allocator)
 		tf_set(&wwork.disp, mirrored)
 	}
 	y += 34
 	rl.DrawText("description", x, y + 6, 12, {120, 125, 138, 255})
-	text_field(x + 130, y, 560, &wwork.desc, 2, emouse)
+	text_field(x + 130, y, 560, &wwork.desc, 2, emouse,
+		"Required. Shown in the crafting detail panel and on hover in-game - required by the item_icons_are_well_formed-style hover-description test.")
 	y += 40
 
 	rl.DrawText("flat color", x, y + 6, 12, {120, 125, 138, 255})
 	rl.DrawRectangle(x + 130, y, 26, 70, wwork.color)
 	cy := y
-	slider(x + 170, cy, "R", &wwork.color.r, emouse); cy += 22
-	slider(x + 170, cy, "G", &wwork.color.g, emouse); cy += 22
-	slider(x + 170, cy, "B", &wwork.color.b, emouse)
+	slider(x + 170, cy, "R", &wwork.color.r, emouse, "Red channel of the item's flat color (used where no icon renders, e.g. some UI swatches)."); cy += 22
+	slider(x + 170, cy, "G", &wwork.color.g, emouse, "Green channel of the item's flat color."); cy += 22
+	slider(x + 170, cy, "B", &wwork.color.b, emouse, "Blue channel of the item's flat color.")
 	y += 80
 
-	if button(x, y, fmt.ctprintf("places tile: %s", wwork.place == .Air ? "none (not placeable)" : game.terrain_table[wwork.place].name), emouse) {
+	if button(x, y, fmt.ctprintf("places tile: %s", wwork.place == .Air ? "none (not placeable)" : game.terrain_table[wwork.place].name), emouse,
+		hint = "Cycle forward through every Tile_Type - which world tile right-clicking this item places. 'none' means it can't be placed.") {
 		wwork.place = game.Tile_Type((int(wwork.place) + 1) % len(game.Tile_Type))
 	}
-	if button(x + 320, y, "<", emouse) {
+	if button(x + 320, y, "<", emouse, hint = "Cycle backward through the tile list.") {
 		wwork.place = game.Tile_Type((int(wwork.place) + len(game.Tile_Type) - 1) % len(game.Tile_Type))
 	}
-	if button(x + 360, y, fmt.ctprintf("equip slot: %v", wwork.equip), emouse) {
+	if button(x + 360, y, fmt.ctprintf("equip slot: %v", wwork.equip), emouse,
+		hint = "Cycle which equipment slot this item occupies when worn. None means it isn't equippable.") {
 		wwork.equip = game.Equip_Slot((int(wwork.equip) + 1) % len(game.Equip_Slot))
 	}
 	y += 38
@@ -254,18 +261,23 @@ wizard_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 		rl.DrawText(fmt.ctprintf("copied from %s - refine in the PIXEL tab after create", item_name(wwork.icon_src)),
 			x + 72, y + 20, 12, {150, 155, 165, 255})
 	}
-	if button(x + (wwork.icon_src != .None ? 500 : 0), y + 16, "COPY ART FROM ITEM", emouse) do wwork.picker = -1
+	if button(x + (wwork.icon_src != .None ? 500 : 0), y + 16, "COPY ART FROM ITEM", emouse,
+		hint = "Pick an existing item's icon as a starting point - a COPY, never a shared reference. Refine it in the PIXEL EDITOR tab after CREATE.") {
+		wwork.picker = -1
+	}
 	y += 76
 
 	// Optional recipe.
-	if button(x, y, wwork.has_recipe ? cstring("RECIPE: yes") : cstring("RECIPE: none"), emouse, true, wwork.has_recipe) {
+	if button(x, y, wwork.has_recipe ? cstring("RECIPE: yes") : cstring("RECIPE: none"), emouse, true, wwork.has_recipe,
+		hint = "Toggle whether this item gets a craftable recipe at all - some items (raw ore, quest items) are never crafted.") {
 		wwork.has_recipe = !wwork.has_recipe
 	}
 	y += 34
 	if wwork.has_recipe {
 		rl.DrawText("result count", x, y + 6, 12, {120, 125, 138, 255})
-		spinner(x + 100, y, &wwork.result_count, 1, 99, emouse)
-		if button(x + 200, y, fmt.ctprintf("station: %s", station_label[station_ex(wwork.station)]), emouse) {
+		spinner(x + 100, y, &wwork.result_count, 1, 99, emouse, "How many of this item one craft yields.")
+		if button(x + 200, y, fmt.ctprintf("station: %s", station_label[station_ex(wwork.station)]), emouse,
+			hint = "Cycles the station this recipe is made at: None (hand-craftable anywhere), Bench, Forge, Rune Altar.") {
 			for st, i in station_cycle {
 				if st == wwork.station {
 					wwork.station = station_cycle[(i + 1) % len(station_cycle)]
@@ -279,23 +291,26 @@ wizard_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 			if ing.item != .None {
 				game.draw_item_icon(ing.item, x, y, 24)
 				rl.DrawText(fmt.ctprintf("%s", item_name(ing.item)), x + 30, y + 5, 12, {225, 228, 235, 255})
-				spinner(x + 200, y, &ing.count, 1, 999, emouse)
-				if button(x + 290, y, "PICK", emouse) do wwork.picker = slot
-				if button(x + 350, y, "CLEAR", emouse) do ing^ = {}
+				spinner(x + 200, y, &ing.count, 1, 999, emouse, "How many of this ingredient the recipe consumes.")
+				if button(x + 290, y, "PICK", emouse, hint = "Choose a different ingredient for this slot.") do wwork.picker = slot
+				if button(x + 350, y, "CLEAR", emouse, hint = "Empty this ingredient slot.") do ing^ = {}
 			} else {
 				rl.DrawText("- empty -", x + 30, y + 5, 12, {90, 95, 110, 255})
-				if button(x + 290, y, "PICK", emouse) do wwork.picker = slot
+				if button(x + 290, y, "PICK", emouse, hint = "Choose an ingredient for this slot.") do wwork.picker = slot
 			}
 			y += 32
 		}
 		if gate := wwork.unlock; gate != .None {
 			game.draw_item_icon(gate, x, y, 24)
 			rl.DrawText(fmt.ctprintf("unlocked by holding %s", item_name(gate)), x + 30, y + 5, 12, {225, 228, 235, 255})
-			if button(x + 290, y, "PICK", emouse) do wwork.picker = -2
-			if button(x + 350, y, "CLEAR", emouse) do wwork.unlock = .None
+			if button(x + 290, y, "PICK", emouse, hint = "Choose which item, once held, reveals this recipe in the crafting window.") do wwork.picker = -2
+			if button(x + 350, y, "CLEAR", emouse, hint = "Remove the gate - this recipe is visible from the start.") do wwork.unlock = .None
 		} else {
 			rl.DrawText("unlock gate: known from the start", x + 30, y + 5, 12, {150, 155, 165, 255})
-			if button(x + 290, y, "PICK", emouse) do wwork.picker = -2
+			if button(x + 290, y, "PICK", emouse,
+				hint = "Choose a material that, once held, reveals this recipe (a sticky unlock - stays revealed after the material is spent).") {
+				wwork.picker = -2
+			}
 		}
 		y += 40
 	}
@@ -304,7 +319,8 @@ wizard_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	rl.DrawText("is_rune_scroll) still needs code - the wizard creates the data-complete item.", x, y + 14, 11, {120, 125, 138, 255})
 	y += 40
 
-	if button(x, y, wizard_lock ? cstring("CREATED - waiting for rebuild") : cstring("CREATE ITEM  (writes types.odin + gen files, saves everything)"), emouse, !wizard_lock) {
+	if button(x, y, wizard_lock ? cstring("CREATED - waiting for rebuild") : cstring("CREATE ITEM  (writes types.odin + gen files, saves everything)"), emouse, !wizard_lock,
+		hint = "Validates everything, inserts the enum member into types.odin, and does a global save (icons + recipes, unsaved edits included) so the write is content-atomic. Locks every SAVE button until the watcher rebuild swaps this process.") {
 		wizard_create()
 	}
 	if wwork.status != "" {

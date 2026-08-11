@@ -147,6 +147,7 @@ studio_run :: proc(shot := false) {
 	player_work_init()
 	recipe_work_init()
 	wizard_work_init()
+	tile_work_init()
 	xref_init(rwork.recipes[:rwork.recipe_count], rwork.smelt[:rwork.smelt_count])
 
 	s: Studio
@@ -201,6 +202,7 @@ studio_run :: proc(shot := false) {
 		}
 
 		draw_top_bar(&s, sw, mouse)
+		flush_hint() // always last: the hint is the true top layer
 		rl.EndDrawing()
 		free_all(context.temp_allocator)
 
@@ -243,6 +245,15 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 	rl.DrawLine(0, i32(TOP_BAR), i32(sw), i32(TOP_BAR), {60, 64, 76, 255})
 
 	labels := [Tab]cstring{.Items = "ITEMS [1]", .DAG = "RECIPE DAG [2]", .Pixel = "PIXEL EDITOR [3]", .Player = "PLAYER [4]", .Recipes = "RECIPES [5]", .Wizard = "WIZARD [6]", .Tiles = "TILES [7]"}
+	tab_hint := [Tab]string{
+		.Items   = "Browse every item's art, recipe, and where it's made/used. Read-only - editing lives in PIXEL EDITOR and RECIPES.",
+		.DAG     = "The whole crafting graph as a diagram: raw materials in green, edges colored by station. Read-only preview, rebuilds live as you edit RECIPES.",
+		.Pixel   = "Paint the selected item's 12x12 icon and edit its palette. A shared shape edits every item still anchored to it unless you switch to THIS ITEM ONLY.",
+		.Player  = "Paint the player's 7 forms x 2 walk frames x 16x22 sprite grid, tinted live through the real in-game color resolver.",
+		.Recipes = "Edit costs, stations, ingredients, unlock gates and smelt rules; append new recipes. Indices are load-bearing for tests, so rows are append-only.",
+		.Wizard  = "Create a brand-new item end to end: identifier, art, recipe, unlock gate. The only tab that touches types.odin.",
+		.Tiles   = "The whole world's terrain: color, flags, move cost, damage, drops, and station glow - one card per Tile_Type.",
+	}
 	x := i32(16)
 	for tab in Tab {
 		w := rl.MeasureText(labels[tab], 16) + 28
@@ -253,12 +264,13 @@ draw_top_bar :: proc(s: ^Studio, sw: f32, mouse: rl.Vector2) {
 		rl.DrawRectangleRec(r, active ? {45, 48, 58, 255} : {26, 28, 36, 255})
 		rl.DrawRectangleLinesEx(r, 1, active ? {245, 205, 90, 255} : (hov ? {150, 155, 165, 255} : {60, 64, 76, 255}))
 		rl.DrawText(labels[tab], x + 14, 18, 16, active ? rl.Color{235, 235, 240, 255} : rl.Color{150, 155, 165, 255})
+		if hov do draw_hint(mouse, tab_hint[tab])
 		x += w + 10
 	}
 
 	title :: "GNIPA STUDIO"
 	rl.DrawText(title, i32(sw) - rl.MeasureText(title, 20) - 16, 16, 20, {235, 235, 240, 255})
-	if work.dirty || pwork.dirty || rwork.dirty {
+	if work.dirty || pwork.dirty || rwork.dirty || twork.dirty {
 		rl.DrawText("unsaved edits", i32(sw) - rl.MeasureText(title, 20) - 130, 20, 13, {245, 205, 90, 255})
 	}
 }
@@ -288,6 +300,7 @@ items_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 	}
 	if hovered != .None {
 		rl.DrawText(fmt.ctprintf("%s", item_name(hovered)), BROWSER_X, i32(sh) - 26, 14, {200, 203, 210, 255})
+		draw_hint(mouse, game.item_table[hovered].desc)
 	}
 
 	inspector_frame(s, f32(BROWSER_X + BROWSER_COLS*BCELL + 28), sw, sh)
@@ -303,6 +316,46 @@ draw_checker :: proc(x, y, w, h: i32) {
 			if ((cx/8) + (cy/8)) % 2 == 0 do continue
 			rl.DrawRectangle(x + cx, y + cy, min(8, w-cx), min(8, h-cy), CHECKER_LIGHT)
 		}
+	}
+}
+
+// Shared cursor-anchored hint tooltip: what a control does. button/slider/
+// spinner all take an optional `hint` and call this on hover — every custom-
+// drawn widget (checkboxes, rune bars, text fields, tabs) calls it directly.
+// DEFERRED, not drawn in place: a hint fired mid-frame (say, from a FLAGS
+// checkbox) would otherwise sit underneath whatever the rest of that tab —
+// or the top bar, or a modal — draws afterward. draw_hint just records the
+// latest request; flush_hint (called once, dead last in studio_run, after
+// the top bar) is what actually paints it, so it is always the true top
+// layer. At most one hint is ever live in a frame (the mouse is one point),
+// so last-write-wins is correct, not just convenient.
+pending_hint:       string
+pending_hint_mouse: rl.Vector2
+
+draw_hint :: proc(mouse: rl.Vector2, text: string) {
+	if text == "" do return
+	pending_hint = text
+	pending_hint_mouse = mouse
+}
+
+flush_hint :: proc() {
+	if pending_hint == "" do return
+	defer pending_hint = ""
+	FONT :: i32(12)
+	PAD  :: i32(6)
+	W    :: i32(260)
+	lines := wrap_text(pending_hint, W - PAD*2, FONT)
+	ph := PAD*2 + i32(len(lines))*15
+	sw := rl.GetScreenWidth()
+	sh := rl.GetScreenHeight()
+	x := clamp(i32(pending_hint_mouse.x) + 16, 0, sw - W - PAD)
+	y := clamp(i32(pending_hint_mouse.y) + 20, 0, sh - ph)
+	rl.DrawRectangle(x, y, W, ph, {18, 20, 26, 240})
+	rl.DrawRectangleLinesEx({f32(x), f32(y), f32(W), f32(ph)}, 1, {245, 205, 90, 255})
+	ty := y + PAD
+	for l in lines {
+		rl.DrawText(fmt.ctprintf("%s", l), x + PAD, ty, FONT, {225, 228, 235, 255})
+		ty += 15
 	}
 }
 

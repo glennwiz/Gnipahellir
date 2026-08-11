@@ -148,7 +148,13 @@ test_save :: proc() -> bool {
 	rwork.dirty = true
 	recipe_save()
 	fmt.printfln("test-save recipes: %s", rwork.status)
-	return !work.dirty && !pwork.dirty && !rwork.dirty
+
+	tile_work_init()
+	twork.behavior[game.Tile_Type.Dirt].color.r += 1
+	twork.dirty = true
+	tile_save()
+	fmt.printfln("test-save tiles:   %s", twork.status)
+	return !work.dirty && !pwork.dirty && !rwork.dirty && !twork.dirty
 }
 
 draw_view_icon :: proc(v: ^Icon_View, x, y, size: i32) {
@@ -162,25 +168,27 @@ draw_view_icon :: proc(v: ^Icon_View, x, y, size: i32) {
 	}
 }
 
-button :: proc(x, y: i32, label: cstring, mouse: rl.Vector2, enabled := true, active := false) -> bool {
+button :: proc(x, y: i32, label: cstring, mouse: rl.Vector2, enabled := true, active := false, hint := "") -> bool {
 	w := rl.MeasureText(label, 14) + 20
 	r := rl.Rectangle{f32(x), f32(y), f32(w), 26}
-	hov := enabled && rl.CheckCollisionPointRec(mouse, r)
+	over := rl.CheckCollisionPointRec(mouse, r)
+	hov := enabled && over
 	rl.DrawRectangleRec(r, active ? {45, 48, 58, 255} : {26, 28, 36, 255})
 	rl.DrawRectangleLinesEx(r, 1,
 		!enabled ? {60, 64, 76, 255} :
 		active   ? {245, 205, 90, 255} :
 		hov      ? {150, 155, 165, 255} : {90, 95, 110, 255})
 	rl.DrawText(label, x + 10, y + 6, 14, enabled ? rl.Color{225, 228, 235, 255} : rl.Color{100, 104, 116, 255})
+	if over do draw_hint(mouse, hint)
 	return hov && rl.IsMouseButtonPressed(.LEFT)
 }
 
-slider :: proc(x, y: i32, label: cstring, val: ^u8, mouse: rl.Vector2) -> bool {
+slider :: proc(x, y: i32, label: cstring, val: ^u8, mouse: rl.Vector2, hint := "") -> bool {
 	rl.DrawText(label, x, y + 1, 12, {150, 155, 165, 255})
 	bar := rl.Rectangle{f32(x + 22), f32(y), 256, 14}
+	hovbox := rl.Rectangle{bar.x - 4, bar.y - 6, bar.width + 8, bar.height + 12}
 	changed := false
-	if rl.IsMouseButtonDown(.LEFT) &&
-	   rl.CheckCollisionPointRec(mouse, {bar.x - 4, bar.y - 6, bar.width + 8, bar.height + 12}) {
+	if rl.IsMouseButtonDown(.LEFT) && rl.CheckCollisionPointRec(mouse, hovbox) {
 		nv := u8(clamp(int(mouse.x - bar.x), 0, 255))
 		if nv != val^ {
 			val^ = nv
@@ -191,7 +199,30 @@ slider :: proc(x, y: i32, label: cstring, val: ^u8, mouse: rl.Vector2) -> bool {
 	rl.DrawRectangle(i32(bar.x), y, i32(val^), 14, {150, 155, 165, 255})
 	rl.DrawRectangleLinesEx(bar, 1, {90, 95, 110, 255})
 	rl.DrawText(fmt.ctprintf("%d", val^), i32(bar.x) + 262, y + 1, 12, {200, 203, 210, 255})
+	if rl.CheckCollisionPointRec(mouse, hovbox) do draw_hint(mouse, hint)
 	return changed
+}
+
+// What each paint rune resolves to (icon_pixel, item_art.odin): B/D/L/A/a are
+// per-item palette slots (editable below); the rest are fixed shared colors
+// used the same way on every icon.
+pixel_rune_hint :: proc(ch: u8) -> string {
+	switch ch {
+	case 'B': return "base - the icon's primary/fill color (this item's palette slot)"
+	case 'D': return "dark - shading and outline within the shape (this item's palette slot)"
+	case 'L': return "light - highlights (this item's palette slot)"
+	case 'A': return "accent - a secondary detail color (this item's palette slot)"
+	case 'a': return "accent2 - a second secondary detail color (this item's palette slot)"
+	case 'W': return "white - fixed shared color, the same on every icon in the game"
+	case 'h': return "wood dark - fixed shared color"
+	case 'H': return "wood light - fixed shared color"
+	case 'g': return "gold trim - fixed shared color"
+	case 'S': return "stone - fixed shared color"
+	case 's': return "stone dark - fixed shared color"
+	case 't': return "stone light - fixed shared color"
+	case '.': return "eraser - clears the pixel (transparent)"
+	}
+	return ""
 }
 
 pixel_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
@@ -210,9 +241,15 @@ pixel_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 		rl.DrawText(fmt.ctprintf("shape %s - shared by %d items", work.shapes[si].name, work_shared_count(v.cells)),
 			bx, by + 4, 13, {140, 185, 225, 255})
 		bx += rl.MeasureText(fmt.ctprintf("shape %s - shared by %d items", work.shapes[si].name, work_shared_count(v.cells)), 13) + 20
-		if button(bx, by - 2, "ALL SHARERS", mouse, true, work.apply_shared) do work.apply_shared = true
+		if button(bx, by - 2, "ALL SHARERS", mouse, true, work.apply_shared,
+			"A stroke edits the shared shape AND every other item still anchored to it - the named constant survives the emit.") {
+			work.apply_shared = true
+		}
 		bx += rl.MeasureText("ALL SHARERS", 14) + 30
-		if button(bx, by - 2, "THIS ITEM ONLY", mouse, true, !work.apply_shared) do work.apply_shared = false
+		if button(bx, by - 2, "THIS ITEM ONLY", mouse, true, !work.apply_shared,
+			"A stroke detaches THIS item to its own inline grid, permanently - painting it back to equality does not re-attach it.") {
+			work.apply_shared = false
+		}
 	} else {
 		rl.DrawText("unique shape", bx, by + 4, 13, {150, 155, 165, 255})
 	}
@@ -290,6 +327,7 @@ pixel_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 			work.paint == ch ? {245, 205, 90, 255} : (hov ? rl.Color{150, 155, 165, 255} : rl.Color{90, 95, 110, 255}))
 		// rune label, readable on any swatch
 		rl.DrawText(fmt.ctprintf("%c", rune(ch)), rx + 2, ry + 30, 12, {150, 155, 165, 255})
+		if hov do draw_hint(mouse, pixel_rune_hint(ch))
 		rx += 34
 	}
 
@@ -300,14 +338,18 @@ pixel_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 			PIX_GRID_X, sy, 13, {200, 203, 210, 255})
 		sy += 22
 		changed := false
-		changed |= slider(PIX_GRID_X, sy, "R", &slot.r, mouse); sy += 22
-		changed |= slider(PIX_GRID_X, sy, "G", &slot.g, mouse); sy += 22
-		changed |= slider(PIX_GRID_X, sy, "B", &slot.b, mouse); sy += 22
+		rhint := fmt.tprintf("Red channel of the '%c' palette slot.", rune(work.paint))
+		ghint := fmt.tprintf("Green channel of the '%c' palette slot.", rune(work.paint))
+		bhint := fmt.tprintf("Blue channel of the '%c' palette slot.", rune(work.paint))
+		changed |= slider(PIX_GRID_X, sy, "R", &slot.r, mouse, rhint); sy += 22
+		changed |= slider(PIX_GRID_X, sy, "G", &slot.g, mouse, ghint); sy += 22
+		changed |= slider(PIX_GRID_X, sy, "B", &slot.b, mouse, bhint); sy += 22
 		if changed {
 			if slot.a == 0 do slot.a = 255
 			work.dirty = true
 		}
-		if button(PIX_GRID_X, sy + 4, "UNSET SLOT (transparent)", mouse, slot^ != {}) {
+		if button(PIX_GRID_X, sy + 4, "UNSET SLOT (transparent)", mouse, slot^ != {},
+			hint = "Clear this palette slot - any pixel painted with it becomes transparent instead of a color.") {
 			slot^ = {}
 			work.dirty = true
 		}
@@ -318,10 +360,12 @@ pixel_frame :: proc(s: ^Studio, sw, sh: f32, mouse: rl.Vector2) {
 
 	// Save / revert / status.
 	sx := i32(sw) - 260
-	if button(sx, i32(TOP_BAR) + 12, work.dirty ? cstring("SAVE  (rewrites gen_item_icons.odin)") : cstring("SAVED"), mouse, work.dirty) {
+	if button(sx, i32(TOP_BAR) + 12, work.dirty ? cstring("SAVE  (rewrites gen_item_icons.odin)") : cstring("SAVED"), mouse, work.dirty,
+		hint = "Validate every icon (every rune must resolve, at least one opaque pixel) and rewrite gen_item_icons.odin. The watcher rebuilds and swaps the window.") {
 		work_save()
 	}
-	if button(sx, i32(TOP_BAR) + 46, "REVERT ALL EDITS", mouse, work.dirty) {
+	if button(sx, i32(TOP_BAR) + 46, "REVERT ALL EDITS", mouse, work.dirty,
+		hint = "Discard every unsaved icon/palette edit across all items and reload from the compiled tables.") {
 		work_init()
 		work.status = "reverted to the compiled tables"
 	}
