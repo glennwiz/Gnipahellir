@@ -1617,6 +1617,63 @@ standing_in_the_altar_swirl_grants_flight :: proc(t: ^testing.T) {
 }
 
 @(test)
+sky_apparition_gated_by_altitude :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_SKY
+
+    // Right at the gate row: nothing, at any elapsed_time.
+    gs.player.pos.y = SKY_APPARITION_GATE_ROW
+    fade, clearness := sky_apparition_glimpse(gs)
+    testing.expect_value(t, fade, f32(0))
+    testing.expect_value(t, clearness, f32(0))
+
+    // Wrong level: nothing, even at clear altitude.
+    gs.level_index = LEVEL_CAVE2
+    gs.player.pos.y = SKY_APPARITION_CLEAR_ROW
+    fade, _ = sky_apparition_glimpse(gs)
+    testing.expect_value(t, fade, f32(0))
+}
+
+@(test)
+sky_apparition_flickers_on_and_off :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_SKY
+    gs.player.pos.y = SKY_APPARITION_CLEAR_ROW // full altitude: clearness == 1
+
+    // Mid-window: t=0 itself sits at the very start of the fade-in ramp
+    // (fade==0 there by construction), so probe the window's midpoint instead.
+    gs.elapsed_time = SKY_APPARITION_WINDOW_NEAR * 0.5
+    fade, clearness := sky_apparition_glimpse(gs)
+    testing.expect(t, fade > 0, "should be inside the visible window mid-way through it")
+    testing.expect_value(t, clearness, f32(1))
+
+    gs.elapsed_time = SKY_APPARITION_WINDOW_NEAR + 0.5 // past the window, before the next period
+    fade, _ = sky_apparition_glimpse(gs)
+    testing.expect_value(t, fade, f32(0))
+}
+
+@(test)
+sky_apparition_first_glimpse_notifies_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index  = LEVEL_SKY
+    gs.player.pos.y = SKY_APPARITION_CLEAR_ROW
+    gs.elapsed_time = SKY_APPARITION_WINDOW_NEAR * 0.5 // mid-window: genuinely visible
+
+    testing.expect(t, !gs.sky_apparition_glimpsed, "starts unglimpsed")
+    update_sky_apparition(gs)
+    testing.expect(t, gs.sky_apparition_glimpsed, "first visible window should arm the flag")
+    testing.expect_value(t, gs.notify.count, 1)
+
+    // A later visible window must not notify again.
+    gs.elapsed_time = SKY_APPARITION_PERIOD_NEAR + SKY_APPARITION_WINDOW_NEAR*0.5
+    update_sky_apparition(gs)
+    testing.expect_value(t, gs.notify.count, 1) // unchanged: one-shot held
+}
+
+@(test)
 debug_altar_kit_stamps_and_completes_rituals :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

@@ -188,6 +188,7 @@ draw_world :: proc(gs: ^Game_State) {
     // The altar is a foreground station: on the sky level it must sit over the
     // neighboring cloud puffs rather than disappear into their broad bulges.
     draw_sky_altars(gs)
+    if gs.level_index == LEVEL_SKY do draw_sky_apparition(gs)
 }
 
 // ─── Clay-golem automation visuals ───────────────────────────────────────────
@@ -553,6 +554,118 @@ draw_altar_eternal_swirl :: proc(gs: ^Game_State, altar_x, altar_y: int) {
         rl.DrawRectangleV({rx, ry}, {5, 5}, rl.Color{18,22,34,140})
         draw_pixel_rune_mark_v({rx+0.5, ry}, col, i)
     }
+}
+
+// ─── Sky apparition — a wordless tease at the top of the world ────────────────
+//
+//  gen_sky_level fills rows 0-27 with pure Air above the topmost cloud band
+//  (row 28) — unclaimed space.  A chained, hound-shaped silhouette flickers
+//  there, glimpsed only by someone who has climbed well above the known
+//  platforms.  Never named as Garm anywhere in code; see garm.odin for what
+//  the boss fight actually is.  What happens if the player "reaches" it is
+//  deliberately unbuilt — a future hook, matching plan.md's "Garm + TBD".
+
+SKY_APPARITION_GATE_ROW  :: f32(20)  // player pos.y must be below this for anything to show
+SKY_APPARITION_CLEAR_ROW :: f32(6)   // pos.y at/below this = fullest, longest read
+SKY_APPARITION_PERIOD_FAR  :: f32(17.0) // seconds between glimpses, right at the gate
+SKY_APPARITION_PERIOD_NEAR :: f32(6.0)  // seconds between glimpses, at clear altitude
+SKY_APPARITION_WINDOW_FAR  :: f32(0.5)  // seconds visible, right at the gate (a flicker)
+SKY_APPARITION_WINDOW_NEAR :: f32(3.0)  // seconds visible, at clear altitude (lingers)
+SKY_APPARITION_EDGE_FRAC   :: f32(0.25) // fraction of the window spent fading in/out
+
+// Deterministic glimpse state, pure function of level/altitude/elapsed_time
+// (this codebase's sim has zero RNG). fade is this instant's flicker-window
+// intensity (0 = invisible, 1 = fully in); clearness is the altitude ramp (0
+// at the gate row, 1 at/above the clear row). Read-only — the single source
+// of truth shared by the draw proc below and update_sky_apparition's
+// (mutating) one-shot notify check in levels.odin, so their timing can never
+// drift apart.
+sky_apparition_glimpse :: proc(gs: ^Game_State) -> (fade, clearness: f32) {
+	if gs.level_index != LEVEL_SKY do return
+	clearness = 1 - clamp((gs.player.pos.y - SKY_APPARITION_CLEAR_ROW) /
+		(SKY_APPARITION_GATE_ROW - SKY_APPARITION_CLEAR_ROW), 0, 1)
+	if clearness <= 0 do return
+
+	period := SKY_APPARITION_PERIOD_FAR + (SKY_APPARITION_PERIOD_NEAR-SKY_APPARITION_PERIOD_FAR)*clearness
+	window := SKY_APPARITION_WINDOW_FAR + (SKY_APPARITION_WINDOW_NEAR-SKY_APPARITION_WINDOW_FAR)*clearness
+	phase  := math.mod(gs.elapsed_time, period)
+	if phase >= window do return
+
+	s := phase / window
+	fade = 1
+	if s < SKY_APPARITION_EDGE_FRAC {
+		fade = s / SKY_APPARITION_EDGE_FRAC
+	} else if s > 1 - SKY_APPARITION_EDGE_FRAC {
+		fade = (1 - s) / SKY_APPARITION_EDGE_FRAC
+	}
+	return
+}
+
+SKY_APPARITION_X      :: f32(GRID_W) * 0.5 // tile column, grid-center
+SKY_APPARITION_Y      :: f32(4.5)          // tile row, just under the grid's top edge
+SKY_APPARITION_SWAY_X :: f32(2.5)          // tiles, slow horizontal drift amplitude
+SKY_APPARITION_SWAY_Y :: f32(1.0)          // tiles, slow vertical drift amplitude
+SKY_APPARITION_SWAY_SPEED :: f32(0.12)     // rad/s — glacial: distant and bound, not alive/playful
+
+SKY_APPARITION_BODY_COL   :: rl.Color{10, 11, 16, 235}   // near-black silhouette
+SKY_APPARITION_GLOW_COL   :: rl.Color{130, 170, 210, 40} // faint cold outline, additive
+SKY_APPARITION_SCALE_FAR  :: f32(0.6)  // size multiplier at the gate
+SKY_APPARITION_SCALE_NEAR :: f32(1.15) // size multiplier at clear altitude
+
+// A wordless tease glimpsed above the clouds. Still and heavy, not orbiting:
+// only a slow position sway (no rotation, no motes) plus the on/off flicker
+// from sky_apparition_glimpse. Read-only — reads Game_State + calls raylib,
+// never mutates.
+draw_sky_apparition :: proc(gs: ^Game_State) {
+	fade, clearness := sky_apparition_glimpse(gs)
+	if fade <= 0 do return
+
+	t := gs.elapsed_time
+	sway_x := math.sin(t*SKY_APPARITION_SWAY_SPEED) * SKY_APPARITION_SWAY_X * CELL_SIZE
+	sway_y := math.sin(t*SKY_APPARITION_SWAY_SPEED*0.7 + 1.3) * SKY_APPARITION_SWAY_Y * CELL_SIZE
+	cx := SKY_APPARITION_X*CELL_SIZE + sway_x
+	cy := SKY_APPARITION_Y*CELL_SIZE + sway_y
+
+	scale  := (SKY_APPARITION_SCALE_FAR + (SKY_APPARITION_SCALE_NEAR-SKY_APPARITION_SCALE_FAR)*clearness) * CELL_SIZE
+	dim    := 0.5 + 0.5*clearness // fainter far below the gate, solid near the top
+	body_a := u8(f32(SKY_APPARITION_BODY_COL.a) * fade * dim)
+	glow_a := u8(f32(SKY_APPARITION_GLOW_COL.a) * fade * dim)
+	body   := rl.Color{SKY_APPARITION_BODY_COL.r, SKY_APPARITION_BODY_COL.g, SKY_APPARITION_BODY_COL.b, body_a}
+	glow   := rl.Color{SKY_APPARITION_GLOW_COL.r, SKY_APPARITION_GLOW_COL.g, SKY_APPARITION_GLOW_COL.b, glow_a}
+
+	// Couched, still torso + head — a low, heavy hound-like mass, not mid-stride.
+	torso := rl.Rectangle{cx - scale*2.2, cy - scale*0.7, scale*4.4, scale*1.3}
+	head  := rl.Rectangle{cx - scale*2.6, cy - scale*1.1, scale*1.5, scale*1.1}
+
+	rl.BeginBlendMode(.ADDITIVE)
+	h := scale*0.35
+	rl.DrawRectangleV({torso.x-h, torso.y-h}, {torso.width+h*2, torso.height+h*2}, glow)
+	rl.DrawRectangleV({head.x-h*0.6, head.y-h*0.6}, {head.width+h*1.2, head.height+h*1.2}, glow)
+	rl.EndBlendMode()
+
+	rl.DrawRectangleRec(torso, body)
+	rl.DrawRectangleRec(head, body)
+
+	ear_w, ear_h := scale*0.35, scale*0.5
+	ex := head.x + scale*0.25
+	rl.DrawTriangle({ex, head.y}, {ex+ear_w, head.y}, {ex+ear_w*0.5, head.y-ear_h}, body)
+	ex2 := head.x + head.width - scale*0.25 - ear_w
+	rl.DrawTriangle({ex2, head.y}, {ex2+ear_w, head.y}, {ex2+ear_w*0.5, head.y-ear_h}, body)
+
+	// Chain links trailing below the belly, fading into nothing — bound to
+	// something never shown.
+	LINKS :: 4
+	lx := cx + scale*0.6
+	ly := torso.y + torso.height
+	for i in 0 ..< LINKS {
+		link_a := u8(f32(body_a) * (1 - f32(i)/LINKS))
+		if link_a == 0 do continue
+		y0 := ly + f32(i)*scale*0.55
+		y1 := y0 + scale*0.55
+		col := rl.Color{body.r, body.g, body.b, link_a}
+		rl.DrawLineEx({lx, y0}, {lx, y1}, 1.5, col)
+		rl.DrawRectangleV({lx-scale*0.18, y1-scale*0.12}, {scale*0.36, scale*0.24}, col)
+	}
 }
 
 draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {

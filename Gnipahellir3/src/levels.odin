@@ -454,6 +454,20 @@ altar_blessing :: proc(gs: ^Game_State) {
     }
 }
 
+// Step 5f — one-shot: the first time the sky apparition (render.odin) is
+// genuinely glimpsed (window open, altitude above the gate), announce it
+// once.  Uses sky_apparition_glimpse's own timing math so the notify only
+// fires on a moment the player could actually see something.  Ambience
+// only — pushes no events.
+update_sky_apparition :: proc(gs: ^Game_State) {
+    if gs.sky_apparition_glimpsed do return
+    fade, _ := sky_apparition_glimpse(gs)
+    if fade <= 0 do return
+    gs.sky_apparition_glimpsed = true
+    notify(gs, "Something moves at the edge of the sky...")
+    log_action(gs, "First glimpse of the sky apparition")
+}
+
 // Step 5e — advances the offering animation.  Spawns the rainbow swirl each
 // frame; at RITUAL_DURATION it consumes the materials, raises the structure
 // (Structure_Complete) and opens the instruction tome.  Pushes an event, so it

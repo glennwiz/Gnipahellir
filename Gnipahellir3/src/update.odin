@@ -76,6 +76,10 @@ game_update :: proc(gs: ^Game_State) {
     //     Structure_Complete, so it must precede process_events
     update_ritual(gs)
 
+    // 5f. Sky apparition — one-shot "first glimpse" notify once the player
+    //     climbs high enough to catch it mid-flicker; pushes no events
+    update_sky_apparition(gs)
+
     // 6. Events — drains the queue completely, including events pushed by
     //    handlers mid-drain.  Systems ordered AFTER this step must not push
     //    events: they would be destroyed unprocessed by the clear below.
