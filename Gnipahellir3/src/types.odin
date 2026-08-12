@@ -330,14 +330,15 @@ Stat :: enum u8 {
 
 Equip_Slot :: enum u8 {
     None,      // zero value: the item is not equippable
-    Weapon,
+    Weapon,    // legacy since the hotbar (2026-08-12): hand gear lives in the bag;
+               // kept for save layout, loads migrate any content to the bag
     Head,
     Chest,
     Hands,
     Legs,
     Feet,
     Charm,
-    Tool,      // append-only: dedicated pickaxe slot; save v19
+    Tool,      // append-only: dedicated pickaxe slot, save v19; legacy like Weapon
     Charm_2,   // append-only: extra charm belt sockets; save v21
     Charm_3,
 }

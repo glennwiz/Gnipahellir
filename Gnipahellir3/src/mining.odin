@@ -58,7 +58,7 @@ is_wand :: proc(it: Item) -> bool {
 // input and the hover effect so the visual promise exactly matches the shot:
 // range, mineability and structure protection all come from one check.
 wand_target :: proc(gs: ^Game_State, T: [2]i32) -> (wand: Item, cost: f32, blast, ok: bool) {
-	wand = gs.player.equipment[.Weapon]
+	wand = held_item(&gs.player)
 	wrange := wand_mine_range[wand]
 	cost = wand_mana_cost[wand]
 	when GAME_DEBUG {
@@ -197,6 +197,11 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	p.mine_timer -= dt
 	if !gs.input.mine || p.mine_timer > 0 {return}
 
+	// A hand holding a sword swings it, a command wand commands with it —
+	// neither also punches the terrain on the same click.
+	held := held_item(p)
+	if is_melee_weapon(held) || is_command_wand(held) {return}
+
 	// Wand: an equipped wand mines the tile under the cursor at any range —
 	// adjacent included — for mana.  Precise cursor aim (and reach) is what the
 	// weapon slot buys over the pick.
@@ -230,7 +235,7 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	// worked. An equipped pickaxe works any mineable tile in PICK_HITS;
 	// bare-handed you can still knock down TREES (Wood), but it takes
 	// BARE_HAND_MULT× the hits — nothing else yields to fists.
-	has_pick := p.equipment[.Tool] == .Pickaxe
+	has_pick := held == .Pickaxe
 	C, have_target := pick_target(p, gs.input.mouse_world)
 	if !have_target {return} 	// cursor on the player's own body: no swing to make
 

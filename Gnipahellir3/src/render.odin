@@ -2605,7 +2605,7 @@ draw_player :: proc(p: ^Player, form: Player_Form, step_visual_y: f32 = 0) {
 
 	// Held item in the leading hand, drawn from its real icon art so what you
 	// carry is what you see. Only the pickaxe swings (chip-cooldown arc).
-	held := held_tool(p)
+	held := held_item(p)
 	if held != .None {
 		hand := rl.Vector2{origin_x + total_w - ps * 3, origin_y + ps * 16 + bob}
 		if p.facing < 0 {hand.x = origin_x + ps * 3}
@@ -2640,15 +2640,6 @@ draw_form_sprite :: proc(form: Player_Form, x, y, ps: f32, hair, clothing: rl.Co
 			)
 		}
 	}
-}
-
-// The equipped hand-carried item; bagged gear stays visually and mechanically
-// inert. Mining priority first (a mine wand outranks the pick, matching
-// player_mine), then any other weapon-slot item — sword or command wand.
-held_tool :: proc(p: ^Player) -> Item {
-	if wand := p.equipment[.Weapon]; is_wand(wand) do return wand
-	if p.equipment[.Tool] == .Pickaxe do return .Pickaxe
-	return p.equipment[.Weapon] // sword / command wand; .None when empty-handed
 }
 
 // A held item's icon art drawn in world space: one icon pixel per player

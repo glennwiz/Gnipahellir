@@ -17,6 +17,17 @@ is_rune_scroll :: proc(it: Item) -> bool {
     return it == .Rune_Scroll_A || it == .Rune_Scroll_B || it == .Rune_Scroll_C || it == .Sky_Rune_Scroll
 }
 
+// The item in the player's hand: the selected bag slot's stack (hotbar model —
+// what you select is what you hold). Weapons and tools are never "equipped";
+// gear in unselected slots is inert. .None = bare hands.
+held_item :: proc(p: ^Player) -> Item {
+    sel := p.inventory.selected
+    if sel < 0 || sel >= MAX_INVENTORY do return .None
+    s := p.inventory.slots[sel]
+    if s.count <= 0 do return .None
+    return s.item
+}
+
 // ─── Equipment & Stats ────────────────────────────────────────────────────────
 //
 //  Which slot an item occupies (.None = not equippable) and what it grants.
@@ -90,12 +101,19 @@ player_base_stats := [Stat]i32{
     .Speed   = i32(MOVE_SPEED),   // base stride; boots add on top
 }
 
-// Total for one stat: base + every equipped item's bonus.
+// Total for one stat: base + every equipped item's bonus, plus the held
+// hand-gear's own (a sword swings from the hand, not a slot). Worn stats
+// still require wearing: a helm carried in the hand grants nothing.
 player_stat :: proc(p: ^Player, stat: Stat) -> i32 {
     total := player_base_stats[stat]
     for slot in Equip_Slot {
         if slot == .None do continue
         if it := p.equipment[slot]; it != .None {
+            total += item_stat_bonus[it][stat]
+        }
+    }
+    if it := held_item(p); it != .None {
+        if eq := item_equip_slot[it]; eq == .Weapon || eq == .Tool {
             total += item_stat_bonus[it][stat]
         }
     }
@@ -117,6 +135,14 @@ player_equip :: proc(gs: ^Game_State, inv_slot: int) {
     s := &p.inventory.slots[inv_slot]
     eq := item_equip_slot[s.item]
     if eq == .None || s.count <= 0 do return
+
+    // Hand gear isn't worn anymore: wielding it IS selecting its slot, same
+    // as the number keys. It stays in the bag.
+    if eq == .Weapon || eq == .Tool {
+        p.inventory.selected = inv_slot
+        log_action(gs, "Player wields %s", item_table[s.item].name)
+        return
+    }
 
     item := s.item
     if eq == .Charm {

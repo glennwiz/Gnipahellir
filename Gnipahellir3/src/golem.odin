@@ -96,12 +96,11 @@ command_wand_capacity :: proc(it: Item) -> int {
 }
 
 equipped_command_wand :: proc(gs: ^Game_State) -> Item {
-	it := gs.player.equipment[.Weapon]
+	it := held_item(&gs.player)
 	return it if is_command_wand(it) else .None
 }
 
 player_has_command_wand :: proc(gs: ^Game_State) -> bool {
-	if is_command_wand(gs.player.equipment[.Weapon]) do return true
 	for s in gs.player.inventory.slots do if is_command_wand(s.item) && s.count > 0 do return true
 	return false
 }
@@ -1724,7 +1723,7 @@ update_golems :: proc(gs: ^Game_State) {
 // ─── Hearth, repair and upgrades ─────────────────────────────────────────────
 
 replace_player_item :: proc(gs: ^Game_State, old, new: Item) -> bool {
-	if gs.player.equipment[.Weapon] == old {gs.player.equipment[.Weapon] = new; return true}
+	// Hand gear lives in the bag now, so the bag scan covers a wielded wand too.
 	for &s in gs.player.inventory.slots do if s.item == old && s.count > 0 {s.item = new; return true}
 	return false
 }

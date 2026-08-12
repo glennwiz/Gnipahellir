@@ -136,11 +136,11 @@ process_events :: proc(gs: ^Game_State) {
             case .Sky_Rune_Scroll:
                 notify(gs, "Sky Rune Scroll found - raise a Sky Altar to open the way above (B)")
             case .Pickaxe:
-                // First pickaxe: teach its dedicated slot and the core verb.
+                // First pickaxe: teach the hotbar and the core verb.
                 // One-shot so a dropped-and-repicked pick doesn't nag.
                 if !gs.pickaxe_hint_shown {
                     gs.pickaxe_hint_shown = true
-                    notify(gs, "Equip the pickaxe in PICK (right-click it), then hold left-click to mine")
+                    notify(gs, "Select the pickaxe (number keys 1-8), then hold left-click to mine")
                 }
             case .Wood_Log:
                 // First log: teach hand-crafting — the hidden bootstrap verb
@@ -158,13 +158,13 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Pickup)
             crafted := Item(e.payload.int_val)
             spawn_craft_burst(gs, crafted)
-            // First wand: it's weapon-slot gear now, inert in the bag until worn.
+            // First wand: inert in the bag until it's the selected slot.
             if is_wand(crafted) && !gs.wand_hint_shown {
                 gs.wand_hint_shown = true
-                notify(gs, "Equip the wand (right-click it in the bag) to mine at range")
+                notify(gs, "Hold the wand (select its slot) to mine at range")
             }
             if crafted == .Command_Wand {
-                notify(gs, "Equip the Command Wand; right-click crafted golems to bind them")
+                notify(gs, "Hold the Command Wand; right-click crafted golems to bind them")
             }
 
         case .Station_Interact:

@@ -86,8 +86,9 @@ structure_interact :: proc(gs: ^Game_State, tile: [2]i32) {
 }
 
 structure_reclaim_block :: proc(gs: ^Game_State, tile: [2]i32) -> Reclaim_Block {
-    if is_wand(gs.player.equipment[.Weapon]) do return .Wand_Equipped
-    if gs.player.equipment[.Tool] != .Pickaxe do return .Need_Pickaxe
+    held := held_item(&gs.player)
+    if is_wand(held) do return .Wand_Equipped
+    if held != .Pickaxe do return .Need_Pickaxe
 
     t := get_tile(&gs.world, int(tile.x), int(tile.y))
     #partial switch t {
@@ -128,8 +129,8 @@ structure_reclaim_block :: proc(gs: ^Game_State, tile: [2]i32) -> Reclaim_Block 
 
 reclaim_block_message := [Reclaim_Block]string{
     .None               = "",
-    .Need_Pickaxe       = "Equip a pickaxe to reclaim equipment",
-    .Wand_Equipped      = "Equip the pickaxe - a wand cannot reclaim equipment",
+    .Need_Pickaxe       = "Hold the pickaxe to reclaim equipment",
+    .Wand_Equipped      = "Hold the pickaxe - a wand cannot reclaim equipment",
     .Loaded_Smelter     = "Empty the smelter before reclaiming it",
     .Loaded_Silo        = "Empty the silo before reclaiming it",
     .Loaded_Barrel      = "Empty the barrel before reclaiming it",

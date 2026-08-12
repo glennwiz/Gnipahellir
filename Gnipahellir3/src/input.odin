@@ -282,11 +282,17 @@ update_input :: proc(gs: ^Game_State) {
         }
     }
 
-    // The bottom-center placement chip is a shortcut to the bag: click it to
-    // toggle the inventory (mine/attack were already suppressed over the chip).
-    if rl.IsMouseButtonPressed(.LEFT) && sel_chip_hovered(gs) && gs.ui.win_drag < 0 && gs.ui.drag_item == .None {
-        gs.ui.show_inventory = !gs.ui.show_inventory
-        if gs.ui.show_inventory && !gs.ui.show_crafting do place_bag_centered(gs)
+    // Clicking a hotbar cell wields that slot; the selected cell again unhands
+    // it (mine/attack were already suppressed over the bar). Skipped when an
+    // open window covers the bar — the window owns that click.
+    if rl.IsMouseButtonPressed(.LEFT) && gs.ui.win_drag < 0 && gs.ui.drag_item == .None {
+        if slot := hotbar_slot_hovered(gs); slot >= 0 {
+            covered := false
+            for w in UI_Window do if cursor_in_window(gs, w) { covered = true; break }
+            if !covered {
+                gs.player.inventory.selected = gs.player.inventory.selected == slot ? -1 : slot
+            }
+        }
     }
 
     // The rune scroll chip beside it: click to toggle the rune scroll overlay —

@@ -11,14 +11,23 @@ import "core:os"
 //  Everything here drives the real game procs on a heap Game_State; audio is
 //  uninitialized (audio_play no-ops) and no raylib window is required.
 
+// Hotbar model: the hand is the selected bag slot. Tests wield an item by
+// stashing one in the LAST bag slot (clear of inventory_insert's front-fill)
+// and selecting it.
+@(private = "file")
+test_hold :: proc(gs: ^Game_State, it: Item) {
+    gs.player.inventory.slots[MAX_INVENTORY - 1] = {item = it, count = 1}
+    gs.player.inventory.selected = MAX_INVENTORY - 1
+}
+
 @(private = "file")
 test_state :: proc() -> ^Game_State {
     gs := new(Game_State)
     game_state_init(gs)
     gs.delta_time = 1.0 / 60.0
-    // Production spawns the pickaxe on the grass to be picked up and equipped;
-    // most tests want a ready-to-mine player, so put it in its dedicated slot.
-    gs.player.equipment[.Tool] = .Pickaxe
+    // Production spawns the pickaxe on the grass to be picked up and wielded;
+    // most tests want a ready-to-mine player, so hold one.
+    test_hold(gs, .Pickaxe)
     return gs
 }
 
@@ -1185,6 +1194,7 @@ rune_coffer_re_places_as_ordinary_storage :: proc(t: ^testing.T) {
 	set_tile(&gs.world, 11, 42, .Stone)  // something to attach to
 	eq_push(&gs.events, Event{type = .Place_Request, tile = {11, 41}})
 	process_events(gs)
+	gs.player.inventory.selected = MAX_INVENTORY - 1  // hand back on the pick
 
 	testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Coffer)
 	b := barrel_at(gs, gs.level_index, {11, 41})
@@ -2093,7 +2103,7 @@ held_swing_carves_the_whole_tunnel_mouth :: proc(t: ^testing.T) {
 }
 
 @(test)
-pickaxe_mines_only_while_equipped :: proc(t: ^testing.T) {
+pickaxe_mines_only_while_held :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
@@ -2101,60 +2111,59 @@ pickaxe_mines_only_while_equipped :: proc(t: ^testing.T) {
     target := [2]i32{31, i32(SURFACE_Y)}
     set_tile(&gs.world, int(target.x), int(target.y), .Stone)
 
-    // A bagged pick is inert, like a bagged sword or wand.
-    gs.player.equipment[.Tool] = .None
-    inventory_insert(&gs.player.inventory, .Pickaxe, 1)
+    // A bagged, unselected pick is inert, like a bagged sword or wand.
+    gs.player.inventory.selected = -1
     for _ in 0 ..< PICK_HITS + 2 do mine_swing(gs, target)
     testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Stone)
 
-    // Equipping it into the dedicated pick slot enables ordinary mining.
-    player_equip(gs, 0)
-    testing.expect_value(t, gs.player.equipment[.Tool], Item.Pickaxe)
+    // Wielding it (right-click routes through player_equip) selects its slot.
+    player_equip(gs, MAX_INVENTORY - 1)
+    testing.expect_value(t, held_item(&gs.player), Item.Pickaxe)
     for _ in 0 ..< PICK_HITS do mine_swing(gs, target)
     testing.expect(t, get_tile(&gs.world, int(target.x), int(target.y)) != .Stone,
-        "the equipped pickaxe should mine")
+        "the held pickaxe should mine")
 }
 
 @(test)
-pickaxe_slot_is_independent_from_weapons :: proc(t: ^testing.T) {
+one_hand_wielding_swaps_selection :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
 
+    // Wielding a sword moves the hand off the pick; the pick stays in the bag.
     inventory_insert(&gs.player.inventory, .Sword, 1)
     player_equip(gs, 0)
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Sword)
-    testing.expect_value(t, gs.player.equipment[.Tool], Item.Pickaxe)
+    testing.expect_value(t, held_item(&gs.player), Item.Sword)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Pickaxe), 1)
 
+    // Wielding a wand swaps again; nothing is ever displaced or destroyed.
     inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
-    player_equip(gs, 0)
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand)
-    testing.expect_value(t, gs.player.equipment[.Tool], Item.Pickaxe)
+    player_equip(gs, 1)
+    testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand)
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Sword), 1)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Pickaxe), 1)
 }
 
 @(test)
-wand_priority_keeps_pickaxe_fallback :: proc(t: ^testing.T) {
+a_held_wand_does_not_secretly_swing_a_pick :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
 
     inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
-    player_equip(gs, 0)
+    player_equip(gs, 0)  // wield the wand: one hand, the pick stays bagged
 
-    // A valid adjacent target belongs to the wand even though PICK is filled.
     set_tile(&gs.world, 31, SURFACE_Y - 1, .Stone)
     mine_swing(gs, {31, i32(SURFACE_Y - 1)})
-    testing.expect(t, gs.mining.active, "a valid wand target should take priority")
+    testing.expect(t, gs.mining.active, "a valid wand target fires the wand")
     testing.expect_value(t, gs.player.chip_hits, u8(0))
 
-    // Point beyond wand reach: no spell fires, but the same direction still
-    // lets the independently equipped pick work the adjacent tile.
+    // Beyond wand reach nothing digs: the bagged pick never sneaks into the
+    // hand (bare hands only fell trees).
     gs.mining = {}
     gs.player.chip_tile = {-1, -1}
     for _ in 0 ..< PICK_HITS do mine_swing(gs, {35, i32(SURFACE_Y - 1)})
     testing.expect(t, !gs.mining.active)
-    testing.expect(t, get_tile(&gs.world, 31, SURFACE_Y - 1) != .Stone,
-        "the pickaxe should remain the close-range fallback")
+    testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y - 1), Tile_Type.Stone)
 }
 
 @(test)
@@ -2163,7 +2172,7 @@ bare_hands_fell_trees_slower :: proc(t: ^testing.T) {
     defer free(gs)
 
     // Put the starter pickaxe away: bare hands only.
-    gs.player.equipment[.Tool] = .None
+    gs.player.inventory.selected = -1
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
 
@@ -2525,15 +2534,15 @@ wand_mines_at_range_for_mana :: proc(t: ^testing.T) {
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
     inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
 
-    // A wand sitting in the bag no longer fires — it must be equipped.
+    // A wand sitting unselected in the bag never fires — it must be held.
     mine_swing(gs, {32, i32(SURFACE_Y)})
-    testing.expect(t, !gs.mining.active, "an unequipped wand must not fire")
+    testing.expect(t, !gs.mining.active, "an unheld wand must not fire")
 
-    // Equip it into the weapon slot; now it is the mining tool.
+    // Wield it (selection); now it is the mining tool.
     wslot := -1
     for s, i in gs.player.inventory.slots do if s.item == .Mine_Wand { wslot = i; break }
     player_equip(gs, wslot)
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand)
+    testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand)
 
     // Adjacent tile: the wand fires up close too (no more free-pick fallback).
     mine_swing(gs, {31, i32(SURFACE_Y)})
@@ -2579,10 +2588,10 @@ wand_does_not_strike_structures :: proc(t: ^testing.T) {
 
     gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}  // center tile (30, 53)
 
-    // Equip a wand — the mining tool at every range.
+    // Hold a wand — the mining tool at every range.
     inventory_insert(&gs.player.inventory, .Mine_Wand, 1)
     for s, i in gs.player.inventory.slots do if s.item == .Mine_Wand { player_equip(gs, i); break }
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand)
+    testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand)
 
     // A smelter two tiles out is a structure: the wand must not fire at it and
     // no mana is spent — you reclaim a machine with the pick, up close.
@@ -2604,7 +2613,7 @@ wand_target_highlight_matches_mining_rules :: proc(t: ^testing.T) {
 	defer free(gs)
 
 	gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
-	gs.player.equipment[.Weapon] = .Mine_Wand
+	test_hold(gs, .Mine_Wand)
 
 	set_tile(&gs.world, 33, SURFACE_Y, .Stone)
 	wand, cost, blast, ok := wand_target(gs, {33, SURFACE_Y})
@@ -2630,7 +2639,7 @@ silver_wand_uses_less_mana :: proc(t: ^testing.T) {
 	gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
 	set_tile(&gs.world, 34, SURFACE_Y, .Stone)
 
-	gs.player.equipment[.Weapon] = .Mine_Wand_Silver
+	test_hold(gs, .Mine_Wand_Silver)
 	_, silver_cost, _, silver_ok := wand_target(gs, {34, SURFACE_Y})
 	testing.expect(t, silver_ok)
 	testing.expect_value(t, silver_cost, f32(3))
@@ -2661,12 +2670,12 @@ wand_tiers_extend_reach :: proc(t: ^testing.T) {
     }
 
     equip_wand(gs, .Mine_Wand_Silver)
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand_Silver)
+    testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand_Silver)
     testing.expect(t, fires_at(gs, 4), "silver wand reaches 4")
     testing.expect(t, !fires_at(gs, 5), "silver wand stops at 4")
 
     equip_wand(gs, .Mine_Wand_Gold)   // swapping wands: the gold now reaches farther
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Mine_Wand_Gold)
+    testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand_Gold)
     testing.expect(t, fires_at(gs, 8), "gold wand reaches 8")
     testing.expect(t, !fires_at(gs, 9), "gold wand stops at 8")
 }
@@ -2857,7 +2866,7 @@ runic_gear_ladder :: proc(t: ^testing.T) {
     testing.expect_value(t, inventory_count(inv, .Gold_Sword), 0)
     testing.expect_value(t, inventory_count(inv, .Runic_Sky_Ore), 0)
 
-    // And it wears like the rest of the ladder
+    // And wielding it (the equip request selects hand gear) arms its stat
     sword_slot := -1
     for s, i in inv.slots {
         if s.item == .Runic_Sword && s.count > 0 do sword_slot = i
@@ -2866,7 +2875,7 @@ runic_gear_ladder :: proc(t: ^testing.T) {
     eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(sword_slot)}})
     process_events(gs)
     eq_clear(&gs.events)
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Runic_Sword)
+    testing.expect_value(t, held_item(&gs.player), Item.Runic_Sword)
     testing.expect_value(t, player_stat(&gs.player, .Attack), i32(8))
 }
 
@@ -3342,10 +3351,10 @@ sword_melee_kills_builders :: proc(t: ^testing.T) {
     process_events(gs)
     testing.expect_value(t, e.hp, 6)
 
-    // First swing wounds and enrages (sword must be equipped, not just bagged)
+    // First swing wounds and enrages (the sword must be held, not just bagged)
     inventory_insert(&gs.player.inventory, .Sword, 1)
     player_equip(gs, 0)
-    testing.expect_value(t, gs.player.equipment[.Weapon], Item.Sword)
+    testing.expect_value(t, held_item(&gs.player), Item.Sword)
     gs.player.attack_timer = 0
     update_player(gs)
     process_events(gs)
@@ -3478,30 +3487,34 @@ equip_swaps_through_events_and_never_destroys_gear :: proc(t: ^testing.T) {
     defer free(gs)
     p := &gs.player
 
-    // Equip via the event route — the same path input.odin pushes.
+    // Hand gear via the event route — the same path input.odin pushes.
+    // Wielding is selection: the sword never leaves the bag.
     inventory_insert(&p.inventory, .Sword, 1)
     eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = 0}})
     process_events(gs)
-    testing.expect_value(t, p.equipment[.Weapon], Item.Sword)
-    testing.expect_value(t, inventory_count(&p.inventory, .Sword), 0)
-
-    // Swapping in a silver sword hands the old sword back to the bag.
-    inventory_insert(&p.inventory, .Silver_Sword, 1)
-    player_equip(gs, 0)
-    testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
+    testing.expect_value(t, held_item(p), Item.Sword)
     testing.expect_value(t, inventory_count(&p.inventory, .Sword), 1)
 
-    // Bag stuffed full, source slot still stacked: the displaced weapon has
+    // Worn gear still swaps through its slot: the displaced helm returns to the bag.
+    inventory_insert(&p.inventory, .Iron_Helm, 1)
+    player_equip(gs, 1)
+    testing.expect_value(t, p.equipment[.Head], Item.Iron_Helm)
+    inventory_insert(&p.inventory, .Silver_Helm, 1)
+    player_equip(gs, 1)
+    testing.expect_value(t, p.equipment[.Head], Item.Silver_Helm)
+    testing.expect_value(t, inventory_count(&p.inventory, .Iron_Helm), 1)
+
+    // Bag stuffed full, source slot still stacked: the displaced helm has
     // nowhere to go, so the swap is refused — nothing is destroyed.
     for &s in p.inventory.slots { s.item = .Stone_Block; s.count = MAX_STACK }
-    p.inventory.slots[1] = {.Gold_Sword, 2}
+    p.inventory.slots[1] = {.Gold_Helm, 2}
     player_equip(gs, 1)
-    testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
+    testing.expect_value(t, p.equipment[.Head], Item.Silver_Helm)
     testing.expect_value(t, p.inventory.slots[1].count, 2)
 
     // Unequip into a full bag is likewise refused.
-    player_unequip(gs, .Weapon)
-    testing.expect_value(t, p.equipment[.Weapon], Item.Silver_Sword)
+    player_unequip(gs, .Head)
+    testing.expect_value(t, p.equipment[.Head], Item.Silver_Helm)
 }
 
 @(test)
@@ -5521,7 +5534,7 @@ surface_pond_has_water_clay_and_sand :: proc(t: ^testing.T) {
 @(test)
 command_wand_loads_deploys_and_recalls_golems :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
-	gs.player.equipment[.Weapon] = .Command_Wand
+	test_hold(gs, .Command_Wand)
 	gs.player.pos = {90, f32(SURFACE_Y)-PLAYER_H}
 	inventory_insert(&gs.player.inventory,.Clay_Golem,2)
 	slot := -1
@@ -5573,7 +5586,7 @@ command_wand_golem_hitbox_matches_the_visible_worker :: proc(t:^testing.T) {
 @(test)
 golem_roster_hit_test_and_enable_rules :: proc(t:^testing.T) {
 	gs:=test_state(); defer free(gs)
-	gs.player.equipment[.Weapon]=.Command_Wand
+	test_hold(gs, .Command_Wand)
 	gs.player.pos={90,f32(SURFACE_Y)-PLAYER_H}
 	gs.ui.show_golem_roster=true
 	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={92,f32(SURFACE_Y)-GOLEM_H},hp=GOLEM_HP,mode=.Gather,project_cell=-1}
@@ -5706,17 +5719,17 @@ golem_fight_mode_stands_guard :: proc(t:^testing.T) {
 @(test)
 hearth_upgrades_one_to_five_to_fifteen_slots :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
-	gs.player.equipment[.Weapon]=.Command_Wand
+	test_hold(gs, .Command_Wand)
 	inventory_insert(&gs.player.inventory,.Emerald,1)
 	golem_hearth_use(gs)
-	testing.expect_value(t,gs.player.equipment[.Weapon],Item.Command_Wand_Emerald)
-	testing.expect_value(t,command_wand_capacity(gs.player.equipment[.Weapon]),5)
+	testing.expect_value(t,held_item(&gs.player),Item.Command_Wand_Emerald)
+	testing.expect_value(t,command_wand_capacity(held_item(&gs.player)),5)
 	testing.expect_value(t,inventory_count(&gs.player.inventory,.Emerald),0)
 
 	inventory_insert(&gs.player.inventory,.Hel_Gem,1)
 	golem_hearth_use(gs)
-	testing.expect_value(t,gs.player.equipment[.Weapon],Item.Command_Wand_Hel)
-	testing.expect_value(t,command_wand_capacity(gs.player.equipment[.Weapon]),15)
+	testing.expect_value(t,held_item(&gs.player),Item.Command_Wand_Hel)
+	testing.expect_value(t,command_wand_capacity(held_item(&gs.player)),15)
 }
 
 @(test)
@@ -6483,7 +6496,7 @@ golem_depot_feeds_and_collects_smelter_output :: proc(t: ^testing.T) {
 @(test)
 golem_monument_project_completes_into_infrastructure :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
-	gs.player.equipment[.Weapon]=.Command_Wand_Emerald
+	test_hold(gs, .Command_Wand_Emerald)
 	anchor := [2]i32{100,i32(SURFACE_Y-1)}
 	gs.player.pos={99,f32(SURFACE_Y)-PLAYER_H}
 	testing.expect(t,golem_project_start(gs,.Golem_Depot,anchor),"emerald wand should mark a depot")
@@ -6501,7 +6514,7 @@ golem_monument_project_completes_into_infrastructure :: proc(t: ^testing.T) {
 build_mode_crew_fetches_and_places_a_hearth :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	gs.delta_time=.05
-	gs.player.equipment[.Weapon]=.Command_Wand
+	test_hold(gs, .Command_Wand)
 	gs.player.pos={119,f32(SURFACE_Y)-PLAYER_H}
 	anchor := [2]i32{120,i32(SURFACE_Y-1)}
 	for y in SURFACE_Y-6..<SURFACE_Y do for x in 114..=126 do set_tile(&gs.world,x,y,.Air)
@@ -6591,7 +6604,7 @@ a_missing_material_does_not_stall_the_rest_of_the_build :: proc(t: ^testing.T) {
 	// everything it can and only the truly starved cells wait.
 	gs := test_state(); defer free(gs)
 	gs.delta_time=.05
-	gs.player.equipment[.Weapon]=.Command_Wand
+	test_hold(gs, .Command_Wand)
 	gs.player.pos={119,f32(SURFACE_Y)-PLAYER_H}
 	anchor := [2]i32{120,i32(SURFACE_Y-1)}
 	for y in SURFACE_Y-6..<SURFACE_Y do for x in 114..=126 do set_tile(&gs.world,x,y,.Air)
@@ -6660,7 +6673,7 @@ a_missing_material_does_not_stall_the_rest_of_the_build :: proc(t: ^testing.T) {
 @(test)
 broken_golem_is_recalled_and_repaired :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
-	gs.player.equipment[.Weapon]=.Command_Wand
+	test_hold(gs, .Command_Wand)
 	gs.player.pos={90,50}
 	g:=&gs.golems.data[0]
 	g^={status=.Broken,level=gs.level_index,pos={91,50},hp=0,carry=.Stone_Block,project_cell=-1}
@@ -7655,6 +7668,27 @@ a_snapshot_restores_the_run_and_refuses_dead_saves :: proc(t: ^testing.T) {
 	gs.player.pos = {90, 90}
 	testing.expect(t, !snapshot_restore_from(gs, path), "a dead snapshot refuses to load")
 	testing.expect_value(t, gs.player.pos, [2]f32{90, 90})
+}
+
+@(test)
+legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
+	// The hotbar made the Weapon/Tool equip slots legacy: a load returns any
+	// gear still in them to the bag, so no old save ever loses its wand or pick.
+	path :: "gnipahellir_hand_migration_scratch.dat"
+	defer os.remove(path)
+
+	gs := test_state(); defer free(gs)
+	gs.player.equipment[.Weapon] = .Mine_Wand
+	gs.player.equipment[.Tool]   = .Pickaxe  // a second pick — the fixture's is bagged
+	testing.expect(t, save_game_to(gs, path), "legacy-shaped save written")
+
+	gs2 := new(Game_State); defer free(gs2)
+	game_state_init(gs2)
+	testing.expect(t, load_game_from(gs2, path), "save loads")
+	testing.expect_value(t, gs2.player.equipment[.Weapon], Item.None)
+	testing.expect_value(t, gs2.player.equipment[.Tool], Item.None)
+	testing.expect_value(t, inventory_count(&gs2.player.inventory, .Mine_Wand), 1)
+	testing.expect_value(t, inventory_count(&gs2.player.inventory, .Pickaxe), 2)
 }
 
 @(test)

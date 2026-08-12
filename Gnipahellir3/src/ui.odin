@@ -36,17 +36,18 @@ CRAFT_PANEL_H  :: 400
 CRAFT_BTN_W    :: CRAFT_DETAIL_W - 16
 CRAFT_BTN_H    :: 34
 
-// Equipment boxes — weapon, dedicated pick, armor head→feet, then a 3-slot charm belt.
+// Equipment boxes — armor head→feet, then a 3-slot charm belt. Weapons and
+// tools aren't worn: they live in the bag and are wielded via the hotbar.
 EQUIP_STEP :: 50
 
 @(rodata)
-equip_slot_order := [10]Equip_Slot{
-	.Weapon, .Tool, .Head, .Chest, .Hands, .Legs, .Feet, .Charm, .Charm_2, .Charm_3,
+equip_slot_order := [8]Equip_Slot{
+	.Head, .Chest, .Hands, .Legs, .Feet, .Charm, .Charm_2, .Charm_3,
 }
 
 @(rodata)
-equip_slot_labels := [10]cstring{
-	"WPN", "PICK", "HEAD", "CHEST", "HANDS", "LEGS", "FEET", "CHM1", "CHM2", "CHM3",
+equip_slot_labels := [8]cstring{
+	"HEAD", "CHEST", "HANDS", "LEGS", "FEET", "CHM1", "CHM2", "CHM3",
 }
 
 // Rune Scroll overlay — centered panel.
@@ -69,17 +70,19 @@ BARREL_H :: BARREL_GRID_Y + BARREL_ROWS * SLOT_PX + 28      // header + grid + f
 BARREL_X :: 420 // default position (draggable)
 BARREL_Y :: 200
 
-// Selected-block chip — a bottom-center HUD slot showing what right-click will
-// place (icon + count).  Clicking it opens the bag.
-SEL_CHIP   :: 52
-SEL_CHIP_X :: (UI_W - SEL_CHIP) / 2
-SEL_CHIP_Y :: UI_H - 70
+// Hotbar — the first bag row, always visible bottom-center. The selected
+// cell is the player's hand: keys 1-8 or a click wield it, right-click
+// places/uses it.
+HOTBAR_CELL :: 48
+HOTBAR_W    :: HOTBAR_CELL * INV_COLS
+HOTBAR_X    :: (UI_W - HOTBAR_W) / 2
+HOTBAR_Y    :: UI_H - HOTBAR_CELL - 18
 
-// Rune Scroll chip — sits left of the placement chip; shows the carried
-// rune scroll's icon (if any) and toggles the rune scroll overlay on click.
+// Rune Scroll chip — sits left of the hotbar; shows the carried rune
+// scroll's icon (if any) and toggles the rune scroll overlay on click.
 RS_CHIP   :: 52
-RS_CHIP_X :: SEL_CHIP_X - 12 - RS_CHIP
-RS_CHIP_Y :: SEL_CHIP_Y
+RS_CHIP_X :: HOTBAR_X - 12 - RS_CHIP
+RS_CHIP_Y :: HOTBAR_Y - 2
 
 GOLEM_CMD_X :: i32(18)
 GOLEM_CMD_Y :: i32(UI_H - 112)
@@ -1595,7 +1598,7 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	for w in UI_Window {
 		if cursor_in_window(gs, w) do return true
 	}
-	if sel_chip_hovered(gs) do return true  // the bottom-center placement chip
+	if hotbar_slot_hovered(gs) >= 0 do return true  // the bottom-center hotbar
 	if rs_chip_hovered(gs) do return true   // the rune scroll chip beside it
 	if equipped_command_wand(gs) != .None && mx >= GOLEM_CMD_X && mx < GOLEM_CMD_X+GOLEM_CMD_W &&
 	   my >= GOLEM_CMD_Y && my < GOLEM_CMD_Y+GOLEM_CMD_H {
@@ -1621,11 +1624,13 @@ golem_plan_button_at_cursor :: proc(gs: ^Game_State) -> Golem_Plan {
 }
 
 // True when the cursor is over the selected-block chip (bottom-center HUD).
-sel_chip_hovered :: proc(gs: ^Game_State) -> bool {
+// Hotbar cell under the cursor, or -1.
+hotbar_slot_hovered :: proc(gs: ^Game_State) -> int {
 	mx := i32(gs.input.mouse_screen.x)
 	my := i32(gs.input.mouse_screen.y)
-	return mx >= SEL_CHIP_X && mx < SEL_CHIP_X + SEL_CHIP &&
-	       my >= SEL_CHIP_Y && my < SEL_CHIP_Y + SEL_CHIP
+	if my < HOTBAR_Y || my >= HOTBAR_Y + HOTBAR_CELL do return -1
+	if mx < HOTBAR_X || mx >= HOTBAR_X + HOTBAR_W do return -1
+	return int((mx - HOTBAR_X) / HOTBAR_CELL)
 }
 
 // True when the cursor is over the rune scroll chip (bottom HUD, left of the
@@ -2544,7 +2549,7 @@ draw_hud :: proc(gs: ^Game_State) {
 	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
 
 	draw_buffs(gs)
-	draw_sel_chip(gs)
+	draw_hotbar(gs)
 	draw_rs_chip(gs)
 }
 
@@ -2633,46 +2638,57 @@ draw_rs_chip :: proc(gs: ^Game_State) {
 // The bottom-center placement chip: shows the selected item's icon + count, a
 // name label tinted by whether it can be placed, and an empty prompt when
 // nothing is selected.  Clicking it (handled in input.odin) opens the bag.
-draw_sel_chip :: proc(gs: ^Game_State) {
+// The hotbar: the first bag row always on screen. The gold-ringed cell is the
+// hand; the held item's name floats above the bar (gold when placeable).
+draw_hotbar :: proc(gs: ^Game_State) {
 	inv := &gs.player.inventory
-	hov := sel_chip_hovered(gs)
-	x := i32(SEL_CHIP_X)
-	y := i32(SEL_CHIP_Y)
+	hov := hotbar_slot_hovered(gs)
 
-	has_sel := inv.selected >= 0 &&
-		inv.slots[inv.selected].item != .None &&
-		inv.slots[inv.selected].count > 0
+	for i in 0 ..< INV_COLS {
+		x := i32(HOTBAR_X + i * HOTBAR_CELL)
+		y := i32(HOTBAR_Y)
+		rl.DrawRectangle(x, y, HOTBAR_CELL, HOTBAR_CELL, NORSE_ROW)
+		rl.DrawRectangleLinesEx(
+			{f32(x), f32(y), HOTBAR_CELL, HOTBAR_CELL},
+			i == hov ? 2 : 1,
+			i == hov ? NORSE_GOLD_HOT : NORSE_BORDER,
+		)
 
-	item: Item = .None
-	count := 0
-	if has_sel {
-		item  = inv.slots[inv.selected].item
-		count = inv.slots[inv.selected].count
-	}
-	placeable := has_sel && item_table[item].place_tile != .Air
+		// Number-key label in the corner.
+		kbuf: [2]u8 = {u8('1' + i), 0}
+		rl.DrawText(cstring(raw_data(kbuf[:])), x + 4, y + 3, 10, text_dim)
 
-	rl.DrawRectangle(x, y, SEL_CHIP, SEL_CHIP, NORSE_ROW)
-	bcol := NORSE_BORDER
-	switch {
-	case hov:       bcol = NORSE_GOLD_HOT
-	case placeable: bcol = NORSE_GOLD
-	}
-	rl.DrawRectangleLinesEx({f32(x), f32(y), SEL_CHIP, SEL_CHIP}, (hov || placeable) ? 2 : 1, bcol)
-
-	if has_sel {
-		draw_item_icon(item, x + 12, y + 8, 32, placeable ? 255 : 120)
-		if count > 1 {
-			cbuf: [8]u8
-			fmt.bprintf(cbuf[:7], "%d", count)
-			rl.DrawText(cstring(raw_data(cbuf[:])), x + 6, y + SEL_CHIP - 14, 11, rl.WHITE)
+		s := inv.slots[i]
+		if s.item != .None && s.count > 0 {
+			draw_item_icon(s.item, x + 12, y + 12, 24)
+			if s.count > 1 {
+				cbuf: [8]u8
+				fmt.bprintf(cbuf[:7], "%d", s.count)
+				rl.DrawText(cstring(raw_data(cbuf[:])), x + 5, y + HOTBAR_CELL - 14, 10, rl.WHITE)
+			}
 		}
-		name := cstring(raw_data(item_table[item].name))
+		if i == inv.selected {
+			rl.DrawRectangleLinesEx(
+				{f32(x) + 1, f32(y) + 1, HOTBAR_CELL - 2, HOTBAR_CELL - 2},
+				2,
+				NORSE_GOLD_HOT,
+			)
+		}
+	}
+
+	// Held item's name over the bar; works for a hand selected deeper in the
+	// bag too, since the hand is whatever slot is selected.
+	if it := held_item(&gs.player); it != .None {
+		placeable := item_table[it].place_tile != .Air
+		name := cstring(raw_data(item_table[it].name))
 		nw := rl.MeasureText(name, 11)
-		rl.DrawText(name, x + (SEL_CHIP - nw)/2, y - 16, 11, placeable ? NORSE_GOLD_HOT : text_dim)
-	} else {
-		hint := cstring("no block")
-		hw := rl.MeasureText(hint, 10)
-		rl.DrawText(hint, x + (SEL_CHIP - hw)/2, y - 15, 10, text_dim)
+		rl.DrawText(name, HOTBAR_X + (HOTBAR_W - nw)/2, HOTBAR_Y - 16, 11, placeable ? NORSE_GOLD_HOT : text_dim)
+	}
+
+	// Hovered stack's tooltip (name + what it does).
+	if hov >= 0 {
+		s := inv.slots[hov]
+		if s.item != .None && s.count > 0 do draw_item_tooltip(gs, s.item)
 	}
 }
 

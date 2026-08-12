@@ -145,6 +145,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
 
         seal_loose_rune_scrolls(&gs.world)
         for i in 0 ..< len(gs.levels.worlds) do if gs.levels.generated[i] do seal_loose_rune_scrolls(&gs.levels.worlds[i])
+        migrate_hand_gear_to_bag(gs)
         log_action(gs, "run migrated from save v23")
         gs.save_dirty = true
         return true
@@ -189,8 +190,40 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
         gs.save_dirty = true
     }
 
+    migrate_hand_gear_to_bag(gs)
+
     log_action(gs, "run continued from save")
     return true
+}
+
+// Hand gear moved from the Weapon/Tool equip slots to the bag + hotbar
+// (2026-08-12): older saves may still carry gear in those slots. Return it to
+// the bag — or set it on the nearest empty ground cell when the bag is full —
+// so nothing is ever lost. Same byte layout, no version bump; the two slots
+// simply stay .None from here on.
+migrate_hand_gear_to_bag :: proc(gs: ^Game_State) {
+    for slot in ([2]Equip_Slot{.Weapon, .Tool}) {
+        it := gs.player.equipment[slot]
+        if it == .None do continue
+        if !inventory_insert(&gs.player.inventory, it, 1) {
+            pt := player_tile(&gs.player)
+            spot := -1
+            scan: for dy in 0 ..= 4 {
+                for dx in -2 ..= 2 {
+                    x, y := int(pt.x) + dx, int(pt.y) + dy
+                    if !in_bounds(x, y) do continue
+                    if idx := grid_idx(x, y); gs.world.items[idx] == .None {
+                        spot = idx
+                        break scan
+                    }
+                }
+            }
+            if spot < 0 do continue  // nowhere to put it: stays in the slot, retried next load
+            gs.world.items[spot] = it
+        }
+        gs.player.equipment[slot] = .None
+        gs.save_dirty = true
+    }
 }
 
 // ─── Snapshots (F3 menu) ──────────────────────────────────────────────────────

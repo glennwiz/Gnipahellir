@@ -168,10 +168,10 @@ update_player :: proc(gs: ^Game_State) {
     // ── Mana regen ────────────────────────────────────────────────
     p.mana = min(p.mana + p.mana_regen * dt, p.mana_max)
 
-    // ── Melee: click near an enemy swings the equipped weapon (a wand in
-    //    the weapon slot is a mining tool, not a melee weapon) ─────
+    // ── Melee: click near an enemy swings the held weapon (a held wand is
+    //    a mining tool, not a melee weapon) ─────
     p.attack_timer -= dt
-    if inp.attack && p.attack_timer <= 0 && is_melee_weapon(p.equipment[.Weapon]) {
+    if inp.attack && p.attack_timer <= 0 && is_melee_weapon(held_item(p)) {
         if id, found := enemy_near_tile(gs, gs.input.mouse_tile); found {
             if chebyshev(builder_tile(&gs.enemies.data[id]), player_tile(p)) <= MELEE_REACH {
                 p.attack_timer = SWORD_COOLDOWN
