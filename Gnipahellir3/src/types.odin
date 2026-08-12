@@ -17,6 +17,9 @@ MAX_PROJECTILES :: 32
 MAX_FALLING     :: 256   // structural blocks in mid-fall at once (gravity.odin)
 MAX_EVENTS      :: 512
 MAX_INVENTORY   :: 24
+PLACE_SLOT      :: MAX_INVENTORY - 1  // the bag's last slot doubles as the Place Slot:
+                                      // right-click builds from this stack while the
+                                      // hand holds a tool (drawn beside the hotbar)
 MAX_AUDIO       :: 128
 MAX_LEVELS      :: 16
 MAX_PROGRESSION_TIERS :: 3
@@ -303,6 +306,10 @@ Item :: enum u8 {
     // already doing there, auto-tiled casing art connects into a network.
     // (appended: item ordinals are serialized)
     Mana_Pipe,
+    // Mined from mossy cave stone; places back as the tile, and mushrooms
+    // take root on it — the mushroom farm's missing piece. (appended: item
+    // ordinals are serialized)
+    Mossy_Stone,
     // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

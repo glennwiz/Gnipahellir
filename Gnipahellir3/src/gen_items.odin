@@ -109,6 +109,7 @@ item_table := [Item]Item_Info{
 	.Magic_Kettle = { "Magic Kettle", {130, 90, 160, 255}, .Magic_Kettle, "Burns a gem beside an adjacent Magic Lava cell, breathing Mana Mist into the open tile above. No gem, no heat - the magic track has no free shortcut." },
 	.Mana_Wheel = { "Mana Wheel", {170, 130, 200, 255}, .Mana_Wheel, "Set it in pooled Mana Mist: while it drinks, every machine within 3 tiles runs powered, no fuel needed. Same reach as the Steam Engine - the tracks trade fuel, not capability." },
 	.Mana_Pipe = { "Mana Pipe", {160, 130, 190, 255}, .Air, "A conduit fitting: place it on an open cell to dress your plumbing. Fluid moves exactly as it always did - the pipe just lets you see it, lit by whatever's flowing through." },
+	.Mossy_Stone = { "Mossy Stone", {96, 138, 90, 255}, .Mossy_Stone, "Cave stone furred green with moss. Set it down under open air and cave mushrooms take root on it." },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.

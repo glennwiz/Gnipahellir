@@ -88,28 +88,47 @@ door_placement_ok :: proc(gs: ^Game_State, x, y: int) -> bool {
 
 handle_place_request :: proc(gs: ^Game_State, e: Event) {
     if gs.player.dead do return
-    inv  := &gs.player.inventory
-    if inv.selected < 0 do return  // nothing selected
-    slot := &inv.slots[inv.selected]
-    if slot.item == .None || slot.count <= 0 do return
-
-    place_tile := item_table[slot.item].place_tile
+    inv := &gs.player.inventory
     x := int(e.tile.x)
     y := int(e.tile.y)
 
-    // Buckets place no tile of their own (place_tile is .Air), so they would
-    // fall straight through placement_ok and do nothing — they get the click first.
-    if slot.item == .Iron_Bucket || bucket_fluid_for(slot.item) != .Air {
-        bucket_use(gs, x, y)
-        return
+    // Use-items act from the hand — deliberate verbs on the held stack.
+    if inv.selected >= 0 {
+        held := inv.slots[inv.selected]
+        if held.item != .None && held.count > 0 {
+            // Buckets place no tile of their own (place_tile is .Air), so they
+            // would fall straight through placement_ok — they get the click first.
+            if held.item == .Iron_Bucket || bucket_fluid_for(held.item) != .Air {
+                bucket_use(gs, x, y)
+                return
+            }
+            // Mana Pipe is a Tile_Flag.Piped overlay, not a Tile_Type (place_tile
+            // is .Air), so it takes the click first too — same reason as buckets.
+            if held.item == .Mana_Pipe {
+                mana_pipe_use(gs, x, y)
+                return
+            }
+            // A held Clay Golem is bound into the command wand on use (place_tile
+            // is .Air) — the same load the bag right-click route performs.
+            if held.item == .Clay_Golem {
+                eq_push(&gs.events, Event{type = .Golem_Load, payload = {int_val = i32(inv.selected)}})
+                return
+            }
+        }
     }
 
-    // Mana Pipe is a Tile_Flag.Piped overlay, not a Tile_Type (place_tile is
-    // .Air), so it takes the click first too — same reason as buckets.
-    if slot.item == .Mana_Pipe {
-        mana_pipe_use(gs, x, y)
-        return
+    // The placing stack: the hand when its item places a tile; otherwise the
+    // dedicated Place Slot, so building while holding the pick or wand never
+    // needs a hand swap. (The command wand can't reach here — its right-click
+    // is golem deploy, routed in input before a Place_Request is ever pushed.)
+    idx := inv.selected
+    if idx < 0 || item_table[inv.slots[idx].item].place_tile == .Air {
+        idx = PLACE_SLOT
     }
+    slot := &inv.slots[idx]
+    if slot.item == .None || slot.count <= 0 do return
+    place_tile := item_table[slot.item].place_tile
+    if place_tile == .Air do return  // the Place Slot holds a non-block
 
     if !placement_ok(gs, slot.item, x, y) {
         // Explain the common templated-structure miss (the red ghost shows the rest).

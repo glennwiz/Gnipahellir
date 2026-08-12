@@ -78,6 +78,10 @@ HOTBAR_W    :: HOTBAR_CELL * INV_COLS
 HOTBAR_X    :: (UI_W - HOTBAR_W) / 2
 HOTBAR_Y    :: UI_H - HOTBAR_CELL - 18
 
+// The Place cell — the bag's PLACE_SLOT drawn detached at the hotbar's right
+// end: right-click builds from this stack while the hand holds a tool.
+PLACE_CELL_X :: HOTBAR_X + HOTBAR_W + 12
+
 // Rune Scroll chip — sits left of the hotbar; shows the carried rune
 // scroll's icon (if any) and toggles the rune scroll overlay on click.
 RS_CHIP   :: 52
@@ -1624,13 +1628,15 @@ golem_plan_button_at_cursor :: proc(gs: ^Game_State) -> Golem_Plan {
 }
 
 // True when the cursor is over the selected-block chip (bottom-center HUD).
-// Hotbar cell under the cursor, or -1.
+// Hotbar cell under the cursor (the detached Place cell answers as
+// PLACE_SLOT), or -1.
 hotbar_slot_hovered :: proc(gs: ^Game_State) -> int {
 	mx := i32(gs.input.mouse_screen.x)
 	my := i32(gs.input.mouse_screen.y)
 	if my < HOTBAR_Y || my >= HOTBAR_Y + HOTBAR_CELL do return -1
-	if mx < HOTBAR_X || mx >= HOTBAR_X + HOTBAR_W do return -1
-	return int((mx - HOTBAR_X) / HOTBAR_CELL)
+	if mx >= HOTBAR_X && mx < HOTBAR_X + HOTBAR_W do return int((mx - HOTBAR_X) / HOTBAR_CELL)
+	if mx >= PLACE_CELL_X && mx < PLACE_CELL_X + HOTBAR_CELL do return PLACE_SLOT
+	return -1
 }
 
 // True when the cursor is over the rune scroll chip (bottom HUD, left of the
@@ -2676,6 +2682,37 @@ draw_hotbar :: proc(gs: ^Game_State) {
 		}
 	}
 
+	// The Place cell: detached at the bar's right end, feeding right-click
+	// builds while the hand holds a tool. Same dressing as a hotbar cell,
+	// marked P; clicking it wields the stack directly like any slot.
+	{
+		x := i32(PLACE_CELL_X)
+		y := i32(HOTBAR_Y)
+		rl.DrawRectangle(x, y, HOTBAR_CELL, HOTBAR_CELL, NORSE_ROW)
+		rl.DrawRectangleLinesEx(
+			{f32(x), f32(y), HOTBAR_CELL, HOTBAR_CELL},
+			hov == PLACE_SLOT ? 2 : 1,
+			hov == PLACE_SLOT ? NORSE_GOLD_HOT : NORSE_GOLD,
+		)
+		rl.DrawText("P", x + 4, y + 3, 10, NORSE_GOLD)
+		s := inv.slots[PLACE_SLOT]
+		if s.item != .None && s.count > 0 {
+			draw_item_icon(s.item, x + 12, y + 12, 24)
+			if s.count > 1 {
+				cbuf: [8]u8
+				fmt.bprintf(cbuf[:7], "%d", s.count)
+				rl.DrawText(cstring(raw_data(cbuf[:])), x + 5, y + HOTBAR_CELL - 14, 10, rl.WHITE)
+			}
+		}
+		if inv.selected == PLACE_SLOT {
+			rl.DrawRectangleLinesEx(
+				{f32(x) + 1, f32(y) + 1, HOTBAR_CELL - 2, HOTBAR_CELL - 2},
+				2,
+				NORSE_GOLD_HOT,
+			)
+		}
+	}
+
 	// Held item's name over the bar; works for a hand selected deeper in the
 	// bag too, since the hand is whatever slot is selected.
 	if it := held_item(&gs.player); it != .None {
@@ -2743,7 +2780,9 @@ draw_inventory :: proc(gs: ^Game_State) {
 		x := bx + c * SLOT_PX
 		y := by + r * SLOT_PX
 		rl.DrawRectangle(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, NORSE_ROW)
-		rl.DrawRectangleLines(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4, rl.Color{70, 56, 38, 255})
+		rl.DrawRectangleLines(x + 2, y + 2, SLOT_PX - 4, SLOT_PX - 4,
+			i == PLACE_SLOT ? NORSE_GOLD : rl.Color{70, 56, 38, 255})
+		if i == PLACE_SLOT do rl.DrawText("P", x + 6, y + 5, 10, NORSE_GOLD)
 
 		s := inv.slots[i]
 		if s.item != .None && s.count > 0 {

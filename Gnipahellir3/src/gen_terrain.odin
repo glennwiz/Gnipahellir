@@ -95,7 +95,7 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Steam_Engine = { "Steam Engine", {.Solid, .Mineable, .Placeable}, {150, 122, 62, 255}, 0, 0, .Steam_Engine, 0 },
 	.Gem_Replicator = { "Gem Replicator", {.Solid, .Mineable, .Placeable}, {168, 120, 205, 255}, 0, 0, .Gem_Replicator, 0 },
 	.Green_Cave_Mushroom = { "Green Cave Mushroom", {.Walkable, .Mineable}, {57, 235, 40, 255}, 1, 0, .Green_Cave_Mushroom, 0 },
-	.Mossy_Stone = { "Mossy Stone", {.Solid, .Mineable}, {96, 138, 90, 255}, 0, 0, .Stone_Block, 0 },
+	.Mossy_Stone = { "Mossy Stone", {.Solid, .Mineable}, {96, 138, 90, 255}, 0, 0, .Mossy_Stone, 0 },
 	.Magic_Kettle = { "Magic Kettle", {.Solid, .Mineable, .Placeable}, {130, 90, 160, 255}, 0, 0, .Magic_Kettle, 0 },
 	.Mana_Wheel = { "Mana Wheel", {.Solid, .Mineable, .Placeable}, {170, 130, 200, 255}, 0, 0, .Mana_Wheel, 0 },
 	// The magic track's vapour, twin of Steam: rises, pools, fades - but

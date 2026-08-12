@@ -12,12 +12,15 @@ import "core:os"
 //  uninitialized (audio_play no-ops) and no raylib window is required.
 
 // Hotbar model: the hand is the selected bag slot. Tests wield an item by
-// stashing one in the LAST bag slot (clear of inventory_insert's front-fill)
-// and selecting it.
+// stashing one in a LATE bag slot (clear of inventory_insert's front-fill;
+// the very last slot is the Place Slot, so the hand sits beside it) and
+// selecting it.
+TEST_HAND :: MAX_INVENTORY - 2
+
 @(private = "file")
 test_hold :: proc(gs: ^Game_State, it: Item) {
-    gs.player.inventory.slots[MAX_INVENTORY - 1] = {item = it, count = 1}
-    gs.player.inventory.selected = MAX_INVENTORY - 1
+    gs.player.inventory.slots[TEST_HAND] = {item = it, count = 1}
+    gs.player.inventory.selected = TEST_HAND
 }
 
 @(private = "file")
@@ -1194,7 +1197,7 @@ rune_coffer_re_places_as_ordinary_storage :: proc(t: ^testing.T) {
 	set_tile(&gs.world, 11, 42, .Stone)  // something to attach to
 	eq_push(&gs.events, Event{type = .Place_Request, tile = {11, 41}})
 	process_events(gs)
-	gs.player.inventory.selected = MAX_INVENTORY - 1  // hand back on the pick
+	gs.player.inventory.selected = TEST_HAND  // hand back on the pick
 
 	testing.expect_value(t, get_tile(&gs.world, 11, 41), Tile_Type.Rune_Coffer)
 	b := barrel_at(gs, gs.level_index, {11, 41})
@@ -2117,7 +2120,7 @@ pickaxe_mines_only_while_held :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Stone)
 
     // Wielding it (right-click routes through player_equip) selects its slot.
-    player_equip(gs, MAX_INVENTORY - 1)
+    player_equip(gs, TEST_HAND)
     testing.expect_value(t, held_item(&gs.player), Item.Pickaxe)
     for _ in 0 ..< PICK_HITS do mine_swing(gs, target)
     testing.expect(t, get_tile(&gs.world, int(target.x), int(target.y)) != .Stone,
@@ -7668,6 +7671,105 @@ a_snapshot_restores_the_run_and_refuses_dead_saves :: proc(t: ^testing.T) {
 	gs.player.pos = {90, 90}
 	testing.expect(t, !snapshot_restore_from(gs, path), "a dead snapshot refuses to load")
 	testing.expect_value(t, gs.player.pos, [2]f32{90, 90})
+}
+
+@(test)
+a_held_clay_golem_loads_the_wand_on_use :: proc(t: ^testing.T) {
+	// Hotbar gesture: hold the golem, right-click anywhere — it curls into the
+	// command wand (the wand itself may rest in the bag). Same load the bag
+	// right-click performs.
+	gs := test_state(); defer free(gs)
+	inventory_insert(&gs.player.inventory, .Command_Wand, 1)
+	inventory_insert(&gs.player.inventory, .Clay_Golem, 1)
+	for s, i in gs.player.inventory.slots do if s.item == .Clay_Golem {
+		gs.player.inventory.selected = i
+		break
+	}
+
+	eq_push(&gs.events, Event{type = .Place_Request, tile = {10, 10}})
+	process_events(gs)
+	testing.expect_value(t, golem_loaded_count(gs), 1)
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Clay_Golem), 0)
+
+	// Without any command wand the use refuses and the golem stays.
+	gs2 := test_state(); defer free(gs2)
+	inventory_insert(&gs2.player.inventory, .Clay_Golem, 1)
+	for s, i in gs2.player.inventory.slots do if s.item == .Clay_Golem {
+		gs2.player.inventory.selected = i
+		break
+	}
+	eq_push(&gs2.events, Event{type = .Place_Request, tile = {10, 10}})
+	process_events(gs2)
+	testing.expect_value(t, golem_loaded_count(gs2), 0)
+	testing.expect_value(t, inventory_count(&gs2.player.inventory, .Clay_Golem), 1)
+}
+
+@(test)
+blocks_place_from_the_place_slot_while_a_tool_is_held :: proc(t: ^testing.T) {
+	// The Place Slot (last bag slot, the P cell beside the hotbar): right-click
+	// builds from its stack while the hand keeps the pick or wand — mining and
+	// building without constant hand swaps.
+	gs := test_state(); defer free(gs)  // hand: pickaxe
+	gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+	gs.player.inventory.slots[PLACE_SLOT] = {item = .Stone_Block, count = 5}
+
+	target := [2]i32{31, i32(SURFACE_Y) - 1}  // open air beside the player
+	eq_push(&gs.events, Event{type = .Place_Request, tile = target})
+	process_events(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Stone)
+	testing.expect_value(t, gs.player.inventory.slots[PLACE_SLOT].count, 4)
+	testing.expect_value(t, held_item(&gs.player), Item.Pickaxe)  // the hand never moved
+
+	// A hand holding a placeable block still places THAT, not the Place Slot.
+	set_tile(&gs.world, int(target.x), int(target.y), .Air)
+	gs.world.tile_flags[grid_idx(int(target.x), int(target.y))] = {}
+	inventory_insert(&gs.player.inventory, .Dirt, 2)
+	for s, i in gs.player.inventory.slots do if s.item == .Dirt {
+		gs.player.inventory.selected = i
+		break
+	}
+	eq_push(&gs.events, Event{type = .Place_Request, tile = target})
+	process_events(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Dirt)
+	testing.expect_value(t, gs.player.inventory.slots[PLACE_SLOT].count, 4)  // untouched
+
+	// A non-block in the Place Slot places nothing.
+	gs.player.inventory.selected = TEST_HAND  // back on the pick
+	gs.player.inventory.slots[PLACE_SLOT] = {item = .GreenBerrie, count = 3}
+	open := [2]i32{29, i32(SURFACE_Y) - 1}
+	eq_push(&gs.events, Event{type = .Place_Request, tile = open})
+	process_events(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(open.x), int(open.y)), Tile_Type.Air)
+	testing.expect_value(t, gs.player.inventory.slots[PLACE_SLOT].count, 3)
+}
+
+@(test)
+mossy_stone_mines_places_and_grows_mushrooms :: proc(t: ^testing.T) {
+	// The mushroom farm's missing piece: mossy stone mines into its own item,
+	// places back down, and a placed block sprouts mushrooms like a natural one.
+	gs := test_state(); defer free(gs)  // hand: pickaxe
+	gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+
+	// Mining the mossy block drops the block itself, not plain stone.
+	set_tile(&gs.world, 31, SURFACE_Y, .Mossy_Stone)
+	for _ in 0 ..< PICK_HITS do mine_swing(gs, {31, i32(SURFACE_Y)})
+	testing.expect_value(t, gs.world.items[grid_idx(31, SURFACE_Y)], Item.Mossy_Stone)
+
+	// Place it from the Place Slot while the pick stays in hand — on the
+	// grass beside the hole, where placement finds its solid neighbour.
+	gs.player.inventory.slots[PLACE_SLOT] = {item = .Mossy_Stone, count = 1}
+	target := [2]i32{32, i32(SURFACE_Y) - 1}
+	set_tile(&gs.world, int(target.x), int(target.y), .Air)      // worldgen may have grown here
+	set_tile(&gs.world, int(target.x), int(target.y) - 1, .Air)  // open sky for the sprout
+	eq_push(&gs.events, Event{type = .Place_Request, tile = target})
+	process_events(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Mossy_Stone)
+	testing.expect_value(t, gs.player.inventory.slots[PLACE_SLOT].count, 0)
+
+	// Open air above: the placed block grows a mushroom on the normal clock.
+	gs.delta_time = 0.5
+	for _ in 0 ..< int(MUSHROOM_GROW_TIME / 0.5) + 2 do update_sim(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y) - 1), Tile_Type.Green_Cave_Mushroom)
 }
 
 @(test)
