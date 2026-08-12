@@ -2667,10 +2667,23 @@ draw_held_item :: proc(it: Item, hand: rl.Vector2, ps: f32, deg: f32, flip: bool
 	grip_x, grip_y := f32(5), f32(9.5)
 	if icon.grid == WAND_GRID {grip_x, grip_y = 2, 9}
 
+	// Pixels near the grip fade into the robe's black cloth, so the handle
+	// reads as held by the body rather than pasted beside it.
+	GRIP_FADE_R :: 3.5
+	robe := rl.Color{16, 14, 22, 255} 	// player_pixel_color's 'v' black cloth
+
 	for row, gy in icon.grid {
 		for gx in 0 ..< len(row) {
 			col, ok := icon_pixel(icon.pal, row[gx])
 			if !ok do continue
+			gdx := f32(gx) + 0.5 - grip_x
+			gdy := f32(gy) + 0.5 - grip_y
+			if d := math.sqrt(gdx * gdx + gdy * gdy); d < GRIP_FADE_R {
+				t := 1 - d / GRIP_FADE_R 	// 1 at the grip → 0 at the fade edge
+				col.r = u8(f32(col.r) + (f32(robe.r) - f32(col.r)) * t)
+				col.g = u8(f32(col.g) + (f32(robe.g) - f32(col.g)) * t)
+				col.b = u8(f32(col.b) + (f32(robe.b) - f32(col.b)) * t)
+			}
 			dx := f32(gx) - grip_x
 			if flip {dx = -dx - 1} 	// mirror the offset across the grip
 			rx := hand.x + dx * ps
