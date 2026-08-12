@@ -1,6 +1,7 @@
 package game
 
 import rl "vendor:raylib"
+import "core:fmt"
 import "core:mem"
 import "core:os"
 
@@ -82,6 +83,11 @@ Save_Data :: struct {
 }
 
 save_game :: proc(gs: ^Game_State) -> bool {
+    return save_game_to(gs, SAVE_FILE)
+}
+
+// Split out so snapshots (and tests) can write the same format anywhere.
+save_game_to :: proc(gs: ^Game_State, path: string) -> bool {
     sd := new(Save_Data)
     defer free(sd)
 
@@ -98,7 +104,7 @@ save_game :: proc(gs: ^Game_State) -> bool {
     sd.elapsed_time = gs.elapsed_time
     sd.frame        = gs.frame
 
-    return os.write_entire_file(SAVE_FILE, mem.ptr_to_bytes(sd)) == nil
+    return os.write_entire_file(path, mem.ptr_to_bytes(sd)) == nil
 }
 
 load_game :: proc(gs: ^Game_State) -> bool {
@@ -185,6 +191,83 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
 
     log_action(gs, "run continued from save")
     return true
+}
+
+// ─── Snapshots (F3 menu) ──────────────────────────────────────────────────────
+//
+//  Ten numbered slot files in the same Save_Data format as the autosave.
+//  Saving is just save_game_to; loading rebuilds the whole Game_State
+//  boot-style first so transient state (buffs, golem calls, fluid ages)
+//  never leaks across the jump.
+
+SNAP_SLOTS :: 10
+
+snapshot_path :: proc(buf: []u8, slot: int) -> string {
+    return fmt.bprintf(buf, "gnipahellir_snap_%d.dat", slot)
+}
+
+snapshot_save :: proc(gs: ^Game_State, slot: int) -> bool {
+    buf: [40]u8
+    ok := save_game_to(gs, snapshot_path(buf[:], slot))
+    if ok do log_action(gs, "snapshot %d saved", slot + 1)
+    return ok
+}
+
+snapshot_load :: proc(gs: ^Game_State, slot: int) -> bool {
+    buf: [40]u8
+    ok := snapshot_restore_from(gs, snapshot_path(buf[:], slot))
+    if ok do log_action(gs, "snapshot %d loaded", slot + 1)
+    return ok
+}
+
+// Peek-validates the file BEFORE touching the live run — a stale or corrupt
+// snapshot must never destroy the current state.  On success the Game_State
+// is rebuilt the way main() boots (init, pixel art, load, orphan sweep,
+// camera snap), so a mid-session load behaves exactly like quitting and
+// relaunching into that save.
+snapshot_restore_from :: proc(gs: ^Game_State, path: string) -> bool {
+    data, err := os.read_entire_file_from_path(path, context.allocator)
+    if err != nil do return false
+    ok := len(data) == size_of(Save_Data)
+    if ok {
+        sd := new(Save_Data)
+        mem.copy(sd, raw_data(data), size_of(Save_Data))
+        ok = sd.version == SAVE_VERSION && !sd.player.dead
+        free(sd)
+    }
+    delete(data)
+    if !ok do return false
+
+    flush_action_log(gs)  // game_state_init doesn't preserve the log buffer
+    game_state_init(gs, gs.world_seed)
+    load_pixel_art(gs)    // init zeroed the sprite bank, same as boot
+    if !load_game_from(gs, path) do return false  // unreachable: just validated
+    golem_sweep_orphan_quick_clay(gs)
+    camera_snap_y(gs)
+    gs.ui.show_title = false  // init re-arms the boot title screen
+    gs.save_dirty    = true   // the autosave catches up to the jump
+    return true
+}
+
+// Refreshes the F3 menu's slot cache (existence + write time).  Called when
+// the menu opens and after a save — never per frame, and never from draw.
+snapshot_scan :: proc(gs: ^Game_State) {
+    for slot in 0 ..< SNAP_SLOTS {
+        buf: [40]u8
+        path := snapshot_path(buf[:], slot)
+        gs.ui.snap_exists[slot] = os.exists(path)
+        gs.ui.snap_time[slot] = {}
+        if gs.ui.snap_exists[slot] {
+            if mt, terr := os.modification_time_by_path(path); terr == nil {
+                gs.ui.snap_time[slot] = mt
+            }
+        }
+    }
+}
+
+snapshot_menu_open :: proc(gs: ^Game_State) {
+    snapshot_scan(gs)
+    gs.ui.show_snapshots = true
 }
 
 // "New Game" from the menu: wipes any existing save and drops the player

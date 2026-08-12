@@ -146,6 +146,14 @@ update_input :: proc(gs: ^Game_State) {
         return
     }
 
+    // Snapshot menu (F3): ten save/load slots. Takes all input while open;
+    // the sim is frozen (see game_update). Checked before the death screen so
+    // a doomed run can still be rewound to an earlier snapshot.
+    if gs.ui.show_snapshots {
+        update_snapshots_input(gs)
+        return
+    }
+
     // Pause menu takes over all input while open: ESC (or Resume) closes it,
     // New Game / Save and Quit are queued as events for process_events to
     // handle. Nothing below this block runs — the sim is frozen (see
@@ -169,7 +177,9 @@ update_input :: proc(gs: ^Game_State) {
     // click carves a new hero (roguelike — the old run is ash). ESC still
     // reaches the pause menu for Save and Quit.
     if gs.player.dead {
-        if rl.IsKeyPressed(.ESCAPE) {
+        if rl.IsKeyPressed(.F3) {
+            snapshot_menu_open(gs)  // rewind the doomed run to a snapshot
+        } else if rl.IsKeyPressed(.ESCAPE) {
             gs.ui.show_menu = true
         } else if gs.player.death_timer > DEATH_INPUT_DELAY &&
            (rl.IsKeyPressed(.ENTER) || rl.IsMouseButtonPressed(.LEFT)) {
@@ -410,6 +420,10 @@ update_input :: proc(gs: ^Game_State) {
         if rl.IsKeyPressed(key) {
             gs.player.inventory.selected = gs.player.inventory.selected == i ? -1 : i
         }
+    }
+    // F3: snapshot menu (save/load slots).
+    if rl.IsKeyPressed(.F3) {
+        snapshot_menu_open(gs)
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
@@ -659,7 +673,7 @@ update_input :: proc(gs: ^Game_State) {
     inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
     inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
     when GAME_DEBUG {
-        if rl.IsKeyPressed(.F3) {
+        if rl.IsKeyPressed(.F4) {  // F3 belongs to the snapshot menu now
             gs.ui.show_debug = !gs.ui.show_debug
         }
         if rl.IsKeyPressed(.F1) {
@@ -878,6 +892,34 @@ update_settings_input :: proc(gs: ^Game_State) {
             gs.ui.settings_drag = -1
             audio_play(&gs.audio, .Pickup)  // preview the new loudness
             _ = save_settings(gs)
+        }
+    }
+}
+
+// Snapshot menu input: a SAVE/LOAD click per slot. ESC or F3 closes.
+// A successful load resets the whole Game_State, which also closes the menu.
+update_snapshots_input :: proc(gs: ^Game_State) {
+    if rl.IsKeyPressed(.ESCAPE) || rl.IsKeyPressed(.F3) {
+        gs.ui.show_snapshots = false
+        return
+    }
+    if rl.IsMouseButtonPressed(.LEFT) {
+        slot, load, ok := snapshot_button_at_cursor(gs)
+        if !ok do return
+        if !load {
+            if gs.player.dead do return  // a dead save would just refuse to load
+            if snapshot_save(gs, slot) {
+                snapshot_scan(gs)
+                notify(gs, "Snapshot %d saved", slot + 1)
+            } else {
+                notify(gs, "Snapshot %d failed to write", slot + 1)
+            }
+        } else if gs.ui.snap_exists[slot] {
+            if snapshot_load(gs, slot) {
+                notify(gs, "Snapshot %d loaded", slot + 1)
+            } else {
+                notify(gs, "Snapshot %d is from another version - not loaded", slot + 1)
+            }
         }
     }
 }

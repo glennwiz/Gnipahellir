@@ -2,7 +2,7 @@ package game
 
 // ─── Build Flags ──────────────────────────────────────────────────────────────
 
-// Debug tooling (action log, scan rays, F3 overlay) compiles in by default.
+// Debug tooling (action log, scan rays, F4 overlay) compiles in by default.
 // Release builds strip it: odin build src -define:GAME_DEBUG=false
 GAME_DEBUG :: #config(GAME_DEBUG, true)
 

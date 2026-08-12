@@ -2,6 +2,7 @@ package game
 
 import "core:fmt"
 import "core:math"
+import "core:time"
 import rl "vendor:raylib"
 
 // ─── UI Layout (virtual-resolution pixels) ────────────────────────────────────
@@ -633,6 +634,69 @@ draw_title_pixel_rune_ring :: proc(cx, cy, tick: i32) {
 	}
 }
 
+// Broken, ember-lit masonry at the cave threshold. Variable block widths and
+// slightly uneven crowns keep the four rising courses from reading as nested
+// rectangles, while shared baselines preserve the heavy architectural shape.
+draw_title_ember_masonry :: proc(cx, tick: i32) {
+	course_x := [4]i32{cx - 470, cx - 360, cx - 255, cx - 145}
+	course_y := [4]i32{655, 614, 578, 547}
+	course_w := [4]i32{940, 720, 510, 290}
+	course_h := [4]i32{65, 46, 41, 36}
+
+	for row in 0 ..< 4 {
+		x := course_x[row]
+		y := course_y[row]
+		w := course_w[row]
+		h := course_h[row]
+		mortar := rl.Color{u8(35 + row * 6), u8(18 + row * 2), 15, 255}
+		draw_stepped_panel_shape(x, y, w, h, mortar)
+
+		cursor := x + 3
+		block_index := 0
+		for cursor < x + w - 3 {
+			seed := whash(u32(row * 101 + block_index * 37 + 19))
+			gap := i32(3 + seed % 3)
+			bw := i32(68 + seed % 48)
+			remaining := x + w - 3 - cursor
+			if bw > remaining do bw = remaining
+			if bw < 12 do break
+
+			lift := i32((seed >> 8) % 5)
+			by := y + lift
+			bh := h - lift - 3
+			outline := rl.Color{15, 12, 14, 255}
+			body := rl.Color{u8(34 + row * 7), u8(24 + row * 3), u8(21 + row), 255}
+			highlight := rl.Color{u8(60 + row * 8), u8(38 + row * 4), u8(27 + row * 2), 255}
+			side_light := rl.Color{u8(47 + row * 7), u8(30 + row * 3), u8(24 + row), 255}
+
+			draw_stepped_panel_shape(cursor, by, bw, bh, outline)
+			draw_stepped_panel_shape(cursor + 2, by + 2, bw - 4, bh - 4, body)
+			rl.DrawRectangle(cursor + 7, by + 2, max(bw - 14, 2), 2, highlight)
+			rl.DrawRectangle(cursor + 2, by + 7, 2, max(bh - 14, 2), side_light)
+			rl.DrawRectangle(cursor + 7, by + bh - 5, max(bw - 14, 2), 2, rl.Color{23, 15, 16, 255})
+
+			// Sparse two-step cracks are broad enough to survive final scaling.
+			if (seed >> 13) % 3 == 0 && bw > 34 && bh > 24 {
+				crack_x := cursor + 14 + i32((seed >> 17) % u32(bw - 28))
+				crack_y := by + 9 + i32((seed >> 22) % u32(max(bh - 20, 1)))
+				crack := rl.Color{21, 14, 15, 255}
+				rl.DrawRectangle(crack_x, crack_y, 2, 7, crack)
+				rl.DrawRectangle(crack_x + 2, crack_y + 5, 5, 2, crack)
+				rl.DrawRectangle(crack_x + 5, crack_y + 7, 2, 5, crack)
+			}
+
+			// A rare hot mortar pixel flickers without turning the whole threshold
+			// back into the bright orange mass this pass replaces.
+			if (tick / 5 + i32(block_index) + i32(row) * 2) % 11 == 0 {
+				rl.DrawRectangle(cursor - 2, y + h - 8, 2, 3, rl.Color{142, 57, 22, 255})
+			}
+
+			cursor += bw + gap
+			block_index += 1
+		}
+	}
+}
+
 draw_title :: proc(gs: ^Game_State) {
 	_ = gs
 	tick := i32(rl.GetTime() * 8)
@@ -643,10 +707,7 @@ draw_title :: proc(gs: ^Game_State) {
 	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{7, 7, 12, 255})
 	rl.DrawRectangle(0, 390, UI_W, 330, rl.Color{12, 9, 13, 255})
 	rl.DrawRectangle(0, 500, UI_W, 220, rl.Color{23, 13, 12, 255})
-	rl.DrawRectangle(cx - 470, 650, 940, 70, rl.Color{28, 16, 15, 255})
-	rl.DrawRectangle(cx - 360, 610, 720, 110, rl.Color{40, 20, 16, 255})
-	rl.DrawRectangle(cx - 255, 576, 510, 144, rl.Color{56, 24, 16, 255})
-	rl.DrawRectangle(cx - 145, 552, 290, 168, rl.Color{72, 28, 16, 255})
+	draw_title_ember_masonry(cx, tick)
 
 	// Heavy, asymmetrical cave walls crop the warm horizon into a stepped mouth.
 	cave := rl.Color{15, 14, 18, 255}
@@ -720,7 +781,7 @@ draw_title :: proc(gs: ^Game_State) {
 	// The prompt is a small forged pixel plate instead of floating antialiased
 	// text. Its two-state blink is intentionally stepped, not a smooth pulse.
 	PROMPT_X :: i32(452)
-	PROMPT_Y :: i32(550)
+	PROMPT_Y :: i32(472)
 	PROMPT_W :: i32(376)
 	PROMPT_H :: i32(48)
 	draw_stepped_panel_shape(PROMPT_X + 4, PROMPT_Y + 5, PROMPT_W, PROMPT_H, rl.Color{5, 4, 7, 190})
@@ -1015,6 +1076,79 @@ draw_settings :: proc(gs: ^Game_State) {
 			rl.DrawRectangleLines(kx - 10, y + 2, kw + 20, SET_ROW_H - 12, NORSE_BORDER)
 			rl.DrawText(key_str, kx, y + 8, 20, NORSE_GOLD_HOT)
 		}
+	}
+}
+
+// ─── Snapshot Menu (F3) — ten save/load slots ─────────────────────────────────
+
+SNAP_MENU_W :: 560
+SNAP_ROW_H  :: 46
+SNAP_MENU_X :: (UI_W - SNAP_MENU_W) / 2
+SNAP_MENU_H :: 76 + SNAP_SLOTS * SNAP_ROW_H + 24
+SNAP_MENU_Y :: (UI_H - SNAP_MENU_H) / 2
+SNAP_ROWS_Y :: SNAP_MENU_Y + 76 // first slot row, below the title band
+SNAP_BTN_W  :: 64
+SNAP_BTN_H  :: 30
+SNAP_SAVE_X :: SNAP_MENU_X + SNAP_MENU_W - 2 * SNAP_BTN_W - 40
+SNAP_LOAD_X :: SNAP_MENU_X + SNAP_MENU_W - SNAP_BTN_W - 24
+
+// SAVE/LOAD button under the cursor: (slot, load?, hit). Shared by draw and
+// input so they can never disagree.
+snapshot_button_at_cursor :: proc(gs: ^Game_State) -> (slot: int, load: bool, ok: bool) {
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	r := int((my - SNAP_ROWS_Y) / SNAP_ROW_H)
+	if my < SNAP_ROWS_Y || r >= SNAP_SLOTS do return 0, false, false
+	by := i32(SNAP_ROWS_Y + r * SNAP_ROW_H + (SNAP_ROW_H - SNAP_BTN_H) / 2)
+	if my < by || my >= by + SNAP_BTN_H do return 0, false, false
+	if mx >= SNAP_SAVE_X && mx < SNAP_SAVE_X + SNAP_BTN_W do return r, false, true
+	if mx >= SNAP_LOAD_X && mx < SNAP_LOAD_X + SNAP_BTN_W do return r, true, true
+	return 0, false, false
+}
+
+draw_snapshots :: proc(gs: ^Game_State) {
+	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{8, 6, 10, 215})
+	draw_pixel_window_frame(SNAP_MENU_X, SNAP_MENU_Y, SNAP_MENU_W, SNAP_MENU_H, 60)
+	rl.DrawText("SNAPSHOTS", SNAP_MENU_X + 24, SNAP_MENU_Y + 20, 30, NORSE_GOLD_HOT)
+	rl.DrawText("[ESC] back", SNAP_MENU_X + SNAP_MENU_W - 110, SNAP_MENU_Y + 28, 14, NORSE_GOLD)
+	rl.DrawRectangle(SNAP_MENU_X + 24, SNAP_MENU_Y + 58, SNAP_MENU_W - 48, 2, NORSE_BORDER)
+
+	snap_button :: proc(x, y: i32, label: cstring, enabled, hovered: bool) {
+		hot := hovered && enabled
+		rl.DrawRectangle(x, y, SNAP_BTN_W, SNAP_BTN_H, hot ? NORSE_ROW_HOT : NORSE_ROW)
+		rl.DrawRectangleLines(x, y, SNAP_BTN_W, SNAP_BTN_H, hot ? NORSE_GOLD_HOT : NORSE_BORDER)
+		tw := rl.MeasureText(label, 16)
+		col := enabled ? (hot ? NORSE_GOLD_HOT : NORSE_GOLD) : rl.Color{110, 100, 90, 255}
+		rl.DrawText(label, x + (SNAP_BTN_W - tw) / 2, y + 7, 16, col)
+	}
+
+	hover_slot, hover_load, hover_ok := snapshot_button_at_cursor(gs)
+	for i in 0 ..< SNAP_SLOTS {
+		y := i32(SNAP_ROWS_Y + i * SNAP_ROW_H)
+
+		name_buf: [12]u8
+		fmt.bprintf(name_buf[:11], "SLOT %d", i + 1)
+		rl.DrawText(cstring(raw_data(name_buf[:])), SNAP_MENU_X + 24, y + 12, 20, rl.Color{225, 215, 195, 255})
+
+		// Status: how long ago the slot file was written, or EMPTY.
+		status_buf: [32]u8
+		status := cstring("EMPTY")
+		if gs.ui.snap_exists[i] {
+			mins := int(time.duration_minutes(time.since(gs.ui.snap_time[i])))
+			switch {
+			case mins < 1:       fmt.bprintf(status_buf[:31], "saved just now")
+			case mins < 60:      fmt.bprintf(status_buf[:31], "saved %dm ago", mins)
+			case mins < 60 * 24: fmt.bprintf(status_buf[:31], "saved %dh ago", mins / 60)
+			case:                fmt.bprintf(status_buf[:31], "saved %dd ago", mins / (60 * 24))
+			}
+			status = cstring(raw_data(status_buf[:]))
+		}
+		rl.DrawText(status, SNAP_MENU_X + 140, y + 14, 16, gs.ui.snap_exists[i] ? NORSE_GOLD : rl.Color{110, 100, 90, 255})
+
+		by := y + (SNAP_ROW_H - SNAP_BTN_H) / 2
+		hovered := hover_ok && hover_slot == i
+		snap_button(SNAP_SAVE_X, by, "SAVE", !gs.player.dead, hovered && !hover_load)
+		snap_button(SNAP_LOAD_X, by, "LOAD", gs.ui.snap_exists[i], hovered && hover_load)
 	}
 }
 
@@ -1467,7 +1601,8 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	   my >= GOLEM_CMD_Y && my < GOLEM_CMD_Y+GOLEM_CMD_H {
 		return true
 	}
-	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings {
+	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings ||
+	   gs.ui.show_snapshots {
 		return true // full-screen modals — everything behind them is blocked
 	}
 	return false
@@ -1626,6 +1761,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top
 	if gs.ui.show_charselect do draw_charselect(gs)
 	if gs.ui.show_settings do draw_settings(gs)
+	if gs.ui.show_snapshots do draw_snapshots(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included
 	// Notifications are the final UI layer.  Rune Scroll pickup messages and other
 	// important feedback must stay readable over inventory/storage windows,

@@ -80,7 +80,9 @@ fluid_rules := [?]Fluid_Rule {
 	// deliberately slower (mana_industry.md §4, a first guess to retune by
 	// feel). springs stays OFF for the same reason it does for every gas: a
 	// mist spring would be free infinite power with zero gems ever burned.
-	{tile = .Mana_Mist, period = 1.0, rise = true, lifetime = 20.0},
+	// Lives MUCH longer than Steam (10 min, not 20 s) — Glenn's call: a piped
+	// network should hold its charge, not evaporate mid-build.
+	{tile = .Mana_Mist, period = 1.0, rise = true, lifetime = 600.0},
 }
 
 // How far along its row a blocked cell can spot somewhere to fall.  Bigger =
@@ -165,6 +167,61 @@ update_fluid :: proc(gs: ^Game_State) {
 		gs.fluid.timers[i] = 0
 		fluid_step(gs, rule, gs.fluid.flip[i])
 		gs.fluid.flip[i] = !gs.fluid.flip[i]
+	}
+	update_mana_pipe_fill(gs)
+}
+
+MANA_PIPE_FILL_PERIOD :: f32(0.3) // seconds between each ring of pipe-fill spread
+
+// A pipe network is its own sealed reservoir, independent of whatever open
+// cavern the casing happens to sit in: Mana Mist touching a Piped cell
+// spreads into every OPEN Piped cell connected to it, ring by ring, filling
+// the whole run over a few seconds regardless of how the surrounding rock is
+// shaped — a pipe holds gas even where "the terrain is the plumbing" alone
+// wouldn't (an unsealed cavern would just let it rise away).  Two passes
+// (mark then fill, both over fixed-size scratch arrays — no [dynamic]) so a
+// cell filled this tick doesn't also spread within the same tick: exactly
+// one ring of growth per period, deterministic regardless of scan order.
+//
+// Deliberately NOT mass-conserving — a real, narrow exception to fluid.odin's
+// usual law, made safe by what Mana Mist actually is: it has zero economic
+// value (nothing bottles or sells it, unlike water/lava through a bucket)
+// and powered() is presence-based, not volume-based, so a fuller network
+// grants no extra capability — purely the "the whole system is lit" payoff.
+// An open (unpiped) end still leaks through the ordinary gas physics above,
+// same as an unsealed steam duct.
+update_mana_pipe_fill :: proc(gs: ^Game_State) {
+	gs.fluid.pipe_fill_timer -= gs.delta_time
+	if gs.fluid.pipe_fill_timer > 0 do return
+	gs.fluid.pipe_fill_timer = MANA_PIPE_FILL_PERIOD
+
+	w := &gs.world
+	to_fill:  [GRID_W * GRID_H]bool
+	tint_for: [GRID_W * GRID_H]u8
+
+	for y in 0 ..< GRID_H {
+		for x in 0 ..< GRID_W {
+			idx := grid_idx(x, y)
+			if w.terrain[idx] != .Mana_Mist do continue
+			if .Piped not_in w.tile_flags[idx] do continue
+			tint := gs.fluid.gem_tint[idx]
+			for d in ([4][2]int{{0, -1}, {0, 1}, {1, 0}, {-1, 0}}) {
+				nx, ny := x + d[0], y + d[1]
+				if !in_bounds(nx, ny) do continue
+				nidx := grid_idx(nx, ny)
+				if .Piped not_in w.tile_flags[nidx] do continue
+				if w.terrain[nidx] != .Air do continue // only spread into genuinely open pipe segments
+				to_fill[nidx] = true
+				tint_for[nidx] = tint
+			}
+		}
+	}
+
+	for idx in 0 ..< GRID_W * GRID_H {
+		if !to_fill[idx] do continue
+		set_tile(w, idx % GRID_W, idx / GRID_W, .Mana_Mist)
+		gs.fluid.age[idx] = 0
+		gs.fluid.gem_tint[idx] = tint_for[idx]
 	}
 }
 

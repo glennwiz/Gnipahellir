@@ -7256,7 +7256,12 @@ mana_mist_is_never_a_spring :: proc(t: ^testing.T) {
 
 	testing.expect(t, fluid_is_spring(w, cx, cy, .Mana_Mist), "the built stencil matches the spring shape")
 
-	for _ in 0 ..< 1500 {
+	// Mana Mist's lifetime is minutes now (Glenn's call), so coarsen
+	// delta_time to exactly one fluid_rules period per iteration — the same
+	// technique the Gem Replicator tests use for its minutes-long clocks —
+	// rather than looping tens of thousands of real-60fps steps.
+	gs.delta_time = 1.0 // == Mana_Mist's own Fluid_Rule.period
+	for _ in 0 ..< 700 { // past its 600-step lifetime
 		update_fluid(gs)
 		if get_tile(w, cx, cy + 1) == .Mana_Mist {
 			testing.fail_now(t, "the mouth filled: a mist spring must never fire")
@@ -7365,6 +7370,80 @@ mana_pipe_places_and_removes_via_the_flag :: proc(t: ^testing.T) {
 	mana_pipe_use(gs, x, y)
 	testing.expect(t, .Piped not_in w.tile_flags[grid_idx(x, y)], "a second use on a piped cell removes it")
 	testing.expect_value(t, inventory_count(inv, .Mana_Pipe), 2)
+}
+
+@(test)
+mana_mist_fills_a_piped_network :: proc(t: ^testing.T) {
+	// A pipe network is its own sealed reservoir: mist touching one end
+	// spreads ring by ring to fill every connected Piped cell, even though
+	// the row is otherwise open (capped only to keep ordinary gas-rise
+	// physics from moving cells around and confusing the picture) - and it
+	// must NOT leak into an adjacent open cell that isn't piped.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	row_y := 70
+	// Fully sealed (fluid_carve_box's usual pattern) so ordinary gas physics
+	// has nowhere to drift the mist sideways looking for an opening — the
+	// only thing that can move mist through this fixture is the pipe-fill
+	// pass under test.
+	fluid_carve_box(gs, 98, 106, 68, 72)
+	for x in 100 ..= 104 {
+		set_tile(w, x, row_y, .Air)
+		w.tile_flags[grid_idx(x, row_y)] += {.Piped}
+		set_tile(w, x, row_y - 1, .Stone) // cap: isolate from ordinary rise physics
+	}
+	// An open cell beside the far end that is NOT piped - must stay untouched,
+	// proving containment comes from the flag, not just being open.
+	set_tile(w, 105, row_y, .Air)
+
+	set_tile(w, 100, row_y, .Mana_Mist)
+	tint := gem_tint_index(.Jade)
+	gs.fluid.gem_tint[grid_idx(100, row_y)] = tint
+
+	// Call update_mana_pipe_fill directly rather than through update_fluid:
+	// this fixture's whole row is artificially the same gas at the same
+	// instant, a shape the ordinary per-cell rise/settle physics was never
+	// exercised against (a real kettle only ever seeds one puff at a time) -
+	// isolating the pipe-fill pass under test from that unrelated physics.
+	gs.delta_time = MANA_PIPE_FILL_PERIOD
+	for _ in 0 ..< 6 do update_mana_pipe_fill(gs) // 5 cells apart needs 4 rings; give it headroom
+
+	for x in 100 ..= 104 {
+		testing.expectf(t, get_tile(w, x, row_y) == .Mana_Mist, "cell %d should have filled with mist", x)
+		testing.expect_value(t, gs.fluid.gem_tint[grid_idx(x, row_y)], tint)
+	}
+	testing.expect_value(t, get_tile(w, 105, row_y), Tile_Type.Air) // never leaks past an unpiped cell
+}
+
+@(test)
+a_full_pipe_tunnel_stays_full_under_ordinary_gas_physics :: proc(t: ^testing.T) {
+	// The real shape a player builds: a single-cell-wide dug tunnel, sealed by
+	// undug rock on every side, with pipe casing along the floor. Once full,
+	// it must STAY full under the ordinary per-cell fluid_step tick (not just
+	// the isolated pipe-fill pass) — ordinary gas physics has genuinely
+	// nowhere to send a cell once ~an entire packed run has no open neighbor
+	// anywhere, so nothing should drift, age out early, or "cannibalize" a
+	// neighboring cell of the same gas.
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	row_y := 70
+	// A tunnel sealed on every side - no gaps in the ceiling anywhere, unlike
+	// the deliberately-open fixture above.
+	fluid_carve_box(gs, 100, 104, 70, 70)
+	tint := gem_tint_index(.Diamond)
+	for x in 100 ..= 104 {
+		set_tile(w, x, row_y, .Mana_Mist)
+		w.tile_flags[grid_idx(x, row_y)] += {.Piped}
+		gs.fluid.gem_tint[grid_idx(x, row_y)] = tint
+	}
+
+	before := w.terrain
+	for _ in 0 ..< 120 do update_fluid(gs) // ~2 simulated minutes at 60fps delta_time
+
+	testing.expect(t, before == w.terrain, "a sealed, fully-piped tunnel must sit bit-identical - nothing to drift into")
+	for x in 100 ..= 104 {
+		testing.expect_value(t, gs.fluid.gem_tint[grid_idx(x, row_y)], tint)
+	}
 }
 
 @(test)
@@ -7543,6 +7622,39 @@ a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
 	for i in RECIPE_SLOTS_V23 ..< MAX_ITEM_SLOTS {
 		testing.expect(t, !gs.progression.recipe_unlocked[i], "new recipe slots start locked")
 	}
+}
+
+@(test)
+a_snapshot_restores_the_run_and_refuses_dead_saves :: proc(t: ^testing.T) {
+	// F3 snapshots: save the run to a slot file mid-session, load it back
+	// mid-session.  A load rebuilds the whole Game_State boot-style, so
+	// transient state must not leak across, and a refused file must leave
+	// the live run untouched.
+	path :: "gnipahellir_snap_test_scratch.dat"
+	defer os.remove(path)
+
+	gs := test_state(); defer free(gs)
+	gs.player.pos = {500, 300}
+	gs.player.hp = 4
+	testing.expect(t, save_game_to(gs, path), "snapshot written")
+
+	// Wander on: the restore must bring back the snapshot, not this.
+	gs.player.pos = {90, 90}
+	gs.player.hp = 9
+	gs.flight_t = 12  // transient buff — must not survive the jump
+	testing.expect(t, snapshot_restore_from(gs, path), "snapshot restored")
+	testing.expect_value(t, gs.player.pos, [2]f32{500, 300})
+	testing.expect_value(t, gs.player.hp, 4)
+	testing.expect_value(t, gs.flight_t, f32(0))
+	testing.expect(t, !gs.ui.show_title, "a restore drops straight into the run, no boot screens")
+
+	// A dead run's snapshot must refuse to load and leave the live run alone.
+	gs.player.dead = true
+	testing.expect(t, save_game_to(gs, path), "dead snapshot written")
+	gs.player.dead = false
+	gs.player.pos = {90, 90}
+	testing.expect(t, !snapshot_restore_from(gs, path), "a dead snapshot refuses to load")
+	testing.expect_value(t, gs.player.pos, [2]f32{90, 90})
 }
 
 @(test)

@@ -380,14 +380,21 @@ Fluid_State :: struct {
     flip:   [len(fluid_rules)]bool,
     // Gas only: flow steps each cell has existed, for dissipation.  Transient
     // like the clocks — a save/load resets it, so loaded vapour lives one
-    // extra lifetime.  Cosmetic; not worth a save bump.
-    age:    [GRID_W * GRID_H]u8,
+    // extra lifetime.  Cosmetic; not worth a save bump.  u16 (not u8): Mana
+    // Mist's 600s lifetime at a 1.0s period is 600 steps, past u8's 255 cap —
+    // widened for both gases since the field is shared; Steam's 80 steps
+    // fit either way.
+    age:    [GRID_W * GRID_H]u16,
     // Mana Mist only: which gem's own item_table color tints this cell
     // (gem_tint_index, sim.odin) — carried on move exactly like age is, so a
     // drifting plume keeps its color.  Transient/cosmetic for the same
     // reason age is: a reload just loses one cloud's tint, not worth a save
     // bump.  Meaningless (and unread) for every other fluid.
     gem_tint: [GRID_W * GRID_H]u8,
+    // Mana Mist only: clock for update_mana_pipe_fill's spread-through-pipes
+    // pass (fluid.odin) — separate from the per-rule `timers` above since
+    // it isn't keyed to a fluid_rules row.  Transient.
+    pipe_fill_timer: f32,
 }
 
 // ─── Event Queue ──────────────────────────────────────────────────────────────
@@ -433,6 +440,9 @@ UI_State :: struct {
     show_title:      bool,   // boot title screen; any key dismisses it into the character-select
     show_charselect: bool,   // startup form picker; dismissed by choosing a look
     show_settings:   bool,   // volume sliders + key rebinding screen
+    show_snapshots:  bool,   // F3 snapshot save/load menu (full-screen modal)
+    snap_exists:     [SNAP_SLOTS]bool,      // slot cache, refreshed by snapshot_scan
+    snap_time:       [SNAP_SLOTS]time.Time, // slot file write time, for the row label
     show_book:       bool,   // full-screen tome overlay (ritual passage, or a read scroll)
     book_page:       Book_Page, // which text the tome is showing
     book_tier:       int,    // .Seal only: which structure tier's passage the tome describes
