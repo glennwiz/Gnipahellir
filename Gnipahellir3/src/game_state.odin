@@ -47,6 +47,7 @@ Build_Kind :: enum u8 {
     Cairn,
     Pillar,
     Shelter,
+    Lair,     // Garm's stone den (builders always pick Shelter)
 }
 
 Builder_Goal :: enum u8 {

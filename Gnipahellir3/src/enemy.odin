@@ -103,6 +103,19 @@ SHELTER_TILES := [?]Template_Tile{
     {{-2, -3}, .Wood}, {{-1, -3}, .Wood}, {{0, -3}, .Wood}, {{1, -3}, .Wood}, {{2, -3}, .Wood},
 }
 
+// Garm's lair: the shelter geometry raised in conjured stone.  He is too
+// wide for its doorway — the den is his monument to guard, not a house.
+@(rodata)
+GARM_LAIR_TILES := [?]Template_Tile{
+    {{-1, 0}, .Void}, {{0, 0}, .Void}, {{1, 0}, .Void}, {{2, 0}, .Void},
+    {{-1, -1}, .Void}, {{0, -1}, .Void}, {{1, -1}, .Void},
+    {{-1, -2}, .Void}, {{0, -2}, .Void}, {{1, -2}, .Void},
+    {{-2, 0}, .Stone},
+    {{-2, -1}, .Stone},
+    {{-2, -2}, .Stone}, {{2, -2}, .Stone},
+    {{-2, -3}, .Stone}, {{-1, -3}, .Stone}, {{0, -3}, .Stone}, {{1, -3}, .Stone}, {{2, -3}, .Stone},
+}
+
 // Static table; cannot be @(rodata) because the slice initializers are not
 // compile-time constants.  The arrays it points into ARE rodata — treat this
 // as read-only. Same reason golem.odin's HEARTH_CELLS/DEPOT_CELLS/
@@ -112,6 +125,7 @@ build_templates := [Build_Kind]Build_Template{
     .Cairn   = {"cairn",   CAIRN_TILES[:]},
     .Pillar  = {"pillar",  PILLAR_TILES[:]},
     .Shelter = {"shelter", SHELTER_TILES[:]},
+    .Lair    = {"lair",    GARM_LAIR_TILES[:]},
 }
 
 // ─── Enemy Pool ───────────────────────────────────────────────────────────────
@@ -1183,7 +1197,7 @@ builder_pick_den_site :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
 
         if !site_is_free(gs, id, ax) { continue }
 
-        b.build       = .Shelter
+        if e.kind == .Builder { b.build = .Shelter }   // Garm keeps his .Lair
         b.anchor      = {i32(ax), i32(ay)}
         b.step        = 0
         b.den_built   = false

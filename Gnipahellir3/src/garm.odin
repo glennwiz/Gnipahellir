@@ -48,6 +48,9 @@ ARENA_Y1 :: 102
 
 ARENA_CX :: (ARENA_X0 + ARENA_X1) / 2
 
+// The lair site: off-center so the phase-2 column at ARENA_CX stays clear.
+GARM_DEN_X :: ARENA_CX - 10
+
 // Column: floor up to 2 below the ceiling (the gap keeps a jump route open).
 GARM_COLUMN_LEN :: ARENA_Y1 - ARENA_Y0 - 1
 // Ring: left wall + right wall + top row (the floor is already solid).
@@ -70,9 +73,10 @@ spawn_garm :: proc(gs: ^Game_State) {
     if !ok { return }
 
     e := &gs.enemies.data[id]
-    e.kind   = .Garm
-    e.hp     = GARM_HP
-    e.hp_max = GARM_HP
+    e.kind          = .Garm
+    e.hp            = GARM_HP
+    e.hp_max        = GARM_HP
+    e.builder.build = .Lair   // his den, raised before the hunt begins
 
     // Arena center floor; the room is carved to ARENA_Y1 with stone below.
     cx := f32(ARENA_CX)
@@ -285,6 +289,44 @@ update_garm :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     garm_update_phase(e, gs)
     garm_build_tick(e, gs)
+
+    // The lair comes first: before the eternal hunt begins, Garm raises a
+    // stone den with the same machinery the builders use — walking to the
+    // site, carving, placing (the material is conjured, never fetched).
+    // While he works, only a player inside biting reach gets punished; the
+    // hunt and the fireballs wait for a finished lair.
+    if !e.builder.den_built {
+        b := &e.builder
+        if b.anchor == DEN_UNSET {
+            // A boss dens in his arena, not wherever he happens to stand.
+            ax, ay, found := find_cave_floor(&gs.world, GARM_DEN_X, 4)
+            if found {
+                b.anchor = {i32(ax), i32(ay)}
+                b.step   = 0
+                log_action(gs, "GARM raises his lair at (%d,%d)", ax, ay)
+            }
+        }
+        if !gs.player.dead && g.bite_timer <= 0 &&
+           chebyshev(builder_tile(e), player_tile(&gs.player)) <= GARM_BITE_REACH {
+            g.bite_timer = GARM_BITE_TIME
+            eq_push(&gs.events, Event{
+                type    = .Damage_Dealt,
+                source  = enemy_entity_id(id),
+                target  = PLAYER_ID,
+                payload = {int_val = GARM_BITE_DAMAGE},
+            })
+            log_action(gs, "GARM bites the intruder at his lair")
+        }
+        if garm_smash(e, gs) { return }   // wide-body carves serve den travel too
+        b.cooldown -= dt
+        if b.goal == .Cooldown {
+            e.vel.x = 0
+            if b.cooldown <= 0 { b.goal = b.resume }
+            return
+        }
+        builder_build_den(e, id, gs, dt)
+        return
+    }
 
     if gs.player.dead {
         e.vel.x = 0

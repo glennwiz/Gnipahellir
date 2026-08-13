@@ -3963,6 +3963,7 @@ garm_ledge_fixture :: proc(gs: ^Game_State) -> (gi: int) {
     e.pos      = {146.71, 99.2}   // feet at 101.0, left toe on (146,101)
     e.grounded = true
     e.facing   = -1
+    e.builder.den_built = true    // this fixture pins the HUNT, not the lair
     entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
     return id
 }
@@ -4065,6 +4066,57 @@ garm_bridges_climbs_a_builder_cannot_afford :: proc(t: ^testing.T) {
         testing.expect(t, e2.nav.path.tiles[e2.nav.path.len - 1] != target,
             "a pocket-limited builder must not plan onto the platform")
     }
+}
+
+@(test)
+garm_builds_his_lair_before_the_hunt :: proc(t: ^testing.T) {
+    // Glenn's call: the boss constructs his den first, then hunts.  Garm
+    // walks the builders' den machinery (a stone .Lair near GARM_DEN_X, off
+    // the phase column), leaves a distant player untouched while he works,
+    // and only afterward begins the eternal hunt.
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+    testing.expect_value(t, g.builder.build, Build_Kind.Lair)
+
+    // The player watches from across the arena, out of biting reach.
+    px, py := snap_to_standable(&gs.world, ARENA_X1 - 3, ARENA_Y1 - 1)
+    gs.player.pos = {f32(px) + (1 - PLAYER_W)*0.5, f32(py) - PLAYER_H + 1}
+    hp_start := gs.player.hp
+
+    step :: proc(gs: ^Game_State) {
+        update_enemies(gs)
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    // The lair rises: den complete within a generous window.
+    built_at := -1
+    for f in 0 ..< 120 * 60 {
+        step(gs)
+        if g.builder.den_built { built_at = f; break }
+    }
+    testing.expect(t, g.builder.den_built, "the lair should be complete")
+    testing.expect(t, built_at >= 0, "den completion frame recorded")
+    testing.expect_value(t, gs.player.hp, hp_start)   // no hunt while he worked
+
+    // It stands in stone at his chosen site, roof and walls.
+    a := g.builder.anchor
+    testing.expect(t, abs(int(a.x) - GARM_DEN_X) <= 6, "the lair sits near GARM_DEN_X")
+    testing.expect_value(t, get_tile(&gs.world, int(a.x), int(a.y) - 3), Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, int(a.x) - 2, int(a.y)), Tile_Type.Stone)
+
+    // Then the hunt: fireballs and bites are gated on the finished lair, so
+    // any blood drawn now proves the hunt is on (he opens at fireball range).
+    for _ in 0 ..< 60 * 60 {
+        step(gs)
+        if gs.player.hp < hp_start { break }
+    }
+    testing.expect(t, gs.player.hp < hp_start, "the hunt begins once the lair stands")
 }
 
 @(test)
