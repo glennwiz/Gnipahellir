@@ -3728,9 +3728,17 @@ garm_spawns_only_behind_boss_gate :: proc(t: ^testing.T) {
     for i in 0 ..< MAX_ENEMIES {
         if gs.enemies.active[i] && gs.enemies.data[i].kind == .Garm { gi = i; break }
     }
+    // (a snapshot of g.grounded at one exact frame is fragile — the moment he
+    // wakes he starts hunting, so he may already be mid-step or mid-dig)
     g := &gs.enemies.data[gi]
-    for _ in 0 ..< 60 { update_enemies(gs); process_events(gs); eq_clear(&gs.events) }
-    testing.expect(t, g.grounded, "Garm should land on the arena floor")
+    landed := false
+    for _ in 0 ..< 60 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        landed ||= g.grounded
+    }
+    testing.expect(t, landed, "Garm should land on the arena floor")
 
     eq_push(&gs.events, Event{
         type    = .Damage_Dealt,
@@ -3928,6 +3936,135 @@ garm_fight_soak :: proc(t: ^testing.T) {
 
     log.infof("garm soak: fight lasted %.1f s, %d fireballs, %d hits on the player",
         f32(frame_done) / 60.0, fireballs, player_hits)
+}
+
+// The exact geometry from Glenn's 2026-08-13 live save, replayed headlessly:
+// Garm stood at (146.7,99.2) with his 1.6-wide body's left toe resting on the
+// ledge corner (146,101), his waypoint (147,101) directly BELOW him.  dx ~ 0
+// kept vel.x at zero, his stale facing pointed at the step wall (145,100), and
+// enemy_follow_path's wall-jump fired every landing — an eternal pogo Glenn
+// saw as "just standing there jumping".
+@(private = "file")
+garm_ledge_fixture :: proc(gs: ^Game_State) -> (gi: int) {
+    for y in 94 ..= 104 {
+        for x in 138 ..= 158 { set_tile(&gs.world, x, y, .Air) }
+    }
+    for x in 144 ..= 145 { set_tile(&gs.world, x, 100, .Stone) }
+    for x in 143 ..= 146 { set_tile(&gs.world, x, 101, .Stone) }   // (146,101) = the toe-catcher
+    for x in 141 ..= 147 { set_tile(&gs.world, x, 102, .Stone) }
+    for x in 138 ..= 158 { set_tile(&gs.world, x, 103, .Stone) }   // main floor
+
+    gs.enemies = {}
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind     = .Garm
+    e.hp       = GARM_HP
+    e.hp_max   = GARM_HP
+    e.pos      = {146.71, 99.2}   // feet at 101.0, left toe on (146,101)
+    e.grounded = true
+    e.facing   = -1
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    return id
+}
+
+@(test)
+a_wall_at_his_back_never_pogos_a_descent :: proc(t: ^testing.T) {
+    // enemy_follow_path's wall-ahead jump needs real walking: standing
+    // centered over a lower waypoint (vel.x = 0) with stale facing at a wall
+    // must not fire a jump — that was the visible half of the stuck loop.
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_ledge_fixture(gs)
+    e := &gs.enemies.data[gi]
+    e.nav.path.tiles[0] = {147, 101}
+    e.nav.path.len      = 1
+
+    enemy_follow_path(e, &e.nav, &gs.world)
+    testing.expect_value(t, e.vel.x, f32(0))
+    testing.expect_value(t, e.vel.y, f32(0))
+}
+
+@(test)
+garm_smashes_the_ledge_lip_and_descends :: proc(t: ^testing.T) {
+    // The other half: his wide body toe-catches on a ledge corner beside an
+    // open drop, which a 1-wide builder can never do.  He must chew the lip
+    // (146,101), fall through, and carry on to the player — forever-stuck is
+    // the bug this pins out.
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_ledge_fixture(gs)
+    g := &gs.enemies.data[gi]
+    gs.player.pos = {152, 103 - PLAYER_H}   // on the main floor, past the pocket
+    g.nav.path.tiles[0] = {147, 101}
+    g.nav.path.len      = 1
+    g.builder.plan_target = player_tile(&gs.player)
+
+    reached := false
+    for _ in 0 ..< 15 * 60 {
+        gs.player.hp = 1000   // bites/fireballs must not end the walk early
+        update_enemies(gs)
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if chebyshev(builder_tile(g), player_tile(&gs.player)) <= GARM_BITE_REACH {
+            reached = true
+            break
+        }
+    }
+    testing.expect(t, !is_solid(&gs.world, 146, 101), "the toe-catching lip should be smashed")
+    testing.expect(t, reached, "Garm should descend the ledge and reach the player")
+}
+
+@(test)
+garm_bridges_climbs_a_builder_cannot_afford :: proc(t: ^testing.T) {
+    // In the same save Garm later stalled at the cave floor: the player sat
+    // 75 tiles up and astar_dig with his empty pocket (bridge budget 0) found
+    // no route.  Garm conjures stone — his travel plans with a full
+    // MAX_NAV_PATH budget while a builder stays honestly pocket-limited.
+    gs := test_state()
+    defer free(gs)
+
+    for y in 44 ..= 59 {
+        for x in 38 ..= 62 { set_tile(&gs.world, x, y, .Air) }
+    }
+    for x in 38 ..= 62 { set_tile(&gs.world, x, 60, .Stone) }   // floor
+    set_tile(&gs.world, 50, 50, .Stone)                         // floating platform
+    target := [2]i32{50, 49}
+
+    // astar_dig returns best-effort routes; `complete` is the honest signal.
+    probe: Nav_Path
+    c: bool
+    _ = astar_dig(gs, {44, 59}, target, 0, 0, &probe, 0, complete = &c)
+    testing.expect(t, !c, "an empty bridge budget must not complete the climb")
+    _ = astar_dig(gs, {44, 59}, target, 0, MAX_NAV_PATH, &probe, 0, complete = &c)
+    testing.expect(t, c, "a full bridge budget must complete it")
+
+    // And the plumbing: Garm's travel plans with the full budget despite his
+    // empty pocket, so HIS route ends on the platform; a builder's best-effort
+    // route falls short of it.
+    gs.enemies = {}
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind = .Garm
+    e.pos  = {43.2, 58.2}   // feet on the floor
+    e.grounded = true
+    testing.expect_value(t, e.builder.pocket, u8(0))
+    builder_travel(e, id, gs, gs.delta_time, target, 0)
+    testing.expect(t, e.nav.path.len > 0, "Garm plans the climb with an empty pocket")
+    testing.expect_value(t, e.nav.path.tiles[e.nav.path.len - 1], target)
+
+    e2_id, _ := enemy_alloc(&gs.enemies)
+    e2 := &gs.enemies.data[e2_id]
+    e2.kind = .Builder
+    e2.pos  = {43.2, 59.0}
+    e2.grounded = true
+    builder_travel(e2, e2_id, gs, gs.delta_time, target, 0)
+    if e2.nav.path.len > 0 {
+        testing.expect(t, e2.nav.path.tiles[e2.nav.path.len - 1] != target,
+            "a pocket-limited builder must not plan onto the platform")
+    }
 }
 
 @(test)

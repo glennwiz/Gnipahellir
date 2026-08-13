@@ -226,18 +226,31 @@ garm_smash :: proc(e: ^Enemy, gs: ^Game_State) -> bool {
 
     // Column just ahead of the body, every row the body spans...
     ahead_x := int(e.pos.x - 0.3) if e.facing < 0 else int(e.pos.x + GARM_W + 0.3)
-    check: [4][2]int
+    check: [8][2]int
     n := 0
     for row_y := int(e.pos.y); row_y <= int(e.pos.y + GARM_H - 0.1); row_y += 1 {
         check[n] = {ahead_x, row_y}
         n += 1
     }
-    // ...plus headroom above both shoulders when climbing.
+    // ...plus headroom above both shoulders when climbing...
     if target.y < bt.y && n < len(check) - 1 {
         check[n] = {int(e.pos.x + 0.1), int(e.pos.y) - 1}
         n += 1
         check[n] = {int(e.pos.x + GARM_W - 0.1), int(e.pos.y) - 1}
         n += 1
+    }
+    // ...plus, when he stands over a lower waypoint, the ledge lip his wide
+    // body toe-catches on: solid tiles in the row under his feet.  A 1-wide
+    // builder centers over the drop and falls clean; Garm's 1.6-wide span
+    // overhangs the neighboring ledge corner and hangs there forever.
+    over_drop := target.y > bt.y && e.grounded &&
+        int(target.x) >= int(e.pos.x) && int(target.x) <= int(e.pos.x + GARM_W - 0.1)
+    if over_drop && n <= len(check) - 3 {
+        feet_y := int(e.pos.y + GARM_H + 0.05)
+        for lip_x := int(e.pos.x); lip_x <= int(e.pos.x + GARM_W - 0.1); lip_x += 1 {
+            check[n] = {lip_x, feet_y}
+            n += 1
+        }
     }
 
     for i in 0 ..< n {
@@ -265,6 +278,10 @@ update_garm :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     g.fire_timer  -= dt
     g.bite_timer  -= dt
     g.build_timer -= dt
+
+    // Boss-magic masonry: the shared travel executor spends pocket blocks on
+    // bridges/pillars, but Garm conjures stone — he never runs out.
+    e.builder.pocket = POCKET_MAX
 
     garm_update_phase(e, gs)
     garm_build_tick(e, gs)

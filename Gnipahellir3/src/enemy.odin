@@ -677,10 +677,13 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
         e.vel.x = 0
     }
 
-    // Jump when the waypoint is above, or when walking into a wall.
+    // Jump when the waypoint is above, or when walking into a wall.  The
+    // wall jump needs real walking (vel.x != 0): standing centered over a
+    // lower waypoint with stale facing at a wall must not pogo in place.
     if e.grounded {
         waypoint_above := dy < -0.4
-        wall_ahead     := is_solid(w, int(e.pos.x + f32(e.facing)*(size.x + 0.1)), int(e.pos.y + size.y - 0.5))
+        wall_ahead     := e.vel.x != 0 &&
+            is_solid(w, int(e.pos.x + f32(e.facing)*(size.x + 0.1)), int(e.pos.y + size.y - 0.5))
         if waypoint_above || wall_ahead {
             e.vel.y = BUILDER_JUMP
         }
@@ -1113,7 +1116,11 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         b.replan_timer = REPLAN_MIN
         size := enemy_body_size(e.kind)
         from := [2]i32{i32(e.pos.x + size.x*0.5), i32(e.pos.y + size.y - 0.01)}
-        if !astar_dig(gs, from, T, stop, int(b.pocket), &nav.path, id) {
+        // Garm conjures his masonry (update_garm keeps his pocket topped up):
+        // boss bridging is never limited by mined blocks, so the planner may
+        // route through any climb a builder could only afford with a full pocket.
+        budget := MAX_NAV_PATH if e.kind == .Garm else int(b.pocket)
+        if !astar_dig(gs, from, T, stop, budget, &nav.path, id) {
             builder_strike(e, id, gs, "no path")
             return false
         }
