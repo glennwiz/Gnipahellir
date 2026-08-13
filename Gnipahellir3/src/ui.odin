@@ -2609,6 +2609,49 @@ draw_buff_tooltip :: proc(b: Buff, t: f32) {
 	rl.DrawText(desc, x + 8, y + 22, 10, rl.WHITE)
 }
 
+// Compact forged socket used by the hotbar, Place cell, and rune-scroll chip.
+// Its outer bounds stay exactly on the old clickable rectangle; all stepped
+// corners and selection dressing are render-only.
+draw_pixel_hotbar_cell :: proc(x, y, w, h: i32, selected, hovered: bool, place: bool = false) {
+	outline    := rl.Color{18, 16, 19, 255}
+	iron_dark  := rl.Color{45, 44, 49, 255}
+	iron_mid   := rl.Color{70, 68, 69, 255}
+	iron_light := rl.Color{103, 98, 91, 255}
+	well       := rl.Color{20, 17, 20, 255}
+	well_top   := rl.Color{12, 11, 15, 255}
+	accent     := place ? rl.Color{159, 105, 43, 255} : NORSE_BORDER
+	if hovered do accent = NORSE_GOLD
+	if selected do accent = NORSE_GOLD_HOT
+
+	draw_stepped_panel_shape(x, y, w, h, outline)
+	draw_stepped_panel_shape(x + 2, y + 2, w - 4, h - 4, iron_dark)
+	draw_stepped_panel_shape(x + 5, y + 5, w - 10, h - 10, well)
+
+	// Upper-left steel light and a deep lower/right lip make the icon sit in a
+	// socket rather than on a flat colored square.
+	rl.DrawRectangle(x + 7, y + 3, w - 14, 2, iron_light)
+	rl.DrawRectangle(x + 4, y + 7, 2, h - 14, iron_mid)
+	rl.DrawRectangle(x + 7, y + 6, w - 14, 2, well_top)
+	rl.DrawRectangle(x + 7, y + h - 7, w - 14, 2, rl.Color{9, 8, 11, 255})
+	rl.DrawRectangle(x + w - 7, y + 7, 2, h - 14, rl.Color{10, 9, 12, 255})
+
+	// Sparse forged brackets mark interaction without outlining the whole cell
+	// in a smooth vector line. The Place socket owns warmer brass corners.
+	BRACKET :: i32(8)
+	rl.DrawRectangle(x + 3, y + 3, BRACKET, 2, accent)
+	rl.DrawRectangle(x + 3, y + 3, 2, BRACKET, accent)
+	rl.DrawRectangle(x + w - 3 - BRACKET, y + h - 5, BRACKET, 2, accent)
+	rl.DrawRectangle(x + w - 5, y + h - 3 - BRACKET, 2, BRACKET, accent)
+
+	if selected {
+		// A raised center clasp is easier to recognize at a glance than another
+		// nested outline, especially when the cell contains a bright icon.
+		rl.DrawRectangle(x + w / 2 - 8, y, 16, 3, outline)
+		rl.DrawRectangle(x + w / 2 - 6, y, 12, 2, NORSE_GOLD_HOT)
+		rl.DrawRectangle(x + 3, y + h - 4, w - 6, 2, NORSE_GOLD)
+	}
+}
+
 // The rune scroll chip: shows the carried rune scroll's icon, tinted gold once
 // its structure is ready to raise, with a [B] hint; empty when none is
 // carried.  Clicking it (handled in input.odin) toggles the rune scroll overlay.
@@ -2619,13 +2662,7 @@ draw_rs_chip :: proc(gs: ^Game_State) {
 	item := current_rune_scroll_item(gs)
 	has_rs := item != .None
 
-	rl.DrawRectangle(x, y, RS_CHIP, RS_CHIP, NORSE_ROW)
-	bcol := NORSE_BORDER
-	switch {
-	case hov:    bcol = NORSE_GOLD_HOT
-	case has_rs: bcol = NORSE_GOLD
-	}
-	rl.DrawRectangleLinesEx({f32(x), f32(y), RS_CHIP, RS_CHIP}, (hov || has_rs) ? 2 : 1, bcol)
+	draw_pixel_hotbar_cell(x, y, RS_CHIP, RS_CHIP, has_rs, hov)
 
 	if has_rs {
 		draw_item_icon(item, x + 10, y + 8, 32)
@@ -2649,36 +2686,40 @@ draw_rs_chip :: proc(gs: ^Game_State) {
 draw_hotbar :: proc(gs: ^Game_State) {
 	inv := &gs.player.inventory
 	hov := hotbar_slot_hovered(gs)
+	y := i32(HOTBAR_Y)
+
+	// One substantial rail locks the eight hand slots together. Its oak lower
+	// beam echoes the window headers while the individual cells remain iron.
+	draw_stepped_panel_shape(HOTBAR_X - 7, y - 7, HOTBAR_W + 14, HOTBAR_CELL + 14, rl.Color{5, 4, 7, 185})
+	draw_stepped_panel_shape(HOTBAR_X - 9, y - 9, HOTBAR_W + 18, HOTBAR_CELL + 14, rl.Color{18, 16, 19, 255})
+	draw_stepped_panel_shape(HOTBAR_X - 6, y - 6, HOTBAR_W + 12, HOTBAR_CELL + 8, rl.Color{53, 50, 51, 255})
+	rl.DrawRectangle(HOTBAR_X, y + HOTBAR_CELL + 1, HOTBAR_W, 4, rl.Color{66, 34, 21, 255})
+	rl.DrawRectangle(HOTBAR_X + 8, y + HOTBAR_CELL + 1, HOTBAR_W - 16, 1, rl.Color{143, 77, 35, 255})
+	rl.DrawRectangle(HOTBAR_X + 5, y - 6, HOTBAR_W - 10, 2, rl.Color{102, 97, 90, 255})
+	for rx in ([2]i32{HOTBAR_X - 3, HOTBAR_X + HOTBAR_W - 1}) {
+		rl.DrawRectangle(rx, y + HOTBAR_CELL - 1, 3, 3, NORSE_GOLD)
+	}
 
 	for i in 0 ..< INV_COLS {
 		x := i32(HOTBAR_X + i * HOTBAR_CELL)
-		y := i32(HOTBAR_Y)
-		rl.DrawRectangle(x, y, HOTBAR_CELL, HOTBAR_CELL, NORSE_ROW)
-		rl.DrawRectangleLinesEx(
-			{f32(x), f32(y), HOTBAR_CELL, HOTBAR_CELL},
-			i == hov ? 2 : 1,
-			i == hov ? NORSE_GOLD_HOT : NORSE_BORDER,
-		)
+		draw_pixel_hotbar_cell(x, y, HOTBAR_CELL, HOTBAR_CELL, i == inv.selected, i == hov)
 
-		// Number-key label in the corner.
+		// Number-key label sits on a small dark stamp so it survives any icon.
 		kbuf: [2]u8 = {u8('1' + i), 0}
-		rl.DrawText(cstring(raw_data(kbuf[:])), x + 4, y + 3, 10, text_dim)
+		rl.DrawRectangle(x + 5, y + 5, 9, 11, rl.Color{12, 10, 13, 235})
+		rl.DrawText(cstring(raw_data(kbuf[:])), x + 7, y + 6, 9, i == inv.selected ? NORSE_GOLD_HOT : text_dim)
 
 		s := inv.slots[i]
 		if s.item != .None && s.count > 0 {
-			draw_item_icon(s.item, x + 12, y + 12, 24)
+			draw_item_icon(s.item, x + 11, y + 11, 26)
 			if s.count > 1 {
 				cbuf: [8]u8
 				fmt.bprintf(cbuf[:7], "%d", s.count)
-				rl.DrawText(cstring(raw_data(cbuf[:])), x + 5, y + HOTBAR_CELL - 14, 10, rl.WHITE)
+				count := cstring(raw_data(cbuf[:]))
+				cw := rl.MeasureText(count, 10)
+				rl.DrawRectangle(x + HOTBAR_CELL - cw - 8, y + HOTBAR_CELL - 16, cw + 5, 12, rl.Color{10, 9, 12, 225})
+				rl.DrawText(count, x + HOTBAR_CELL - cw - 6, y + HOTBAR_CELL - 15, 10, rl.WHITE)
 			}
-		}
-		if i == inv.selected {
-			rl.DrawRectangleLinesEx(
-				{f32(x) + 1, f32(y) + 1, HOTBAR_CELL - 2, HOTBAR_CELL - 2},
-				2,
-				NORSE_GOLD_HOT,
-			)
 		}
 	}
 
@@ -2687,29 +2728,21 @@ draw_hotbar :: proc(gs: ^Game_State) {
 	// marked P; clicking it wields the stack directly like any slot.
 	{
 		x := i32(PLACE_CELL_X)
-		y := i32(HOTBAR_Y)
-		rl.DrawRectangle(x, y, HOTBAR_CELL, HOTBAR_CELL, NORSE_ROW)
-		rl.DrawRectangleLinesEx(
-			{f32(x), f32(y), HOTBAR_CELL, HOTBAR_CELL},
-			hov == PLACE_SLOT ? 2 : 1,
-			hov == PLACE_SLOT ? NORSE_GOLD_HOT : NORSE_GOLD,
-		)
-		rl.DrawText("P", x + 4, y + 3, 10, NORSE_GOLD)
+		draw_stepped_panel_shape(x - 5, y - 5, HOTBAR_CELL + 10, HOTBAR_CELL + 10, rl.Color{5, 4, 7, 175})
+		draw_pixel_hotbar_cell(x, y, HOTBAR_CELL, HOTBAR_CELL, inv.selected == PLACE_SLOT, hov == PLACE_SLOT, true)
+		rl.DrawRectangle(x + 5, y + 5, 10, 11, rl.Color{25, 14, 11, 235})
+		rl.DrawText("P", x + 7, y + 6, 9, NORSE_GOLD_HOT)
 		s := inv.slots[PLACE_SLOT]
 		if s.item != .None && s.count > 0 {
-			draw_item_icon(s.item, x + 12, y + 12, 24)
+			draw_item_icon(s.item, x + 11, y + 11, 26)
 			if s.count > 1 {
 				cbuf: [8]u8
 				fmt.bprintf(cbuf[:7], "%d", s.count)
-				rl.DrawText(cstring(raw_data(cbuf[:])), x + 5, y + HOTBAR_CELL - 14, 10, rl.WHITE)
+				count := cstring(raw_data(cbuf[:]))
+				cw := rl.MeasureText(count, 10)
+				rl.DrawRectangle(x + HOTBAR_CELL - cw - 8, y + HOTBAR_CELL - 16, cw + 5, 12, rl.Color{10, 9, 12, 225})
+				rl.DrawText(count, x + HOTBAR_CELL - cw - 6, y + HOTBAR_CELL - 15, 10, rl.WHITE)
 			}
-		}
-		if inv.selected == PLACE_SLOT {
-			rl.DrawRectangleLinesEx(
-				{f32(x) + 1, f32(y) + 1, HOTBAR_CELL - 2, HOTBAR_CELL - 2},
-				2,
-				NORSE_GOLD_HOT,
-			)
 		}
 	}
 
@@ -2719,7 +2752,11 @@ draw_hotbar :: proc(gs: ^Game_State) {
 		placeable := item_table[it].place_tile != .Air
 		name := cstring(raw_data(item_table[it].name))
 		nw := rl.MeasureText(name, 11)
-		rl.DrawText(name, HOTBAR_X + (HOTBAR_W - nw)/2, HOTBAR_Y - 16, 11, placeable ? NORSE_GOLD_HOT : text_dim)
+		label_w := nw + 22
+		label_x := HOTBAR_X + (HOTBAR_W - label_w) / 2
+		draw_stepped_panel_shape(label_x, HOTBAR_Y - 25, label_w, 18, rl.Color{17, 14, 17, 235})
+		rl.DrawRectangle(label_x + 7, HOTBAR_Y - 23, label_w - 14, 1, placeable ? NORSE_GOLD : NORSE_BORDER)
+		rl.DrawText(name, label_x + 11, HOTBAR_Y - 22, 11, placeable ? NORSE_GOLD_HOT : text_dim)
 	}
 
 	// Hovered stack's tooltip (name + what it does).
