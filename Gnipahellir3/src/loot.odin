@@ -52,10 +52,12 @@ rand_range :: proc(gs: ^Game_State, lo, hi: int) -> int {
 }
 
 // Drop a stack on the ground at or near a tile.  Rings outward (nearest
-// first) to the first cell that already stacks this item with room, or is
-// empty and not inside solid terrain — so multiple drops from one death
-// never clobber each other.  If everything nearby is taken, the origin cell
-// is claimed outright: a guaranteed drop (the Hell Key) can never be lost.
+// first), topping up matching piles and claiming open cells until the WHOLE
+// stack has landed — a partial fit continues the search with the remainder,
+// other items' piles are never clobbered, and counts past MAX_STACK split
+// across cells instead of truncating.  The rings widen as far as the grid
+// itself, so a guaranteed drop (the Hell Key) can never be lost as long as
+// one open cell exists anywhere.
 spawn_ground_item :: proc(w: ^World_Grid, tile: [2]i32, item: Item, count: int) {
     if item == .None || count <= 0 do return
     // Progression knowledge always lands protected in a coffer, never as a
@@ -70,8 +72,8 @@ spawn_ground_item :: proc(w: ^World_Grid, tile: [2]i32, item: Item, count: int) 
         }
         return
     }
-    n := u8(min(count, MAX_STACK))
-    for r in i32(0) ..= 2 {
+    left := count
+    for r: i32 = 0; left > 0 && r < GRID_W; r += 1 {
         for dy in -r ..= r do for dx in -r ..= r {
             if max(abs(dx), abs(dy)) != r do continue  // this ring only
             x := int(tile.x + dx)
@@ -80,19 +82,18 @@ spawn_ground_item :: proc(w: ^World_Grid, tile: [2]i32, item: Item, count: int) 
             idx := grid_idx(x, y)
             if .Solid in terrain_table[w.terrain[idx]].flags do continue
             if w.items[idx] == item && w.item_counts[idx] > 0 && int(w.item_counts[idx]) < MAX_STACK {
-                w.item_counts[idx] += min(n, u8(MAX_STACK) - w.item_counts[idx])
-                return
-            }
-            if w.items[idx] == .None || w.item_counts[idx] == 0 {
+                take := min(left, MAX_STACK - int(w.item_counts[idx]))
+                w.item_counts[idx] += u8(take)
+                left -= take
+            } else if w.items[idx] == .None || w.item_counts[idx] == 0 {
+                take := min(left, MAX_STACK)
                 w.items[idx]       = item
-                w.item_counts[idx] = n
-                return
+                w.item_counts[idx] = u8(take)
+                left -= take
             }
+            if left == 0 do return
         }
     }
-    idx := grid_idx(int(tile.x), int(tile.y))
-    w.items[idx]       = item
-    w.item_counts[idx] = n
 }
 
 roll_enemy_drops :: proc(gs: ^Game_State, kind: Enemy_Kind, tile: [2]i32) {

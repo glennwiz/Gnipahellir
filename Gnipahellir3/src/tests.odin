@@ -2941,15 +2941,24 @@ ground_item_spillover :: proc(t: ^testing.T) {
     }
     testing.expect_value(t, found, 2)
 
-    // Every nearby cell taken: the origin is claimed outright so a
-    // guaranteed drop (the Hell Key) is never lost.
+    // Every nearby cell taken: the ring keeps widening, so the guaranteed
+    // drop (the Hell Key) still lands — and no leaf pile is clobbered for it.
     for dy in -2 ..= 2 do for dx in -2 ..= 2 {
         i2 := grid_idx(int(T.x) + dx, int(T.y) + dy)
         w.items[i2]       = .Leaf
         w.item_counts[i2] = 1
     }
     spawn_ground_item(w, T, .Hell_Key, 1)
-    testing.expect_value(t, w.items[idx], Item.Hell_Key)
+    keys := 0
+    for dy in -3 ..= 3 do for dx in -3 ..= 3 {
+        i2 := grid_idx(int(T.x) + dx, int(T.y) + dy)
+        if w.items[i2] == .Hell_Key do keys += int(w.item_counts[i2])
+    }
+    testing.expect_value(t, keys, 1)
+    for dy in -2 ..= 2 do for dx in -2 ..= 2 {
+        i2 := grid_idx(int(T.x) + dx, int(T.y) + dy)
+        testing.expect_value(t, w.items[i2], Item.Leaf)
+    }
 }
 
 @(test)
