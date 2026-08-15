@@ -106,6 +106,9 @@ game_update :: proc(gs: ^Game_State) {
     // 9b. Floating combat text — damage numbers rise and fade (visual only)
     update_floating_text(gs)
 
+    // 9c. Tile effects — overlay telegraphs age and chain (visual only)
+    update_tile_fx(gs)
+
     // 10. Audio (reads state only, never pushes events)
     update_audio(gs)
 

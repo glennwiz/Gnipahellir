@@ -4,6 +4,9 @@ import rl "vendor:raylib"
 
 GOLEM_ZONE_DRAG_THRESHOLD :: f32(6)
 
+// Two hotbar clicks within this many frames pair into a double-click (~⅓ s).
+DOUBLE_CLICK_FRAMES :: u64(20)
+
 golem_zone_drag_ready :: proc(start,now:[2]f32) -> bool {
 	dx,dy:=now.x-start.x,now.y-start.y
 	return dx*dx+dy*dy>=GOLEM_ZONE_DRAG_THRESHOLD*GOLEM_ZONE_DRAG_THRESHOLD
@@ -283,14 +286,24 @@ update_input :: proc(gs: ^Game_State) {
     }
 
     // Clicking a hotbar cell wields that slot; the selected cell again unhands
-    // it (mine/attack were already suppressed over the bar). Skipped when an
-    // open window covers the bar — the window owns that click.
+    // it (mine/attack were already suppressed over the bar). A quick SECOND
+    // click on a consumable cell eats/drinks it instead of unhanding.
+    // Skipped when an open window covers the bar — the window owns that click.
     if rl.IsMouseButtonPressed(.LEFT) && gs.ui.win_drag < 0 && gs.ui.drag_item == .None {
         if slot := hotbar_slot_hovered(gs); slot >= 0 {
             covered := false
             for w in UI_Window do if cursor_in_window(gs, w) { covered = true; break }
             if !covered {
-                gs.player.inventory.selected = gs.player.inventory.selected == slot ? -1 : slot
+                if slot == gs.ui.hotbar_click_slot && gs.ui.hotbar_click_frame != 0 &&
+                   gs.frame - gs.ui.hotbar_click_frame <= DOUBLE_CLICK_FRAMES &&
+                   item_is_consumable(gs.player.inventory.slots[slot].item) {
+                    eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(slot)}})
+                    gs.ui.hotbar_click_frame = 0   // spent — a third click starts a fresh pair
+                } else {
+                    gs.player.inventory.selected = gs.player.inventory.selected == slot ? -1 : slot
+                    gs.ui.hotbar_click_slot  = slot
+                    gs.ui.hotbar_click_frame = gs.frame
+                }
             }
         }
     }

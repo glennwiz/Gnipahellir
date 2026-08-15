@@ -1,5 +1,7 @@
 package game
 
+import "core:math"
+
 // ─── Event Queue ──────────────────────────────────────────────────────────────
 
 eq_push :: proc(eq: ^Event_Queue, e: Event) {
@@ -77,6 +79,18 @@ process_events :: proc(gs: ^Game_State) {
                     en := &gs.enemies.data[i]
                     en.hp -= int(e.payload.int_val)
                     audio_play(&gs.audio, .Sword_Hit)
+                    // The hit is SEEN: a gold damage number pops off the body
+                    // and its blood sprays away from whoever struck it.
+                    ec := [2]f32{en.pos.x + 0.5, en.pos.y + 0.5}
+                    spawn_damage_number(&gs.floating_text, {ec.x, en.pos.y}, int(e.payload.int_val), ENEMY_HIT_COLOR)
+                    dir := [2]f32{f32(en.facing), 0}
+                    if e.source == PLAYER_ID {
+                        pc := [2]f32{gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y + PLAYER_H*0.5}
+                        d  := ec - pc
+                        dist := math.sqrt(d.x*d.x + d.y*d.y)
+                        if dist > 0.1 do dir = d / dist
+                    }
+                    spawn_hit_burst(gs, ec, dir, enemy_blood[en.kind])
                     log_action(gs, "Enemy#%d takes %d damage (hp %d)", i, e.payload.int_val, en.hp)
                     if en.hp <= 0 {
                         eq_push(&gs.events, Event{type = .Entity_Died, source = e.target})
@@ -132,7 +146,9 @@ process_events :: proc(gs: ^Game_State) {
             case .Rune_Scroll_C:
                 eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 2}})
             case .Hell_Key:
-                eq_push(&gs.events, Event{type = .Game_Won})
+                // Not the win anymore: the key turns the Hell_Gate Garm's
+                // death tore open — the Final Seal beyond it ends the run.
+                notify(gs, "The Hell Key burns cold - it turns the gate Garm guarded")
             case .Sky_Rune_Scroll:
                 notify(gs, "Sky Rune Scroll found - raise a Sky Altar to open the way above (B)")
             case .Pickaxe:
@@ -457,6 +473,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
             roll_enemy_drops(gs, en.kind, T)   // loot lands where they fell
             if en.kind == .Garm {
                 log_action(gs, "GARM slain - Hell Key drops at (%d,%d)", T.x, T.y)
+                garm_open_hell_gate(gs, en)
                 eq_push(&gs.events, Event{type = .Boss_Defeated})
             }
         }

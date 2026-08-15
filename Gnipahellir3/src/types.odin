@@ -174,6 +174,14 @@ Tile_Type :: enum u8 {
     // pools, fades, but deals no damage (comfort is the luxury track's
     // perk).  (appended: terrain ordinals are serialized)
     Mana_Mist,
+    // Garm's death tears this open where he fell: a walk-in gate to the Hell
+    // dimension, turned by the Hell Key — never crafted, never mined.
+    // (appended: terrain ordinals are serialized)
+    Hell_Gate,
+    // The run's last door, standing in a vault deep in Hell.  Breaking it
+    // (E, Hell Key in the bag) wins the run; the future Hell fight will
+    // guard it.  (appended: terrain ordinals are serialized)
+    Final_Seal,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────

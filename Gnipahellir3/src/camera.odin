@@ -18,6 +18,13 @@ ZOOM_MAX  :: f32(4.0)
 // bob the view.  A little wider than a full jump so the whole arc is swallowed.
 CAM_DEADZONE_Y :: f32(3.5 * CELL_SIZE)
 
+// The view's bottom edge may overshoot the world by two tiles of black void:
+// the hotbar covers the lowest rows of the screen, so a player standing on
+// the level floor needs the deepest layers lifted clear of it.  The clamp
+// engages progressively — the final tiles of a descent slide the view into
+// the pad, no snap.  Y-axis only; every Y clamp site passes it.
+CAM_BOTTOM_PAD :: f32(2 * CELL_SIZE)
+
 // A wheel notch glides to its new zoom over this many seconds, smoothstepped in
 // 1/zoom (view half-width) space — see update_camera for why that matters: the
 // edge clamp is linear in half-width, so easing there is what stops the camera
@@ -62,10 +69,10 @@ cam_glide_c :: proc(vel, dist: f32) -> f32 {
 }
 
 // Where the camera comes to rest on one axis at a given zoom: the point it
-// tracks, pulled back inside the level edges.
-cam_rest_axis :: proc(p, span, zoom: f32) -> f32 {
+// tracks, pulled back inside the level edges (plus any bottom pad on Y).
+cam_rest_axis :: proc(p, span, zoom: f32, pad := f32(0)) -> f32 {
     half := span * 0.5 / max(zoom, ZOOM_MIN)
-    return clamp(p, half, span - half)
+    return clamp(p, half, span + pad - half)
 }
 
 // The points the camera tracks, before the level-edge clamp: the player's exact
@@ -91,16 +98,16 @@ cam_track_y :: proc(gs: ^Game_State) -> f32 {
 // still. Both ends are relative to the live p, so walking mid-glide still
 // tracks. from_off is captured by camera_begin_zoom_glide, NOT re-derived from
 // the live zoom — see there.
-cam_glide_axis :: proc(gs: ^Game_State, p, span, from_off, c: f32) -> f32 {
-    if gs.zoom_t >= 1 do return cam_rest_axis(p, span, gs.zoom)
+cam_glide_axis :: proc(gs: ^Game_State, p, span, from_off, c: f32, pad := f32(0)) -> f32 {
+    if gs.zoom_t >= 1 do return cam_rest_axis(p, span, gs.zoom, pad)
     from := p + from_off
-    to   := cam_rest_axis(p, span, gs.zoom_target)
+    to   := cam_rest_axis(p, span, gs.zoom_target, pad)
     v    := from + (to - from) * cam_ease_from(gs.zoom_t, c)
     // Zooming OUT narrows the visible window, so a framing that was legal when
     // the notch started can fall outside it; hold it inside the level edges.
     // (Zooming in only widens the window, so this is a no-op there.)
     half := span * 0.5 / max(gs.zoom, ZOOM_MIN)
-    return clamp(v, half, span - half)
+    return clamp(v, half, span + pad - half)
 }
 
 // Player-centered camera, plus the temporary offset made by an ALT cursor zoom.
@@ -114,7 +121,7 @@ game_camera :: proc(gs: ^Game_State) -> rl.Camera2D {
     py   := cam_track_y(gs)
     return rl.Camera2D{
         target   = {cam_glide_axis(gs, px, f32(SCREEN_W), gs.cam_glide_from.x, gs.cam_ease_c.x),
-                    cam_glide_axis(gs, py, f32(SCREEN_H), gs.cam_glide_from.y, gs.cam_ease_c.y)},
+                    cam_glide_axis(gs, py, f32(SCREEN_H), gs.cam_glide_from.y, gs.cam_ease_c.y, CAM_BOTTOM_PAD)},
         offset   = {f32(SCREEN_W)*0.5, f32(SCREEN_H)*0.5},
         rotation = 0,
         zoom     = zoom,
@@ -141,7 +148,7 @@ camera_begin_zoom_glide :: proc(gs: ^Game_State, from_target: [2]f32) {
     gs.cam_glide_from = {from_target.x - px, from_target.y - py}
     gs.cam_ease_c = {
         cam_glide_c(gs.cam_glide_vel.x, cam_rest_axis(px, f32(SCREEN_W), gs.zoom_target) - from_target.x),
-        cam_glide_c(gs.cam_glide_vel.y, cam_rest_axis(py, f32(SCREEN_H), gs.zoom_target) - from_target.y),
+        cam_glide_c(gs.cam_glide_vel.y, cam_rest_axis(py, f32(SCREEN_H), gs.zoom_target, CAM_BOTTOM_PAD) - from_target.y),
     }
     // The zoom itself glides in 1/zoom space (see update_camera), so its carried
     // speed is measured there too.
@@ -346,7 +353,7 @@ camera_pan_drag :: proc(gs: ^Game_State, screen_delta: [2]f32) {
     pan    := gs.cam_pan - screen_delta/zoom
     gs.cam_pan = {
         clamp(pan.x, half_w - px,       f32(SCREEN_W) - half_w - px),
-        clamp(pan.y, half_h - gs.cam_y, f32(SCREEN_H) - half_h - gs.cam_y),
+        clamp(pan.y, half_h - gs.cam_y, f32(SCREEN_H) + CAM_BOTTOM_PAD - half_h - gs.cam_y),
     }
     gs.zoom_cursor_active = false
     gs.cam_recentering    = false

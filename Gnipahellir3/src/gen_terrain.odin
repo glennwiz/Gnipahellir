@@ -101,6 +101,8 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	// The magic track's vapour, twin of Steam: rises, pools, fades - but
 	// deals no damage (decision 5: comfort is the luxury track's perk).
 	.Mana_Mist = { "Mana Mist", {.Walkable}, {225, 200, 245, 110}, 1, 0, .None, 0 },
+	.Hell_Gate = { "Hell Gate", {.Walkable}, {200, 40, 30, 255}, 1, 0, .None, 0 },
+	.Final_Seal = { "Final Seal", {.Solid}, {120, 20, 30, 255}, 0, 0, .None, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -145,6 +147,8 @@ terrain_desc := #partial [Tile_Type]string{
 	.Magic_Kettle = "Burns a gem to breathe Mana Mist - the magic track's power sink.",
 	.Mana_Wheel = "Drinks pooled Mana Mist to power nearby machines.",
 	.Mana_Mist = "Harmless magic vapour, tinted by whatever gem is burning. It rises, it leaks, it fades.",
+	.Hell_Gate = "Torn open by Garm's fall. Only the Hell Key turns it.",
+	.Final_Seal = "The last door. Break it with the Hell Key and the long night ends.",
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
@@ -222,4 +226,6 @@ station_glow := #partial [Tile_Type]rl.Color{
 	.Magic_Kettle = {200, 140, 255, 255},
 	// working violet-brass
 	.Mana_Wheel = {225, 190, 255, 255},
+	.Hell_Gate = {255, 70, 45, 255},
+	.Final_Seal = {200, 40, 80, 255},
 }

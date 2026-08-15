@@ -184,6 +184,24 @@ player_interact :: proc(gs: ^Game_State) {
         return
     }
 
+    // The Final Seal, deep in Hell: the run's last door.  Breaking it with
+    // the Hell Key is the win — the door outranks every other interaction.
+    if gs.level_index == LEVEL_DIMENSION && gs.dimension.kind == .Hell {
+        for dy in -BENCH_RANGE ..= BENCH_RANGE {
+            for dx in -BENCH_RANGE ..= BENCH_RANGE {
+                if get_tile(&gs.world, cx+dx, cy+dy) == .Final_Seal {
+                    if inventory_count(&gs.player.inventory, .Hell_Key) == 0 {
+                        notify(gs, "The seal ignores you - it answers only the Hell Key")
+                        return
+                    }
+                    log_action(gs, "The Final Seal breaks")
+                    eq_push(&gs.events, Event{type = .Game_Won})
+                    return
+                }
+            }
+        }
+    }
+
     // A Sky_Altar tile near the player: in the sky it runs the ritual; on the
     // surface it's the gate the player raised — step through to the heavens.
     for dy in -BENCH_RANGE ..= BENCH_RANGE {
@@ -208,6 +226,12 @@ player_interact :: proc(gs: ^Game_State) {
                 t := get_tile(&gs.world, cx+dx, cy+dy)
                 for kind in Dimension_Kind {
                     if dimension_spawner_tile[kind] == t {
+                        // Hell opens only to Garm's key — the gate is a lock,
+                        // not a doorway.
+                        if kind == .Hell && inventory_count(&gs.player.inventory, .Hell_Key) == 0 {
+                            notify(gs, "The gate is shut - only the Hell Key turns it")
+                            return
+                        }
                         dimension_enter(gs, {i32(cx + dx), i32(cy + dy)}, kind)
                         return
                     }
@@ -320,7 +344,7 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
     if gs.game_won do return ""
     p := &gs.progression
     if p.final_boss_defeated {
-        return fmt.bprintf(buf, "GARM is slain - claim the Hell Key")
+        return fmt.bprintf(buf, "GARM is slain - take his key through the gate, break the Final Seal")
     }
 
     tier := -1

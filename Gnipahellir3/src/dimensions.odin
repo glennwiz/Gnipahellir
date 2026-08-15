@@ -19,6 +19,9 @@ Dimension_Kind :: enum u8 {
     Metal,
     Gold,
     Runic,
+    // Beyond Garm: entered through the Hell_Gate his death tears open, never
+    // through a crafted spawner.  Holds the Final Seal — the run's last door.
+    Hell,
 }
 
 // Theme → generation parameters.  New dimension type = new table row (plus a
@@ -42,6 +45,9 @@ dimension_table := [Dimension_Kind]Dimension_Theme{
     .Metal = { "Metal Dimension", {{.Iron_Ore, 14}, {.Silver_Ore, 6}, {.Gold_Ore, 3}, {}} },
     .Gold  = { "Gold Dimension",  {{.Gold_Ore, 12}, {.Iron_Ore, 4},  {.Silver_Ore, 3}, {}} },
     .Runic = { "Runic Dimension", {{.Runic_Sky_Ore, 8}, {.Gold_Ore, 4}, {.Silver_Ore, 3}, {}} },
+    // Lava pockets sealed in the stone: mining in Hell risks a burn — the
+    // cost mirrors the reward, and the reward is the top of the gem ladder.
+    .Hell  = { "Hell", {{.Hel_Gem_Ore, 7}, {.Lava, 6}, {.Gold_Ore, 3}, {}} },
 }
 
 // Which placed tile opens which theme — the station_tile pattern.
@@ -50,6 +56,7 @@ dimension_spawner_tile := [Dimension_Kind]Tile_Type{
     .Metal = .Dimension_Spawner,
     .Gold  = .Dimension_Spawner_Gold,
     .Runic = .Dimension_Spawner_Runic,
+    .Hell  = .Hell_Gate,
 }
 
 // Where the player came from — restored on exit.  Saved with the run so a
@@ -73,8 +80,13 @@ DIM_SPAWN_POS  :: [2]f32{95, 27 - PLAYER_H}
 // dropped first, so level_transition always regenerates from the seed.
 // Exception: an active Auto-Miner anchors ITS dimension — that world
 // persists, and other spawners refuse to open until it is reclaimed.
+// Hell is ONE place: every gate cell opens the same world, so its seed is
+// fixed — never derived from which of the two gate tiles you pressed E on.
+HELL_SEED :: u32(0x48454C4C)   // "HELL"
+
 dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) {
     seed := whash(u32(spawner.x) * 2654435761 + u32(spawner.y) * 97)
+    if kind == .Hell do seed = HELL_SEED
 
     if dimension_world_anchored(gs) {
         if seed != gs.dimension.seed || kind != gs.dimension.kind {
@@ -82,6 +94,14 @@ dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) 
             return
         }
         // Re-entering the anchored world: keep the saved grid as-is.
+    } else if kind == .Hell && gs.dimension.kind == .Hell &&
+              gs.dimension.seed == HELL_SEED && gs.levels.generated[LEVEL_DIMENSION] {
+        // Hell PERSISTS with no anchor needed: it is a real place, not a
+        // manufactured world — returning finds your dug tunnels and the
+        // spread lava exactly as you left them.  Opening any OTHER
+        // dimension claims the one world slot and Hell regenerates fresh
+        // on the next visit (the Seal vault is deterministic, so nothing
+        // of the progression is lost).
     } else {
         gs.levels.generated[LEVEL_DIMENSION] = false
         gs.dimension.kind = kind
@@ -212,4 +232,13 @@ gen_dimension :: proc(w: ^World_Grid, kind: Dimension_Kind, seed: u32) {
     gate := DIM_GATE_TILES
     set_tile(w, int(gate[0].x), int(gate[0].y), .Dimension_Gate)
     set_tile(w, int(gate[1].x), int(gate[1].y), .Dimension_Gate)
+
+    // Hell's far door: the Final Seal stands in a stone vault at the world's
+    // bottom-right corner — crossing (and digging through) the whole burning
+    // world is the run's epilogue.  player_interact breaks it for the win.
+    if kind == .Hell {
+        carve_box(w, GRID_W - 28, CAVE_LVL_BOT - 9, GRID_W - 18, CAVE_LVL_BOT - 4)
+        for x in GRID_W - 28 ..= GRID_W - 18 do set_tile(w, x, CAVE_LVL_BOT - 3, .Stone)
+        set_tile(w, GRID_W - 23, CAVE_LVL_BOT - 4, .Final_Seal)
+    }
 }

@@ -2,11 +2,15 @@ package game
 
 // ─── Fluid Flow ───────────────────────────────────────────────────────────────
 //
-//  Water and lava are ordinary terrain tiles that MOVE.  Mass is conserved: a
+//  Water is an ordinary terrain tile that MOVES.  Mass is conserved: a
 //  fluid cell is one unit that steps into an open neighbour and leaves its own
 //  cell open behind it — nothing is ever copied, so a body of fluid holds
 //  exactly the tiles world-gen laid down.  Breach a basin and it drains; once
 //  it has run out, it is gone.  You cannot farm the pond.
+//
+//  LAVA is the standing exception (static_drip, Glenn's 2026-08-15 law): it
+//  never moves and every cell drips copies straight down — permanent scenery,
+//  endless hazard, removable only cell by cell with the bucket.
 //
 //  There is exactly ONE exception, and it has to be BUILT: a spring (see
 //  `fluid_is_spring`).  Wall a three-wide pool and leave a gap under its middle
@@ -57,11 +61,12 @@ package game
 // step count lives in `Fluid_State.age`, which is transient: a save/load
 // resets every age and loaded vapour lives one extra lifetime.  Cosmetic.
 Fluid_Rule :: struct {
-	tile:     Tile_Type,
-	period:   f32, // seconds between flow steps — one tile per period
-	rise:     bool, // gas: flows up, pools under ceilings
-	springs:  bool, // may the spring stencil fire for this fluid?
-	lifetime: f32, // 0 = forever; >0 = seconds before a cell fades back to open
+	tile:        Tile_Type,
+	period:      f32, // seconds between flow steps — one tile per period
+	rise:        bool, // gas: flows up, pools under ceilings
+	springs:     bool, // may the spring stencil fire for this fluid?
+	lifetime:    f32, // 0 = forever; >0 = seconds before a cell fades back to open
+	static_drip: bool, // never moves; every cell drips a copy straight down instead
 }
 
 // Do not reorder existing rows: Fluid_State.timers/flip are indexed by rule
@@ -69,8 +74,16 @@ Fluid_Rule :: struct {
 @(rodata)
 fluid_rules := [?]Fluid_Rule {
 	{tile = .Water, period = 1.0, springs = true},
-	{tile = .Lava, period = 3.0, springs = true},
-	{tile = .Magic_Lava, period = 3.0, springs = true},
+	// Lava is STATIC (Glenn's law, 2026-08-15): a level's lava is permanent
+	// scenery and an endless hazard — it sits where the world (or Garm, or a
+	// poured bucket) put it and drips copies straight down into open space,
+	// never a conserving blob that wanders off and drains itself away.  The
+	// bucket removing cells is the one off switch.  Deliberately NOT
+	// mass-conserving, safe like Mana Mist's fill: lava has no economy (the
+	// boiler reads it by adjacency, nothing consumes it), so infinite lava
+	// grants heat and danger, never wealth.
+	{tile = .Lava, period = 3.0, springs = true, static_drip = true},
+	{tile = .Magic_Lava, period = 3.0, springs = true, static_drip = true},
 	// Steam is fast (gas is light) and lives 20 s — long enough to cross a real
 	// steam room, short enough that a leak visibly bleeds you dry.  `springs`
 	// stays OFF for every gas: a steam spring would be free infinite power and
@@ -266,6 +279,34 @@ fluid_step :: proc(gs: ^Game_State, rule: Fluid_Rule, flip: bool) {
 					set_tile(w, x, y, gravity_open_tile(gs, y))
 					continue
 				}
+			}
+
+			// A static fluid's cell IS a downward source: it drips a copy
+			// into open space below, one tile per step (rows run bottom-up,
+			// so the newborn in the already-settled row y+1 waits for the
+			// next step).  Blocked below, it spreads ONLY under pressure —
+			// with more of itself bearing down from above, the buried cell
+			// pushes sideways exactly like water and the source re-drips
+			// into the gap it leaves, so a pool levels out across a floor.
+			// A settled surface cell never creeps: no pressure, no motion.
+			if rule.static_drip {
+				if fluid_open(w, x, y + 1) {
+					set_tile(w, x, y + 1, fluid)
+					continue
+				}
+				// Only the STACK'S BASE spreads: pressure from above AND
+				// ground (not more lava) beneath.  A mid-column cell holds,
+				// so a tall drip column never smears out at every height.
+				if get_tile(w, x, y - 1) != fluid do continue
+				if get_tile(w, x, y + 1) == fluid do continue
+				if tx, ok := fluid_push_target(w, x, y, dir, fluid); ok {
+					fluid_move(gs, x, y, tx, y, fluid, &moved)
+					continue
+				}
+				if tx, ok := fluid_push_target(w, x, y, -dir, fluid); ok {
+					fluid_move(gs, x, y, tx, y, fluid, &moved)
+				}
+				continue
 			}
 
 			// A spring COPIES itself downward and stays put — the one place

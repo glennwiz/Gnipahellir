@@ -350,17 +350,20 @@ handle_item_drop :: proc(gs: ^Game_State, e: Event) {
 
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
-    if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH {
-        notify(gs, "Too far to drop there")
-        return
-    }
-    if is_solid(&gs.world, x, y) {
-        notify(gs, "No room to drop there")
-        return
-    }
+    in_reach := abs(x - pcx) <= PLAYER_REACH && abs(y - pcy) <= PLAYER_REACH
     // Rune Scrolls re-seal themselves when deliberately dropped.  They remain
-    // unique progression objects instead of joining automation item piles.
+    // unique progression objects instead of joining automation item piles —
+    // and they keep the strict refusals (never thrown: spawn_ground_item's
+    // scroll path can silently fail, which would void a progression item).
     if is_rune_scroll(s.item) {
+        if !in_reach {
+            notify(gs, "Too far to drop there")
+            return
+        }
+        if is_solid(&gs.world, x, y) {
+            notify(gs, "No room to drop there")
+            return
+        }
         if tile_overlaps_player(gs, x, y) {
             notify(gs, "Step aside before sealing the rune scroll there")
             return
@@ -380,27 +383,42 @@ handle_item_drop :: proc(gs: ^Game_State, e: Event) {
         log_action(gs, "Player seals %v in a chest at (%d,%d)", item, x, y)
         return
     }
+    // An in-reach drop onto a clear (or matching, roomy) cell lands exactly
+    // where aimed — precise piles matter for machine fuel hoppers.
     idx      := grid_idx(x, y)
     existing := gs.world.items[idx]
     have     := int(gs.world.item_counts[idx])
     matches  := existing == s.item && have > 0
-    if existing != .None && have > 0 && !matches {
-        notify(gs, "Something is already lying there")
+    clear    := existing == .None || have == 0
+    room     := MAX_STACK - (matches ? have : 0)
+    if in_reach && !is_solid(&gs.world, x, y) && (clear || matches) && room > 0 {
+        n := min(s.count, room)
+        gs.world.items[idx]       = s.item
+        gs.world.item_counts[idx] = u8((matches ? have : 0) + n)
+        item := s.item
+        s.count -= n
+        if s.count == 0 do s.item = .None
+        audio_play(&gs.audio, .Place)
+        log_action(gs, "Player drops %v x%d at (%d,%d)", item, n, x, y)
         return
     }
-    room := MAX_STACK - (matches ? have : 0)
-    if room <= 0 {
-        notify(gs, "The pile is full")
-        return
-    }
-    n := min(s.count, room)
-    gs.world.items[idx]       = s.item
-    gs.world.item_counts[idx] = u8((matches ? have : 0) + n)
+
+    // Anywhere else the drop is never refused: the player throws the whole
+    // stack toward the cursor and it lands as a ground pickup at most two
+    // tiles out — spawn_ground_item rings to the first legal cell.  Aimed at
+    // your own feet it lands on you and the walk-over vacuum takes it back.
+    tx := pcx + clamp(x - pcx, -2, 2)
+    ty := pcy + clamp(y - pcy, -2, 2)
+    if tx == pcx && ty == pcy do tx += gs.player.facing >= 0 ? 2 : -2
+    tx = clamp(tx, 0, GRID_W - 1)   // spawn's last resort indexes the origin
+    ty = clamp(ty, 0, GRID_H - 1)   // cell unchecked, so keep it on the grid
     item := s.item
-    s.count -= n
-    if s.count == 0 do s.item = .None
+    n    := int(s.count)
+    spawn_ground_item(&gs.world, {i32(tx), i32(ty)}, item, n)
+    s.count = 0
+    s.item  = .None
     audio_play(&gs.audio, .Place)
-    log_action(gs, "Player drops %v x%d at (%d,%d)", item, n, x, y)
+    log_action(gs, "Player throws %v x%d toward (%d,%d)", item, n, tx, ty)
 }
 
 tile_overlaps_player :: proc(gs: ^Game_State, x, y: int) -> bool {

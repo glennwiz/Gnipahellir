@@ -103,17 +103,39 @@ SHELTER_TILES := [?]Template_Tile{
     {{-2, -3}, .Wood}, {{-1, -3}, .Wood}, {{0, -3}, .Wood}, {{1, -3}, .Wood}, {{2, -3}, .Wood},
 }
 
-// Garm's lair: the shelter geometry raised in conjured stone.  He is too
-// wide for its doorway — the den is his monument to guard, not a house.
+// Garm's lair: a real vault, not a hut — a wide stone hall (9x4 interior)
+// he raises and then FILLS with fire: twin lava pools laid on the floor,
+// flanking a clear center span (where his death later tears the Hell Gate
+// open — reaching Hell means crossing his fire).  The doorway is one tile
+// wide: a player fits, his 1.6-wide body never did — the den is his
+// monument to guard, not a house.  Interior carves over open arena air
+// auto-satisfy, so the real work is the shell and the pour; static lava
+// (fluid.odin) holds a floor-level pool without any basin, forever.
 @(rodata)
 GARM_LAIR_TILES := [?]Template_Tile{
-    {{-1, 0}, .Void}, {{0, 0}, .Void}, {{1, 0}, .Void}, {{2, 0}, .Void},
-    {{-1, -1}, .Void}, {{0, -1}, .Void}, {{1, -1}, .Void},
-    {{-1, -2}, .Void}, {{0, -2}, .Void}, {{1, -2}, .Void},
-    {{-2, 0}, .Stone},
-    {{-2, -1}, .Stone},
-    {{-2, -2}, .Stone}, {{2, -2}, .Stone},
-    {{-2, -3}, .Stone}, {{-1, -3}, .Stone}, {{0, -3}, .Stone}, {{1, -3}, .Stone}, {{2, -3}, .Stone},
+    // carve the hall (9 wide, 4 tall) + the 2-tall doorway on the right
+    {{-4, 0}, .Void}, {{-3, 0}, .Void}, {{-2, 0}, .Void}, {{-1, 0}, .Void}, {{0, 0}, .Void},
+    {{1, 0}, .Void}, {{2, 0}, .Void}, {{3, 0}, .Void}, {{4, 0}, .Void}, {{5, 0}, .Void},
+    {{-4, -1}, .Void}, {{-3, -1}, .Void}, {{-2, -1}, .Void}, {{-1, -1}, .Void}, {{0, -1}, .Void},
+    {{1, -1}, .Void}, {{2, -1}, .Void}, {{3, -1}, .Void}, {{4, -1}, .Void}, {{5, -1}, .Void},
+    {{-4, -2}, .Void}, {{-3, -2}, .Void}, {{-2, -2}, .Void}, {{-1, -2}, .Void}, {{0, -2}, .Void},
+    {{1, -2}, .Void}, {{2, -2}, .Void}, {{3, -2}, .Void}, {{4, -2}, .Void},
+    {{-4, -3}, .Void}, {{-3, -3}, .Void}, {{-2, -3}, .Void}, {{-1, -3}, .Void}, {{0, -3}, .Void},
+    {{1, -3}, .Void}, {{2, -3}, .Void}, {{3, -3}, .Void}, {{4, -3}, .Void},
+    // shell, bottom-up: solid left wall, right wall above the doorway gap
+    {{-5, 0}, .Stone}, {{-5, -1}, .Stone}, {{-5, -2}, .Stone}, {{-5, -3}, .Stone},
+    {{5, -2}, .Stone}, {{5, -3}, .Stone},
+    // roof
+    {{-5, -4}, .Stone}, {{-4, -4}, .Stone}, {{-3, -4}, .Stone}, {{-2, -4}, .Stone},
+    {{-1, -4}, .Stone}, {{0, -4}, .Stone}, {{1, -4}, .Stone}, {{2, -4}, .Stone},
+    {{3, -4}, .Stone}, {{4, -4}, .Stone}, {{5, -4}, .Stone},
+    // and the fire — the pour comes last, twin pools laid ON the floor of
+    // the finished vault (static lava holds a floor-level pool without any
+    // basin: no pressure, no spread — and no below-floor build targets for
+    // his own wide-body descent smashes to chew the floor over).  The
+    // center -1..1 stays clear stone: the Hell Gate's future ground.
+    {{-4, 0}, .Lava}, {{-3, 0}, .Lava}, {{-2, 0}, .Lava},
+    {{2, 0}, .Lava}, {{3, 0}, .Lava}, {{4, 0}, .Lava},
 }
 
 // Static table; cannot be @(rodata) because the slice initializers are not
@@ -750,21 +772,6 @@ spawn_builder :: proc(gs: ^Game_State, start_x: int) {
 
 // Enemy slot whose center tile is at or adjacent to T (the entity map is a
 // center-tile index, so a fat cursor makes bodies clickable) — melee targeting.
-enemy_near_tile :: proc(gs: ^Game_State, T: [2]i32) -> (idx: int, ok: bool) {
-    for dy in i32(-1) ..= i32(1) {
-        for dx in i32(-1) ..= i32(1) {
-            x := int(T.x + dx)
-            y := int(T.y + dy)
-            if !in_bounds(x, y) { continue }
-            id := gs.world.entity_map[grid_idx(x, y)]
-            if id == PLAYER_ID || id == INVALID_ENTITY { continue }
-            i := entity_id_to_enemy_index(id)
-            if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] { return i, true }
-        }
-    }
-    return 0, false
-}
-
 // Clear the entity-map marker and release the pool slot.
 despawn_enemy :: proc(gs: ^Game_State, i: int) {
     if i < 0 || i >= MAX_ENEMIES || !gs.enemies.active[i] { return }
@@ -839,7 +846,8 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     // waypoints at or below our height: a floor under an elevated waypoint
     // doesn't get us up there, and it feeds a place/carve livelock with
     // the climb rule above.
-    if target.y >= bt.y && in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) {
+    if target.y >= bt.y && in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) &&
+       !is_sacred_tile(get_tile(&gs.world, tx, ty+1)) {
         if e.builder.pocket == 0 {
             log_action(gs, "Builder out of blocks at (%d,%d) - replans", tx, ty+1)
             nav.path = {}
@@ -905,7 +913,8 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     // time cap bounds the free stone to a handful.
     if !e.grounded {
         if e.vel.y >= 0 && !is_solid(&gs.world, x, y+1) && in_bounds(x, y+1) &&
-           e.pos.y + BUILDER_H <= f32(y+1) {
+           e.pos.y + BUILDER_H <= f32(y+1) &&
+           !is_sacred_tile(get_tile(&gs.world, x, y+1)) {
             if b.pocket > 0 do b.pocket -= 1
             set_tile(&gs.world, x, y+1, .Stone)
             eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(x), i32(y+1)}})
@@ -1005,6 +1014,11 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
             e.builder.step += 1   // unmineable obstruction — skip this step
         }
         e.builder.stuck_timer = 0
+        return
+    }
+
+    if is_sacred_tile(get_tile(w, x, y)) {
+        e.builder.step += 1   // the way to Hell is no den slot — skip it
         return
     }
 

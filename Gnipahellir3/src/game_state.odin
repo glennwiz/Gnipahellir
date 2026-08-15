@@ -461,6 +461,8 @@ UI_State :: struct {
     win_moved:       [UI_Window]bool,   // player has hand-dragged this window; auto-layout leaves it alone
     win_drag:        int,     // window being dragged by its header, -1 = none
     win_drag_off:    [2]i32,  // cursor offset inside the window at grab
+    hotbar_click_slot:  int,  // hotbar cell of the last click — double-click-to-consume pairing
+    hotbar_click_frame: u64,  // gs.frame of that click (0 = none/spent)
     smelter_tile:    [2]i32,  // furnace the smelter window is looking at
     barrel_tile:     [2]i32,  // barrel the barrel window is looking at
     active_station:  Station, // station the crafting window was opened at (.None = hand crafting)
@@ -626,6 +628,7 @@ Game_State :: struct {
     projectiles: Projectile_Store,
     particles:   Particle_Store,
     floating_text: Floating_Text_Store,   // damage numbers (floating_text.odin)
+    tile_fx:     Tile_Fx_Store,   // reusable tile-overlay telegraphs (fx.odin); transient, not saved
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     leaf_fall_t: f32,             // GreenBerrie slow-fall buff seconds left (player.odin); transient, not saved
     flight_t:    f32,             // altar-swirl flight buff seconds left (levels.odin grants, player.odin ticks); transient, not saved

@@ -30,6 +30,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	draw_enemies(&gs.enemies)
 	draw_golems(gs)
 	draw_projectiles(&gs.projectiles)
+	draw_tile_fx(gs)
 	draw_particles(&gs.particles)
 	draw_ritual(gs)
 	draw_floating_text(&gs.floating_text)
@@ -2604,7 +2605,8 @@ draw_player :: proc(p: ^Player, form: Player_Form, step_visual_y: f32 = 0) {
 	}
 
 	// Held item in the leading hand, drawn from its real icon art so what you
-	// carry is what you see. Only the pickaxe swings (chip-cooldown arc).
+	// carry is what you see. The pickaxe swings on the chip cooldown; a melee
+	// weapon swings on the attack cooldown.
 	held := held_item(p)
 	if held != .None {
 		hand := rl.Vector2{origin_x + total_w - ps * 3, origin_y + ps * 16 + bob}
@@ -2616,6 +2618,17 @@ draw_player :: proc(p: ^Player, form: Player_Form, step_visual_y: f32 = 0) {
 			// recovering back up as the timer runs out.
 			sw := p.mine_timer / PICK_SWING_TIME // 1 at the strike → 0 recovered
 			deg = -30 + 60 * sw
+		} else if is_melee_weapon(held) && p.attack_timer > 0 {
+			// Weighted slash on the attack cooldown: a fast follow-through
+			// from over the shoulder, then a slow, heavy lift back to guard —
+			// the asymmetry is what sells the blade's weight.
+			sw := p.attack_timer / SWORD_COOLDOWN // 1 at the strike → 0 recovered
+			if sw > 0.75 {
+				cut := (1 - sw) / 0.25 // 0 raised behind → 1 swept through
+				deg = -40 + 110 * cut
+			} else {
+				deg = 10 + 60 * (sw / 0.75) // +70 swept → +10 rested, slowly
+			}
 		}
 		if p.facing < 0 {deg = -deg}
 		draw_held_item(held, hand, ps * 0.75, deg, p.facing < 0)

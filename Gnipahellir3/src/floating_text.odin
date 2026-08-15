@@ -18,6 +18,9 @@ FLOAT_TEXT_SIZE     :: i32(9)     // font height in world pixels
 DAMAGE_COLOR :: rl.Color{255, 80, 60, 255}
 // Colour of healing — a bright green, the visual opposite of damage.
 HEAL_COLOR :: rl.Color{90, 220, 90, 255}
+// Colour of a hit the player LANDS — hot gold, distinct from both of the
+// above so your damage and their damage never read as the same thing.
+ENEMY_HIT_COLOR :: rl.Color{255, 210, 90, 255}
 
 // Pop a number off a world position (tile coords).  Full store = silently
 // dropped, like a lost particle.

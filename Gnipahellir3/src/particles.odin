@@ -89,14 +89,49 @@ spawn_wand_stream :: proc(gs: ^Game_State, T: [2]i32) {
     }
 }
 
-// Pick chips: a small fan of sparks off the struck tile.
+// What a struck body sprays: red blood for the living, pale grave-ichor for
+// the risen, embers for sprites, hell-magic for Garm.
+@(rodata)
+enemy_blood := [Enemy_Kind]rl.Color{
+    .Garm        = {200, 60, 210, 255},
+    .Undead      = {140, 190, 150, 255},
+    .Fire_Sprite = {255, 150, 40, 255},
+    .Builder     = {200, 40, 35, 255},
+}
+
+// A landed blow sprays the victim's blood away from the hit — the fan gives
+// the strike a direction, the upward bias and mixed shades give it weight.
+// A hot white flash at the impact point sells the moment of contact.
+spawn_hit_burst :: proc(gs: ^Game_State, center: [2]f32, dir: [2]f32, color: rl.Color) {
+    dark := rl.Color{color.r / 2, color.g / 2, color.b / 2, color.a}
+    for i in 0 ..< 18 {
+        seed := u32(gs.frame)*41 + u32(i)*547
+        vel  := dir * (3.5 + jitter(seed, 2.5)) +
+                [2]f32{jitter(seed + 1, 3.0), -2.5 + jitter(seed + 3, 2.5)}
+        pos  := center + {jitter(seed + 5, 0.3), jitter(seed + 7, 0.3)}
+        spawn_particle(&gs.particles, pos, vel,
+            color if i % 2 == 0 else dark, 0.35 + jitter(seed + 9, 0.18),
+            f32(i % 3) * 0.02)   // three micro-waves so the spray lingers a beat
+    }
+    // Impact flash: a few fast hot sparks straight off the point of contact.
+    for i in 0 ..< 4 {
+        seed := u32(gs.frame)*53 + u32(i)*613
+        vel  := dir * (7 + jitter(seed, 2)) + [2]f32{jitter(seed + 1, 1.5), jitter(seed + 3, 1.5)}
+        spawn_particle(&gs.particles, center, vel,
+            rl.Color{255, 245, 230, 255}, 0.15 + jitter(seed + 5, 0.05))
+    }
+}
+
+// Pick chips: a fan of sparks off the struck tile, with a few dark rock
+// chips tumbling among the bright ones.
 spawn_chip_sparks :: proc(gs: ^Game_State, T: [2]i32) {
     center := [2]f32{f32(T.x) + 0.5, f32(T.y) + 0.5}
-    for i in 0 ..< 4 {
+    for i in 0 ..< 9 {
         seed := u32(gs.frame)*17 + u32(i)*563
-        vel  := [2]f32{jitter(seed, 4), -2 + jitter(seed + 1, 2)}
+        vel  := [2]f32{jitter(seed, 5), -2.5 + jitter(seed + 1, 2.5)}
+        color := rl.Color{255, 240, 180, 255} if i % 3 != 2 else rl.Color{120, 105, 90, 255}
         spawn_particle(&gs.particles, center, vel,
-            rl.Color{255, 240, 180, 255}, 0.25)
+            color, 0.25 + jitter(seed + 3, 0.08))
     }
 }
 

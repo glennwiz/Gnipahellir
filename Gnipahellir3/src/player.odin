@@ -55,6 +55,26 @@ is_fire_wand :: proc(it: Item) -> bool {
     return fire_orb_damage[it] > 0
 }
 
+// The swing hits what is actually in reach: any active enemy within
+// MELEE_REACH of the player qualifies, and the cursor only breaks ties
+// between several — no pixel aiming required (2026-08-15 playtest: swings
+// while standing on a builder must connect).  A direct pool scan, not the
+// entity map: two bodies sharing a tile leave only one in the center-tile
+// index, and the one underfoot must still be hittable.
+melee_target :: proc(gs: ^Game_State) -> (best: int, found: bool) {
+    pt := player_tile(&gs.player)
+    mt := gs.input.mouse_tile
+    best_d := max(i32)
+    for i in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[i] { continue }
+        et := builder_tile(&gs.enemies.data[i])
+        if chebyshev(et, pt) > MELEE_REACH { continue }
+        d := chebyshev(et, mt)
+        if d < best_d { best_d = d; best = i; found = true }
+    }
+    return
+}
+
 // Fall damage: safe up to SAFE_FALL_TILES of drop (a full jump arc is ~3),
 // then 1 hp per FALL_TILES_PER_HP beyond.  Water breaks any fall, and so does
 // an active leaf-fall buff — a drifting leaf never lands hard.
@@ -191,21 +211,29 @@ update_player :: proc(gs: ^Game_State) {
     // ── Mana regen ────────────────────────────────────────────────
     p.mana = min(p.mana + p.mana_regen * dt, p.mana_max)
 
+    // ── Consume from the hand: a click while holding a GreenBerrie/potion
+    //    eats or drinks it — Equip_Request already routes consumables to
+    //    player_consume, so the hand needs no new path of its own ─────
+    if inp.attack && item_is_consumable(held_item(p)) {
+        eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = i32(p.inventory.selected)}})
+    }
+
     // ── Melee: click near an enemy swings the held weapon (a held wand is
-    //    a mining tool, not a melee weapon) ─────
+    //    a mining tool, not a melee weapon).  The blade swings on EVERY
+    //    click, hit or whiff — the cooldown is the swing itself, and the
+    //    render's swing arc reads it — so attacking never looks like
+    //    nothing happened. ─────
     p.attack_timer -= dt
     if inp.attack && p.attack_timer <= 0 && is_melee_weapon(held_item(p)) {
-        if id, found := enemy_near_tile(gs, gs.input.mouse_tile); found {
-            if chebyshev(builder_tile(&gs.enemies.data[id]), player_tile(p)) <= MELEE_REACH {
-                p.attack_timer = SWORD_COOLDOWN
-                eq_push(&gs.events, Event{
-                    type    = .Damage_Dealt,
-                    source  = PLAYER_ID,
-                    target  = enemy_entity_id(id),
-                    payload = {int_val = player_stat(p, .Attack)},
-                })
-                log_action(gs, "Player strikes enemy#%d", id)
-            }
+        p.attack_timer = SWORD_COOLDOWN
+        if id, found := melee_target(gs); found {
+            eq_push(&gs.events, Event{
+                type    = .Damage_Dealt,
+                source  = PLAYER_ID,
+                target  = enemy_entity_id(id),
+                payload = {int_val = player_stat(p, .Attack)},
+            })
+            log_action(gs, "Player strikes enemy#%d", id)
         }
     }
 
