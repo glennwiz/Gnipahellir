@@ -296,10 +296,19 @@ player_pickup :: proc(gs: ^Game_State) {
             it  := gs.world.items[idx]
             cnt := int(gs.world.item_counts[idx])
             if it == .None || cnt == 0 do continue
-            if !inventory_insert(&p.inventory, it, cnt) do continue
+            // A partial fit banks what fits and deducts exactly that from the
+            // pile — the remainder stays on the ground for a later pass.
+            had := inventory_count(&p.inventory, it)
+            all := inventory_insert(&p.inventory, it, cnt)
+            banked := inventory_count(&p.inventory, it) - had
+            if banked == 0 do continue
 
-            gs.world.items[idx]       = .None
-            gs.world.item_counts[idx] = 0
+            if all {
+                gs.world.items[idx]       = .None
+                gs.world.item_counts[idx] = 0
+            } else {
+                gs.world.item_counts[idx] = u8(cnt - banked)
+            }
             eq_push(&gs.events, Event{
                 type    = .Item_Pickup,
                 tile    = {i32(tx), i32(ty)},

@@ -552,15 +552,10 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     gravity_check_removed(gs, x, y)
 
     if drop != .None {
-        // One drop stack per cell: stack onto a matching drop, claim an empty
-        // cell, but never clobber a different item already lying there.
-        existing := gs.world.items[idx]
-        if existing == drop && gs.world.item_counts[idx] > 0 {
-            if int(gs.world.item_counts[idx]) < MAX_STACK do gs.world.item_counts[idx] += 1
-        } else if existing == .None || gs.world.item_counts[idx] == 0 {
-            gs.world.items[idx]       = drop
-            gs.world.item_counts[idx] = 1
-        }
+        // The drop lands on the mined cell when it can, and rings outward when
+        // a different pile (or a capped one) already lies there — a mined
+        // tile's payout is never voided.
+        spawn_ground_item(&gs.world, e.tile, drop, 1)
     }
 
     // The dirt half of the payout flies straight into the bag with a collect
