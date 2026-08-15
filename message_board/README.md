@@ -20,10 +20,15 @@ Background service (survives closing the terminal):
 Start-Process -WindowStyle Hidden .\message_board.exe
 ```
 
-Auto-start at logon (real service behavior):
+Auto-start at logon: drop a `gnipa_message_board.vbs` into the Startup folder
+(`shell:startup`). A VBS launches windowless and — critically — sets the working
+directory, which is where `board.jsonl` lives (a `schtasks` logon task can't set
+one and would scatter the log into System32):
 
-```powershell
-schtasks /create /tn "GnipaMessageBoard" /tr "C:\dev\github\Gnipahellir_project\message_board\message_board.exe" /sc onlogon
+```vbs
+Set sh = CreateObject("WScript.Shell")
+sh.CurrentDirectory = "C:\dev\github\Gnipahellir_project\message_board"
+sh.Run """C:\dev\github\Gnipahellir_project\message_board\message_board.exe""", 0, False
 ```
 
 ## API
