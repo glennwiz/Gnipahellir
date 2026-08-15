@@ -2173,7 +2173,48 @@ draw_enemy :: proc(e: ^Enemy) {
 	}
 }
 
-// Garm: hulking black hound, ember eyes, hp bar overhead.
+// Sub-cell sprite detail: fine rectangles layered over a body drawn at any
+// scale. Coordinates are in frame-pixel units with fractions allowed — a
+// 0.25-unit rect is quarter-pixel detail — so one table serves every render
+// size. Tables are authored right-facing; facing < 0 mirrors across frame_w.
+Sprite_Detail :: struct {
+	x, y, w, h: f32,
+	color:      rl.Color,
+}
+
+// Placement math split from the draw loop so the facing mirror is testable
+// without a window.
+detail_rect :: proc(origin: [2]f32, ps: f32, frame_w: f32, facing: int, d: Sprite_Detail) -> rl.Rectangle {
+	x := d.x
+	if facing < 0 {x = frame_w - d.x - d.w}
+	return {origin.x + x * ps, origin.y + d.y * ps, d.w * ps, d.h * ps}
+}
+
+draw_detail_overlay :: proc(origin: [2]f32, ps: f32, frame_w: f32, facing: int, details: []Sprite_Detail) {
+	for d in details {
+		rl.DrawRectangleRec(detail_rect(origin, ps, frame_w, facing, d), d.color)
+	}
+}
+
+// Garm's face on a 16x18-unit virtual frame (1 unit = 0.1 tile). Table order
+// is draw order: brow shadows first so the sockets sink into the skull, ember
+// irises in the recess, white-hot cores last. The leading eye is larger and
+// hotter than the trailing one so the head reads in profile.
+GARM_FRAME_W :: f32(16)
+
+@(rodata)
+garm_details := [8]Sprite_Detail{
+	{10.75, 2.50, 4.00, 0.75, {10, 8, 14, 255}}, 	// leading brow
+	{6.25, 2.75, 3.50, 0.75, {10, 8, 14, 255}}, 	// trailing brow
+	{11.00, 3.25, 3.50, 3.00, {12, 9, 16, 255}}, 	// leading socket
+	{6.50, 3.50, 3.00, 2.75, {12, 9, 16, 255}}, 	// trailing socket
+	{11.50, 3.75, 2.50, 2.00, {255, 60, 20, 255}}, 	// leading ember
+	{7.00, 4.00, 2.00, 1.75, {225, 48, 16, 255}}, 	// trailing ember, dimmer with depth
+	{12.50, 4.25, 0.75, 0.75, {255, 230, 170, 255}}, 	// leading core
+	{7.75, 4.50, 0.60, 0.60, {255, 205, 145, 255}}, 	// trailing core
+}
+
+// Garm: hulking black hound, layered ember eyes, hp bar overhead.
 draw_garm :: proc(e: ^Enemy) {
 	px := i32(e.pos.x * CELL_SIZE)
 	py := i32(e.pos.y * CELL_SIZE)
@@ -2181,11 +2222,10 @@ draw_garm :: proc(e: ^Enemy) {
 	ph := i32(GARM_H * CELL_SIZE)
 
 	rl.DrawRectangle(px, py, pw, ph, rl.Color{25, 20, 30, 255})
-	// Ember eyes on the facing side
-	eye_y := py + ph / 5
-	eye_x := px + pw - pw / 4 if e.facing >= 0 else px + pw / 4 - 2
-	rl.DrawRectangle(eye_x, eye_y, 3, 3, rl.Color{255, 60, 20, 255})
-	rl.DrawRectangle(eye_x - 5, eye_y, 3, 3, rl.Color{255, 60, 20, 255})
+	draw_detail_overlay(
+		{e.pos.x * CELL_SIZE, e.pos.y * CELL_SIZE},
+		CELL_SIZE * 0.1, GARM_FRAME_W, e.facing, garm_details[:],
+	)
 
 	// HP bar
 	if e.hp < e.hp_max {

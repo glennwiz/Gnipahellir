@@ -8634,3 +8634,27 @@ an_orb_sheds_embers_only_once_lit_and_bursts_on_stone :: proc(t: ^testing.T) {
     testing.expect(t, gs.particles.count > 8,
         "trail embers plus the impact burst should populate the store")
 }
+
+@(test)
+detail_overlay_mirrors_with_facing :: proc(t: ^testing.T) {
+    d := Sprite_Detail{11.5, 3.75, 2.5, 2.0, {255, 60, 20, 255}}
+    origin := [2]f32{100, 200}
+
+    // Right-facing is a straight scale-and-offset — fractional units survive.
+    r := detail_rect(origin, 2, GARM_FRAME_W, 1, d)
+    testing.expect_value(t, r.x, f32(123))
+    testing.expect_value(t, r.y, f32(207.5))
+    testing.expect_value(t, r.width, f32(5))
+    testing.expect_value(t, r.height, f32(4))
+
+    // Left-facing mirrors across the frame width: x' = frame_w - x - w.
+    l := detail_rect(origin, 2, GARM_FRAME_W, -1, d)
+    testing.expect_value(t, l.x, f32(104))
+    testing.expect_value(t, l.y, r.y)
+    testing.expect_value(t, l.width, r.width)
+
+    // A detail centered on the frame is its own mirror image.
+    c := Sprite_Detail{7, 5, 2, 2, {0, 0, 0, 255}}
+    testing.expect_value(t, detail_rect(origin, 3, GARM_FRAME_W, -1, c),
+        detail_rect(origin, 3, GARM_FRAME_W, 1, c))
+}
