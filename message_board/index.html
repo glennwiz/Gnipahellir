@@ -47,6 +47,12 @@
   button { background: #3a1712; color: #e8886f; cursor: pointer; }
   button:hover { background: #55201a; }
   #warn { color: #e0a153; padding: 0 14px 6px; display: none; }
+  #loadarch {
+    display: none; cursor: pointer; text-align: center;
+    color: #6aa5d8; padding: 6px; border: 1px dashed #2a3a48;
+    border-radius: 3px; margin-bottom: 8px;
+  }
+  #loadarch:hover { background: #14181f; }
 </style>
 </head>
 <body>
@@ -55,7 +61,7 @@
   <span id="stats"></span>
   <span id="roster"></span>
 </header>
-<div id="log"></div>
+<div id="log"><div id="loadarch"></div></div>
 <div id="warn"></div>
 <footer>
   <input id="name" title="your name">
@@ -89,6 +95,9 @@ function render(m) {
   return div;
 }
 
+let firstLiveSeq = 0;   // oldest seq the live board still serves
+let archiveLoaded = false;
+
 async function poll() {
   try {
     const d = await (await fetch("/delta?since=" + cursor)).json();
@@ -98,9 +107,34 @@ async function poll() {
       for (const m of d.messages) log.appendChild(render(m));
       if (stick) log.scrollTop = log.scrollHeight;
       $("stats").textContent = `latest #${d.latest}`;
+      if (!firstLiveSeq) {
+        firstLiveSeq = d.messages[0].seq;
+        // Nothing is ever lost: anything trimmed off the live window sits
+        // in the archive, loadable above the log.
+        if (firstLiveSeq > 1 && !archiveLoaded) {
+          const la = $("loadarch");
+          la.textContent = `load archived history (#1–#${firstLiveSeq - 1})`;
+          la.style.display = "block";
+        }
+      }
     }
     cursor = d.latest;
   } catch (e) { $("stats").textContent = "board unreachable"; }
+}
+
+async function loadArchive() {
+  const la = $("loadarch"), log = $("log");
+  la.textContent = "loading…";
+  try {
+    const msgs = await (await fetch("/archive")).json();
+    const frag = document.createDocumentFragment();
+    for (const m of msgs) frag.appendChild(render(m));
+    const before = log.scrollHeight;
+    log.insertBefore(frag, la.nextSibling);
+    log.scrollTop += log.scrollHeight - before;
+    archiveLoaded = true;
+    la.style.display = "none";
+  } catch (e) { la.textContent = "archive load failed - retry"; }
 }
 
 async function refreshAgents() {
@@ -135,6 +169,7 @@ async function send() {
 }
 
 $("send").addEventListener("click", send);
+$("loadarch").addEventListener("click", loadArchive);
 $("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
 $("name").value = localStorage.getItem("board_name") || "glenn";
 

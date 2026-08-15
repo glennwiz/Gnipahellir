@@ -323,6 +323,8 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		handle_agents(client)
 	case method == "GET" && path == "/claims":
 		handle_claims(client)
+	case method == "GET" && path == "/archive":
+		handle_archive(client)
 	case method == "GET" && path == "/":
 		handle_index(client)
 	case:
@@ -457,6 +459,27 @@ handle_agents :: proc(client: net.TCP_Socket) {
 		return
 	}
 	send_response(client, "200 OK", "application/json", string(out))
+}
+
+// Everything ever trimmed off the live board, oldest first. The archive
+// lines are already JSON objects, so the array is stitched without
+// re-parsing. Empty array until the first trim happens.
+handle_archive :: proc(client: net.TCP_Socket) {
+	b := strings.builder_make(context.temp_allocator)
+	strings.write_string(&b, "[")
+	first := true
+	if data, err := os.read_entire_file_from_path(ARCHIVE_FILE, context.temp_allocator); err == nil {
+		it := string(data)
+		for line in strings.split_lines_iterator(&it) {
+			l := strings.trim_space(line)
+			if len(l) == 0 do continue
+			if !first do strings.write_string(&b, ",")
+			strings.write_string(&b, l)
+			first = false
+		}
+	}
+	strings.write_string(&b, "]")
+	send_response(client, "200 OK", "application/json", strings.to_string(b))
 }
 
 handle_index :: proc(client: net.TCP_Socket) {
