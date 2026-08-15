@@ -122,6 +122,36 @@ spawn_hit_burst :: proc(gs: ^Game_State, center: [2]f32, dir: [2]f32, color: rl.
     }
 }
 
+// A flying fire orb sheds one ember behind it: a short-lived fleck knocked
+// off the flight line, sinking as it dies — sparse by the caller's period so
+// the trail never reads as a solid laser.
+spawn_orb_ember :: proc(gs: ^Game_State, pos: [2]f32) {
+    seed  := u32(gs.frame)*59 + 197
+    color := rl.Color{255, 150, 40, 230} if whash(seed) % 3 != 0 else rl.Color{150, 30, 20, 230}
+    spawn_particle(&gs.particles, pos + {jitter(seed + 1, 0.15), jitter(seed + 3, 0.15)},
+        {jitter(seed + 5, 0.6), 0.6 + jitter(seed + 7, 0.5)},
+        color, 0.3 + jitter(seed + 9, 0.1))
+}
+
+// The orb bursting on whatever it struck: a white-hot contact flash first,
+// embers fanning out a beat later, and one slow smoke mote curling up last —
+// sequenced by spawn delays, not code.
+spawn_orb_impact :: proc(gs: ^Game_State, T: [2]i32) {
+    center := [2]f32{f32(T.x) + 0.5, f32(T.y) + 0.5}
+    for i in 0 ..< 4 {
+        seed := u32(gs.frame)*61 + u32(i)*431
+        vel  := [2]f32{jitter(seed, 5), jitter(seed + 1, 5)}
+        spawn_particle(&gs.particles, center, vel, rl.Color{255, 245, 230, 255}, 0.12)
+    }
+    for i in 0 ..< 7 {
+        seed  := u32(gs.frame)*67 + u32(i)*509
+        vel   := [2]f32{jitter(seed, 3.5), -2 + jitter(seed + 1, 2)}
+        color := rl.Color{255, 150, 40, 255} if i % 2 == 0 else rl.Color{200, 60, 25, 255}
+        spawn_particle(&gs.particles, center, vel, color, 0.35 + jitter(seed + 3, 0.12), 0.03)
+    }
+    spawn_particle(&gs.particles, center, {0, -1.2}, rl.Color{90, 80, 75, 180}, 0.5, 0.08)
+}
+
 // Pick chips: a fan of sparks off the struck tile, with a few dark rock
 // chips tumbling among the bright ones.
 spawn_chip_sparks :: proc(gs: ^Game_State, T: [2]i32) {

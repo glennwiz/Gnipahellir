@@ -236,7 +236,7 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Fireball, audio_tile_gain(gs, e.tile))
 
         case .Projectile_Impact:
-            // impact particles land in Phase 7
+            spawn_orb_impact(gs, e.tile)
 
         case .Play_Sound:
             // A tile-stamped Play_Sound is a world sound (a machine's puff,

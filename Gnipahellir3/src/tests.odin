@@ -8604,3 +8604,33 @@ the_fire_wand_refuses_without_mana :: proc(t: ^testing.T) {
     // And the held wand never moonlights as a pick: no swing was started.
     testing.expect(t, gs.player.mine_timer <= 0, "a fire wand never punches terrain")
 }
+
+@(test)
+an_orb_sheds_embers_only_once_lit_and_bursts_on_stone :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fire_range_fixture(gs)
+    set_tile(&gs.world, 64, 52, .Stone)   // the wall it will burst on
+
+    spawn_projectile(gs, {50, 52.5}, {FIRE_ORB_SPEED, 0}, PLAYER_ID, 3)
+    eq_clear(&gs.events)   // drop the launch event; this test is about the flight
+
+    // The void phase: black orb, no embers yet.
+    for gs.projectiles.data[0].age < ORB_VOID_T {
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, gs.particles.count, 0)
+
+    // Flight to the wall: an ignited orb trails embers, and the impact bursts.
+    for _ in 0 ..< 90 {
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if gs.projectiles.count == 0 do break
+    }
+    testing.expect_value(t, gs.projectiles.count, 0)
+    testing.expect(t, gs.particles.count > 8,
+        "trail embers plus the impact burst should populate the store")
+}

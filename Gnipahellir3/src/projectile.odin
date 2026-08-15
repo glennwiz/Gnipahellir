@@ -13,6 +13,19 @@ import rl "vendor:raylib"
 PROJECTILE_LIFETIME :: f32(3.0)
 PROJECTILE_RADIUS   :: f32(0.25)  // tile units; overlap test + draw size
 
+// The void birth (Glenn's direction): every shot leaves its caster as a pure
+// black orb — the body's inner void births it — and only ignites once clear
+// of the body.  Hard age steps, no smooth fades: black silhouette, then a
+// dark-red rim smolders in, then orange blooms, then the white-hot core —
+// with a single void pixel kept at the very center, the remnant of its birth.
+ORB_VOID_T   :: f32(0.10)  // pure void: black silhouette only
+ORB_RIM_T    :: f32(0.20)  // dark-red rim around the black
+ORB_IGNITE_T :: f32(0.28)  // orange bloom; full fire after
+
+// Ignited orbs shed one trail ember per period — sparse on purpose, so the
+// trail reads as falling embers, never a solid laser.
+ORB_EMBER_PERIOD :: f32(0.09)
+
 spawn_projectile :: proc(gs: ^Game_State, pos, vel: [2]f32, owner: Entity_ID, damage: int) {
     for i in 0 ..< MAX_PROJECTILES {
         p := &gs.projectiles.data[i]
@@ -45,6 +58,12 @@ update_projectiles :: proc(gs: ^Game_State) {
 
         p.age += dt
         p.pos += p.vel * dt
+
+        // Trail: only a lit orb burns — the black void phase sheds nothing.
+        if p.age > ORB_IGNITE_T &&
+           int(p.age / ORB_EMBER_PERIOD) != int((p.age - dt) / ORB_EMBER_PERIOD) {
+            spawn_orb_ember(gs, p.pos)
+        }
 
         x := int(p.pos.x)
         y := int(p.pos.y)
@@ -108,16 +127,36 @@ update_projectiles :: proc(gs: ^Game_State) {
     }
 }
 
-// Read-only, called from render.
+// Read-only, called from render.  Layered centered squares, staged by age —
+// see the ORB_* constants for the birth sequence.
 draw_projectiles :: proc(ps: ^Projectile_Store) {
+    VOID :: rl.Color{16, 14, 22, 255}     // the wizard robe's own void-black
+    RIM  :: rl.Color{150, 30, 20, 255}
+    FIRE :: rl.Color{255, 120, 20, 255}
+    CORE :: rl.Color{255, 240, 180, 255}
     for i in 0 ..< MAX_PROJECTILES {
         p := &ps.data[i]
         if !p.active { continue }
-        rl.DrawCircle(
-            i32(p.pos.x * CELL_SIZE),
-            i32(p.pos.y * CELL_SIZE),
-            PROJECTILE_RADIUS * CELL_SIZE,
-            rl.Color{255, 120, 20, 255},
-        )
+        px := i32(p.pos.x * CELL_SIZE)
+        py := i32(p.pos.y * CELL_SIZE)
+        switch {
+        case p.age < ORB_VOID_T:
+            rl.DrawRectangle(px - 2, py - 2, 5, 5, VOID)
+        case p.age < ORB_RIM_T:
+            rl.DrawRectangle(px - 3, py - 3, 7, 7, RIM)
+            rl.DrawRectangle(px - 2, py - 2, 5, 5, VOID)
+        case p.age < ORB_IGNITE_T:
+            rl.DrawRectangle(px - 3, py - 3, 7, 7, RIM)
+            rl.DrawRectangle(px - 2, py - 2, 5, 5, FIRE)
+            rl.DrawRectangle(px - 1, py - 1, 3, 3, VOID)
+        case:
+            rl.DrawRectangle(px - 3, py - 3, 7, 7, RIM)
+            rl.DrawRectangle(px - 2, py - 2, 5, 5, FIRE)
+            // Two-state core flicker off the age clock — hard pixel steps,
+            // no smooth pulse; the single void pixel at center stays.
+            c := i32(2) if int(p.age * 24) % 2 == 0 else i32(1)
+            rl.DrawRectangle(px - c, py - c, c*2 + 1, c*2 + 1, CORE)
+            rl.DrawRectangle(px, py, 1, 1, VOID)
+        }
     }
 }
