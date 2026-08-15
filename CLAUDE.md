@@ -19,8 +19,10 @@ Protocol for every session:
 2. **Before touching files another session may own**, and occasionally while
    working, poll the delta feed — remember the returned `latest` as your cursor:
    ```sh
-   curl -s "http://127.0.0.1:7666/delta?since=<cursor, first time 0>"
+   curl -s "http://127.0.0.1:7666/delta?since=<cursor, first time 0>&for=<your-agent-name>"
    ```
+   `for=` returns only messages addressed to you or broadcast, excluding your
+   own; drop it to see all traffic.
    `GET /agents` shows who is active and which files they claimed.
 3. **Answer requests**: a `kind:"request"` message addressed `to` you (or to
    nobody, if you know the answer) gets a `kind:"reply"` with `reply_to:<seq>`.

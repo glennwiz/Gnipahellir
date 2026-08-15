@@ -26,6 +26,12 @@ DEFAULT_PORT :: 7666
 LOG_FILE :: "board.jsonl"
 MAX_REQUEST :: 1 << 20 // 1 MB — nobody's status update needs more
 
+// Retention: past MAX_MESSAGES the oldest are dropped and the log rewritten,
+// keeping TRIM_TO. seq stays monotonic, so delta cursors survive a trim —
+// clients just never see the discarded history again.
+MAX_MESSAGES :: #config(MAX_MESSAGES, 2000)
+TRIM_TO :: #config(TRIM_TO, 1000)
+
 Message :: struct {
 	seq:      int      `json:"seq"`,
 	unix:     i64      `json:"unix"`,     // server-side receive time, unix seconds
@@ -88,7 +94,35 @@ board_post :: proc(m: Message) -> Message {
 		os.write(board.log_fd, line)
 		os.write_string(board.log_fd, "\n")
 	}
+
+	if len(board.messages) > MAX_MESSAGES do board_trim()
 	return stored
+}
+
+board_trim :: proc() {
+	remove_range(&board.messages, 0, len(board.messages) - TRIM_TO)
+
+	os.close(board.log_fd)
+	fd, err := os.open(LOG_FILE, {.Write, .Create, .Trunc})
+	if err != nil {
+		fmt.eprintfln("trim: cannot rewrite %s: %v", LOG_FILE, err)
+		os.exit(1)
+	}
+	for m in board.messages {
+		if line, merr := json.marshal(m, {}, context.temp_allocator); merr == nil {
+			os.write(fd, line)
+			os.write_string(fd, "\n")
+		}
+	}
+	board.log_fd = fd
+	fmt.printfln("trimmed board to %d messages (oldest kept: seq %d)", TRIM_TO, board.messages[0].seq)
+}
+
+// A message is "for" an agent if addressed to them or broadcast — but never
+// their own posts echoed back.
+message_is_for :: proc(m: Message, name: string) -> bool {
+	if m.agent == name do return false
+	return m.to == "" || m.to == name || m.to == "anyone" || m.to == "all"
 }
 
 // ---------------------------------------------------------------- HTTP layer
@@ -246,6 +280,18 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 			break
 		}
 	}
+	fresh := board.messages[first:]
+
+	// ?for=<agent>: only messages addressed to that agent or broadcast,
+	// never the agent's own posts. Cursor semantics are unchanged — 'latest'
+	// stays global, so filtered and unfiltered polls share one cursor.
+	if name, found := query_param(query, "for"); found && name != "" {
+		filtered := make([dynamic]Message, 0, len(fresh), context.temp_allocator)
+		for m in fresh {
+			if message_is_for(m, name) do append(&filtered, m)
+		}
+		fresh = filtered[:]
+	}
 
 	Delta :: struct {
 		latest:   int       `json:"latest"`,
@@ -254,8 +300,8 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 	}
 	delta := Delta{
 		latest   = board.next_seq - 1,
-		count    = len(board.messages) - first,
-		messages = board.messages[first:],
+		count    = len(fresh),
+		messages = fresh,
 	}
 	out, err := json.marshal(delta, {}, context.temp_allocator)
 	if err != nil {
@@ -295,6 +341,7 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "POST /post            body: {\"agent\":\"name\",\"kind\":\"status|msg|request|reply\",\"text\":\"...\",\"files\":[\"...\"],\"to\":\"agent\",\"reply_to\":seq}")
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
+	fmt.sbprintln(&b, "     &for=agent      only messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
 	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent")
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "recent:")
