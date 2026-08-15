@@ -8658,3 +8658,14 @@ detail_overlay_mirrors_with_facing :: proc(t: ^testing.T) {
     testing.expect_value(t, detail_rect(origin, 3, GARM_FRAME_W, -1, c),
         detail_rect(origin, 3, GARM_FRAME_W, 1, c))
 }
+
+@(test)
+garms_hound_stays_inside_his_frame :: proc(t: ^testing.T) {
+    check :: proc(t: ^testing.T, d: Sprite_Detail, msg: string) {
+        testing.expect(t, d.x >= 0 && d.x + d.w <= GARM_FRAME_W, msg)
+        testing.expect(t, d.y >= 0 && d.y + d.h <= 18, msg)
+    }
+    for d in garm_statics do check(t, d, "a statics row escapes the 16x18 frame")
+    for d in garm_body    do check(t, d, "a body row escapes the 16x18 frame")
+    for d in garm_details do check(t, d, "a face row escapes the 16x18 frame")
+}

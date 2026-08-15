@@ -28,7 +28,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	draw_reclaim_target(gs)
 	draw_golem_orders(gs)
 	draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
-	draw_enemies(&gs.enemies)
+	draw_enemies(&gs.enemies, gs.elapsed_time)
 	draw_golems(gs)
 	draw_projectiles(&gs.projectiles)
 	draw_tile_fx(gs)
@@ -2247,19 +2247,19 @@ draw_reclaim_target :: proc(gs: ^Game_State) {
 
 // ─── Enemies ──────────────────────────────────────────────────────────────────
 
-draw_enemies :: proc(es: ^Enemy_Store) {
+draw_enemies :: proc(es: ^Enemy_Store, t: f32) {
 	for i in 0 ..< MAX_ENEMIES {
 		if !es.active[i] {continue}
-		draw_enemy(&es.data[i])
+		draw_enemy(&es.data[i], t)
 	}
 }
 
-draw_enemy :: proc(e: ^Enemy) {
+draw_enemy :: proc(e: ^Enemy, t: f32) {
 	switch e.kind {
 	case .Builder:
 		draw_builder(e)
 	case .Garm:
-		draw_garm(e)
+		draw_garm(e, t)
 	case .Undead:
 		draw_draugr(e)
 	case .Fire_Sprite:
@@ -2295,33 +2295,107 @@ draw_detail_overlay :: proc(origin: [2]f32, ps: f32, frame_w: f32, facing: int, 
 // Garm's face on a 16x18-unit virtual frame (1 unit = 0.1 tile). Table order
 // is draw order: brow shadows first so the sockets sink into the skull, ember
 // irises in the recess, white-hot cores last. The leading eye is larger and
-// hotter than the trailing one so the head reads in profile.
+// hotter than the trailing one so the head reads in profile.  The rows were
+// rescaled onto the hound redesign's compact forward skull (same layers, same
+// colors, same leading/trailing asymmetry — the approved treatment at hound
+// proportions instead of the old full-frame face).
 GARM_FRAME_W :: f32(16)
 
 @(rodata)
 garm_details := [8]Sprite_Detail{
-	{10.75, 2.50, 4.00, 0.75, {10, 8, 14, 255}}, 	// leading brow
-	{6.25, 2.75, 3.50, 0.75, {10, 8, 14, 255}}, 	// trailing brow
-	{11.00, 3.25, 3.50, 3.00, {12, 9, 16, 255}}, 	// leading socket
-	{6.50, 3.50, 3.00, 2.75, {12, 9, 16, 255}}, 	// trailing socket
-	{11.50, 3.75, 2.50, 2.00, {255, 60, 20, 255}}, 	// leading ember
-	{7.00, 4.00, 2.00, 1.75, {225, 48, 16, 255}}, 	// trailing ember, dimmer with depth
-	{12.50, 4.25, 0.75, 0.75, {255, 230, 170, 255}}, 	// leading core
-	{7.75, 4.50, 0.60, 0.60, {255, 205, 145, 255}}, 	// trailing core
+	{12.60, 2.80, 2.20, 0.50, {10, 8, 14, 255}}, 	// leading brow
+	{10.30, 2.95, 1.90, 0.50, {10, 8, 14, 255}}, 	// trailing brow
+	{12.70, 3.30, 2.00, 1.70, {12, 9, 16, 255}}, 	// leading socket
+	{10.40, 3.45, 1.70, 1.50, {12, 9, 16, 255}}, 	// trailing socket
+	{13.00, 3.60, 1.40, 1.10, {255, 60, 20, 255}}, 	// leading ember
+	{10.70, 3.75, 1.10, 0.95, {225, 48, 16, 255}}, 	// trailing ember, dimmer with depth
+	{13.50, 3.90, 0.45, 0.45, {255, 230, 170, 255}}, 	// leading core
+	{11.10, 4.05, 0.40, 0.40, {255, 205, 145, 255}}, 	// trailing core
 }
 
-// Garm: hulking black hound, layered ember eyes, hp bar overhead.
-draw_garm :: proc(e: ^Enemy) {
+// Garm's body: a void-black hound in profile on the same 16x18 frame as the
+// face — stepped near-black/charcoal/void-purple planes so the mass stays
+// dark but readable.  Two tables by motion group.  The planted group first:
+// contact shadow, then four distinct legs with gaps between them — the far
+// pair a shade darker and half a step behind the near pair, paws toed
+// forward.  These never move; the living mass above them breathes.
+@(rodata)
+garm_statics := [9]Sprite_Detail{
+	{1.0, 17.2, 13.5, 0.8, {0, 0, 0, 90}}, 	// grounded contact shadow
+	{1.6, 13.2, 1.6, 4.2, {12, 9, 16, 255}}, 	// far rear leg
+	{9.4, 13.2, 1.6, 4.2, {12, 9, 16, 255}}, 	// far front leg
+	{1.2, 17.0, 2.0, 0.8, {12, 9, 16, 255}}, 	// far rear paw
+	{9.0, 17.0, 2.0, 0.8, {12, 9, 16, 255}}, 	// far front paw
+	{3.6, 13.0, 1.8, 4.6, {20, 16, 26, 255}}, 	// near rear leg
+	{11.6, 13.0, 1.8, 4.6, {20, 16, 26, 255}}, 	// near front leg
+	{3.6, 17.4, 2.5, 0.6, {20, 16, 26, 255}}, 	// near rear paw, toes forward
+	{11.6, 17.4, 2.5, 0.6, {20, 16, 26, 255}}, 	// near front paw
+}
+
+// The living mass: long low torso, haunch, hunched ember-cracked shoulders,
+// angular skull and muzzle (sized to hold the approved eye rows), back-swept
+// ears, ragged stepped tail.  Flame is selective — mane cracks, tail tip —
+// small red -> orange -> white-hot steps on a dominant dark body.
+@(rodata)
+garm_body := [27]Sprite_Detail{
+	// torso, rear to chest — low and heavy, legs mostly buried in the mass
+	{0.5, 7.6, 12.0, 5.8, {25, 20, 30, 255}}, 	// long low torso
+	{0.5, 8.6, 4.0, 4.6, {18, 14, 24, 255}}, 	// haunch mass
+	{9.8, 7.6, 2.8, 5.2, {22, 17, 28, 255}}, 	// deep chest drop
+	{1.0, 7.6, 9.5, 0.6, {32, 25, 41, 255}}, 	// spine light
+	{1.6, 12.4, 10.0, 0.8, {10, 8, 14, 255}}, 	// belly shadow
+	{5.0, 4.8, 4.4, 3.6, {25, 20, 30, 255}}, 	// hunched shoulder crest
+	{5.3, 4.8, 3.6, 0.7, {36, 28, 46, 255}}, 	// crest top light
+	{8.0, 4.6, 3.0, 3.6, {25, 20, 30, 255}}, 	// neck carrying the head forward
+	{9.0, 6.6, 3.0, 0.7, {14, 11, 19, 255}}, 	// throat shadow
+	// head — a compact forward skull holding the garm_details eye rows
+	{9.8, 2.2, 5.4, 4.6, {25, 20, 30, 255}}, 	// skull
+	{10.0, 2.2, 4.6, 0.6, {36, 28, 46, 255}}, 	// skull top light
+	{13.8, 4.4, 2.2, 2.0, {18, 14, 24, 255}}, 	// muzzle, jutting past the jawline
+	{13.8, 6.1, 2.0, 0.5, {10, 8, 14, 255}}, 	// jaw underside
+	{15.6, 4.6, 0.4, 0.6, {8, 6, 11, 255}}, 	// nose tip
+	{10.2, 0.8, 1.4, 1.8, {18, 14, 24, 255}}, 	// near ear
+	{9.9, 1.6, 0.7, 1.0, {18, 14, 24, 255}}, 	// near ear, swept-back base
+	{12.4, 1.0, 1.3, 1.5, {12, 9, 16, 255}}, 	// far ear
+	// ragged tail, stepping up off the rear
+	{0.0, 6.4, 1.6, 1.6, {18, 14, 24, 255}}, 	// tail root
+	{0.0, 5.2, 1.0, 1.4, {25, 20, 30, 255}}, 	// tail mid step
+	{0.2, 4.2, 0.7, 1.2, {12, 9, 16, 255}}, 	// ragged tip
+	// selective flame — cracks along the shoulder crest, one on the spine,
+	// the tail tip; small red -> orange -> white-hot steps
+	{5.5, 5.0, 0.9, 0.5, {190, 55, 18, 255}}, 	// crest crack
+	{6.7, 4.6, 1.1, 0.6, {255, 110, 25, 255}}, 	// mane heart
+	{8.0, 5.1, 0.8, 0.45, {190, 55, 18, 255}}, 	// crest crack
+	{7.0, 4.75, 0.35, 0.3, {255, 225, 160, 255}}, 	// white-hot fleck
+	{3.2, 7.75, 1.0, 0.4, {170, 48, 16, 255}}, 	// spine crack
+	{0.25, 3.95, 0.55, 0.55, {255, 110, 25, 255}}, 	// tail-tip flame
+	{0.4, 4.05, 0.25, 0.25, {255, 225, 160, 255}}, 	// tail-tip core
+}
+
+// Garm: void-black pixel hound — planted legs, a breathing body carrying the
+// layered ember eyes, a two-state mane flare, hp bar overhead.
+draw_garm :: proc(e: ^Enemy, t: f32) {
 	px := i32(e.pos.x * CELL_SIZE)
 	py := i32(e.pos.y * CELL_SIZE)
 	pw := i32(GARM_W * CELL_SIZE)
-	ph := i32(GARM_H * CELL_SIZE)
 
-	rl.DrawRectangle(px, py, pw, ph, rl.Color{25, 20, 30, 255})
-	draw_detail_overlay(
-		{e.pos.x * CELL_SIZE, e.pos.y * CELL_SIZE},
-		CELL_SIZE * 0.1, GARM_FRAME_W, e.facing, garm_details[:],
-	)
+	ps := f32(CELL_SIZE) * 0.1
+	origin := [2]f32{e.pos.x * CELL_SIZE, e.pos.y * CELL_SIZE}
+	draw_detail_overlay(origin, ps, GARM_FRAME_W, e.facing, garm_statics[:])
+
+	// The living mass — torso, head, tail, mane and the face — sinks up to
+	// 0.35 units on a slow breath while the legs stay planted.
+	breath := (math.sin(t * 1.3) + 1) * 0.5 * 0.35
+	borigin := [2]f32{origin.x, origin.y + breath * ps}
+	draw_detail_overlay(borigin, ps, GARM_FRAME_W, e.facing, garm_body[:])
+	draw_detail_overlay(borigin, ps, GARM_FRAME_W, e.facing, garm_details[:])
+
+	// Mane flare: a hard two-state flicker over the hottest crack — stepped
+	// like every other flame in the game, never a smooth pulse.
+	if math.sin(t*9 + 1.7) > 0.35 {
+		flare := Sprite_Detail{6.5, 4.45, 1.5, 0.85, {255, 150, 45, 200}}
+		rl.DrawRectangleRec(detail_rect(borigin, ps, GARM_FRAME_W, e.facing, flare), flare.color)
+	}
 
 	// HP bar
 	if e.hp < e.hp_max {
