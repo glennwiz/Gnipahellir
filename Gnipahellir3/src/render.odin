@@ -19,6 +19,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	world_cam.zoom *= SS_SCALE
 	rl.BeginMode2D(world_cam)
 	draw_world(gs)
+	draw_tile_ambience(gs)
 	draw_falling_blocks(gs)
 	draw_mining_cracks(gs)
 	draw_portals(gs)
@@ -126,6 +127,101 @@ GRID_FADE_HI :: f32(2.6)
 
 // Ground-item rune scroll pulse: radians/sec for the glow sine wave.
 RUNE_SCROLL_PULSE_SPEED :: f32(4.0)
+
+// ─── Tile Ambience ────────────────────────────────────────────────────────────
+//
+//  Always-on atmospheric motes — lava embers, cave dust — drawn as pure
+//  functions of elapsed time and a per-tile hash: no pool, no update step, no
+//  state, so ambience never competes with the combat particle store. Motion is
+//  whole-pixel and brightness is stepped, matching the boot screen's ember
+//  language. New ambience = a Tile_Ambience member, a tile_ambience table row,
+//  and an arm in draw_tile_ambience.
+
+Tile_Ambience :: enum u8 {
+	None,
+	Fire_Embers, // sparks rising off an exposed (open-above) face
+}
+
+@(rodata)
+tile_ambience := #partial [Tile_Type]Tile_Ambience {
+	.Lava       = .Fire_Embers,
+	.Magic_Lava = .Fire_Embers,
+}
+
+// Bright/dark ember pair per emitter, mirroring enemy_blood's per-kind shades.
+@(rodata)
+ember_palette := #partial [Tile_Type][2]rl.Color {
+	.Lava       = {{255, 170, 60, 255}, {255, 70, 20, 255}},
+	.Magic_Lava = {{235, 100, 240, 255}, {150, 40, 170, 255}}, // hell-magic magenta
+}
+
+// Dust lives in open cells wherever there is cave overhead: below the surface
+// line on level 0, everywhere in the deep levels and spawned dimensions —
+// never in the sky.
+DUST_COLOR :: rl.Color{185, 190, 205, 255}
+
+draw_tile_ambience :: proc(gs: ^Game_State) {
+	t := gs.elapsed_time
+	deep := gs.level_index == LEVEL_CAVE2 || gs.level_index == LEVEL_CAVE3 ||
+		gs.level_index == LEVEL_DIMENSION
+	for y in 0 ..< GRID_H {
+		for x in 0 ..< GRID_W {
+			idx := grid_idx(x, y)
+			tile := gs.world.terrain[idx]
+			h := whash(u32(idx))
+
+			// Cave dust: a sparse scatter of slow pale motes in open cells.
+			if tile == .Air || tile == .Void {
+				underground := deep || (gs.level_index == LEVEL_SURFACE && y >= SURFACE_Y)
+				if underground && h % 14 == 0 {
+					draw_dust_mote(x, y, h, t)
+				}
+				continue
+			}
+
+			if tile_ambience[tile] == .Fire_Embers {
+				// Embers rise only off an exposed face — lava sealed in stone
+				// (Hell's trap pockets) stays quiet until it's mined open.
+				above: Tile_Type = .Air
+				if y > 0 {above = gs.world.terrain[grid_idx(x, y - 1)]}
+				if above == .Air || above == .Void {
+					draw_fire_embers(x, y, h, t, ember_palette[tile])
+				}
+			}
+		}
+	}
+}
+
+// Two sparks per surface cell, each looping its own rise: whole-pixel climb,
+// hash-desynced period and sway, brightness stepped down in thirds of the
+// flight instead of a smooth fade.
+draw_fire_embers :: proc(x, y: int, h: u32, t: f32, pal: [2]rl.Color) {
+	for i in 0 ..< 2 {
+		hh := whash(h + u32(i) * 97)
+		period := 1.6 + f32(hh % 100) * 0.012 	// 1.6–2.8 s per rise
+		phase := math.mod(t / period + f32(hh % 255) / 255.0, 1.0)
+		rise := phase * (12 + f32(hh % 8))
+		sway := math.sin(phase * 6.28318 * (2 + f32(hh % 3))) * 2
+		px := math.floor(f32(x * CELL_SIZE) + 1 + f32(hh % 7) + sway)
+		py := math.floor(f32(y * CELL_SIZE) + 1 - rise)
+		col := pal[i & 1]
+		col.a = phase < 0.4 ? 255 : phase < 0.75 ? 160 : 80
+		size := phase < 0.35 ? f32(2) : f32(1)
+		rl.DrawRectangleRec({px, py, size, size}, col)
+	}
+}
+
+// One pixel drifting a slow figure inside its cell, shimmering between two
+// alpha states — never a smooth pulse.
+draw_dust_mote :: proc(x, y: int, h: u32, t: f32) {
+	period := 6 + f32(h % 5)
+	phase := math.mod(t / period + f32(h % 97) / 97.0, 1.0)
+	px := math.floor(f32(x * CELL_SIZE) + 1 + f32(h % 8) + math.sin(phase * 6.28318) * 3)
+	py := math.floor(f32(y * CELL_SIZE) + 1 + f32((h >> 4) % 8) + math.sin(phase * 12.56636 + f32(h % 7)) * 2)
+	col := DUST_COLOR
+	col.a = math.mod(t * 0.8 + f32(h % 13) * 0.3, 1.0) < 0.6 ? 70 : 35
+	rl.DrawRectangleRec({px, py, 1, 1}, col)
+}
 
 draw_world :: proc(gs: ^Game_State) {
 	w := &gs.world
