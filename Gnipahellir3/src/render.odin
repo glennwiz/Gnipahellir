@@ -139,13 +139,15 @@ RUNE_SCROLL_PULSE_SPEED :: f32(4.0)
 
 Tile_Ambience :: enum u8 {
 	None,
-	Fire_Embers, // sparks rising off an exposed (open-above) face
+	Fire_Embers,  // sparks rising off an exposed (open-above) face
+	Growth_Motes, // life-green flecks climbing a growing sapling
 }
 
 @(rodata)
 tile_ambience := #partial [Tile_Type]Tile_Ambience {
-	.Lava       = .Fire_Embers,
-	.Magic_Lava = .Fire_Embers,
+	.Lava        = .Fire_Embers,
+	.Magic_Lava  = .Fire_Embers,
+	.Tree_Grower = .Growth_Motes,
 }
 
 // Bright/dark ember pair per emitter, mirroring enemy_blood's per-kind shades.
@@ -179,13 +181,23 @@ draw_tile_ambience :: proc(gs: ^Game_State) {
 				continue
 			}
 
-			if tile_ambience[tile] == .Fire_Embers {
+			switch tile_ambience[tile] {
+			case .None:
+			case .Fire_Embers:
 				// Embers rise only off an exposed face — lava sealed in stone
 				// (Hell's trap pockets) stays quiet until it's mined open.
 				above: Tile_Type = .Air
 				if y > 0 {above = gs.world.terrain[grid_idx(x, y - 1)]}
 				if above == .Air || above == .Void {
 					draw_fire_embers(x, y, h, t, ember_palette[tile])
+				}
+			case .Growth_Motes:
+				// Motes ride the grower's own saved clock: silent while the
+				// column is blocked (tick_grower zeroes the timer), climbing
+				// with the sapling tip as progress accrues.
+				p := gs.world.sim_data[idx].growth_timer / TREE_GROW_TIME
+				if p > 0 {
+					draw_growth_motes(x, y, h, t, clamp(p, 0, 1))
 				}
 			}
 		}
@@ -208,6 +220,24 @@ draw_fire_embers :: proc(x, y: int, h: u32, t: f32, pal: [2]rl.Color) {
 		col.a = phase < 0.4 ? 255 : phase < 0.75 ? 160 : 80
 		size := phase < 0.35 ? f32(2) : f32(1)
 		rl.DrawRectangleRec({px, py, size, size}, col)
+	}
+}
+
+// Two life-green flecks spiraling up alongside the grower's sapling stalk,
+// never higher than the growth has actually reached — the motes ARE the
+// progress read at a distance. Leaf-palette pair, stepped alpha.
+draw_growth_motes :: proc(x, y: int, h: u32, t: f32, p: f32) {
+	for i in 0 ..< 2 {
+		hh := whash(h + u32(i) * 131)
+		period := 2.2 + f32(hh % 90) * 0.01
+		phase := math.mod(t / period + f32(hh % 255) / 255.0, 1.0)
+		max_rise := 2 + p * f32(TREE_MAX_H * CELL_SIZE - 4) 	// the sapling tip's own climb
+		sway := math.sin(phase * 6.28318 * 3 + f32(hh % 5)) * 2.5
+		px := math.floor(f32(x * CELL_SIZE) + f32(CELL_SIZE / 2) + sway)
+		py := math.floor(f32(y * CELL_SIZE) - phase * max_rise)
+		col := rl.Color{110, 230, 110, 255} if i == 0 else rl.Color{70, 190, 60, 255}
+		col.a = phase < 0.7 ? 200 : 90
+		rl.DrawRectangleRec({px, py, 1, 1}, col)
 	}
 }
 

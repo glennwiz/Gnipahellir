@@ -14,7 +14,7 @@ SMELTER_IN_CAP   :: MAX_STACK  // most ore the internal input buffer holds
 SMELTER_FUEL_CAP :: MAX_STACK  // most wood the fuel buffer holds
 FUEL_PER_BAR     :: 2          // wood logs burned to cast one bar
 FUEL_ITEM        :: Item.Wood_Log  // what stokes the fire
-TREE_GROW_TIME :: f32(20.0)  // seconds per tree
+TREE_GROW_TIME :: f32(40.0)  // seconds per tree
 FLOWER_BED_GROW_TIME :: f32(120.0)  // seconds for a bed to bloom (~2 min)
 MUSHROOM_GROW_TIME :: f32(120.0)  // seconds for mossy stone to regrow its mushroom (~2 min)
 TREE_MAX_H     :: 5          // tallest grown trunk; clearance is checked to here
