@@ -2315,13 +2315,18 @@ garm_details := [8]Sprite_Detail{
 
 // Garm's body: a void-black hound in profile on the same 16x18 frame as the
 // face — stepped near-black/charcoal/void-purple planes so the mass stays
-// dark but readable.  Two tables by motion group.  The planted group first:
-// contact shadow, then four distinct legs with gaps between them — the far
-// pair a shade darker and half a step behind the near pair, paws toed
-// forward.  These never move; the living mass above them breathes.
+// dark but readable.  Tables by motion group: the contact shadow always
+// grounds him; the legs come in three stances (planted, and two trot frames
+// picked by ground covered); the living mass above them breathes.
 @(rodata)
-garm_statics := [9]Sprite_Detail{
+garm_shadow := [1]Sprite_Detail{
 	{1.0, 17.2, 13.5, 0.8, {0, 0, 0, 90}}, 	// grounded contact shadow
+}
+
+// Standing still: four distinct legs with gaps between them — the far pair a
+// shade darker and half a step behind the near pair, paws toed forward.
+@(rodata)
+garm_legs_planted := [8]Sprite_Detail{
 	{1.6, 13.2, 1.6, 4.2, {12, 9, 16, 255}}, 	// far rear leg
 	{9.4, 13.2, 1.6, 4.2, {12, 9, 16, 255}}, 	// far front leg
 	{1.2, 17.0, 2.0, 0.8, {12, 9, 16, 255}}, 	// far rear paw
@@ -2330,6 +2335,48 @@ garm_statics := [9]Sprite_Detail{
 	{11.6, 13.0, 1.8, 4.6, {20, 16, 26, 255}}, 	// near front leg
 	{3.6, 17.4, 2.5, 0.6, {20, 16, 26, 255}}, 	// near rear paw, toes forward
 	{11.6, 17.4, 2.5, 0.6, {20, 16, 26, 255}}, 	// near front paw
+}
+
+// Trot frame A: the diagonal pair (far-rear + near-front) swings forward
+// lifted — shorter leg, raised paw — while the other diagonal drives back,
+// planted at full length.
+@(rodata)
+garm_legs_a := [8]Sprite_Detail{
+	{2.7, 13.2, 1.6, 3.6, {12, 9, 16, 255}}, 	// far rear leg, swinging, lifted
+	{8.6, 13.2, 1.6, 4.2, {12, 9, 16, 255}}, 	// far front leg, driving back
+	{2.5, 16.4, 2.0, 0.8, {12, 9, 16, 255}}, 	// far rear paw, mid-air
+	{8.2, 17.0, 2.0, 0.8, {12, 9, 16, 255}}, 	// far front paw
+	{2.7, 13.0, 1.8, 4.6, {20, 16, 26, 255}}, 	// near rear leg, planted under the haunch
+	{12.7, 13.0, 1.8, 4.0, {20, 16, 26, 255}}, 	// near front leg, reaching, lifted
+	{2.7, 17.4, 2.5, 0.6, {20, 16, 26, 255}}, 	// near rear paw
+	{12.9, 16.6, 2.5, 0.6, {20, 16, 26, 255}}, 	// near front paw, mid-air
+}
+
+// Trot frame B: the opposite diagonal.
+@(rodata)
+garm_legs_b := [8]Sprite_Detail{
+	{0.9, 13.2, 1.6, 4.2, {12, 9, 16, 255}}, 	// far rear leg, trailing, planted
+	{10.2, 13.2, 1.6, 3.6, {12, 9, 16, 255}}, 	// far front leg, swinging, lifted
+	{0.7, 17.0, 2.0, 0.8, {12, 9, 16, 255}}, 	// far rear paw
+	{10.4, 16.4, 2.0, 0.8, {12, 9, 16, 255}}, 	// far front paw, mid-air
+	{4.5, 13.0, 1.8, 4.0, {20, 16, 26, 255}}, 	// near rear leg, gathering, lifted
+	{10.8, 13.0, 1.8, 4.6, {20, 16, 26, 255}}, 	// near front leg, driving
+	{4.7, 16.6, 2.5, 0.6, {20, 16, 26, 255}}, 	// near rear paw, mid-air
+	{10.8, 17.4, 2.5, 0.6, {20, 16, 26, 255}}, 	// near front paw
+}
+
+// One trot stride covers ~1.33 tiles of ground; the frame is a pure function
+// of where he stands, so the gait needs no animation state and never drifts
+// from his actual movement.
+GARM_STRIDE :: f32(0.75) // stride cycles per tile walked
+
+garm_gait_phase :: proc(pos_x: f32) -> f32 {
+	return math.mod(abs(pos_x) * GARM_STRIDE, 1.0)
+}
+
+garm_legs_for :: proc(grounded: bool, vel_x: f32, pos_x: f32) -> []Sprite_Detail {
+	if !grounded || abs(vel_x) <= 0.1 {return garm_legs_planted[:]}
+	return garm_legs_a[:] if garm_gait_phase(pos_x) < 0.5 else garm_legs_b[:]
 }
 
 // The living mass: long low torso, haunch, hunched ember-cracked shoulders,
@@ -2372,8 +2419,8 @@ garm_body := [27]Sprite_Detail{
 	{0.4, 4.05, 0.25, 0.25, {255, 225, 160, 255}}, 	// tail-tip core
 }
 
-// Garm: void-black pixel hound — planted legs, a breathing body carrying the
-// layered ember eyes, a two-state mane flare, hp bar overhead.
+// Garm: void-black pixel hound — distance-trotting legs, a breathing body
+// carrying the layered ember eyes, a two-state mane flare, hp bar overhead.
 draw_garm :: proc(e: ^Enemy, t: f32) {
 	px := i32(e.pos.x * CELL_SIZE)
 	py := i32(e.pos.y * CELL_SIZE)
@@ -2381,11 +2428,18 @@ draw_garm :: proc(e: ^Enemy, t: f32) {
 
 	ps := f32(CELL_SIZE) * 0.1
 	origin := [2]f32{e.pos.x * CELL_SIZE, e.pos.y * CELL_SIZE}
-	draw_detail_overlay(origin, ps, GARM_FRAME_W, e.facing, garm_statics[:])
+	draw_detail_overlay(origin, ps, GARM_FRAME_W, e.facing, garm_shadow[:])
+	walking := e.grounded && abs(e.vel.x) > 0.1
+	draw_detail_overlay(origin, ps, GARM_FRAME_W, e.facing,
+		garm_legs_for(e.grounded, e.vel.x, e.pos.x))
 
 	// The living mass — torso, head, tail, mane and the face — sinks up to
-	// 0.35 units on a slow breath while the legs stay planted.
+	// 0.35 units on a slow breath while the legs move under it; each trot
+	// footfall drops the mass another third of a unit so the stride has weight.
 	breath := (math.sin(t * 1.3) + 1) * 0.5 * 0.35
+	if walking && math.mod(garm_gait_phase(e.pos.x) * 2, 1.0) < 0.3 {
+		breath += 0.35
+	}
 	borigin := [2]f32{origin.x, origin.y + breath * ps}
 	draw_detail_overlay(borigin, ps, GARM_FRAME_W, e.facing, garm_body[:])
 	draw_detail_overlay(borigin, ps, GARM_FRAME_W, e.facing, garm_details[:])

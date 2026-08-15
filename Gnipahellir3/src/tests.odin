@@ -8660,12 +8660,33 @@ detail_overlay_mirrors_with_facing :: proc(t: ^testing.T) {
 }
 
 @(test)
+garms_trot_is_driven_by_ground_covered :: proc(t: ^testing.T) {
+    // Standing still or airborne plants the legs.
+    testing.expect(t, raw_data(garm_legs_for(true, 0, 5.0)) == raw_data(garm_legs_planted[:]),
+        "still legs should be planted")
+    testing.expect(t, raw_data(garm_legs_for(false, 3.0, 5.0)) == raw_data(garm_legs_planted[:]),
+        "airborne legs should be planted")
+
+    // Walking: the frame is a pure function of ground covered — half a
+    // stride later the opposite diagonal swings.
+    a := garm_legs_for(true, 3.0, 0.2)
+    b := garm_legs_for(true, 3.0, 0.2 + 0.5 / GARM_STRIDE)
+    testing.expect(t, raw_data(a) == raw_data(garm_legs_a[:]),
+        "early phase should swing frame A")
+    testing.expect(t, raw_data(b) == raw_data(garm_legs_b[:]),
+        "half a stride later should swing frame B")
+}
+
+@(test)
 garms_hound_stays_inside_his_frame :: proc(t: ^testing.T) {
     check :: proc(t: ^testing.T, d: Sprite_Detail, msg: string) {
         testing.expect(t, d.x >= 0 && d.x + d.w <= GARM_FRAME_W, msg)
         testing.expect(t, d.y >= 0 && d.y + d.h <= 18, msg)
     }
-    for d in garm_statics do check(t, d, "a statics row escapes the 16x18 frame")
-    for d in garm_body    do check(t, d, "a body row escapes the 16x18 frame")
-    for d in garm_details do check(t, d, "a face row escapes the 16x18 frame")
+    for d in garm_shadow       do check(t, d, "the shadow escapes the 16x18 frame")
+    for d in garm_legs_planted do check(t, d, "a planted leg escapes the 16x18 frame")
+    for d in garm_legs_a       do check(t, d, "a trot-A leg escapes the 16x18 frame")
+    for d in garm_legs_b       do check(t, d, "a trot-B leg escapes the 16x18 frame")
+    for d in garm_body         do check(t, d, "a body row escapes the 16x18 frame")
+    for d in garm_details      do check(t, d, "a face row escapes the 16x18 frame")
 }
