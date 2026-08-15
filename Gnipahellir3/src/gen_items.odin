@@ -110,6 +110,7 @@ item_table := [Item]Item_Info{
 	.Mana_Wheel = { "Mana Wheel", {170, 130, 200, 255}, .Mana_Wheel, "Set it in pooled Mana Mist: while it drinks, every machine within 3 tiles runs powered, no fuel needed. Same reach as the Steam Engine - the tracks trade fuel, not capability." },
 	.Mana_Pipe = { "Mana Pipe", {160, 130, 190, 255}, .Air, "A conduit fitting: place it on an open cell to dress your plumbing. Fluid moves exactly as it always did - the pipe just lets you see it, lit by whatever's flowing through." },
 	.Mossy_Stone = { "Mossy Stone", {96, 138, 90, 255}, .Mossy_Stone, "Cave stone furred green with moss. Set it down under open air and cave mushrooms take root on it." },
+	.Fire_Wand = { "Fire Wand", {235, 110, 30, 255}, .Air, "Hurls fire orbs at the cursor - hold to stream them. Each orb costs mana; the orb flies straight and bursts on whatever it strikes." },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.
@@ -153,4 +154,5 @@ item_equip_slot := #partial [Item]Equip_Slot{
 	.Command_Wand_Emerald = .Weapon,
 	.Command_Wand_Hel = .Weapon,
 	.Jade_Ring = .Charm,
+	.Fire_Wand = .Weapon,
 }

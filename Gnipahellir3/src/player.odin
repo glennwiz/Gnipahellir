@@ -1,5 +1,7 @@
 package game
 
+import "core:math"
+
 GRAVITY        :: f32(28.0)
 MOVE_SPEED     :: f32(8.0)
 JUMP_VEL       :: f32(-13.0)
@@ -31,6 +33,27 @@ STEP_VISUAL_EASE :: f32(18.0)
 MELEE_REACH    :: i32(2)     // chebyshev tiles from player center
 SWORD_DAMAGE   :: 2
 SWORD_COOLDOWN :: f32(0.35)
+
+// Ranged: the fire wand streams orbs at the cursor while the button is held.
+// Per-shot damage sits between base and silver sword — range is what the
+// wand buys, mana is what it costs (regen 5/s caps sustained fire at half
+// uptime, so melee keeps the raw-DPS crown).
+FIRE_ORB_SPEED    :: f32(16)     // tiles/s — snappier than Garm's 12
+FIRE_ORB_COOLDOWN :: f32(0.4)
+FIRE_ORB_MANA     :: f32(4)
+
+// Damage per orb by wand tier — the mine wands' range-table idiom, ready for
+// higher tiers.  is_fire_wand keys off it, so a new tier is one row here
+// (plus the usual item tables); NOT item_stat_bonus, which would make the
+// wand read as a melee weapon.
+@(rodata)
+fire_orb_damage := #partial [Item]int{
+    .Fire_Wand = 3,
+}
+
+is_fire_wand :: proc(it: Item) -> bool {
+    return fire_orb_damage[it] > 0
+}
 
 // Fall damage: safe up to SAFE_FALL_TILES of drop (a full jump arc is ~3),
 // then 1 hp per FALL_TILES_PER_HP beyond.  Water breaks any fall, and so does
@@ -182,6 +205,29 @@ update_player :: proc(gs: ^Game_State) {
                     payload = {int_val = player_stat(p, .Attack)},
                 })
                 log_action(gs, "Player strikes enemy#%d", id)
+            }
+        }
+    }
+
+    // ── Fire wand: hold the button and orbs stream at the cursor for mana.
+    //    Rides attack_timer (it IS an attack — a sword swap respects the same
+    //    cooldown); player_mine skips fire wands, so the same held button
+    //    never also punches terrain. ─────
+    if inp.mine && p.attack_timer <= 0 && is_fire_wand(held_item(p)) {
+        if p.mana < FIRE_ORB_MANA {
+            p.attack_timer = 0.6   // rate-limits the reminder while held
+            notify(gs, "Not enough mana!")
+        } else {
+            pc := [2]f32{p.pos.x + PLAYER_W*0.5, p.pos.y + PLAYER_H*0.5}
+            m  := gs.input.mouse_world / CELL_SIZE
+            d  := m - pc
+            dist := math.sqrt(d.x*d.x + d.y*d.y)
+            if dist > 0.1 {   // a cursor on the body aims nowhere: no shot
+                p.attack_timer = FIRE_ORB_COOLDOWN
+                p.mana -= FIRE_ORB_MANA
+                if d.x != 0 {p.facing = 1 if d.x > 0 else -1}
+                spawn_projectile(gs, pc, d * (FIRE_ORB_SPEED / dist),
+                    PLAYER_ID, fire_orb_damage[held_item(p)])
             }
         }
     }

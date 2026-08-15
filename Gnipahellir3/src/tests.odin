@@ -8168,3 +8168,89 @@ mined_gem_replicator_spills_seed_and_tray :: proc(t: ^testing.T) {
     }
     testing.expect_value(t, gems, 4)
 }
+
+// ─── Fire wand: ranged combat ─────────────────────────────────────────────────
+
+// Carve a still-air firing range and stand the player at its left end.
+@(private = "file")
+fire_range_fixture :: proc(gs: ^Game_State) {
+    for y in 48 ..= 56 do for x in 44 ..= 68 {
+        set_tile(&gs.world, x, y, .Air)
+    }
+    gs.player.pos = {50, 50}
+    test_hold(gs, .Fire_Wand)
+}
+
+@(test)
+a_fire_orb_burns_the_builder_at_range :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fire_range_fixture(gs)
+
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "an enemy slot should be free")
+    e := &gs.enemies.data[id]
+    e.kind   = .Builder
+    e.hp     = 10
+    e.hp_max = 10
+    e.pos    = {58, 50.5}   // 8 tiles out — far past melee reach
+
+    mana0 := gs.player.mana
+    gs.input.mouse_world = {(e.pos.x + BUILDER_W*0.5) * CELL_SIZE,
+                            (e.pos.y + BUILDER_H*0.5) * CELL_SIZE}
+    gs.input.mine = true
+    update_player(gs)   // one press: one orb leaves the wand
+    testing.expect_value(t, gs.projectiles.count, 1)
+    testing.expect(t, gs.player.mana < mana0, "the orb drinks mana")
+
+    // Let it fly (8 tiles at FIRE_ORB_SPEED is well under a second).
+    for _ in 0 ..< 90 {
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, e.hp < 10, "the orb burns what it strikes")
+    testing.expect_value(t, gs.projectiles.count, 0)
+}
+
+@(test)
+a_fire_orb_clips_the_flank_of_a_wide_body :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fire_range_fixture(gs)
+
+    // A wide body: the flank column is NOT the center-tile column the entity
+    // map indexes — this pins the body-AABB scan, not the map lookup.
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "an enemy slot should be free")
+    e := &gs.enemies.data[id]
+    e.kind   = .Garm
+    e.hp     = 50
+    e.hp_max = 50
+    e.pos    = {60, 52}   // center tile column 60; right flank reaches into 61
+
+    spawn_projectile(gs, {e.pos.x + 1.4, e.pos.y - 3}, {0, FIRE_ORB_SPEED},
+        PLAYER_ID, 3)
+    for _ in 0 ..< 60 {
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, e.hp < 50, "an orb through the flank still connects")
+}
+
+@(test)
+the_fire_wand_refuses_without_mana :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fire_range_fixture(gs)
+
+    gs.player.mana = 0
+    gs.input.mouse_world = {58 * CELL_SIZE, 50 * CELL_SIZE}
+    gs.input.mine = true
+    update_player(gs)
+
+    testing.expect_value(t, gs.projectiles.count, 0)
+    // And the held wand never moonlights as a pick: no swing was started.
+    testing.expect(t, gs.player.mine_timer <= 0, "a fire wand never punches terrain")
+}

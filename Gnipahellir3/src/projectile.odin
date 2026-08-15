@@ -80,11 +80,20 @@ update_projectiles :: proc(gs: ^Game_State) {
             }
         }
 
-        // Enemy hit via the entity map.
-        id := gs.world.entity_map[grid_idx(x, y)]
-        if id != INVALID_ENTITY && id != PLAYER_ID && id != p.owner {
-            ei := entity_id_to_enemy_index(id)
-            if ei >= 0 && ei < MAX_ENEMIES && gs.enemies.active[ei] {
+        // Enemy hit: a direct pool scan against each body's real AABB.  The
+        // entity map only indexes center tiles — an orb clipping Garm's flank
+        // would fly straight through him (the same coarseness the melee
+        // cursor-gating fix hit; ranged combat needs bodies, not centers).
+        for ei in 0 ..< MAX_ENEMIES {
+            if !gs.enemies.active[ei] { continue }
+            id := enemy_entity_id(ei)
+            if id == p.owner { continue }
+            e := &gs.enemies.data[ei]
+            size := enemy_body_size(e.kind)
+            if p.pos.x + PROJECTILE_RADIUS > e.pos.x &&
+               p.pos.x - PROJECTILE_RADIUS < e.pos.x + size.x &&
+               p.pos.y + PROJECTILE_RADIUS > e.pos.y &&
+               p.pos.y - PROJECTILE_RADIUS < e.pos.y + size.y {
                 eq_push(&gs.events, Event{
                     type    = .Damage_Dealt,
                     source  = p.owner,
@@ -93,7 +102,7 @@ update_projectiles :: proc(gs: ^Game_State) {
                 })
                 eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {i32(x), i32(y)}})
                 projectile_free(&gs.projectiles, i)
-                continue
+                break
             }
         }
     }

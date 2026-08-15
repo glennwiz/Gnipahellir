@@ -106,6 +106,10 @@ recipe_table := [?]Recipe{
 	{ .Magic_Kettle, 1, .Rune_Altar, {{.Iron_Bar, 6}, {.Gold_Bar, 3}, {.Cloud_Stone, 8}} },
 	{ .Mana_Wheel, 1, .Forge, {{.Iron_Bar, 10}, {.Silver_Bar, 2}, {}} },
 	{ .Mana_Pipe, 1, .Bench, {{.Iron_Bar, 2}, {.Cloud_Stone, 1}, {}} },
+	// Ranged combat, rung one: a gem-hearted wand that throws fire orbs.
+	// The emerald is the magic heart — combat wands are the gem economy's
+	// martial sink, the way mine wands are the ore economy's.
+	{ .Fire_Wand, 1, .Bench, {{.Plank, 2}, {.Iron_Ore, 2}, {.Emerald, 1}} },
 }
 
 // Recipe unlock tree: a recipe stays hidden until the player first holds its
@@ -184,6 +188,8 @@ recipe_unlock := #partial [Item]Item{
 	.Magic_Kettle = .Emerald,
 	.Mana_Wheel = .Magic_Kettle,
 	.Mana_Pipe = .Mana_Wheel,
+	// Same tell as the kettle: your first gem reveals the fire wand card.
+	.Fire_Wand = .Emerald,
 }
 
 // What a smelter eats and what it casts.  New smeltable = new row.

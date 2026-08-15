@@ -197,10 +197,11 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	p.mine_timer -= dt
 	if !gs.input.mine || p.mine_timer > 0 {return}
 
-	// A hand holding a sword swings it, a command wand commands with it —
-	// neither also punches the terrain on the same click.
+	// A hand holding a sword swings it, a command wand commands with it, a
+	// fire wand shoots with it — none also punches the terrain on the same
+	// click.
 	held := held_item(p)
-	if is_melee_weapon(held) || is_command_wand(held) {return}
+	if is_melee_weapon(held) || is_command_wand(held) || is_fire_wand(held) {return}
 
 	// Wand: an equipped wand mines the tile under the cursor at any range —
 	// adjacent included — for mana.  Precise cursor aim (and reach) is what the

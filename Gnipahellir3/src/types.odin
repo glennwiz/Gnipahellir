@@ -310,6 +310,10 @@ Item :: enum u8 {
     // take root on it — the mushroom farm's missing piece. (appended: item
     // ordinals are serialized)
     Mossy_Stone,
+    // The first ranged weapon: hold the button and it streams fire orbs at
+    // the cursor for mana — combat's answer to the mine wand. (appended: item
+    // ordinals are serialized)
+    Fire_Wand,
     // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

@@ -179,3 +179,7 @@ unlock	Magic_Kettle	wheel - a built-in build order.
 icon	Magic_Kettle	Magic Kettle - the machine box reusing the smelter silhouette in violet.
 icon	Mana_Wheel	Mana Wheel - the machine box reusing the smelter silhouette, lighter violet.
 icon	Mana_Pipe	A horizontal pipe segment: iron casing, a glowing fluid core down the middle.
+recipe	Fire_Wand	Ranged combat, rung one: a gem-hearted wand that throws fire orbs.
+recipe	Fire_Wand	The emerald is the magic heart — combat wands are the gem economy's
+recipe	Fire_Wand	martial sink, the way mine wands are the ore economy's.
+unlock	Fire_Wand	Same tell as the kettle: your first gem reveals the fire wand card.
