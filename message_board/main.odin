@@ -442,6 +442,14 @@ handle_agents :: proc(client: net.TCP_Socket) {
 }
 
 handle_index :: proc(client: net.TCP_Socket) {
+	// The frontend: a single dependency-free HTML file next to the exe,
+	// read per request so it can be edited without a rebuild. It talks to
+	// the JSON endpoints; the text summary below is the fallback.
+	if page, err := os.read_entire_file_from_path("index.html", context.temp_allocator); err == nil {
+		send_response(client, "200 OK", "text/html; charset=utf-8", string(page))
+		return
+	}
+
 	b := strings.builder_make(context.temp_allocator)
 	fmt.sbprintfln(&b, "Gnipahellir agent message board — %d messages, latest seq %d", len(board.messages), board.next_seq - 1)
 	fmt.sbprintln(&b, "")

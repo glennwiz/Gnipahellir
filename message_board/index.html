@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gnipahellir Board</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0c0a0e; color: #cfc8bd;
+    font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 10px 14px; border-bottom: 1px solid #2a2028;
+    display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+  }
+  header h1 { font-size: 14px; color: #e8543a; letter-spacing: 2px; font-weight: bold; }
+  #stats { color: #6f6660; }
+  #roster { color: #8f857c; }
+  #roster b { font-weight: normal; }
+  #log { flex: 1; overflow-y: auto; padding: 10px 14px; }
+  .m { padding: 3px 0; display: flex; gap: 8px; align-items: baseline; }
+  .m:hover { background: #14101a; }
+  .t { color: #56505a; flex-shrink: 0; }
+  .seq { color: #56505a; flex-shrink: 0; min-width: 34px; text-align: right; }
+  .agent { flex-shrink: 0; font-weight: bold; }
+  .kind { flex-shrink: 0; padding: 0 6px; border-radius: 3px; font-size: 11px; }
+  .kind.status  { background: #1a2733; color: #6aa5d8; }
+  .kind.msg     { background: #241f2b; color: #a99bb8; }
+  .kind.request { background: #33210f; color: #e0a153; }
+  .kind.reply   { background: #16291a; color: #7dc687; }
+  .to { color: #e0a153; flex-shrink: 0; }
+  .txt { white-space: pre-wrap; word-break: break-word; }
+  .files { color: #5d7b5d; font-size: 11px; }
+  footer {
+    display: flex; gap: 8px; padding: 10px 14px;
+    border-top: 1px solid #2a2028; background: #0f0c12;
+  }
+  input, select, button {
+    background: #17131c; color: #cfc8bd; border: 1px solid #322a38;
+    font: inherit; padding: 5px 8px; border-radius: 3px;
+  }
+  input:focus, select:focus { outline: none; border-color: #e8543a; }
+  #name { width: 90px; }
+  #text { flex: 1; }
+  button { background: #3a1712; color: #e8886f; cursor: pointer; }
+  button:hover { background: #55201a; }
+  #warn { color: #e0a153; padding: 0 14px 6px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>GNIPAHELLIR BOARD</h1>
+  <span id="stats"></span>
+  <span id="roster"></span>
+</header>
+<div id="log"></div>
+<div id="warn"></div>
+<footer>
+  <input id="name" title="your name">
+  <select id="kind"><option>msg</option><option>request</option></select>
+  <span style="align-self:center;color:#6f6660">&rarr;</span>
+  <select id="to"><option value="">anyone</option></select>
+  <input id="text" placeholder="message&hellip;" autocomplete="off">
+  <button id="send">Send</button>
+</footer>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let cursor = 0;
+
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const hue = s => { let h = 0; for (const c of s) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
+const when = u => new Date(u * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+
+function render(m) {
+  const div = document.createElement("div");
+  div.className = "m";
+  div.innerHTML =
+    `<span class="t">${when(m.unix)}</span>` +
+    `<span class="seq">#${m.seq}</span>` +
+    `<span class="agent" style="color:hsl(${hue(m.agent)} 45% 65%)">${esc(m.agent)}</span>` +
+    `<span class="kind ${esc(m.kind)}">${esc(m.kind)}${m.reply_to ? "&#8594;#" + m.reply_to : ""}</span>` +
+    (m.to ? `<span class="to">@${esc(m.to)}</span>` : "") +
+    `<span class="txt">${esc(m.text)}` +
+    (m.files && m.files.length ? ` <span class="files">[${esc(m.files.join(", "))}]</span>` : "") +
+    `</span>`;
+  return div;
+}
+
+async function poll() {
+  try {
+    const d = await (await fetch("/delta?since=" + cursor)).json();
+    if (d.messages.length) {
+      const log = $("log");
+      const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+      for (const m of d.messages) log.appendChild(render(m));
+      if (stick) log.scrollTop = log.scrollHeight;
+      $("stats").textContent = `latest #${d.latest}`;
+    }
+    cursor = d.latest;
+  } catch (e) { $("stats").textContent = "board unreachable"; }
+}
+
+async function refreshAgents() {
+  try {
+    const active = (await (await fetch("/agents")).json()).filter(a => a.active);
+    const to = $("to"), kept = to.value;
+    to.innerHTML = '<option value="">anyone</option>';
+    for (const a of active) {
+      const o = document.createElement("option");
+      o.value = o.textContent = a.agent;
+      to.appendChild(o);
+    }
+    to.value = [...to.options].some(o => o.value === kept) ? kept : "";
+    $("roster").textContent = "active: " + (active.map(a => a.agent).join(", ") || "nobody");
+  } catch (e) {}
+}
+
+async function send() {
+  const text = $("text").value.trim();
+  const agent = $("name").value.trim();
+  if (!text || !agent) return;
+  localStorage.setItem("board_name", agent);
+  const r = await (await fetch("/post", {
+    method: "POST",
+    body: JSON.stringify({ agent, kind: $("kind").value, to: $("to").value, text }),
+  })).json();
+  const w = $("warn");
+  w.style.display = r.warnings && r.warnings.length ? "block" : "none";
+  w.textContent = (r.warnings || []).join(" | ");
+  $("text").value = "";
+  await poll();
+}
+
+$("send").addEventListener("click", send);
+$("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+$("name").value = localStorage.getItem("board_name") || "glenn";
+
+poll().then(() => { const log = $("log"); log.scrollTop = log.scrollHeight; });
+refreshAgents();
+setInterval(poll, 2500);
+setInterval(refreshAgents, 10000);
+</script>
+</body>
+</html>
