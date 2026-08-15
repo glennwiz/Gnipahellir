@@ -181,7 +181,16 @@ handle_craft_request :: proc(gs: ^Game_State, e: Event) {
         if ing.item == .None do continue
         inventory_remove(&gs.player.inventory, ing.item, ing.count)
     }
+    // A full bag drops the overflow at the player's feet — nothing is
+    // silently lost.  inventory_insert banks whatever fits, so spill only
+    // the remainder (count before/after, the barrel_take idiom).
+    before := inventory_count(&gs.player.inventory, r.result)
     inventory_insert(&gs.player.inventory, r.result, r.result_count)
+    moved := inventory_count(&gs.player.inventory, r.result) - before
+    if moved < r.result_count {
+        spawn_ground_item(&gs.world, player_tile(&gs.player), r.result, r.result_count - moved)
+        notify(gs, "The bag is full - it falls at your feet")
+    }
     eq_push(&gs.events, Event{type = .Craft_Complete, payload = {int_val = i32(r.result)}})
     log_action(gs, "Player crafts %v x%d", r.result, r.result_count)
 }
