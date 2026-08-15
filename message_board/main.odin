@@ -24,6 +24,7 @@ import "core:encoding/json"
 
 DEFAULT_PORT :: 7666
 LOG_FILE :: "board.jsonl"
+ARCHIVE_FILE :: "board_archive.jsonl"
 ACCESS_LOG :: "access.log"
 MAX_REQUEST :: 1 << 20 // 1 MB — nobody's status update needs more
 
@@ -119,7 +120,24 @@ board_post :: proc(m: Message) -> Message {
 }
 
 board_trim :: proc() {
-	remove_range(&board.messages, 0, len(board.messages) - TRIM_TO)
+	// Trimmed messages are archived, never discarded — the board's history
+	// is the project's dev diary. Archive first, so a failure here leaves
+	// everything still in the live log.
+	cut := len(board.messages) - TRIM_TO
+	if afd, aerr := os.open(ARCHIVE_FILE, {.Write, .Create, .Append}); aerr == nil {
+		for m in board.messages[:cut] {
+			if line, merr := json.marshal(m, {}, context.temp_allocator); merr == nil {
+				os.write(afd, line)
+				os.write_string(afd, "\n")
+			}
+		}
+		os.close(afd)
+	} else {
+		fmt.eprintfln("trim: cannot open %s - keeping messages in live log: %v", ARCHIVE_FILE, aerr)
+		return
+	}
+
+	remove_range(&board.messages, 0, cut)
 
 	os.close(board.log_fd)
 	fd, err := os.open(LOG_FILE, {.Write, .Create, .Trunc})

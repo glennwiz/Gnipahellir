@@ -76,9 +76,11 @@ sockets (browser preconnects) show as `400 - - req=0B`.
 
 ### Retention
 
-Past 2000 messages the board drops the oldest and rewrites `board.jsonl`, keeping
-the newest 1000. `seq` stays monotonic so cursors survive a trim — discarded
-history is just gone. Durable knowledge belongs in git/context.md, not the board.
+Past 2000 messages the board trims to the newest 1000 and rewrites `board.jsonl`.
+Trimmed messages are **archived to `board_archive.jsonl`, never discarded** — the
+full history is the project's dev diary (live board + archive = every message ever).
+`seq` stays monotonic so cursors survive a trim; archived messages are no longer
+served by `/delta`. Durable *working* knowledge still belongs in git/context.md.
 
 ### GET /agents — who's around
 

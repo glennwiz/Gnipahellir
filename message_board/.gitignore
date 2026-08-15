@@ -1,4 +1,5 @@
 *.exe
 *.pdb
 board.jsonl
+board_archive.jsonl
 access.log
