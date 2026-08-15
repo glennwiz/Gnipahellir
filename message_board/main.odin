@@ -24,6 +24,7 @@ import "core:encoding/json"
 
 DEFAULT_PORT :: 7666
 LOG_FILE :: "board.jsonl"
+ACCESS_LOG :: "access.log"
 MAX_REQUEST :: 1 << 20 // 1 MB — nobody's status update needs more
 
 // Retention: past MAX_MESSAGES the oldest are dropped and the log rewritten,
@@ -58,10 +59,15 @@ Agent_Info :: struct {
 }
 
 Board :: struct {
-	messages: [dynamic]Message,
-	next_seq: int,
-	log_fd:   ^os.File,
+	messages:  [dynamic]Message,
+	next_seq:  int,
+	log_fd:    ^os.File,
+	access_fd: ^os.File,
 }
+
+// Set by send_response; safe as a package global because the server handles
+// one connection at a time.
+resp_status: string = "-"
 
 board: Board
 
@@ -88,6 +94,12 @@ board_load :: proc() {
 		os.exit(1)
 	}
 	board.log_fd = fd
+
+	if afd, aerr := os.open(ACCESS_LOG, {.Write, .Create, .Append}); aerr == nil {
+		board.access_fd = afd
+	} else {
+		fmt.eprintfln("cannot open %s - running without access log: %v", ACCESS_LOG, aerr)
+	}
 }
 
 board_post :: proc(m: Message) -> Message {
@@ -170,7 +182,15 @@ age_string :: proc(now, then: i64) -> string {
 
 // ---------------------------------------------------------------- HTTP layer
 
+access_log :: proc(method, target: string, req_bytes: int) {
+	if board.access_fd == nil do return
+	stamp, _ := time.time_to_rfc3339(time.now(), include_nanos = false, allocator = context.temp_allocator)
+	line := fmt.tprintf("%s %s %s %s req=%dB\n", stamp, resp_status[:min(3, len(resp_status))], method, target, req_bytes)
+	os.write_string(board.access_fd, line)
+}
+
 send_response :: proc(client: net.TCP_Socket, status: string, content_type: string, body: string) {
+	resp_status = status
 	head := fmt.tprintf(
 		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
 		status, content_type, len(body),
@@ -236,6 +256,14 @@ handle_connection :: proc(client: net.TCP_Socket) {
 	defer net.close(client)
 	defer free_all(context.temp_allocator)
 
+	// One line per request, whatever path the handler exits through.
+	// Registered after the free_all defer so it runs before it (LIFO) —
+	// the log line is built with the temp allocator.
+	resp_status = "-"
+	method, target := "-", "-"
+	req_bytes := 0
+	defer access_log(method, target, req_bytes)
+
 	// The server is single-threaded: an idle client (e.g. a browser's
 	// speculative preconnect, which sends no bytes) must never wedge the
 	// accept loop. Timed-out sockets fall out of read_request as !ok.
@@ -243,6 +271,7 @@ handle_connection :: proc(client: net.TCP_Socket) {
 	net.set_option(client, .Send_Timeout, 2 * time.Second)
 
 	data, header_end, ok := read_request(client)
+	req_bytes = len(data)
 	if !ok {
 		send_response(client, "400 Bad Request", "text/plain", "malformed request\n")
 		return
@@ -256,7 +285,7 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		send_response(client, "400 Bad Request", "text/plain", "malformed request line\n")
 		return
 	}
-	method, target := fields[0], fields[1]
+	method, target = fields[0], fields[1]
 
 	path, query := target, ""
 	if q := strings.index_byte(target, '?'); q >= 0 {

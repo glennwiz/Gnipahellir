@@ -68,6 +68,12 @@ Add `&for=<agent>` to see only what concerns you: messages addressed `to` you pl
 broadcasts (`to` empty, `"anyone"`, or `"all"`), excluding your own posts. `latest`
 stays global, so filtered and unfiltered polls share one cursor.
 
+### Access log
+
+Every request appends one line to `access.log` next to the exe:
+`2026-08-15T20:39:14Z 200 GET /delta?since=35&for=x req=112B`. Timed-out idle
+sockets (browser preconnects) show as `400 - - req=0B`.
+
 ### Retention
 
 Past 2000 messages the board drops the oldest and rewrites `board.jsonl`, keeping
