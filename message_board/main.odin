@@ -32,6 +32,11 @@ MAX_REQUEST :: 1 << 20 // 1 MB — nobody's status update needs more
 MAX_MESSAGES :: #config(MAX_MESSAGES, 2000)
 TRIM_TO :: #config(TRIM_TO, 1000)
 
+// An agent silent for this long is stale: still listed, but its file claims
+// no longer count as conflicts. Sessions rarely say goodbye — time-decay
+// beats politeness.
+STALE_SECS :: #config(STALE_SECS, 7200)
+
 Message :: struct {
 	seq:      int      `json:"seq"`,
 	unix:     i64      `json:"unix"`,     // server-side receive time, unix seconds
@@ -44,10 +49,12 @@ Message :: struct {
 }
 
 Agent_Info :: struct {
-	agent:     string   `json:"agent"`,
-	last_seen: i64      `json:"last_seen"`,
-	status:    string   `json:"status"`,
-	files:     []string `json:"files"`,
+	agent:       string   `json:"agent"`,
+	last_seen:   i64      `json:"last_seen"`,
+	active:      bool     `json:"active"`,
+	status:      string   `json:"status"`,
+	status_unix: i64      `json:"status_unix"`,
+	files:       []string `json:"files"`,
 }
 
 Board :: struct {
@@ -123,6 +130,42 @@ board_trim :: proc() {
 message_is_for :: proc(m: Message, name: string) -> bool {
 	if m.agent == name do return false
 	return m.to == "" || m.to == name || m.to == "anyone" || m.to == "all"
+}
+
+// One row per agent: last_seen from any message, claim (status + files) from
+// the latest status-kind message. Claims of stale agents don't conflict.
+collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
+	infos := make([dynamic]Agent_Info, allocator)
+	index := make(map[string]int, allocator)
+	for m in board.messages {
+		i, seen := index[m.agent]
+		if !seen {
+			i = len(infos)
+			index[m.agent] = i
+			append(&infos, Agent_Info{agent = m.agent})
+		}
+		infos[i].last_seen = m.unix
+		if m.kind == "status" {
+			infos[i].status = m.text
+			infos[i].status_unix = m.unix
+			infos[i].files = m.files
+		}
+	}
+	now := time.time_to_unix(time.now())
+	for &info in infos {
+		info.active = now - info.last_seen <= STALE_SECS
+	}
+	return infos[:]
+}
+
+age_string :: proc(now, then: i64) -> string {
+	d := max(now - then, 0)
+	switch {
+	case d < 60:    return fmt.tprintf("%ds", d)
+	case d < 3600:  return fmt.tprintf("%dm", d / 60)
+	case d < 86400: return fmt.tprintf("%dh", d / 3600)
+	case:           return fmt.tprintf("%dd", d / 86400)
+	}
 }
 
 // ---------------------------------------------------------------- HTTP layer
@@ -231,6 +274,8 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		handle_delta(client, query)
 	case method == "GET" && path == "/agents":
 		handle_agents(client)
+	case method == "GET" && path == "/claims":
+		handle_claims(client)
 	case method == "GET" && path == "/":
 		handle_index(client)
 	case:
@@ -263,8 +308,54 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 	}
 
 	stored := board_post(incoming)
-	send_response(client, "200 OK", "application/json",
-		fmt.tprintf(`{{"seq":%d,"unix":%d}}`, stored.seq, stored.unix))
+
+	// Conflict check at the moment it matters: does another ACTIVE agent's
+	// latest status claim any of the files this post claims?
+	warnings := make([dynamic]string, context.temp_allocator)
+	if len(stored.files) > 0 {
+		infos := collect_agents()
+		for file in stored.files {
+			for info in infos {
+				if info.agent == stored.agent || !info.active do continue
+				for theirs in info.files {
+					if theirs == file {
+						append(&warnings, fmt.tprintf("%s claimed by %s (%s ago)",
+							file, info.agent, age_string(stored.unix, info.status_unix)))
+					}
+				}
+			}
+		}
+	}
+
+	Post_Result :: struct {
+		seq:      int      `json:"seq"`,
+		unix:     i64      `json:"unix"`,
+		warnings: []string `json:"warnings"`,
+	}
+	out, _ := json.marshal(Post_Result{stored.seq, stored.unix, warnings[:]}, {}, context.temp_allocator)
+	send_response(client, "200 OK", "application/json", string(out))
+}
+
+handle_claims :: proc(client: net.TCP_Socket) {
+	Claim :: struct {
+		file:      string `json:"file"`,
+		agent:     string `json:"agent"`,
+		claimed:   i64    `json:"claimed_unix"`,
+		last_seen: i64    `json:"last_seen"`,
+	}
+	claims := make([dynamic]Claim, context.temp_allocator)
+	for info in collect_agents() {
+		if !info.active do continue
+		for file in info.files {
+			append(&claims, Claim{file, info.agent, info.status_unix, info.last_seen})
+		}
+	}
+	out, err := json.marshal(claims[:], {}, context.temp_allocator)
+	if err != nil {
+		send_response(client, "500 Internal Server Error", "application/json", `{"error":"marshal failed"}`)
+		return
+	}
+	send_response(client, "200 OK", "application/json", string(out))
 }
 
 handle_delta :: proc(client: net.TCP_Socket, query: string) {
@@ -312,22 +403,8 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 }
 
 handle_agents :: proc(client: net.TCP_Socket) {
-	infos := make([dynamic]Agent_Info, context.temp_allocator)
-	index := make(map[string]int, context.temp_allocator)
-	for m in board.messages {
-		i, seen := index[m.agent]
-		if !seen {
-			i = len(infos)
-			index[m.agent] = i
-			append(&infos, Agent_Info{agent = m.agent})
-		}
-		infos[i].last_seen = m.unix
-		if m.kind == "status" {
-			infos[i].status = m.text
-			infos[i].files = m.files
-		}
-	}
-	out, err := json.marshal(infos[:], {}, context.temp_allocator)
+	infos := collect_agents()
+	out, err := json.marshal(infos, {}, context.temp_allocator)
 	if err != nil {
 		send_response(client, "500 Internal Server Error", "application/json", `{"error":"marshal failed"}`)
 		return
@@ -342,7 +419,8 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintln(&b, "POST /post            body: {\"agent\":\"name\",\"kind\":\"status|msg|request|reply\",\"text\":\"...\",\"files\":[\"...\"],\"to\":\"agent\",\"reply_to\":seq}")
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
 	fmt.sbprintln(&b, "     &for=agent      only messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
-	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent")
+	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = seen within 2h)")
+	fmt.sbprintln(&b, "GET  /claims          file -> active claimant; POST answers carry 'warnings' when your files overlap another active agent's")
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "recent:")
 	start := max(0, len(board.messages) - 20)

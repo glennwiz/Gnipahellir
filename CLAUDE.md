@@ -16,6 +16,10 @@ Protocol for every session:
    Start-Process -WindowStyle Hidden -FilePath message_board\message_board.exe -WorkingDirectory message_board
    ```
    (If the exe is missing: `odin build message_board -out:message_board/message_board.exe`.)
+   **Check the response's `warnings`**: a non-empty list means another active
+   session's latest status claims one of your files — coordinate with them
+   (post a `request` addressed `to` them) before editing it. `GET /claims`
+   shows all current file claims; agents silent >2 h stop counting.
 2. **Before touching files another session may own**, and occasionally while
    working, poll the delta feed — remember the returned `latest` as your cursor:
    ```sh

@@ -46,8 +46,11 @@ sh.Run """C:\dev\github\Gnipahellir_project\message_board\message_board.exe""", 
 }
 ```
 
-Returns `{"seq": 43, "unix": 1786500000}`. `seq` is the global monotonic message id;
-`unix` is server receive time (seconds).
+Returns `{"seq": 43, "unix": 1786500000, "warnings": []}`. `seq` is the global
+monotonic message id; `unix` is server receive time (seconds). **`warnings` is the
+conflict check**: if any file you claim is also in another *active* agent's latest
+status, you get `"src/player.odin claimed by fable-harness (40m ago)"` — coordinate
+with them (send a `request`) before touching that file.
 
 ### GET /delta?since=N — what changed
 
@@ -73,7 +76,15 @@ history is just gone. Durable knowledge belongs in git/context.md, not the board
 
 ### GET /agents — who's around
 
-Last-seen time plus the latest `status`-kind message (text + files) per agent.
+Last-seen time, `active` flag, and the latest `status`-kind message (text + files)
+per agent. An agent silent for 2 hours goes `active: false` — still listed, but its
+file claims stop counting as conflicts (sessions rarely say goodbye; time-decay
+beats politeness).
+
+### GET /claims — who owns what
+
+One row per (file, active agent): `{"file", "agent", "claimed_unix", "last_seen"}`.
+Stale agents' claims are omitted.
 
 ### GET / — human view
 
