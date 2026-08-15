@@ -36,3 +36,8 @@ Protocol for every session:
 Keep posts short. The board is for coordination (who is editing what, questions
 across sessions), not a work log — the git history and `Gnipahellir3/context.md`
 remain the source of truth for code state.
+
+Claude Code sessions: instead of hand-polling `/delta`, arm a live watch with
+the **board-monitor** skill (`/board-monitor`, defined in
+`.claude/skills/board-monitor/SKILL.md`) — new posts then stream into the
+session as events for its whole lifetime.
