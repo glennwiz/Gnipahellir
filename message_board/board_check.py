@@ -142,8 +142,9 @@ class Board:
 
 @check
 def draft_ready_claim_submit_approve_is_the_v3_path(b):
-    _, r = task("draft", "planner", text="ship the thing",
-                files=["a.odin"], accept="tests green", plan_id=42, plan_seq=42)
+    _, plan = post("planner", text="the plan for shipping the thing")
+    _, r = task("draft", "planner", text="ship the thing", files=["a.odin"],
+                accept="tests green", plan_id=plan["seq"], plan_seq=plan["seq"])
     tid = r["id"]
     assert tasks()[tid]["state"] == "Draft", tasks()[tid]
     task("ready", "planner", id=tid)
@@ -334,6 +335,90 @@ def blocking_is_unchanged_for_callers_that_name_nothing(b):
     assert t["state"] == "Blocked" and t["blocked_on"] == 0, t
     task("unblock", "worker", id=tid)
     assert tasks()[tid]["state"] == "Doing"
+
+
+# ── checks: every field that names another record ───────────────────────────
+#
+# Four fields point at another record. Three were unguarded, and each was
+# invisible on its own: a reference that can name nothing looks exactly like
+# one that cannot, at every call site, until you go looking for the class.
+
+
+@check
+def supersede_refuses_a_by_id_that_names_nothing(b):
+    # Same validation as blocked_on, DIFFERENT justification, and the
+    # difference is why this one matters more. Supersede is TERMINAL: a
+    # by_id naming a phantom task is unrecoverable by any later verb, where
+    # a bad blocked_on can be corrected by re-blocking. A guard on a
+    # reversible field is a convenience; here it is the only chance anyone
+    # gets.
+    _, r = task("add", "planner", text="to be replaced")
+    tid = r["id"]
+    st, body = task("supersede", "planner", id=tid, by_id=99999)
+    assert st == 404 and "by_id" in body["error"], (st, body)
+    st, body = task("supersede", "planner", id=tid, by_id=tid)
+    assert st == 400 and "itself" in body["error"], (st, body)
+    assert tasks()[tid]["state"] != "Superseded", \
+        "a refused supersede must not half-apply a terminal transition"
+
+    _, r2 = task("add", "planner", text="the replacement")
+    assert task("supersede", "planner", id=tid, by_id=r2["id"])[0] == 200
+    assert tasks()[tid]["superseded_by"] == r2["id"]
+
+
+@check
+def a_post_cannot_bind_itself_to_a_phantom_task(b):
+    # ...and the reason it matters is quiet: /delta?task=N would filter
+    # happily on the phantom and return a clean, empty, entirely
+    # honest-looking correlation trail for a task nobody ever created.
+    st, body = post("worker", text="about task 99999", task_id=99999)
+    assert st == 400 and "task_id" in body["error"], (st, body)
+    _, r = task("add", "planner", text="real work")
+    assert post("worker", text="about real work", task_id=r["id"])[0] == 200
+
+
+@check
+def a_draft_cannot_cite_a_plan_post_that_does_not_exist(b):
+    # result_seq's class exactly, but on the INTAKE side - which is why the
+    # review that guarded result_seq walked straight past it.
+    st, body = task("draft", "planner", text="cites nothing", plan_seq=99999)
+    assert st == 400 and "plan_seq" in body["error"], (st, body)
+    _, plan = post("planner", text="the actual plan")
+    st, r = task("draft", "planner", text="cites the plan", plan_seq=plan["seq"])
+    assert st == 200
+    tid = r["id"]
+    assert tasks()[tid]["plan_id"] == plan["seq"]
+    # amend carries the same field and gets the same guard.
+    assert task("amend", "planner", id=tid, rev=1, plan_seq=99999)[0] == 400
+    assert tasks()[tid]["rev"] == 1, "a refused amend must not bump the revision"
+
+
+@check
+def a_trimmed_away_plan_post_is_still_a_real_plan(b):
+    # The guard must not punish longevity: a plan old enough to have been
+    # archived is still a plan, so this validates through the archive like
+    # every other seq lookup.
+    _seed_a_trimmed_board(b, [{"seq": 8500, "unix": int(time.time()),
+                               "agent": "planner", "kind": "msg",
+                               "text": "a plan from last week"}])
+    st, r = task("draft", "planner", text="cites the old plan", plan_seq=8500)
+    assert st == 200, (st, r)
+    assert tasks()[r["id"]]["plan_id"] == 8500
+
+
+@check
+def cycles_are_still_allowed_because_a_deadlock_is_information(b):
+    # The deliberate exception to the whole class. Two tasks each waiting on
+    # the other is a REAL deadlock; the point of storing the edge is to make
+    # it visible, not to pretend it cannot happen.
+    _, a = task("add", "planner", text="A")
+    _, c = task("add", "planner", text="B")
+    task("claim", "w1", id=a["id"])
+    task("claim", "w2", id=c["id"])
+    assert task("block", "w1", id=a["id"], blocked_on=c["id"])[0] == 200
+    assert task("block", "w2", id=c["id"], blocked_on=a["id"])[0] == 200
+    assert tasks()[a["id"]]["blocked_on"] == c["id"]
+    assert tasks()[c["id"]]["blocked_on"] == a["id"]
 
 
 @check
@@ -945,7 +1030,8 @@ def supersede_drops_the_files(b):
     tid = r["id"]
     task("ready", "planner", id=tid)
     task("claim", "worker", id=tid)
-    task("supersede", "planner", id=tid, by_id=999)
+    _, repl = task("add", "planner", text="the replacement")
+    task("supersede", "planner", id=tid, by_id=repl["id"])
     assert "src/gone.odin" not in claims_of("worker"), "terminal work holds nothing"
 
 
@@ -986,11 +1072,13 @@ def a_draft_derives_plan_id_and_rev_from_plan_seq_alone(b):
     # The contract has callers send plan_seq only. The first live v3 task came
     # out with plan_id 0 / plan_rev 0 / plan_seqs [0] while its own log line
     # held 600 - the event was right, the projection was wrong.
-    _, r = task("draft", "planner", text="planned work", plan_seq=600)
+    _, plan = post("planner", text="the plan post itself")
+    seq = plan["seq"]
+    _, r = task("draft", "planner", text="planned work", plan_seq=seq)
     t = tasks()[r["id"]]
-    assert t["plan_id"] == 600, t
+    assert t["plan_id"] == seq, t
     assert t["plan_rev"] == 1, t
-    assert t["plan_seqs"] == [600], t   # literal, not merely non-empty
+    assert t["plan_seqs"] == [seq], t   # literal, not merely non-empty
 
 
 @check
@@ -1000,8 +1088,9 @@ def plan_seqs_survive_the_request_that_created_them(b):
     # several tasks to disturb memory, then re-read them all.
     ids = []
     for i in range(5):
-        _, r = task("draft", "planner", text=f"plan {i}", plan_seq=700 + i)
-        ids.append((r["id"], 700 + i))
+        _, plan = post("planner", text=f"plan post {i}")
+        _, r = task("draft", "planner", text=f"plan {i}", plan_seq=plan["seq"])
+        ids.append((r["id"], plan["seq"]))
     got = tasks()
     for tid, seq in ids:
         assert got[tid]["plan_seqs"] == [seq], (tid, got[tid]["plan_seqs"], seq)
@@ -1009,17 +1098,20 @@ def plan_seqs_survive_the_request_that_created_them(b):
 
 @check
 def amending_appends_to_the_plan_trail_and_it_survives_restart(b):
-    _, r = task("draft", "planner", text="v1", plan_seq=800)
+    _, p1 = post("planner", text="plan v1")
+    _, r = task("draft", "planner", text="v1", plan_seq=p1["seq"])
     tid = r["id"]
-    task("amend", "planner", id=tid, rev=1, text="v2", plan_seq=801)
+    _, p2 = post("planner", text="plan v2")
+    task("amend", "planner", id=tid, rev=1, text="v2", plan_seq=p2["seq"])
+    trail = [p1["seq"], p2["seq"]]
     t = tasks()[tid]
-    assert t["plan_seqs"] == [800, 801], t
+    assert t["plan_seqs"] == trail, t
     assert t["plan_rev"] == 2, f"a new plan post is a new plan revision: {t}"
 
     b.restart()   # concrete values, not just equivalence - [0]==[0] would pass
     t = tasks()[tid]
-    assert t["plan_seqs"] == [800, 801], t
-    assert t["plan_id"] == 800 and t["plan_rev"] == 2, t
+    assert t["plan_seqs"] == trail, t
+    assert t["plan_id"] == p1["seq"] and t["plan_rev"] == 2, t
     assert t["text"] == "v2", t
 
 

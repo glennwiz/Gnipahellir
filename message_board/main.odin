@@ -968,6 +968,15 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 			`{"error":"'agent' is required"}`)
 		return
 	}
+	// Same class as plan_seq and by_id: a post could bind itself to a task
+	// that does not exist, and GET /delta?task=N would then filter happily on
+	// the phantom — returning a clean, empty, entirely honest-looking
+	// correlation trail for a work item nobody ever created.
+	if incoming.task_id != 0 && task_find(incoming.task_id) == nil {
+		send_response(client, "400 Bad Request", "application/json",
+			fmt.tprintf(`{{"error":"task_id %d is not a task"}}`, incoming.task_id))
+		return
+	}
 	switch incoming.kind {
 	case "status", "msg", "request", "reply":
 	case "release":
@@ -1104,6 +1113,27 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 	// it would need real locking around check-then-append, not just here.
 	now := time.time_to_unix(time.now())
 
+	// A REFERENCE THAT NAMES NOTHING LOOKS EXACTLY LIKE ONE THAT CANNOT —
+	// at every call site, until you go looking for the class. Four fields
+	// here name another record; three were unguarded, and each was invisible
+	// alone and obvious together. plan_seq is result_seq's shape on the
+	// INTAKE side, which is why the review that guarded result_seq walked
+	// past it.
+	//
+	// Checked before the action switch so it holds for every verb that
+	// carries the field, present or future, instead of being remembered at
+	// each new call site.
+	if ev.plan_seq != 0 {
+		// message_by_seq, not a live-window scan: a plan post old enough to
+		// have been trimmed into the archive is still a real plan, and
+		// refusing it would make the guard punish longevity.
+		if _, ok := message_by_seq(ev.plan_seq); !ok {
+			send_response(client, "400 Bad Request", "application/json",
+				fmt.tprintf(`{{"error":"plan_seq %d is not a message"}}`, ev.plan_seq))
+			return
+		}
+	}
+
 	switch ev.action {
 	case "add", "draft":
 		if ev.text == "" {
@@ -1188,6 +1218,26 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 				if task_find(ev.blocked_on) == nil {
 					send_response(client, "404 Not Found", "application/json",
 						fmt.tprintf(`{{"error":"blocked_on %d is not a task"}}`, ev.blocked_on))
+					return
+				}
+			}
+		case "supersede":
+			// Same validation as blocked_on, and NOT for the same reason.
+			// blocked_on can be corrected by re-blocking; supersede is a
+			// TERMINAL transition, so a superseded_by naming a phantom task
+			// is unrecoverable by any later verb — the task is closed and
+			// the pointer to its replacement leads nowhere, permanently.
+			// A guard on a reversible field is a convenience; here it is the
+			// only chance anyone gets.
+			if ev.by_id != 0 {
+				if ev.by_id == t.id {
+					send_response(client, "400 Bad Request", "application/json",
+						`{"error":"a task cannot be superseded by itself"}`)
+					return
+				}
+				if task_find(ev.by_id) == nil {
+					send_response(client, "404 Not Found", "application/json",
+						fmt.tprintf(`{{"error":"by_id %d is not a task"}}`, ev.by_id))
 					return
 				}
 			}
