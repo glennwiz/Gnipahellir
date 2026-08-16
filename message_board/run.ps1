@@ -99,7 +99,12 @@ if ($Rebuild) {
     if (Test-Board) {
         $note = @{ agent = 'run.ps1'; kind = 'status'
                    text  = 'rebuilding and restarting the board - hold writes for a minute' } | ConvertTo-Json -Compress
-        try { $null = Invoke-RestMethod -Uri "$board/post" -Method Post -Body $note -TimeoutSec 5 } catch { }
+        # A bare `catch { }` here swallowed the announcement whole: the drill
+        # that exists to make restarts VISIBLE could fail invisibly. Say so
+        # and carry on - the restart is still the right thing to do, but
+        # nobody should have to infer that it happened.
+        try { $null = Invoke-RestMethod -Uri "$board/post" -Method Post -Body $note -TimeoutSec 5 }
+        catch { Write-Warning "[board] could not announce the restart ($($_.Exception.Message)) - proceeding anyway" }
         Start-Sleep -Seconds 5
         Write-Host "[board] stopping for rebuild"
         Get-Process message_board -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -116,7 +121,18 @@ if (Test-Board) {
         Build-Board
     }
     Write-Host "[board] starting..."
-    Start-Process -WindowStyle Hidden -FilePath $exe -WorkingDirectory $here
+    # KEEP WHAT THE SERVICE SAYS. This used to start with no redirection at
+    # all, so anything the process printed went nowhere - and when it died
+    # unexplained, the reason died with it. One redirect is the difference
+    # between "the board crashed" and "the board crashed, and here is what it
+    # said on the way out".
+    # Both names end in .log so the existing *.log gitignore rule covers them.
+    # A runtime file the SOURCE does not declare is invisible to the gitignore
+    # check in board_check.py, so a log written by this script must not need a
+    # new rule that nothing would enforce.
+    $log = Join-Path $here 'service.log'
+    Start-Process -WindowStyle Hidden -FilePath $exe -WorkingDirectory $here `
+        -RedirectStandardOutput $log -RedirectStandardError (Join-Path $here 'service.err.log')
 
     $up = $false
     foreach ($i in 1..20) {
@@ -131,8 +147,18 @@ if (Test-Board) {
         $b = Invoke-RestMethod -Uri "$board/build" -TimeoutSec 5
         Write-Host "[board] up - running $($b.commit) built $($b.built)"
     } catch {
+        $b = $null
         Write-Host "[board] up (no /build endpoint - binary predates build identity)"
     }
+    # WE ACTUALLY STARTED SOMETHING, so say so on the board. Only the rebuild
+    # path announced before, because that is the path that STOPS a running
+    # board - but a restore after an unexplained outage is exactly when the
+    # board most needs to say it is back, and it said nothing. Finding it
+    # already up stays silent; that is not an event.
+    $back = @{ agent = 'run.ps1'; kind = 'status'
+               text  = "board started - running $(if ($b) { $b.commit } else { 'an unstamped binary' })" } | ConvertTo-Json -Compress
+    try { $null = Invoke-RestMethod -Uri "$board/post" -Method Post -Body $back -TimeoutSec 5 }
+    catch { Write-Warning "[board] started but could not announce it ($($_.Exception.Message))" }
 }
 
 # ── 2. herdr sidecar ────────────────────────────────────────────────────

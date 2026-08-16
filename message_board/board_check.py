@@ -27,6 +27,7 @@ import urllib.request
 # free_port below.
 BASE = None
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)  # so the watchdog beside us can be driven directly
 ROOT = os.path.dirname(HERE)
 
 checks = []
@@ -928,6 +929,82 @@ def a_valid_name_is_unaffected_by_the_new_refusals(b):
     st, r = call("/spawn", {"name": "Raids Team", "role": "no-such-role",
                             "prompt": "valid name, bad role"})
     assert st == 400 and "role" in r["error"],         ("a usable name must get past the name checks", st, r)
+
+
+@check
+def spawn_refuses_when_the_launcher_is_not_there(b):
+    # The dispatch is `cmd /c start /b`, which returns 0 for "I started
+    # something" rather than "the something worked" - so the rc check could
+    # never fail, and with no launcher at all the endpoint still answered
+    # ok:true and announced a herdr pane that did not exist. The scratch
+    # workdir has no spawn_herdr.py, which makes this suite the natural place
+    # to pin it.
+    st, r = call("/spawn", {"name": "nolauncher", "prompt": "cannot possibly run"})
+    assert st == 500, (st, r)
+    assert "launcher" in r["error"] and "spawn_herdr.py" in r["error"], r
+
+
+@check
+def the_spawn_announcement_claims_only_a_request(b):
+    # Wording is the fix here, not decoration: the server cannot see whether
+    # a detached launch became an agent, so it must not say "spawned" or name
+    # a herdr pane. The watchdog is what confirms or contradicts it.
+    #
+    # This has to REACH the announcement, so the workdir gets a no-op
+    # launcher. Written after the first version of this check passed while
+    # the old wording was restored - the 500 fired first, no announcement was
+    # ever posted, and "nothing says spawned" was true because nothing was
+    # said at all. A check that passes for the wrong reason is worse than
+    # none: it reports coverage it does not have.
+    with open(os.path.join(b.workdir, "spawn_herdr.py"), "w") as f:
+        f.write("import sys; sys.exit(0)\n")
+    st, r = call("/spawn", {"name": "wording", "prompt": "reaches the announcement"})
+    assert st == 200, (st, r)
+    assert r["launched"] == "requested", r
+
+    texts = [m["text"] for m in call("/delta?since=0")[1]["messages"]
+             if m["agent"] == "board"]
+    said = [t for t in texts if "wording" in t]
+    assert said, ("the announcement must exist for this check to mean anything", texts)
+    assert said[0].startswith("launch requested for "), said
+    assert "herdr pane" not in said[0], said
+
+
+@check
+def the_watchdog_drops_a_deliberately_closed_launch(b):
+    # It tracked launches and cleared them when the agent SPOKE, but never
+    # when the agent was CLOSED - so one killed before it ever posted was
+    # reported as a probable failed spawn, contradicted by a message sitting
+    # in the same delta this watcher was already reading.
+    import importlib, herdr_sync as hs
+    importlib.reload(hs)
+    hs.BASE, hs.cursor, hs.pending = BASE, 0, {}
+
+    post("board", kind="msg", text="launch requested for claude-ghost-9999 (model fable) - task: x")
+    hs.watch_spawns([])
+    assert "claude-ghost-9999" in hs.pending, hs.pending
+
+    post("board", kind="msg", text="closed claude-ghost-9999 (herdr tab a:1) from the board UI")
+    hs.watch_spawns([])
+    assert hs.pending == {}, ("a deliberate close is not a failed launch", hs.pending)
+
+
+@check
+def the_watchdog_warns_about_facts_not_causes(b):
+    # "the spawn likely failed" is a diagnosis. What the watchdog can see is
+    # that nothing spoke and herdr shows no pane - naming a cause it never
+    # checked is how a reader ends up debugging a launcher that was fine.
+    import importlib, herdr_sync as hs
+    importlib.reload(hs)
+    hs.BASE, hs.cursor, hs.pending, hs.GRACE = BASE, 0, {}, -1
+
+    post("board", kind="msg", text="launch requested for claude-mute-8888 (model fable) - task: x")
+    hs.watch_spawns([])          # GRACE is negative, so it warns immediately
+    warned = [m["text"] for m in call("/delta?since=0")[1]["messages"]
+              if "WARNING" in m["text"]]
+    assert warned, "it should have warned"
+    assert "likely failed" not in warned[-1], warned[-1]
+    assert "has not posted" in warned[-1] and "no pane" in warned[-1], warned[-1]
 
 
 # ── checks: crash safety + retention (task #18) ─────────────────────────────

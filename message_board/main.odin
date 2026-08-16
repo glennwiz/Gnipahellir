@@ -1577,6 +1577,23 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 	// falling back to a Windows Terminal tab. Dispatched detached via start /b:
 	// herdr's readiness wait must never block this single-threaded server.
 	launcher, _ := filepath.join({wd, "spawn_herdr.py"}, context.temp_allocator)
+	// SAY ONLY WHAT WE KNOW. The dispatch below is `cmd /c start /b`, which
+	// returns 0 for "I started something", not "the something worked" - so
+	// the rc check reads like error handling and cannot fail. With no
+	// launcher present at all this endpoint still answered ok:true and
+	// announced a herdr pane that did not exist.
+	//
+	// The detached dispatch is deliberate and stays: herdr's readiness wait
+	// must never block a single-threaded server. So instead of pretending to
+	// verify the outcome, verify the PRECONDITION we can actually check, and
+	// word the rest as what it is - a launch requested. The watchdog is what
+	// confirms or contradicts it, which is what it was always for.
+	if !os.exists(launcher) {
+		send_response(client, "500 Internal Server Error", "application/json",
+			fmt.tprintf(`{{"error":%q}}`,
+				fmt.tprintf("launcher missing: %s", launcher)))
+		return
+	}
 	cmd := fmt.tprintf(`cmd /c start /b "" python "%s" "%s" "%s" %s "%s" "%s"`,
 		launcher, agent, work_dir, model, instruction, role_file)
 	if rc := libc.system(strings.clone_to_cstring(cmd, context.temp_allocator)); rc != 0 {
@@ -1601,13 +1618,14 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 	board_post(Message{
 		agent = "board",
 		kind  = "msg",
-		text  = strings.clone(fmt.tprintf("spawned %s (herdr pane, model %s)%s - task: %s", agent,
+		text  = strings.clone(fmt.tprintf("launch requested for %s (model %s)%s - task: %s", agent,
 			model, forced,
 			prompt if len(prompt) <= 120 else fmt.tprintf("%s...", prompt[:120]))),
 	})
 
 	send_response(client, "200 OK", "application/json",
-		fmt.tprintf(`{{"ok":true,"agent":"%s","reused":false,"forced":%t}}`, agent, req.force))
+		fmt.tprintf(`{{"ok":true,"agent":"%s","reused":false,"forced":%t,"launched":"requested"}}`,
+			agent, req.force))
 }
 
 handle_claims :: proc(client: net.TCP_Socket) {

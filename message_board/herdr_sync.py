@@ -4,10 +4,17 @@ Every POLL seconds, `herdr agent list` is condensed to [{name, agent, status,
 pane, workspace}] and POSTed to the board's /herdr_state, which the frontend
 roster reads for live working/idle/blocked/done badges.
 
-Dead-spawn watch: a "spawned <name> ..." announcement by the board agent that
-is followed by neither a check-in post from <name> nor a live herdr pane of
-that name within GRACE seconds gets one warning post, so a silently failed
-spawn surfaces in minutes, not on someone's hunch.
+Dead-spawn watch: a "launch requested for <name> ..." announcement by the
+board agent that is followed by neither a check-in post from <name>, nor a
+live herdr pane of that name, nor a deliberate close, within GRACE seconds
+gets one warning post - so a launch that never became an agent surfaces in
+minutes rather than on someone's hunch.
+
+The warning states what was OBSERVED and stops there. It used to conclude
+"the spawn likely failed", which is a diagnosis rather than an observation,
+and it said exactly that about an agent that started fine and was closed on
+purpose - while the message proving it had been closed sat in the same delta
+this watcher was already reading.
 """
 import json
 import subprocess
@@ -58,14 +65,23 @@ def herdr_agents():
     } for a in out]
 
 
+LAUNCH_PREFIX = "launch requested for "
+CLOSE_PREFIX = "closed "
+
+
 def watch_spawns(fleet):
-    """Track spawn announcements; warn once if one never comes alive."""
+    """Track launch announcements; warn once if one never becomes an agent."""
     global cursor
     d = http_json(f"/delta?since={cursor}")
     for m in d.get("messages", []):
-        if m["agent"] == "board" and m["text"].startswith("spawned "):
-            name = m["text"].split()[1]
-            pending[name] = m["unix"]
+        if m["agent"] == "board" and m["text"].startswith(LAUNCH_PREFIX):
+            pending[m["text"][len(LAUNCH_PREFIX):].split()[0]] = m["unix"]
+        elif m["agent"] == "board" and m["text"].startswith(CLOSE_PREFIX):
+            # Deliberately closed is not "never came alive". This branch was
+            # missing, so an agent killed before it ever posted was reported
+            # as a probable failed spawn - a conclusion contradicted by a
+            # message already in this very stream.
+            pending.pop(m["text"][len(CLOSE_PREFIX):].split()[0], None)
         elif m["agent"] in pending:
             del pending[m["agent"]]  # it spoke - alive
     cursor = d["latest"]
@@ -78,9 +94,12 @@ def watch_spawns(fleet):
         if now - born > GRACE:
             http_post("/post", {
                 "agent": "board", "kind": "msg",
-                "text": f"WARNING: {name} was spawned {int(now - born)}s ago "
-                        "but never checked in and has no live herdr pane - "
-                        "the spawn likely failed",
+                # Facts, not a cause. What we can see is that a launch was
+                # requested, nothing has spoken, and herdr shows no pane -
+                # not WHY. Naming a cause we have not checked is how a
+                # reader ends up debugging a launcher that was never broken.
+                "text": f"WARNING: launch requested for {name} {int(now - born)}s "
+                        "ago; it has not posted and herdr shows no pane for it",
             })
             del pending[name]
 
