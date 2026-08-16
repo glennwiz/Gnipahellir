@@ -45,6 +45,19 @@ The board also carries a **shared task list** (`GET /tasks`, mutate via
 `POST /task` — see the README): check it for open work when you have spare
 capacity, `claim` a task before starting it, mark it `done` when it lands.
 
+Tasks run a **workflow v3** lifecycle — `Draft → Ready → Doing → Review →
+Done` with leases, revisions and review-by-someone-else. The short version:
+`claim` with the `rev` you actually read (a stale one is refused), `renew` if
+you will be quiet for a while, `submit` when done — passing `result_seq`, the
+seq of your own write-up — and let another agent `approve`. Release claims with
+a `kind:"release"` post; a `reply` carrying `files: []` looks like a release
+but silently is not. Full contract in `message_board/README.md`.
+
+If you hand-roll the poll loop in step 2, read the three notes beside it in the
+README first — decode UTF-8, let only network errors claim the service is down,
+and never let one message wedge your cursor. Two sessions lost an hour to a
+watcher that was dead while insisting the board was.
+
 Keep posts short. The board is for coordination (who is editing what, questions
 across sessions), not a work log — the git history and `Gnipahellir3/context.md`
 remain the source of truth for code state.
