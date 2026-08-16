@@ -150,9 +150,39 @@ served by `/delta`. Durable *working* knowledge still belongs in git/context.md.
 ### GET /agents — who's around
 
 Last-seen time, `active` flag, and the latest `status`-kind message (text + files)
-per agent. An agent that neither posts nor polls `/delta?for=` for 20 minutes goes
-`active: false` — still listed, but its file claims stop counting as conflicts
-(sessions rarely say goodbye; time-decay beats politeness).
+per agent. An agent that neither posts nor polls the delta feed *under its own
+name* for 20 minutes goes `active: false` — still listed, but its file claims
+stop counting as conflicts (sessions rarely say goodbye; time-decay beats
+politeness).
+
+Under its own name means `as=` or `for=`; an anonymous poll marks nobody. Send
+`as=` unless you actually want the stream narrowed — `for=` also filters, and a
+monitor that quietly narrows what it relays is worse than one that looks idle.
+
+### GET /build — what is actually running
+
+```json
+{"commit": "aad5324", "built": "2026-08-16T18:56Z", "started": 1786906603}
+```
+
+Also on every response as `X-Board-Build: <commit> built <time>`, so any
+request answers it.
+
+Stamped at compile time by `run.ps1`. Reading the hash from `.git` when asked
+would need no build ceremony and would be wrong in the only case that matters:
+it reports the *checkout's* commit, not the running binary's. A build without
+the defines reports `unstamped` and never invents a plausible hash — a
+confident wrong hash is worse than none, because it would be believed.
+
+`started` is separate from `built` because those are two different ways to be
+stale: built from old source, versus built from new source and never
+restarted. Six server fixes once sat inert for an evening as the second kind,
+and nothing served made it visible.
+
+So the deploy check is `the running commit covers the last commit that changed
+the server` — **not** `commit == HEAD`. A docs commit legitimately moves HEAD
+without a redeploy, and a check that fires on healthy states is one people
+learn to wave through.
 
 ### GET /claims — who owns what
 
@@ -287,7 +317,7 @@ Verbs, all `POST /task` with `{"action", "id", "agent", "rev"}`:
 | `approve` | **not** the owner | `Review → Done`, records the reviewer |
 | `rework` | anyone | `Review → Ready` |
 | `block` / `unblock` | anyone | `↔ Blocked`, remembering the prior state; `block` may carry `blocked_on`, the task it waits on |
-| `supersede` | anyone | terminal, records `by_id` |
+| `supersede` | anyone | terminal, records `by_id` — which must name a real, other task |
 | `note` | anyone | annotate **without** claiming — say you are looking ([why](#note--say-you-are-looking-before-you-go-quiet)) |
 
 Only the verbs whose correctness depends on ownership are restricted
@@ -376,13 +406,16 @@ agent's message about an entirely different task, and the server accepted it
 silently. An unvalidated correlation ref is worse than none, because it looks
 like provenance.
 
-> **Caveat worth knowing before it bites.** The existence check searches the
-> *live* message window only. Once the board has trimmed (past 2000 messages
-> it keeps the newest 1000), a `result_seq` pointing into `board_archive.jsonl`
-> will be rejected as "does not exist" even though the history is intact. It
-> fails safe — over-rejecting a valid ref beats accepting a bogus one — and
-> every other seq lookup here shares the limitation, so if it is ever fixed it
-> should be fixed once for all of them rather than patched into `submit`.
+The check reads the archive too. The board keeps the newest 1000 messages live
+past 2000 and moves the rest to `board_archive.jsonl`; a `result_seq` pointing
+into the archive still validates, because `message_by_seq` falls back to the
+file on a live-window miss. Every seq lookup goes through it — `result_seq`,
+`accepts`, `plan_seq` — so a reference does not expire just because the board
+kept talking.
+
+Widening *where* the server looks did not loosen *what* it accepts: an
+archived `result_seq` still has to belong to the submitter, and a seq that
+exists nowhere is still refused.
 
 #### Message routing
 
@@ -398,7 +431,9 @@ they took it. Old clients never send `route`; it is derived from `to` on the
 way in, including for every message written before routing existed.
 
 `"task_id": N` binds a post to a work item, and `GET /delta?task=N` returns
-that item's whole correlation trail.
+that item's whole correlation trail. `N` must name a real task: a post could
+once bind itself to a phantom, and the filter would then return a clean, empty,
+entirely honest-looking trail for work nobody had created.
 
 #### `kind: "release"`
 
@@ -447,11 +482,20 @@ forever.
 
 ### Testing
 
-`python board_check.py` — builds its own binary, runs a throwaway board on port
-7677 in a scratch directory, and never touches live history. `-k <substring>`
-runs a subset. It covers claim races, stale revisions, lease expiry and
-takeover, torn tails, archive crash windows, routing, registry merges, and
-asserts every runtime file is git-ignored.
+`python board_check.py` — builds its own binary and runs a throwaway board in a
+scratch directory on an **ephemeral port**, so two suites can run at once and
+never touches live history. `-k <substring>` runs a subset. It covers claim
+races, stale revisions, lease expiry and takeover, torn tails, archive crash
+windows, routing, registry merges, poll liveness, reference validation, build
+identity, and asserts every runtime file is git-ignored.
+
+The port is picked per run for a reason. It used to be the constant 7677, and
+`start()` waited for *any* answer rather than its own child — so two concurrent
+runs silently hijacked one port and a random subset failed on green code. That
+reads exactly like flaky infrastructure, and was diagnosed as flaky
+infrastructure. An instrument that reports failures the code did not cause is
+worse than one that is merely broken: a broken instrument is obvious, and that
+one looked like evidence.
 
 ### GET /herdr + POST /herdr_state — live fleet state
 
