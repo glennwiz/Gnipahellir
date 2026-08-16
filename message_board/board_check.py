@@ -1470,6 +1470,161 @@ def the_declaration_scan_actually_catches_a_new_runtime_file(b):
         assert added, f"a new runtime constant escaped the scan: {fake}"
 
 
+# ── checks: strict request parsing (task #51) ───────────────────────────────
+#
+# json.unmarshal DROPS undeclared keys, so a one-character typo was not a bad
+# request - it was an ABSENT field plus ignored noise, and absent means "the
+# optional thing you did not ask for". Every one of these three was run for
+# real against a throwaway board and returned 200 before the fix; they are
+# here so that can never quietly become true again.
+#
+# Each names ITS OWN KEY. A leg asserting only "st == 400" would pass on any
+# refusal at all - including the unrelated ones these endpoints already have,
+# which is exactly how /spawn's role-file 400 could impersonate this one.
+
+
+@check
+def a_misspelled_text_field_is_refused_not_posted_empty(b):
+    # PROBE 1: {"txet": ...} posted a message with EMPTY text and said 200.
+    before = len(call("/delta?since=0")[1]["messages"])
+    st, r = call("/post", {"agent": "typo-1", "kind": "msg", "txet": "the real text"})
+    assert st == 400, (st, r)
+    assert "txet" in r["error"], r
+    assert r["unknown"] == ["txet"], r
+    after = call("/delta?since=0")[1]["messages"]
+    assert len(after) == before, ("a refused post must leave nothing behind",
+                                  [m["text"] for m in after[before:]])
+
+
+@check
+def a_misspelled_force_on_spawn_is_refused_not_inverted(b):
+    # PROBE 2: {"forse": true} on a HELD topic returned 200 reused - the
+    # override did the OPPOSITE of what was asked, on a process launcher.
+    #
+    # The discriminator matters: without force this call reuses (200), with
+    # real force it reaches the launcher and dies on the bad role (400). So a
+    # bare 400 would be ambiguous - the leg reads the ERROR, not the code.
+    call("/herdr_state", [{"name": "claude-inverted-7777", "tab": "a:3"}])
+    assert spawn_probe("inverted")[0] == 200, "sanity: it reuses without force"
+    st, r = spawn_probe("inverted", forse=True)
+    assert st == 400, ("a typo must not be read as absent", st, r)
+    assert "forse" in r["error"], ("refused for the wrong reason", r)
+    assert r["unknown"] == ["forse"], r
+
+
+@check
+def a_misspelled_result_seq_never_submits_without_an_audit_link(b):
+    # PROBE 3, THE WORST: {"reslut_seq": ...} moved a task to Review with NO
+    # result_seq recorded, skipping every validation #23 and #37 exist to
+    # enforce - the audit link the whole workflow rests on, silently absent.
+    _, r = task("draft", "planner", text="strict-parse subject",
+                accept="must submit with a real link")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    seq = post("worker", text="completion write-up", task_id=tid)[1]["seq"]
+
+    st, r = task("submit", "worker", id=tid, rev=tasks()[tid]["rev"],
+                 reslut_seq=seq)
+    assert st == 400, (st, r)
+    assert "reslut_seq" in r["error"], r
+    assert r["unknown"] == ["reslut_seq"], r
+    assert tasks()[tid]["state"] == "Doing", (
+        "the typo submitted anyway", tasks()[tid])
+
+    # ...and the correctly spelled field still works, so this tightened the
+    # typo and nothing else.
+    st, r = task("submit", "worker", id=tid, rev=tasks()[tid]["rev"],
+                 result_seq=seq)
+    assert st == 200, (st, r)
+    assert tasks()[tid]["result_seq"] == seq, tasks()[tid]
+
+
+@check
+def every_unknown_key_is_named_verbatim_not_just_the_first(b):
+    # "Name every unknown key" is the contract, and it is the useful part: a
+    # caller who misspelled two fields fixes one and gets refused again.
+    st, r = call("/post", {"agent": "typo-2", "kind": "msg", "text": "x",
+                           "zebra": 1, "alpha": 2})
+    assert st == 400, (st, r)
+    assert r["unknown"] == ["alpha", "zebra"], ("sorted, and all of them", r)
+    assert "alpha" in r["error"] and "zebra" in r["error"], r
+
+
+@check
+def a_key_the_endpoint_declares_but_a_typo_of_it_does_not(b):
+    # The rule is "a key unmarshal would USE", not "a key that looks familiar".
+    # `to` is declared; `too` is one keystroke away and means nothing.
+    assert post("addressed", kind="request", text="q", to="somebody")[0] == 200
+    st, r = call("/post", {"agent": "addressed", "kind": "request",
+                           "text": "q", "too": "somebody"})
+    assert st == 400 and r["unknown"] == ["too"], (st, r)
+
+
+@check
+def register_and_kill_refuse_an_unknown_key_too(b):
+    # The contract names FIVE JSON POSTs. Three earned a leg by being probed
+    # for real; these two are the ones nobody has typo'd yet, and a helper
+    # wired to four of five endpoints is precisely the gap this task exists
+    # to close - so they are asserted rather than assumed.
+    #
+    # Both already 400 on a missing required field, so the STATUS CODE alone
+    # proves nothing here: only `unknown` distinguishes "refused because the
+    # key was dropped" from "refused because the field it fed was absent".
+    st, r = call("/register", {"agent": "reg-1", "role": "implementer",
+                               "modle": "opus"})
+    assert st == 400 and r["unknown"] == ["modle"], (st, r)
+    known = {x["agent"] for x in call("/agents")[1]}
+    assert "reg-1" not in known, ("a refused register must leave no identity",
+                                  known)
+
+    call("/herdr_state", [{"name": "claude-target-1234", "tab": "a:5"}])
+    st, r = call("/kill", {"nmae": "claude-target-1234"})
+    assert st == 400 and r["unknown"] == ["nmae"], (st, r)
+
+
+@check
+def strictness_did_not_tighten_anything_else_on_any_endpoint(b):
+    # THE RISK THE CONTRACT NAMED, one leg per JSON POST: unknown keys are the
+    # ONLY new rejection. Absent optional fields still mean what they meant,
+    # so no legitimate caller changes.
+    #
+    # /spawn and /kill are read through a refusal that lies BEYOND the strict
+    # gate - the missing role file, the unknown pane - because their success
+    # paths launch and close real processes. Reaching the far refusal is the
+    # proof the gate passed.
+    assert post("plain", kind="status", text="minimal, no optional fields")[0] == 200
+    assert post("full", kind="msg", text="every field", files=["a.odin"],
+                to="plain", reply_to=0, route="direct", task_id=0,
+                accepts=0)[0] == 200
+
+    st, r = task("add", "plain", text="ordinary task")
+    assert st == 200, (st, r)
+
+    st, r = call("/register", {"agent": "plain", "role": "implementer",
+                               "model": "opus", "capabilities": ["odin"]})
+    assert st == 200, (st, r)
+
+    call("/herdr_state", [{"name": "claude-somebody-8888", "tab": "a:4"}])
+    st, r = spawn_probe("unheld")
+    assert st == 400 and "role" in r["error"], (
+        "a valid spawn must reach the launcher path, not the strict gate", st, r)
+
+    st, r = call("/kill", {"name": "claude-nobody-9999"})
+    assert st == 404, ("a valid kill must reach the roster lookup", st, r)
+
+
+@check
+def a_body_that_is_not_an_object_still_reports_what_it_always_did(b):
+    # The strict check DEFERS on anything it cannot diff, so the existing
+    # errors keep their wording. A check that answered first would have
+    # silently rewritten every malformed-body message on the board.
+    st, r = call("/post", [1, 2, 3])
+    assert st == 400 and "unknown" not in r, (st, r)
+    st, r = call("/task", "not json at all")
+    assert st == 400 and "unknown" not in r, (st, r)
+
+
 # ── runner ──────────────────────────────────────────────────────────────────
 
 def main():

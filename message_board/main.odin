@@ -20,6 +20,8 @@ import "core:fmt"
 import "core:net"
 import "core:os"
 import "core:path/filepath"
+import "core:reflect"
+import "core:slice"
 import "core:strings"
 import "core:strconv"
 import "core:time"
@@ -993,7 +995,104 @@ handle_connection :: proc(client: net.TCP_Socket) {
 	}
 }
 
+// ── STRICT REQUEST PARSING ──────────────────────────────────────────────────
+//
+// json.unmarshal DROPS keys the target struct does not declare. So a
+// one-character typo is not a bad request — it is an ABSENT field plus some
+// ignored noise, and an absent field takes its zero value, which for us reads
+// as "the optional thing you did not ask for". The request looks perfect from
+// both ends, and the caller gets a 200.
+//
+// Three real probes proved the class rather than a bug: `txet` posted a
+// message with EMPTY text; `forse` inverted /spawn's override, doing the
+// OPPOSITE of what was asked; and `reslut_seq` moved a task to Review with NO
+// result_seq recorded — skipping every validation #23 and #37 built around
+// that field and returning success. A misspelling silently bypasses the guard
+// that names it. That is how a coordinator's {"topic":...} launched a stray.
+//
+// So every JSON POST diffs its keys against the target struct's declared json
+// tags before anything else. The match rule MIRRORS core:encoding/json
+// exactly — the tag name when a field has one, the Odin field name only when
+// it does not — so a key accepted here is precisely a key unmarshal would
+// USE. (Not mirrored: unmarshal also reaches into `using _` embedded structs.
+// No request struct embeds one; if one ever does, this rejects a key
+// unmarshal would have taken — loudly, in a 400 a leg will catch, which is
+// the failure direction worth having.)
+//
+// Cost is a second parse of a body measured in bytes, on a single-threaded
+// server answering a handful of requests a second. Bought cheaply.
+//
+// `allow` is where deliberate tolerance goes, and it must carry a NAME and a
+// reason. THERE ARE NO ENTRIES TODAY — every client is ours and sends exact
+// fields. Silence is never the answer; if an unknown-but-harmless key ever
+// needs tolerating it is spelled out here, not dropped on the floor.
+//
+// Returns true to proceed. On false the 400 has already been sent.
+request_has_only_declared_keys :: proc(
+	client: net.TCP_Socket, body: []u8, T: typeid, allow: []string = {},
+) -> bool {
+	// A body that will not parse, or is not an object at all, is NOT this
+	// check's business: the handler's own unmarshal reports it, in the wording
+	// callers already read. Deferring keeps every existing error unchanged.
+	val, perr := json.parse(body, allocator = context.temp_allocator)
+	if perr != nil do return true
+	obj, is_obj := val.(json.Object)
+	if !is_obj do return true
+
+	unknown := make([dynamic]string, 0, len(obj), context.temp_allocator)
+	for key in obj {
+		if json_key_is_declared(T, key) do continue
+		tolerated := false
+		for a in allow do if a == key { tolerated = true; break }
+		if !tolerated do append(&unknown, key)
+	}
+	if len(unknown) == 0 do return true
+
+	// Map iteration order is unspecified; sort so the same bad request always
+	// produces the same error, for the reader and for the legs.
+	slice.sort(unknown[:])
+
+	// Marshalled, not interpolated: these strings are UNTRUSTED INPUT going
+	// back out inside JSON. tprintf-ing them would let a key containing a
+	// quote produce a body the caller cannot parse — turning the explanation
+	// this refusal exists to give into a parse error.
+	Unknown_Keys_Error :: struct {
+		error:   string   `json:"error"`,
+		unknown: []string `json:"unknown"`,
+	}
+	msg := fmt.tprintf(
+		"unknown field(s): %s - this endpoint declares no such key, and a key it cannot use is refused rather than dropped",
+		strings.join(unknown[:], ", ", context.temp_allocator))
+	out, merr := json.marshal(Unknown_Keys_Error{msg, unknown[:]}, {}, context.temp_allocator)
+	if merr != nil {
+		send_response(client, "400 Bad Request", "application/json",
+			`{"error":"unknown field(s) in request"}`)
+		return false
+	}
+	send_response(client, "400 Bad Request", "application/json", string(out))
+	return false
+}
+
+// True when `key` is a name json.unmarshal would bind to a field of T: the
+// `json:"..."` tag if the field has one (options after a comma stripped), and
+// the Odin field name only for fields that do not.
+json_key_is_declared :: proc(T: typeid, key: string) -> bool {
+	names := reflect.struct_field_names(T)
+	tags  := reflect.struct_field_tags(T)
+	for name, i in names {
+		tag := reflect.struct_tag_get(tags[i], "json")
+		if comma := strings.index_byte(tag, ','); comma >= 0 do tag = tag[:comma]
+		if tag == "" {
+			if key == name do return true
+		} else if key == tag {
+			return true
+		}
+	}
+	return false
+}
+
 handle_post :: proc(client: net.TCP_Socket, body: []u8) {
+	if !request_has_only_declared_keys(client, body, Message) do return
 	// Unmarshal with the heap allocator: the stored Message owns these strings.
 	incoming: Message
 	if err := json.unmarshal(body, &incoming); err != nil {
@@ -1090,6 +1189,7 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 // A session describing itself on check-in. Re-registering is normal — the
 // latest statement wins, and the log keeps every prior one.
 handle_register :: proc(client: net.TCP_Socket, body: []u8) {
+	if !request_has_only_declared_keys(client, body, Agent_Record) do return
 	rec: Agent_Record
 	if err := json.unmarshal(body, &rec); err != nil {
 		send_response(client, "400 Bad Request", "application/json",
@@ -1131,6 +1231,9 @@ handle_tasks :: proc(client: net.TCP_Socket) {
 }
 
 handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
+	// Before anything reads a field: `reslut_seq` is the probe that made this
+	// task, and it submitted with no audit link and a 200.
+	if !request_has_only_declared_keys(client, body, Task_Event) do return
 	// Heap unmarshal: "add" events keep their strings in the task list.
 	ev: Task_Event
 	if err := json.unmarshal(body, &ev); err != nil {
@@ -1331,6 +1434,7 @@ handle_kill :: proc(client: net.TCP_Socket, body: []u8) {
 	Kill_Request :: struct {
 		name: string `json:"name"`,
 	}
+	if !request_has_only_declared_keys(client, body, Kill_Request) do return
 	req: Kill_Request
 	if err := json.unmarshal(body, &req, allocator = context.temp_allocator); err != nil || strings.trim_space(req.name) == "" {
 		send_response(client, "400 Bad Request", "application/json", `{"error":"'name' is required"}`)
@@ -1441,6 +1545,12 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 		role:   string `json:"role"`,  // "" = no role; else roles/<role>.md
 		force:  bool   `json:"force"`, // spawn a deliberate second on a held topic
 	}
+	// A PROCESS-LAUNCHING ENDPOINT, so this runs before any field is read:
+	// `forse` was accepted as a valid request that did the opposite of the
+	// override it asked for, and {"topic":...} launched an agent under a name
+	// nobody chose. The refusal below for a missing `name` closes the second
+	// case; this closes the class both came from.
+	if !request_has_only_declared_keys(client, body, Spawn_Request) do return
 	req: Spawn_Request
 	if err := json.unmarshal(body, &req, allocator = context.temp_allocator); err != nil {
 		send_response(client, "400 Bad Request", "application/json",
