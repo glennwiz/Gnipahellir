@@ -86,6 +86,51 @@ function Test-Board {
     catch { return $false }
 }
 
+# THE STAMP DESCRIBES HEAD. THE COMPILER READS THE WORKING TREE.
+#
+# Build-Board takes its hash from `git rev-parse HEAD` and then compiles
+# whatever is on disk. Those are the same thing only when the tree is clean,
+# and in a shared tree with concurrent agents they disagree BY DEFAULT - one
+# agent mid-edit is the normal state here, not an edge case. A -Rebuild in
+# that window ships half-finished uncommitted code wearing a clean commit
+# hash: precisely the lie the stamp exists to prevent, produced by the stamp,
+# and believed because the stamp is what everyone checks.
+#
+# It cannot be caught afterwards. The artifact carries no trace of the tree it
+# was built from - a fresh compile of a dirty tree has a newer mtime than the
+# commit, exactly like an honest one - so `git status` AT BUILD TIME is the
+# only moment the fact exists. That is why this is in the tool and not in a
+# checklist: both rung checks in use (live /build vs HEAD, and exe-newer-than-
+# commit) are structurally blind to it.
+#
+# --porcelain covers tracked modifications, staged changes AND untracked files
+# in one pass, which is what "what will the compiler actually read" requires:
+# an untracked scratch .odin compiles exactly like a tracked one.
+function Get-DirtyCompileInputs {
+    $root = Split-Path -Parent $here
+    return @(& git -C $root status --porcelain -- '*.odin' 2>$null | Where-Object { $_ })
+}
+
+# NO OVERRIDE FLAG, AND THAT IS THE DESIGN. A -Force here would be taken every
+# time it appeared, because it appears exactly when someone is in a hurry. The
+# bare `odin build` below IS the valve: it produces a working binary that
+# answers "unstamped" on every /build and every X-Board-Build header, so the
+# honesty is loud and travels with the artifact instead of living in the
+# memory of whoever bypassed the check.
+function Deny-DirtyBuild($dirty) {
+    Write-Warning "[build] REFUSING TO BUILD - uncommitted changes to compiled sources"
+    Write-Host   "  The stamp comes from git HEAD; the compiler reads the working tree."
+    Write-Host   "  Building now yields a binary reporting a commit it does not contain:"
+    foreach ($d in $dirty) { Write-Host "      $d" }
+    Write-Host   "  Three ways on, all of them honest:"
+    Write-Host   "      commit      - HEAD and tree agree, the stamp is true"
+    Write-Host   "      git stash   - the same, temporarily"
+    Write-Host   "      odin build message_board -out:message_board/message_board.exe"
+    Write-Host   "                  - no -define flags, so the binary says 'unstamped'"
+    Write-Host   "  Only *.odin is checked. Dirt in run.ps1, board_check.py or docs does"
+    Write-Host   "  not refuse - the binary is still exactly HEAD's code and the stamp is true."
+}
+
 # Names of agents herdr currently has a pane for. The board's own "active" flag
 # is a CHATTINESS measure - it goes false after 20 minutes of silence - and a
 # standing agent waiting for work is silent by design. Pane liveness is the
@@ -118,6 +163,14 @@ function Get-SidecarProcess {
 $exe = Join-Path $here 'message_board.exe'
 
 if ($Rebuild) {
+    # REFUSE BEFORE ANNOUNCING, AND BEFORE STOPPING ANYTHING. The order is the
+    # whole point: a refusal that has already posted "hold writes for a minute"
+    # and killed the board has cost the fleet an outage to tell someone their
+    # tree was dirty. Nothing below this line has run yet, so the board serves
+    # straight through the refusal and the only casualty is the deploy.
+    $dirty = Get-DirtyCompileInputs
+    if ($dirty) { Deny-DirtyBuild $dirty; exit 1 }
+
     # Announce BEFORE stopping it. The board is how the fleet coordinates, so
     # taking it away unannounced is the one outage nobody can be told about
     # afterwards.
