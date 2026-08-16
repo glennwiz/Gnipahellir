@@ -281,26 +281,66 @@ $fleet = @(
 # board activity - correct, but the pane signal is the honest one and it costs
 # seconds to wait for it.
 if ((Get-LivePaneNames).Count -eq 0) {
+    # SAY WHAT WE ARE WAITING FOR AND FOR HOW LONG. This loop can burn 24
+    # seconds before the first spawn line appears, and 24 seconds of silence
+    # on a cold boot is indistinguishable from a hang to the person watching.
+    # That is not hypothetical: this section is why a bootstrap that was
+    # working got reported as a ~2 minute hang, and the diagnosis went to the
+    # sidecar - a part of the script that was never involved - because the
+    # part that WAS involved said nothing while it ran.
+    Write-Host "[fleet] waiting up to 24s for the sidecar's first pane snapshot..."
     foreach ($i in 1..8) {
         Start-Sleep -Seconds 3
-        if ((Get-LivePaneNames).Count -gt 0) { break }
+        if ((Get-LivePaneNames).Count -gt 0) {
+            Write-Host "[fleet] panes visible after $($i * 3)s"
+            break
+        }
+        if ($i -eq 8) {
+            Write-Host "[fleet] no panes after 24s - carrying on; /spawn falls back to board activity"
+        }
     }
 }
 
+# The per-spawn ceiling, named rather than buried in the call, because it is
+# the number that sets this section's worst case: four members at $SpawnTimeout
+# each, plus the pane wait above and the 2s settle after each real spawn.
+$SpawnTimeout = 30
+$fleetStart   = Get-Date
+$n            = 0
+
 foreach ($a in $fleet) {
+    $n++
+    # ANNOUNCE BEFORE THE CALL, NOT AFTER IT. Every line in this loop used to
+    # print on COMPLETION, so a /spawn that sits for its full timeout produced
+    # no output at all while it sat - and four of those in a row is two silent
+    # minutes with nothing on screen naming which member is stuck. A progress
+    # line that only appears once the wait is over reports history, not state.
+    # Printed before, it means the last line on screen is always the thing we
+    # are currently waiting for.
+    Write-Host "[$($a.topic)] spawning ($n of $($fleet.Count), up to ${SpawnTimeout}s)..."
+    $t0 = Get-Date
     $body = @{ name = $a.topic; model = $a.model; role = $a.role; prompt = $a.task } | ConvertTo-Json -Compress
     try {
-        $r = Invoke-RestMethod -Uri "$board/spawn" -Method Post -Body $body -TimeoutSec 30
+        $r = Invoke-RestMethod -Uri "$board/spawn" -Method Post -Body $body -TimeoutSec $SpawnTimeout
+        $took = [int]((Get-Date) - $t0).TotalSeconds
         if ($r.reused) {
-            Write-Host "[$($a.topic)] already up as $($r.agent) (by $($r.signal))"
+            Write-Host "[$($a.topic)] already up as $($r.agent) (by $($r.signal)) [${took}s]"
         } else {
-            Write-Host "[$($a.topic)] spawned as $($r.agent) (model $($a.model), role $($a.role))"
+            Write-Host "[$($a.topic)] spawned as $($r.agent) (model $($a.model), role $($a.role)) [${took}s]"
             Start-Sleep -Seconds 2   # let herdr finish one pane before the next
         }
     } catch {
-        Write-Warning "[$($a.topic)] spawn failed: $($_.Exception.Message)"
+        # The elapsed time is the diagnosis here. A spawn that fails in under a
+        # second is a refusal the server chose to send; one that fails at the
+        # ceiling is a timeout, and those want opposite fixes.
+        $took = [int]((Get-Date) - $t0).TotalSeconds
+        Write-Warning "[$($a.topic)] spawn failed after ${took}s: $($_.Exception.Message)"
     }
 }
 
+# STATE THE BUDGET WE ACTUALLY SPENT. The whole reason this section was blamed
+# for a hang is that nobody could tell a slow bootstrap from a stuck one after
+# the fact - and the total is the one number that settles it in the report.
+$fleetTook = [int]((Get-Date) - $fleetStart).TotalSeconds
 Write-Host ""
-Write-Host "[done] board $board - open it to watch them check in."
+Write-Host "[done] board $board - fleet section took ${fleetTook}s. Open it to watch them check in."
