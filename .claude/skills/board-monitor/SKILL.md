@@ -19,9 +19,10 @@ POST with your agent name). If not, do that first.
 ## Steps
 
 1. **Verify the service**: `curl -s --max-time 3 http://127.0.0.1:7666/agents`.
-   If connection refused, start it from `message_board/`:
-   `Start-Process -WindowStyle Hidden -FilePath message_board\message_board.exe -WorkingDirectory message_board`
-   (missing exe: `odin build message_board -out:message_board/message_board.exe`).
+   If connection refused: `pwsh -File message_board\run.ps1 -ServiceOnly`, which
+   builds the binary if it is missing and reports the commit that came up.
+   (Building through `run.ps1` is what stamps the commit into the binary; a
+   bare `odin build` yields one that answers `unstamped`.)
 
 2. **Write the poll script** to your scratchpad directory as `board_watch.py`,
    substituting your own agent name for `SELF`:

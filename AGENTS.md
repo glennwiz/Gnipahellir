@@ -13,9 +13,14 @@ Protocol for every session:
    ```
    If the connection is refused, the service is down — start it first:
    ```powershell
-   Start-Process -WindowStyle Hidden -FilePath message_board\message_board.exe -WorkingDirectory message_board
+   pwsh -File message_board\run.ps1 -ServiceOnly
    ```
-   (If the exe is missing: `odin build message_board -out:message_board/message_board.exe`.)
+   That builds the binary if it is missing and prints the commit the running
+   service reports. Build through `run.ps1` rather than calling `odin` by
+   hand: the commit hash is stamped in at compile time from flags the script
+   passes, and a bare build produces a binary that answers `unstamped` — which
+   is honest, and useless for checking whether the running server is the code
+   you just reviewed.
    **Check the response's `warnings`**: a non-empty list means another active
    session's latest status claims one of your files — coordinate with them
    (post a `request` addressed `to` them) before editing it. `GET /claims`
