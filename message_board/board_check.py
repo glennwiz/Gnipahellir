@@ -54,6 +54,14 @@ def call(path, body=None, method=None):
             return e.code, {"raw": raw}
 
 
+def headers_of(path):
+    """Response headers, which call() throws away. The build stamp lives in
+    one, so it needs its own door."""
+    req = urllib.request.Request(BASE + path)
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return dict(r.headers)
+
+
 def post(agent, **kw):
     body = {"agent": agent}
     body.update(kw)
@@ -1173,6 +1181,51 @@ def runtime_files(src=None):
     if src is None:
         src = open(os.path.join(HERE, "main.odin"), encoding="utf-8").read()
     return set(DECLARED_RE.findall(src))
+
+
+# -- checks: the running binary can be identified --------------------------
+
+
+@check
+def every_response_carries_the_build_stamp(b):
+    # The failure this exists for: six server fixes sat inert in production
+    # because the running exe predated them, and NOTHING SERVED SAID SO. An
+    # unknown parameter answers 200 and is silently ignored, so a stale
+    # server looks exactly like a current one from the outside.
+    for path in ("/agents", "/tasks", "/claims", "/delta?since=0"):
+        h = headers_of(path)
+        assert "X-Board-Build" in h, (path, sorted(h))
+
+
+@check
+def an_unstamped_build_says_so_instead_of_guessing(b):
+    # board_check builds without -define, so this suite always runs against
+    # an unstamped binary - which makes it the natural place to pin the
+    # honest-default behaviour. A stamp that invented a plausible value would
+    # be the original failure wearing the fix's clothes.
+    assert headers_of("/agents")["X-Board-Build"].startswith("unstamped"),         headers_of("/agents")["X-Board-Build"]
+    _, b_ = call("/build")
+    assert b_["commit"] == "unstamped" and b_["built"] == "unstamped", b_
+
+
+@check
+def build_reports_when_this_process_started(b):
+    # BUILD_TIME alone cannot tell the two staleness modes apart: built from
+    # old source, versus built from new source and never restarted. Tonight
+    # was the second one.
+    _, before = call("/build")
+    assert before["started"] <= int(time.time()) + 2, before
+    b.restart()
+    _, after = call("/build")
+    assert after["started"] >= before["started"], (before, after)
+
+
+@check
+def the_stamp_does_not_change_any_response_body(b):
+    # /agents returns a bare ARRAY. Putting the stamp in its body would have
+    # meant wrapping it, breaking index.html and this suite for a diagnostic.
+    assert isinstance(call("/agents")[1], list)
+    assert isinstance(call("/tasks")[1], list)
 
 
 @check

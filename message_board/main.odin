@@ -34,6 +34,25 @@ MAX_REQUEST :: 1 << 20 // 1 MB — nobody's status update needs more
 // Retention: past MAX_MESSAGES the oldest are dropped and the log rewritten,
 // keeping TRIM_TO. seq stays monotonic, so delta cursors survive a trim —
 // clients just never see the discarded history again.
+// BUILD IDENTITY. Stamped in at compile time, because the question it
+// answers is "is the running server the code we reviewed" - and only the
+// compiler knows what went into this binary. Reading the hash from .git at
+// runtime would report the CHECKOUT commit, which is a different thing and
+// wrong in exactly the case that matters: a tree that moved on and a
+// service that was never restarted.
+//
+// The default is deliberately loud rather than plausible. An unstamped
+// build says it does not know; it never guesses. Six fixes sat inert in
+// production one evening precisely because an unknown parameter answered
+// 200 and said nothing - a build stamp that invented a value would be that
+// same failure wearing the fix clothes.
+//
+//   odin build message_board -out:message_board/message_board.exe \
+//     -define:BUILD_HASH=$(git rev-parse --short HEAD) \
+//     -define:BUILD_TIME=$(date -u +%Y-%m-%dT%H:%MZ)
+BUILD_HASH :: #config(BUILD_HASH, "unstamped")
+BUILD_TIME :: #config(BUILD_TIME, "unstamped")
+
 MAX_MESSAGES :: #config(MAX_MESSAGES, 2000)
 TRIM_TO :: #config(TRIM_TO, 1000)
 
@@ -201,9 +220,16 @@ claims_clear :: proc(agent: string, unix: i64) {
 // one connection at a time.
 resp_status: string = "-"
 
+// When this process came up. With BUILD_TIME it distinguishes the two
+// ways a service can be stale: built from old source, or built from new
+// source and never restarted. Tonight was the second, and nothing
+// served made it visible.
+board_started: i64
+
 board: Board
 
 board_load :: proc() {
+	board_started = time.time_to_unix(time.now())
 	board.next_seq = 1
 	if data, read_err := os.read_entire_file_from_path(LOG_FILE, context.allocator); read_err == nil {
 		defer delete(data)
@@ -814,9 +840,15 @@ access_log :: proc(method, target: string, req_bytes: int) {
 
 send_response :: proc(client: net.TCP_Socket, status: string, content_type: string, body: string) {
 	resp_status = status
+	// X-Board-Build on EVERY response, not only the endpoints that were
+	// asked for. /agents returns a bare JSON array, so putting the stamp in
+	// its body would have meant wrapping it - breaking index.html and
+	// board_check for the sake of a diagnostic. A header changes no payload
+	// and makes literally any request answer "what is running here", which
+	// is the question that went unasked for a whole evening.
 	head := fmt.tprintf(
-		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-		status, content_type, len(body),
+		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Board-Build\r\nX-Board-Build: %s built %s\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+		status, content_type, len(body), BUILD_HASH, BUILD_TIME,
 	)
 	send_all(client, head)
 	send_all(client, body)
@@ -941,6 +973,13 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		send_response(client, "200 OK", "application/json", `{"ok":true}`)
 	case method == "GET" && (path == "/delta" || path == "/messages"):
 		handle_delta(client, query)
+	case method == "GET" && path == "/build":
+		// The header carries this on every response; the endpoint exists so
+		// it is readable without asking for headers, and so a reviewer can
+		// diff a lane hash against the running service in one curl.
+		send_response(client, "200 OK", "application/json",
+			fmt.tprintf(`{{"commit":"%s","built":"%s","started":%d}}`,
+				BUILD_HASH, BUILD_TIME, board_started))
 	case method == "GET" && path == "/agents":
 		handle_agents(client)
 	case method == "GET" && path == "/claims":
@@ -1644,6 +1683,7 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
 	fmt.sbprintln(&b, "     &as=agent       identity WITHOUT filtering: stamps you alive, returns everything. What a monitor wants.")
 	fmt.sbprintln(&b, "     &for=agent      the same stamp PLUS filtering to messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
+	fmt.sbprintln(&b, "GET  /build           commit + build time of the RUNNING binary, and when it started. Also on every response as X-Board-Build.")
 	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = posted OR polled /delta with as=/for= within 20 min)")
 	fmt.sbprintln(&b, "GET  /claims          file -> active claimant; POST answers carry 'warnings' when your files overlap another active agent's")
 	fmt.sbprintln(&b, "")
