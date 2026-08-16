@@ -248,6 +248,59 @@ def block_remembers_where_it_came_from(b):
 
 
 @check
+def a_block_can_name_the_task_it_waits_on(b):
+    _, up = task("add", "planner", text="the thing upstream")
+    _, dn = task("add", "planner", text="the thing waiting")
+    task("claim", "worker", id=dn["id"])
+    task("block", "worker", id=dn["id"], blocked_on=up["id"],
+         text="needs the upstream lane first")
+    t = tasks()[dn["id"]]
+    assert t["state"] == "Blocked" and t["blocked_on"] == up["id"], t
+    # The edge is the point, so it has to survive the process it outlives.
+    b.restart()
+    assert tasks()[dn["id"]]["blocked_on"] == up["id"]
+    task("unblock", "worker", id=dn["id"])
+    assert tasks()[dn["id"]]["blocked_on"] == 0, "unblock clears the edge"
+
+
+@check
+def a_reblock_naming_nobody_clears_a_stale_edge(b):
+    _, up = task("add", "planner", text="upstream")
+    _, dn = task("add", "planner", text="downstream")
+    task("claim", "worker", id=dn["id"])
+    task("block", "worker", id=dn["id"], blocked_on=up["id"])
+    task("block", "worker", id=dn["id"], text="actually just waiting on glenn")
+    assert tasks()[dn["id"]]["blocked_on"] == 0, \
+        "blocked_on describes the block in force, not every block ever"
+
+
+@check
+def a_blocked_on_edge_must_point_somewhere_real(b):
+    _, r = task("add", "planner", text="downstream")
+    tid = r["id"]
+    task("claim", "worker", id=tid)
+    st, body = task("block", "worker", id=tid, blocked_on=99999)
+    assert st == 404, (st, body)
+    st, body = task("block", "worker", id=tid, blocked_on=tid)
+    assert st == 400 and "itself" in body["error"], (st, body)
+    assert tasks()[tid]["state"] == "Doing", "a refused block must not half-apply"
+
+
+@check
+def blocking_is_unchanged_for_callers_that_name_nothing(b):
+    # blocked_on is additive: every existing block call must behave exactly
+    # as it did, and read back 0 rather than absent.
+    _, r = task("add", "planner", text="blocked on the outside world")
+    tid = r["id"]
+    task("claim", "worker", id=tid)
+    assert task("block", "worker", id=tid, text="waiting on glenn")[0] == 200
+    t = tasks()[tid]
+    assert t["state"] == "Blocked" and t["blocked_on"] == 0, t
+    task("unblock", "worker", id=tid)
+    assert tasks()[tid]["state"] == "Doing"
+
+
+@check
 def legacy_actions_still_work_untouched(b):
     _, r = task("add", "old-client", text="legacy task")
     tid = r["id"]

@@ -116,6 +116,11 @@ Task :: struct {
 	result_seq:    int      `json:"result_seq"`, // board seq of the completion report
 	reviewer:      string   `json:"reviewer"`,
 	blocked_from:  string   `json:"blocked_from"`,
+	// What this task is waiting ON — another task's id, 0 for "blocked, but
+	// not on us". Written by block, cleared by unblock. This is the edge the
+	// critical path is drawn from: without it the dependency lives only in
+	// the coordinator's head and dies with their session.
+	blocked_on:    int      `json:"blocked_on"`,
 	superseded_by: int      `json:"superseded_by"`,
 	origin:        string   `json:"origin"`,     // "v3" (draft-born, review required) | "legacy"
 	notes:         [dynamic]string `json:"notes"`,
@@ -137,6 +142,7 @@ Task_Event :: struct {
 	lease_secs:   int      `json:"lease_secs"`,
 	result_seq:   int      `json:"result_seq"`,
 	by_id:        int      `json:"by_id"`,
+	blocked_on:   int      `json:"blocked_on"`,
 	// Recorded at write time on a takeover so the immutable log self-documents
 	// every Doing->Doing transition; expiry itself never synthesises an event.
 	expired_from: string   `json:"expired_from"`,
@@ -553,9 +559,15 @@ task_apply :: proc(ev: Task_Event) {
 	case "block":
 		if t.state != "Blocked" do t.blocked_from = t.state
 		t.state = "Blocked"
+		// Assigned unconditionally, so a re-block that names nothing CLEARS a
+		// stale dependency rather than leaving the panel drawing an edge to a
+		// task we are no longer waiting on. blocked_on describes the block
+		// currently in force, not every reason we were ever blocked.
+		t.blocked_on = ev.blocked_on
 	case "unblock":
 		t.state = t.blocked_from if t.blocked_from != "" else "Ready"
 		t.blocked_from = ""
+		t.blocked_on = 0
 	case "supersede":
 		t.state, t.superseded_by, t.lease_until = "Superseded", ev.by_id, 0
 	case "note":
@@ -1103,6 +1115,25 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 					send_response(client, "400 Bad Request", "application/json",
 						fmt.tprintf(`{{"error":"result_seq %d belongs to %s, not you"}}`,
 							ev.result_seq, found.agent))
+					return
+				}
+			}
+		case "block":
+			// The panel DRAWS this edge, so a dangling one renders as a
+			// phantom node and a self-edge as a task waiting on itself —
+			// neither is ever what someone meant. A CYCLE is deliberately
+			// allowed: two tasks each waiting on the other is a real
+			// deadlock, and the whole point of recording the edge is to make
+			// that visible rather than to make it unrepresentable.
+			if ev.blocked_on != 0 {
+				if ev.blocked_on == t.id {
+					send_response(client, "400 Bad Request", "application/json",
+						`{"error":"a task cannot be blocked on itself"}`)
+					return
+				}
+				if task_find(ev.blocked_on) == nil {
+					send_response(client, "404 Not Found", "application/json",
+						fmt.tprintf(`{{"error":"blocked_on %d is not a task"}}`, ev.blocked_on))
 					return
 				}
 			}
