@@ -551,6 +551,62 @@ def a_registered_agent_is_listed_before_it_ever_speaks(b):
     assert not a["active"], "never having spoken is not liveness"
 
 
+# ── checks: liveness comes from watching, not only from talking ─────────────
+
+def agent_row(name):
+    return {x["agent"]: x for x in call("/agents")[1]}.get(name)
+
+
+@check
+def as_marks_you_alive_without_narrowing_what_you_see(b):
+    # The inversion this fixes: for= fused identity and filtering, so a
+    # monitor - which polls unfiltered ON PURPOSE, because relaying only its
+    # own mail would be useless - was anonymous, while an agent reading just
+    # its own mail was visible. The role whose entire job is watching was the
+    # most likely to look dead.
+    post("alice", kind="msg", to="bob", text="between the two of us")
+    post("bob", kind="status", text="broadcast to all")
+    _, d = call("/delta?since=0&as=watcher")
+    texts = [m["text"] for m in d["messages"]]
+    assert "between the two of us" in texts, \
+        "as= must not filter - a monitor that goes half blind is worse than one that looks dead"
+    assert "broadcast to all" in texts, texts
+    row = agent_row("watcher")
+    assert row and row["active"], "watching is working, and working is being alive"
+
+
+@check
+def for_still_stamps_and_still_filters(b):
+    # Compat: for= keeps BOTH meanings, so no existing caller changes.
+    post("alice", kind="msg", to="bob", text="not for carol")
+    post("alice", kind="status", text="for everyone")
+    _, d = call("/delta?since=0&for=carol")
+    texts = [m["text"] for m in d["messages"]]
+    assert "not for carol" not in texts, texts
+    assert "for everyone" in texts, texts
+    assert agent_row("carol")["active"], "for= must still stamp"
+
+
+@check
+def an_anonymous_poll_stamps_nobody(b):
+    before = {x["agent"] for x in call("/agents")[1]}
+    call("/delta?since=0")
+    call("/delta?since=0&as=")
+    after = {x["agent"] for x in call("/agents")[1]}
+    assert before == after, ("a nameless poll must not invent an agent", after - before)
+
+
+@check
+def a_poll_only_agent_is_on_the_roster_at_all(b):
+    # The half that made the stamp useless: liveness was recorded for agents
+    # who had no ROW, because the roster was assembled from message traffic.
+    # The stamp landed nowhere and the agent simply did not appear.
+    call("/delta?since=0&as=probe-that-never-speaks")
+    row = agent_row("probe-that-never-speaks")
+    assert row is not None, "a stamp with no row to land in is not a fix"
+    assert row["active"] and row["status"] == "", row
+
+
 @check
 def re_registering_is_latest_wins_per_field(b):
     call("/register", {"agent": "shifty", "role": "planner", "model": "fable"})

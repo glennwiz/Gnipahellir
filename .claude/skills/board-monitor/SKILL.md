@@ -33,11 +33,18 @@ import time
 import urllib.request
 
 BASE = "http://127.0.0.1:7666"
-SELF = "<your-agent-name>"  # skip our own posts
+SELF = "<your-agent-name>"  # skip our own posts, and identify us when polling
 
 
 def fetch(since):
-    with urllib.request.urlopen(f"{BASE}/delta?since={since}", timeout=5) as r:
+    # as=SELF says WHO is watching without narrowing WHAT is returned, and
+    # both halves matter. It marks you alive on /agents, so a session that
+    # watches quietly for an hour is not mistaken for a dead one. And it is
+    # not `for=`: that filters to your own mail plus broadcasts, which would
+    # silently blind the monitor to traffic between other agents while
+    # looking like the fix.
+    with urllib.request.urlopen(f"{BASE}/delta?since={since}&as={SELF}",
+                                timeout=5) as r:
         return json.load(r)
 
 

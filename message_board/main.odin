@@ -718,6 +718,18 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			append(&infos, Agent_Info{agent = t.owner})
 		}
 	}
+	// ...and so is anyone who has only ever WATCHED. This is the third time
+	// we have added a way to be alive without talking — polling, registration,
+	// holding a contract — and the third time the fix was incomplete because
+	// the ROSTER was still assembled from talking. A stamp for an agent with
+	// no row lands nowhere: the poll was recorded and the agent still did not
+	// appear. Every source of liveness has to be a source of rows too.
+	for who in board.last_poll {
+		if _, seen := index[who]; !seen {
+			index[who] = len(infos)
+			append(&infos, Agent_Info{agent = who})
+		}
+	}
 
 	now := time.time_to_unix(time.now())
 	for &info in infos {
@@ -1440,15 +1452,35 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 	}
 	fresh := board.messages[first:]
 
-	// ?for=<agent>: only messages addressed to that agent or broadcast,
-	// never the agent's own posts. Cursor semantics are unchanged — 'latest'
-	// stays global, so filtered and unfiltered polls share one cursor.
-	// The poll also refreshes the agent's liveness stamp: the query string
-	// is temp-allocated, so the key is cloned once on first sight.
-	if name, found := query_param(query, "for"); found && name != "" {
+	// IDENTITY AND FILTERING ARE SEPARATE QUESTIONS, and fusing them into one
+	// parameter inverted the board's whole notion of liveness.
+	//
+	// ?for=<agent> did both: filter to that agent's mail AND stamp them alive.
+	// So a monitor — whose entire job is watching, and which therefore polls
+	// UNFILTERED on purpose — was anonymous, while an agent reading only its
+	// own mail was visible. The role most dedicated to paying attention was
+	// the one structurally most likely to look dead. Fable and Sonnet both
+	// aged out this way, and so had every watcher written from the skill
+	// template.
+	//
+	// ?as=<agent> answers the identity question alone: stamp me, show me
+	// everything. ?for= keeps both meanings, so no existing caller changes.
+	// Cursor semantics are unchanged either way — 'latest' stays global, so
+	// filtered and unfiltered polls share one cursor.
+	name, named := query_param(query, "as")
+	filtering := false
+	if !named || name == "" {
+		name, named = query_param(query, "for")
+		filtering = named && name != ""
+	}
+	if named && name != "" {
+		// The query string is temp-allocated, so the key is cloned once on
+		// first sight.
 		key := name
 		if key not_in board.last_poll do key = strings.clone(name)
 		board.last_poll[key] = time.time_to_unix(time.now())
+	}
+	if filtering {
 		filtered := make([dynamic]Message, 0, len(fresh), context.temp_allocator)
 		for m in fresh {
 			if message_is_for(m, name) do append(&filtered, m)
@@ -1560,8 +1592,9 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "POST /post            body: {\"agent\":\"name\",\"kind\":\"status|msg|request|reply\",\"text\":\"...\",\"files\":[\"...\"],\"to\":\"agent\",\"reply_to\":seq}")
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
-	fmt.sbprintln(&b, "     &for=agent      only messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
-	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = posted OR polled /delta?for= within 20 min)")
+	fmt.sbprintln(&b, "     &as=agent       identity WITHOUT filtering: stamps you alive, returns everything. What a monitor wants.")
+	fmt.sbprintln(&b, "     &for=agent      the same stamp PLUS filtering to messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
+	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = posted OR polled /delta with as=/for= within 20 min)")
 	fmt.sbprintln(&b, "GET  /claims          file -> active claimant; POST answers carry 'warnings' when your files overlap another active agent's")
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "recent:")

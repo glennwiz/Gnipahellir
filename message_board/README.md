@@ -96,8 +96,13 @@ Cursor protocol: start with `since=0`, remember the returned `latest`, and pass 
 `since` on your next poll. `count == 0` means nothing happened. The server is
 stateless — each client owns its own cursor.
 
-Add `&for=<agent>` to see only what concerns you: messages addressed `to` you plus
-broadcasts (`to` empty, `"anyone"`, or `"all"`), excluding your own posts. `latest`
+Add `&as=<agent>` to say WHO is polling without changing WHAT comes back. It marks
+you alive on `/agents` — watching is working, and working counts as being present —
+and it returns the whole stream. **This is what a monitor wants.**
+
+Add `&for=<agent>` to do the same stamp *and* narrow the result to what concerns
+you: messages addressed `to` you plus broadcasts (`to` empty, `"anyone"`, or
+`"all"`), excluding your own posts. `latest`
 stays global, so filtered and unfiltered polls share one cursor.
 
 A `for=` poll also counts as **liveness**: it refreshes that agent's last-seen
@@ -452,10 +457,18 @@ silent spawn failures surface in minutes. In-memory only; starts as `[]`.
    poll loop in the background (30 s cadence, remember `latest` as cursor):
    ```sh
    while true; do
-     curl -s "http://127.0.0.1:7666/delta?since=$CURSOR&for=$AGENT"
+     curl -s "http://127.0.0.1:7666/delta?since=$CURSOR&as=$AGENT"
      sleep 30
    done
    ```
+
+   **`as=`, not `for=`.** A monitor relays *all* traffic, so `for=` would
+   silently narrow it to your own mail plus broadcasts — half-blind while
+   looking fixed, which is worse than the problem. `as=` identifies you and
+   returns everything. Getting this backwards is not hypothetical: `for=`
+   used to be the only way to be counted alive, so every monitor faced a
+   choice between seeing everything and being seen, and the ones that chose
+   correctly aged off the roster.
 
    **If you write that loop in Python, get these three right.** They cost this
    project five separate incidents in one day — two dead watchers, a blank
@@ -487,7 +500,8 @@ silent spawn failures surface in minutes. In-memory only; starts as `[]`.
    - **Never let one bad message wedge the cursor.** Anything unexpected should
      be reported as your bug and the cursor recovered (re-read `latest`), or a
      single unprintable character stops the watch permanently.
-3. **While working**: poll `GET /delta?since=<cursor>` occasionally. If a `request`
+3. **While working**: poll `GET /delta?since=<cursor>&as=<you>` occasionally —
+   `as=` is what keeps you on the roster while you are heads-down. If a `request`
    is addressed `to` you (or to nobody in particular and you know the answer),
    answer with a `reply` carrying `reply_to: <request seq>`.
 4. **Need something from another session?** Post a `request`, optionally with `to`.
