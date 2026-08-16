@@ -340,6 +340,98 @@ def routes_are_resolved_for_messages_written_before_routing_existed(b):
     assert got == {"old-0": "broadcast", "old-1": "direct", "old-2": "anyone"}, got
 
 
+def _seed_a_trimmed_board(b, archived):
+    """Put the board in the state a trim leaves behind: `archived` messages
+    live only in board_archive.jsonl, and the live log starts above them.
+
+    This is the shape the real board reaches in a couple of days, not a
+    contrived one — board_trim() appends the oldest messages to the archive
+    and rewrites board.jsonl with the newest, and next_seq is derived from
+    the live log alone."""
+    b.stop()
+    with open(os.path.join(b.workdir, "board_archive.jsonl"), "a",
+              encoding="utf-8") as f:
+        for m in archived:
+            f.write(json.dumps(m) + "\n")
+    top = max(m["seq"] for m in archived)
+    with open(os.path.join(b.workdir, "board.jsonl"), "a",
+              encoding="utf-8") as f:
+        f.write(json.dumps({"seq": top + 1, "unix": int(time.time()),
+                            "agent": "survivor", "kind": "status",
+                            "text": "still on the live board"}) + "\n")
+    b.start()
+
+
+@check
+def a_trimmed_away_result_seq_still_validates(b):
+    # The breakage with a date on it: a submit points at a real report, the
+    # board trims that report into the archive, and from then on the board
+    # calls a message it is still storing "does not exist".
+    _seed_a_trimmed_board(b, [{"seq": 8500, "unix": int(time.time()),
+                               "agent": "worker", "kind": "msg",
+                               "text": "the report, long since trimmed"}])
+    assert call("/delta?since=0")[1]["messages"][0]["seq"] > 8500, \
+        "seq 8500 must be off the live window for this check to mean anything"
+
+    _, r = task("draft", "planner", text="cites an archived report",
+                accept="must submit")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    st, body = task("submit", "worker", id=tid, rev=tasks()[tid]["rev"],
+                    result_seq=8500)
+    assert st == 200, (st, body)
+    assert tasks()[tid]["result_seq"] == 8500
+
+
+@check
+def ownership_is_still_enforced_on_an_archived_result_seq(b):
+    # The fallback must widen WHERE we look, not WHAT we accept. Finding the
+    # message in the archive still has to prove it is the submitter's own.
+    _seed_a_trimmed_board(b, [{"seq": 8500, "unix": int(time.time()),
+                               "agent": "someone-else", "kind": "msg",
+                               "text": "not the submitter's report"}])
+    _, r = task("draft", "planner", text="cites another agent's report",
+                accept="must refuse")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    st, body = task("submit", "worker", id=tid, rev=tasks()[tid]["rev"],
+                    result_seq=8500)
+    assert st == 400, (st, body)
+    assert "someone-else" in body["error"], body
+
+
+@check
+def an_accept_still_resolves_a_trimmed_away_request(b):
+    # Same lookup, the other caller. An open `anyone` request that outlives
+    # the trim window must still be claimable.
+    _seed_a_trimmed_board(b, [{"seq": 8500, "unix": int(time.time()),
+                               "agent": "asker", "kind": "request",
+                               "to": "anyone", "route": "anyone",
+                               "text": "who will take this?"}])
+    st, body = post("taker", kind="reply", accepts=8500, text="I will")
+    assert st == 200, (st, body)
+    # ...and first-wins arbitration still holds across the archive boundary.
+    st2, body2 = post("latecomer", kind="reply", accepts=8500, text="me too")
+    assert st2 == 409, (st2, body2)
+    assert "taker" in json.dumps(body2), body2
+
+
+@check
+def a_seq_that_exists_nowhere_is_still_refused(b):
+    # The fallback must not turn "unreadable archive" or "no such message"
+    # into a pass. A missing archive file is the common case: no trim yet.
+    _, r = task("draft", "planner", text="cites nothing real", accept="refuse")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    st, body = task("submit", "worker", id=tid, rev=tasks()[tid]["rev"],
+                    result_seq=8500)
+    assert st == 400 and "does not exist" in body["error"], (st, body)
+    assert post("taker", kind="reply", accepts=8500, text="?")[0] == 404
+
+
 @check
 def state_survives_a_restart_by_pure_replay(b):
     _, r = task("draft", "planner", text="durable", accept="must survive")

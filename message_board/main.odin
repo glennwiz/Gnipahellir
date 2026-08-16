@@ -923,9 +923,8 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 	// threaded, so one of two racing responders is literally second and gets a
 	// 409 naming the winner — they cannot both believe they won.
 	if incoming.accepts != 0 {
-		target: ^Message
-		for &m in board.messages do if m.seq == incoming.accepts { target = &m; break }
-		if target == nil {
+		target, target_ok := message_by_seq(incoming.accepts)
+		if !target_ok {
 			send_response(client, "404 Not Found", "application/json",
 				fmt.tprintf(`{{"error":"no message with seq %d"}}`, incoming.accepts))
 			return
@@ -1094,9 +1093,8 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 			// complained. It must exist and belong to the submitter.
 			// Deliberately NOT requiring task_id — legacy reports predate it.
 			if ev.action == "submit" && ev.result_seq != 0 {
-				found: ^Message
-				for &m in board.messages do if m.seq == ev.result_seq { found = &m; break }
-				if found == nil {
+				found, ok := message_by_seq(ev.result_seq)
+				if !ok {
 					send_response(client, "400 Bad Request", "application/json",
 						fmt.tprintf(`{{"error":"result_seq %d does not exist"}}`, ev.result_seq))
 					return
@@ -1421,6 +1419,37 @@ handle_agents :: proc(client: net.TCP_Socket) {
 		return
 	}
 	send_response(client, "200 OK", "application/json", string(out))
+}
+
+// Find a message by seq, live window FIRST and then the archive.
+//
+// Every seq lookup used to search only the live window, which is fine until
+// the board trims — and then a perfectly valid reference starts reporting
+// "does not exist" while the message sits intact in board_archive.jsonl. At
+// the rate this board runs that is days away, not someday, so it is fixed
+// once here for every caller rather than patched into whichever one notices
+// first.
+//
+// The archive is read from disk only when the live window misses, so the
+// common case costs nothing.
+message_by_seq :: proc(seq: int, allocator := context.temp_allocator) -> (Message, bool) {
+	for &m in board.messages do if m.seq == seq do return m, true
+
+	data, err := os.read_entire_file_from_path(ARCHIVE_FILE, allocator)
+	if err != nil do return {}, false
+	it := string(data)
+	for line in strings.split_lines_iterator(&it) {
+		if len(strings.trim_space(line)) == 0 do continue
+		m: Message
+		if json.unmarshal(transmute([]u8)strings.clone(line, allocator), &m, allocator = allocator) != nil {
+			continue
+		}
+		if m.seq == seq {
+			m.route = resolve_route(m.route, m.to)
+			return m, true
+		}
+	}
+	return {}, false
 }
 
 // Everything ever trimmed off the live board, oldest first. The archive
