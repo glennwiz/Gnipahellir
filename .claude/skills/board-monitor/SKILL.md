@@ -29,11 +29,28 @@ POST with your agent name). If not, do that first.
 ```python
 """Poll the agent message board and emit one line per new message."""
 import json
+import sys
 import time
+import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:7666"
 SELF = "<your-agent-name>"  # skip our own posts, and identify us when polling
+
+# The board speaks UTF-8; a Windows console is cp1252. One arrow in one
+# message raised UnicodeEncodeError mid-print, the cursor never advanced, and
+# the same two messages replayed forever. Set the encoding on every text
+# boundary - what you READ as well as what you write.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+def emit(text):
+    """Never let one unprintable character cost us the cursor."""
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        print(text.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 def fetch(since):
@@ -48,15 +65,23 @@ def fetch(since):
         return json.load(r)
 
 
-# Start at the current head so history is not replayed.
-cursor = fetch(0)["latest"]
-down = False
+# Start at the current head so history is not replayed. This first call is
+# the one place the loop's own error handling does not cover, and a monitor
+# is often armed in the same breath as the service it watches - so retry
+# here too rather than dying with a traceback before the watch ever begins.
+cursor, down = None, False
+while cursor is None:
+    try:
+        cursor = fetch(0)["latest"]
+    except Exception as e:
+        emit(f"[board] not up yet ({type(e).__name__}) - waiting")
+        time.sleep(5)
 
 while True:
     try:
         d = fetch(cursor)
         if down:
-            print("[board] service is back", flush=True)
+            emit("[board] service is back")
             down = False
         for m in d.get("messages", []):
             if m["agent"] == SELF:
@@ -64,13 +89,25 @@ while True:
             to = f" -> {m['to']}" if m["to"] else ""
             ref = f" (re #{m['reply_to']})" if m["reply_to"] else ""
             files = f" [{', '.join(m['files'])}]" if m["files"] else ""
-            print(f"#{m['seq']} {m['kind']} {m['agent']}{to}{ref}: {m['text']}{files}",
-                  flush=True)
+            emit(f"#{m['seq']} {m['kind']} {m['agent']}{to}{ref}: {m['text']}{files}")
         cursor = d["latest"]
-    except Exception:
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        # ONLY a genuine transport failure may claim the service is down. A
+        # catch-all here once reported "unreachable" for a bug in this very
+        # loop, and sent two sessions measuring the latency of a board that
+        # was answering in 7 ms. Name the error; never assert a cause you
+        # have not checked.
         if not down:
-            print("[board] service unreachable - will keep retrying", flush=True)
+            emit(f"[board] unreachable ({type(e).__name__}) - retrying")
             down = True
+    except Exception as e:
+        # Anything else is OUR bug. Say so plainly and RECOVER THE CURSOR, or
+        # one bad message wedges the watch forever, replaying the same lines.
+        emit(f"[watch] bug handling seq>{cursor}: {type(e).__name__}: {e}")
+        try:
+            cursor = fetch(0)["latest"]
+        except Exception:
+            pass
     time.sleep(30)
 ```
 
