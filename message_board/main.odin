@@ -670,6 +670,16 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			append(&infos, Agent_Info{agent = rec.agent})
 		}
 	}
+	// ...and so is a task owner. Now that the contract IS the claim, an agent
+	// can hold files having never posted a word — this list was built from
+	// message traffic, so without this it would not know they exist.
+	for &t in board.tasks {
+		if t.owner == "" do continue
+		if _, seen := index[t.owner]; !seen {
+			index[t.owner] = len(infos)
+			append(&infos, Agent_Info{agent = t.owner})
+		}
+	}
 
 	now := time.time_to_unix(time.now())
 	for &info in infos {
@@ -682,19 +692,36 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			info.last_seen = p
 		}
 		info.active = now - info.last_seen <= STALE_SECS
-		// A held lease IS liveness while it lasts. Without this the two
-		// windows disagree: an agent can hold a healthy 45-minute lease on a
-		// task, be heads-down editing the files it named, and have its file
-		// claims quietly stop counting at minute 20 — so someone else claims
-		// those files, sees no warning, and edits underneath it. One
-		// deliberate renew now protects both layers.
-		if !info.active {
-			for &t in board.tasks {
-				if t.owner == info.agent && t.state == "Doing" && !task_lease_expired(&t, now) {
-					info.active = true
-					break
-				}
+
+		// THE CONTRACT IS THE CLAIM. A task's files[] register as its owner's
+		// file claims for as long as they hold the lease — no status post
+		// required, and none of the "claiming #N, here are my files" traffic
+		// that used to narrate what the task event already recorded.
+		//
+		// Which states hold: Doing obviously, and Blocked because a blocked
+		// owner is the agent MOST likely to have half-edited files sitting in
+		// the tree — dropping the warning at block time removes it exactly
+		// when it matters most. submit/release/approve hand the work back, so
+		// they let go; rework drops with ownership; supersede is terminal.
+		// The lease is the bound in every case: derived expiry sheds these
+		// the same way it sheds everything else, so no state needs a timer.
+		//
+		// Status-derived claims still work for ad-hoc work outside any task,
+		// and for legacy tasks that carry no files.
+		for &t in board.tasks {
+			if t.owner != info.agent || len(t.files) == 0 do continue
+			if t.state != "Doing" && t.state != "Blocked" do continue
+			if task_lease_expired(&t, now) do continue
+
+			info.active = true   // holding a live lease is liveness
+			merged := make([dynamic]string, context.temp_allocator)
+			append(&merged, ..info.files)
+			for f in t.files {
+				already := false
+				for m in merged do if m == f { already = true; break }
+				if !already do append(&merged, f)
 			}
+			info.files = merged[:]
 		}
 	}
 	return infos[:]

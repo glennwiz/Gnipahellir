@@ -577,6 +577,103 @@ def archived_history_still_replays_after_a_restart(b):
     assert tasks()[tid] == before, (before, tasks()[tid])
 
 
+# ── checks: the contract IS the claim (task #36) ────────────────────────────
+
+def claims_of(agent):
+    return {c["file"] for c in call("/claims")[1] if c["agent"] == agent}
+
+
+@check
+def claiming_a_task_registers_its_files_with_no_status_post(b):
+    # The whole point: the "claiming #N, here are my files" post was narrating
+    # what the claim event already recorded.
+    _, r = task("draft", "planner", text="work", files=["src/a.odin", "src/b.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    assert claims_of("worker") == set(), "nothing claimed before the claim"
+
+    task("claim", "worker", id=tid)
+    assert claims_of("worker") == {"src/a.odin", "src/b.odin"}, claims_of("worker")
+
+
+@check
+def a_task_claim_makes_a_silent_owner_active(b):
+    _, r = task("draft", "planner", text="quiet work", files=["src/c.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "silent-worker", id=tid)
+    a = {x["agent"]: x for x in call("/agents")[1]}["silent-worker"]
+    assert a["active"], "holding a live lease is liveness, even having never posted"
+
+
+@check
+def submit_release_and_rework_let_the_files_go(b):
+    for verb, setup in (("release", None), ("submit", None), ("rework", "submit")):
+        _, r = task("draft", "planner", text=f"via {verb}", files=[f"src/{verb}.odin"])
+        tid = r["id"]
+        task("ready", "planner", id=tid)
+        task("claim", "worker", id=tid)
+        assert f"src/{verb}.odin" in claims_of("worker"), verb
+        if setup:
+            task(setup, "worker", id=tid)
+        task(verb, "worker", id=tid)
+        assert f"src/{verb}.odin" not in claims_of("worker"), \
+            f"{verb} should have released the files"
+
+
+@check
+def block_keeps_the_files_because_that_is_when_it_matters_most(b):
+    # A blocked owner is the one most likely to have half-edited files sitting
+    # in the tree - dropping the warning there removes it exactly when needed.
+    _, r = task("draft", "planner", text="blocked work", files=["src/held.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    task("block", "worker", id=tid, text="waiting on glenn")
+    assert tasks()[tid]["state"] == "Blocked"
+    assert "src/held.odin" in claims_of("worker"), "block must KEEP the claim"
+
+
+@check
+def supersede_drops_the_files(b):
+    _, r = task("draft", "planner", text="doomed", files=["src/gone.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    task("supersede", "planner", id=tid, by_id=999)
+    assert "src/gone.odin" not in claims_of("worker"), "terminal work holds nothing"
+
+
+@check
+def an_expired_lease_sheds_task_claims_with_no_special_case(b):
+    _, r = task("draft", "planner", text="lapsing", files=["src/lapse.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid, lease_secs=1)
+    assert "src/lapse.odin" in claims_of("worker")
+    time.sleep(2)
+    assert "src/lapse.odin" not in claims_of("worker"), \
+        "the lease is the bound - no state needs its own timer"
+
+
+@check
+def a_task_claimed_file_still_warns_another_agent(b):
+    _, r = task("draft", "planner", text="contested files", files=["src/hot.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+    _, resp = post("intruder", kind="status", text="editing", files=["src/hot.odin"])
+    assert any("src/hot.odin" in w and "holder" in w for w in resp["warnings"]), resp
+
+
+@check
+def status_claims_still_work_for_work_outside_any_task(b):
+    post("adhoc", kind="status", text="poking at something", files=["src/adhoc.odin"])
+    assert "src/adhoc.odin" in claims_of("adhoc"), "the old path must keep working"
+    post("adhoc", kind="release", text="done")
+    assert claims_of("adhoc") == set()
+
+
 # ── checks: plan refs + result_seq validation (task #23) ────────────────────
 
 @check
