@@ -346,6 +346,195 @@ def blocking_is_unchanged_for_callers_that_name_nothing(b):
     assert tasks()[tid]["state"] == "Doing"
 
 
+# ── checks: state-describing fields clear on departure (task #52) ───────────
+#
+# THE RULE, and blocked_on above is its first instance: a field that describes
+# a state must not outlive it. blocked_on is the block IN FORCE, superseded_by
+# the replacement IN FORCE, result_seq the evidence CURRENTLY OFFERED.
+# Direction is CLEAR, not KEEP, everywhere — a cleared field costs the next
+# caller one parameter; a kept one silently attests to something no longer
+# true, and nothing on the record says so.
+
+
+@check
+def every_verb_that_leaves_superseded_clears_the_replacement_marker(b):
+    # `ready` is the departure #51 actually took, but the clear belongs to the
+    # STATE and not to any one verb, so every way out gets the same answer —
+    # which is also what stops a verb added later from quietly reintroducing
+    # the marker.
+    for verb in ("ready", "reopen", "done"):
+        _, repl = task("add", "planner", text=f"the replacement, via {verb}")
+        _, r = task("add", "planner", text=f"replaced then resurrected by {verb}")
+        tid = r["id"]
+
+        task("supersede", "planner", id=tid, by_id=repl["id"])
+        t = tasks()[tid]
+        assert t["state"] == "Superseded" and t["superseded_by"] == repl["id"], \
+            ("supersede SETS the marker", verb, t)
+
+        assert task(verb, "planner", id=tid)[0] == 200, verb
+        t = tasks()[tid]
+        assert t["state"] != "Superseded", (verb, t)
+        assert t["superseded_by"] == 0, \
+            (f"{verb} left Superseded still attesting a replacement", t)
+
+    # ...and a task superseded a second time names the NEW replacement, not a
+    # union of both. Fresh, not merged.
+    _, r = task("add", "planner", text="replaced twice")
+    tid = r["id"]
+    _, first = task("add", "planner", text="first replacement")
+    _, second = task("add", "planner", text="second replacement")
+    task("supersede", "planner", id=tid, by_id=first["id"])
+    task("ready", "planner", id=tid)
+    task("supersede", "planner", id=tid, by_id=second["id"])
+    assert tasks()[tid]["superseded_by"] == second["id"], \
+        "re-supersede names the replacement in force now"
+
+
+@check
+def a_marker_on_a_live_task_is_the_case_that_misroutes_work(b):
+    # ADDITIVE, not part of #52's acceptance — offered by claude-strict-parse-
+    # 4e28 (seq 956) as the near miss they personally made an hour earlier.
+    # The contract's instance is a stale marker on a FINISHED task: misleading,
+    # and cheap to shrug off because the work is already done. This is the
+    # marker misrouting LIVE work. #51 sat Ready with superseded_by=50 while
+    # #50 sat Superseded with superseded_by=51 — a mutual pointer, and nothing
+    # in the data breaks the tie. Two agents dispatched from opposite ends each
+    # read a record saying the other task is the live one. That near miss was
+    # broken on dispatch prose, which is not a mechanism.
+    _, a = task("add", "planner", text="contract A")
+    _, c = task("add", "planner", text="contract B")
+    aid, bid = a["id"], c["id"]
+    task("supersede", "planner", id=aid, by_id=bid)   # the merge
+    task("supersede", "planner", id=bid, by_id=aid)   # ...and back
+    task("ready", "planner", id=aid)                  # A is the live one
+
+    live, dead = tasks()[aid], tasks()[bid]
+    assert live["state"] == "Ready" and live["superseded_by"] == 0, \
+        ("a claimable task must not point at its own replacement", live)
+    assert dead["state"] == "Superseded" and dead["superseded_by"] == aid, \
+        ("the marker still describes the task that really is superseded", dead)
+
+
+@check
+def rework_clears_the_evidence_it_declined_to_accept(b):
+    _, r = task("draft", "planner", text="reworked work", accept="must be right")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    first = post("worker", text="first write-up", task_id=tid)[1]["seq"]
+    task("submit", "worker", id=tid, result_seq=first)
+    assert tasks()[tid]["result_seq"] == first, "submit SETS the audit link"
+
+    task("rework", "reviewer", id=tid)
+    t = tasks()[tid]
+    assert t["state"] == "Ready", t
+    assert t["result_seq"] == 0, \
+        ("a reworked task cites nothing — the rework MEANS the evidence was "
+         "not accepted", t)
+
+    # The second attempt cites the SECOND write-up, and approval keeps it:
+    # Done is where the evidence is finally, correctly, on offer.
+    task("claim", "worker", id=tid)
+    second = post("worker", text="second write-up", task_id=tid)[1]["seq"]
+    task("submit", "worker", id=tid, result_seq=second)
+    assert tasks()[tid]["result_seq"] == second, "resubmit sets fresh"
+    task("approve", "reviewer", id=tid)
+    t = tasks()[tid]
+    assert t["state"] == "Done" and t["result_seq"] == second, t
+
+
+@check
+def a_block_round_trip_is_not_a_departure(b):
+    # Blocked is an OVERLAY, not a state anyone departs to: it stashes where it
+    # came from and unblock puts it back. A clear that read `state` alone would
+    # drop the evidence of a task blocked out of Review, and unblock would
+    # return it to Review citing nothing — a loss on a transition where nobody
+    # departed. Reading through blocked_from is what makes the round trip
+    # lossless, and this is the leg that fails if that is dropped.
+    _, r = task("draft", "planner", text="blocked mid-review", accept="x")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    seq = post("worker", text="the write-up", task_id=tid)[1]["seq"]
+    task("submit", "worker", id=tid, result_seq=seq)
+
+    task("block", "reviewer", id=tid, text="waiting on glenn to look")
+    assert tasks()[tid]["state"] == "Blocked"
+    task("unblock", "reviewer", id=tid)
+    t = tasks()[tid]
+    assert t["state"] == "Review" and t["result_seq"] == seq, \
+        ("a block round trip must not eat the evidence", t)
+
+    # Same for a superseded task: blocking it does not un-supersede it.
+    _, repl = task("add", "planner", text="replacement")
+    _, r2 = task("add", "planner", text="superseded then blocked")
+    sid = r2["id"]
+    task("supersede", "planner", id=sid, by_id=repl["id"])
+    task("block", "planner", id=sid, text="parked")
+    task("unblock", "planner", id=sid)
+    t = tasks()[sid]
+    assert t["state"] == "Superseded" and t["superseded_by"] == repl["id"], t
+
+
+@check
+def a_stale_marker_from_an_older_board_heals_itself_on_replay(b):
+    # #51'S SHAPE, VERBATIM, and it is the leg that proves the fix is in the
+    # right layer. #51 was superseded by #50 during a merge, amended, brought
+    # back with `ready`, then claimed, submitted and approved — carrying
+    # superseded_by=50 the whole way to Done, while #50 was itself superseded
+    # by #51. A board that had already written those events cannot be fixed by
+    # a new rule at the request path; it is fixed because the projection is a
+    # REPLAY of an append-only log, which makes the fix its own migration.
+    #
+    # So this seeds the events an older binary would have left on disk and
+    # boots on them. Nothing is posted through the API, and the assertion that
+    # tasks.jsonl comes back byte-for-byte is the "no migration" half: history
+    # is not rewritten, only re-read.
+    b.stop()
+    log = os.path.join(b.workdir, "tasks.jsonl")
+    now = int(time.time())
+    events = [
+        {"action": "draft", "id": 951, "unix": now, "agent": "coordinator",
+         "text": "the surviving contract", "accept": "must ship"},
+        {"action": "draft", "id": 950, "unix": now, "agent": "planner",
+         "text": "the merged-away twin", "accept": "must ship"},
+        {"action": "supersede", "id": 951, "unix": now, "agent": "coordinator",
+         "by_id": 950},
+        {"action": "amend", "id": 951, "unix": now, "agent": "planner",
+         "text": "the surviving contract, amended"},
+        {"action": "ready", "id": 951, "unix": now, "agent": "planner"},
+        {"action": "supersede", "id": 950, "unix": now, "agent": "planner",
+         "by_id": 951},
+        {"action": "claim", "id": 951, "unix": now, "agent": "worker",
+         "lease_secs": 3600},
+        {"action": "submit", "id": 951, "unix": now, "agent": "worker",
+         "result_seq": 941},
+        {"action": "approve", "id": 951, "unix": now, "agent": "reviewer"},
+    ]
+    with open(log, "a", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+    before = open(log, "rb").read()
+
+    b.start()
+
+    healed = tasks()[951]
+    assert healed["state"] == "Done", healed
+    assert healed["superseded_by"] == 0, \
+        ("a Done task still attesting it was replaced — by the task it "
+         "superseded", healed)
+    # The heal is targeted, not a blanket wipe: everything the record is
+    # entitled to keep is still there.
+    assert healed["result_seq"] == 941, ("Done still offers its evidence", healed)
+    assert healed["reviewer"] == "reviewer" and healed["rev"] == 2, healed
+    # ...and the twin, which really IS superseded, keeps its marker.
+    assert tasks()[950]["superseded_by"] == 951, tasks()[950]
+
+    assert open(log, "rb").read() == before, \
+        "the replay is the migration — it must not rewrite tasks.jsonl"
+
+
 # ── checks: every field that names another record ───────────────────────────
 #
 # Four fields point at another record. Three were unguarded, and each was

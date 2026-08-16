@@ -633,6 +633,35 @@ task_apply :: proc(ev: Task_Event) {
 	case "reopen":
 		t.state, t.owner, t.lease_until = "Ready", "", 0
 	}
+
+	// ── A FIELD THAT DESCRIBES A STATE MUST NOT OUTLIVE IT ──────────────────
+	// superseded_by is the replacement IN FORCE; result_seq is the evidence
+	// CURRENTLY OFFERED. Neither is a record that the thing was once true.
+	// #51 was superseded by #50 during a merge, came back via `ready`, and ran
+	// all the way through Doing, Review and Done still attesting it had been
+	// replaced — by the task it had itself superseded. A reader trusting the
+	// marker was sent to #50 instead of the work that actually shipped, and
+	// the marker was already misrouting readers while #51 sat Ready, before
+	// any of that. Rework is the same failure on the other field: the rework
+	// MEANS the evidence was not accepted, so a reworked task cites nothing.
+	//
+	// Enforced HERE, after the switch, not inside each departing verb.
+	// `ready`, `reopen` and `done` all leave Superseded today, and the next
+	// verb added would have to remember. The rule is about the STATE, so it is
+	// checked once, where the state is final.
+	//
+	// Blocked is an OVERLAY, not a departure — it stashes where it came from
+	// and `unblock` puts it back — so the fields are read through
+	// blocked_from. A task blocked out of Review is still offering its
+	// evidence when it returns; clearing on the way in would lose it for a
+	// transition nobody departed.
+	//
+	// Being in the replay fold IS the migration: every stale marker on disk
+	// corrects itself on the next boot and tasks.jsonl is never rewritten.
+	held := t.blocked_from if t.state == "Blocked" else t.state
+	if held != "Superseded"                 do t.superseded_by = 0
+	if held != "Review" && held != "Done"   do t.result_seq = 0
+
 	task_sync_status(t)
 }
 
