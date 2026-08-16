@@ -55,9 +55,21 @@
   .kind.msg     { background: #241f2b; color: #a99bb8; }
   .kind.request { background: #33210f; color: #e0a153; }
   .kind.reply   { background: #16291a; color: #7dc687; }
+  .kind.release { background: #1d2412; color: #7a8a5d; }
   .to { color: #e0a153; flex-shrink: 0; }
   .txt { white-space: pre-wrap; word-break: break-word; }
   .files { color: #5d7b5d; font-size: 11px; }
+  /* A request taken up by an `anyone` accept - patched onto the ORIGINAL
+     request's row, possibly after it already rendered. */
+  .accepted { color: #7dc687; font-size: 11px; flex-shrink: 0; }
+  /* A message bound to a work item: jumps to and flashes that task's row. */
+  .tasklink {
+    cursor: pointer; color: #6aa5d8; font-size: 11px; flex-shrink: 0;
+    border: 1px solid #223040; border-radius: 3px; padding: 0 4px;
+  }
+  .tasklink:hover { background: #14202c; }
+  .task-flash { animation: taskflash 1.4s ease-out; }
+  @keyframes taskflash { from { background: #1a2733; } to { background: transparent; } }
   footer {
     display: flex; gap: 8px; padding: 10px 14px;
     border-top: 1px solid #2a2028; background: #0f0c12;
@@ -78,15 +90,43 @@
     display: none; border-bottom: 1px solid #2a2028; padding: 8px 14px;
     max-height: 40vh; overflow-y: auto; background: #0f0c12;
   }
-  .task { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
+  .task { padding: 4px 0; border-bottom: 1px solid #1a1620; }
+  .task:last-child { border-bottom: none; }
+  .trow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .task .tid { color: #56505a; min-width: 30px; text-align: right; flex-shrink: 0; }
-  .task .ttext { flex: 1; }
+  .task .ttext { flex: 1; min-width: 160px; }
+  /* State chip - the v3 lifecycle. `status` (open/doing/done) is what a
+     legacy task shows when it never went through draft/ready/etc; every
+     task is folded to a real v3 state server-side, so this always applies. */
   .tstat { padding: 0 6px; border-radius: 3px; font-size: 11px; flex-shrink: 0; }
-  .tstat.open  { background: #33210f; color: #e0a153; }
-  .tstat.doing { background: #1a2733; color: #6aa5d8; }
-  .tstat.done  { background: #16291a; color: #7dc687; }
-  .task.done .ttext { color: #5d5650; text-decoration: line-through; }
+  .tstat.draft      { background: #1c1826; color: #9a8fb0; }
+  .tstat.ready      { background: #33210f; color: #e0a153; }
+  .tstat.doing      { background: #1a2733; color: #6aa5d8; }
+  .tstat.review     { background: #2a1a33; color: #c98fe0; }
+  .tstat.done       { background: #16291a; color: #7dc687; }
+  .tstat.blocked    { background: #33150f; color: #e07a53; }
+  .tstat.superseded { background: #1a1620; color: #5d5650; }
+  .task.done .ttext, .task.superseded .ttext { color: #5d5650; text-decoration: line-through; }
+  .trev {
+    color: #56505a; font-size: 11px; flex-shrink: 0; border: 1px solid #2a2028;
+    border-radius: 3px; padding: 0 4px;
+  }
   .task button { padding: 1px 7px; font-size: 11px; }
+  .towner { color: #5d7b5d; font-size: 11px; flex-shrink: 0; }
+  .tmore {
+    cursor: pointer; color: #6aa5d8; font-size: 11px; flex-shrink: 0;
+    border-bottom: 1px dotted #6aa5d8;
+  }
+  .tmore:hover { color: #9ccbf0; }
+  /* Files/acceptance/plan/notes detail - collapsed by default, own indented
+     block so it never fights the dense summary row for space. */
+  .tdetail {
+    margin: 3px 0 0 38px; padding: 4px 0 4px 8px; border-left: 2px solid #241f2b;
+    font-size: 12px; color: #a99bb8; display: flex; flex-direction: column; gap: 3px;
+  }
+  .tdetail .lbl { color: #6f6660; }
+  .tdetail .plan-old { opacity: 0.6; }
+  .tdetail .plan-old .lbl { color: #8a5050; }
   #taskadd { display: flex; gap: 8px; margin-top: 6px; }
   #ttext { flex: 1; }
   #spawnbar { border-top: 1px dashed #2a2028; }
@@ -191,6 +231,23 @@ function formatText(text) {
   return frag;
 }
 
+// seq -> rendered .m element, so a later event (an accept, an amend) can
+// patch a post that already scrolled by instead of needing a full re-render.
+const messageEls = new Map();
+// requester seq -> {agent, seq} of the message that accepted it - built up
+// as `accepts` posts stream in, since the acceptance always arrives after
+// the request it resolves.
+const acceptedBy = new Map();
+
+function addAcceptedBadge(div, info) {
+  if (div.querySelector(".accepted")) return;   // already patched
+  const b = document.createElement("span");
+  b.className = "accepted";
+  b.textContent = `✓ taken by ${info.agent}`;
+  b.title = `accepted at #${info.seq}`;
+  div.appendChild(b);
+}
+
 function render(m) {
   const div = document.createElement("div");
   const block = isBlock(m.text);
@@ -201,6 +258,15 @@ function render(m) {
     `<span class="agent" style="color:hsl(${hue(m.agent)} 45% 65%)">${esc(m.agent)}</span>` +
     `<span class="kind ${esc(m.kind)}">${esc(m.kind)}${m.reply_to ? "&#8594;#" + m.reply_to : ""}</span>` +
     (m.to ? `<span class="to">@${esc(m.to)}</span>` : "");
+
+  if (m.task_id) {
+    const link = document.createElement("span");
+    link.className = "tasklink";
+    link.textContent = `↳ #${m.task_id}`;
+    link.title = `bound to task #${m.task_id} - click to jump to it`;
+    link.onclick = () => jumpToTask(m.task_id);
+    div.appendChild(link);
+  }
 
   const txt = document.createElement(block ? "div" : "span");
   txt.className = "txt";
@@ -228,6 +294,19 @@ function render(m) {
     f.className = "files";
     f.textContent = "[" + m.files.join(", ") + "]";
     div.appendChild(f);
+  }
+
+  messageEls.set(m.seq, div);
+  // An `anyone` request that was already accepted before this render (e.g.
+  // loaded from the archive out of order) shows the badge immediately.
+  if (acceptedBy.has(m.seq)) addAcceptedBadge(div, acceptedBy.get(m.seq));
+  // This post IS an acceptance: record it, and patch the original request's
+  // row live if it is still on screen.
+  if (m.accepts) {
+    const info = { agent: m.agent, seq: m.seq };
+    acceptedBy.set(m.accepts, info);
+    const target = messageEls.get(m.accepts);
+    if (target) addAcceptedBadge(target, info);
   }
   return div;
 }
@@ -369,41 +448,197 @@ async function closeAgent(name) {
 }
 
 let tasksOpen = false;
+// Detail panels collapse by default and would otherwise flatten every 5s
+// when refreshTasks rebuilds the list - remember what is open per task id.
+const openMeta = new Set();
+const openPlan = new Set();
+const openNotes = new Set();
+const planCache = new Map();   // message seq -> message (or null: fetched, missing)
+
+// v3 lifecycle order for sorting: active work first, terminal work last.
+const STATE_ORDER = { Blocked: 0, Doing: 1, Review: 2, Ready: 3, Draft: 4, Done: 5, Superseded: 6 };
+
+// What a task can legally do FROM its current state - mirrors the server's
+// own switch in handle_task_mut, so a click never offers a 409.
+function stateActions(t) {
+  switch (t.state) {
+    case "Draft":  return [["ready", "ready"]];
+    case "Ready":  return [["claim", "claim"]];
+    case "Doing":  return [["renew", "renew"], ["release", "release"], ["submit", "submit"],
+                            ...(t.origin !== "v3" ? [["force-done", "done"]] : [])];
+    case "Review": return [["approve", "approve"], ["rework", "rework"]];
+    case "Blocked":return [["unblock", "unblock"]];
+    case "Done":   return [["reopen", "reopen"]];
+    default:       return [];   // Superseded is terminal - it points elsewhere instead
+  }
+}
 
 async function refreshTasks() {
   try {
     const ts = await (await fetch("/tasks")).json();
-    const open = ts.filter(t => t.status !== "done").length;
+    const open = ts.filter(t => t.state !== "Done" && t.state !== "Superseded").length;
     $("tasktoggle").textContent = `tasks: ${open} open ${tasksOpen ? "▴" : "▾"}`;
     if (!tasksOpen) return;
     const tl = $("tasklist");
     tl.innerHTML = "";
-    const order = { open: 0, doing: 1, done: 2 };
-    for (const t of [...ts].sort((a, b) => order[a.status] - order[b.status] || b.id - a.id)) {
-      const div = document.createElement("div");
-      div.className = "task" + (t.status === "done" ? " done" : "");
-      div.innerHTML =
-        `<span class="tid">#${t.id}</span>` +
-        `<span class="tstat ${esc(t.status)}">${esc(t.status)}</span>` +
-        `<span class="ttext">${esc(t.text)}</span>` +
-        `<span class="files">${esc(t.creator)}${t.owner ? " → " + esc(t.owner) : ""}</span>`;
-      const btn = (label, action) => {
-        const b = document.createElement("button");
-        b.textContent = label;
-        b.onclick = () => taskAct(action, t.id);
-        div.appendChild(b);
-      };
-      if (t.status === "open") { btn("start", "claim"); btn("done", "done"); }
-      else if (t.status === "doing") btn("done", "done");
-      else btn("reopen", "reopen");
-      tl.appendChild(div);
+    for (const t of [...ts].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.id - a.id)) {
+      tl.appendChild(renderTask(t));
     }
   } catch (e) {}
 }
 
-async function taskAct(action, id) {
+function renderTask(t) {
+  const div = document.createElement("div");
+  div.id = `task-${t.id}`;
+  div.className = "task" + (t.state === "Done" || t.state === "Superseded" ? " " + t.state.toLowerCase() : "");
+
+  const row = document.createElement("div");
+  row.className = "trow";
+  row.innerHTML =
+    `<span class="tid">#${t.id}</span>` +
+    `<span class="tstat ${t.state.toLowerCase()}">${esc(t.state)}</span>` +
+    `<span class="trev">rev ${t.rev || 1}</span>` +
+    `<span class="ttext">${esc(t.text)}</span>` +
+    `<span class="towner">${esc(t.creator)}${t.owner ? " → " + esc(t.owner) : ""}</span>`;
+
+  if (t.state === "Blocked" && t.blocked_from) {
+    const b = document.createElement("span");
+    b.className = "towner";
+    b.textContent = `(from ${t.blocked_from})`;
+    row.appendChild(b);
+  }
+  if (t.state === "Superseded" && t.superseded_by) {
+    const s = document.createElement("span");
+    s.className = "tasklink";
+    s.textContent = `→ #${t.superseded_by}`;
+    s.title = "superseded by this task";
+    s.onclick = () => jumpToTask(t.superseded_by);
+    row.appendChild(s);
+  }
+
+  for (const [label, action] of stateActions(t)) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => taskAct(action, t);
+    row.appendChild(b);
+  }
+
+  const hasMeta = (t.files && t.files.length) || t.accept;
+  const hasPlan = t.plan_seqs && t.plan_seqs.length;
+  const hasNotes = t.notes && t.notes.length;
+  if (hasMeta) row.appendChild(toggle(`files/accept`, openMeta, t.id, refreshTasks));
+  if (hasPlan) row.appendChild(toggle(`plan (${t.plan_seqs.length})`, openPlan, t.id, refreshTasks));
+  if (hasNotes) row.appendChild(toggle(`${t.notes.length} note${t.notes.length > 1 ? "s" : ""}`, openNotes, t.id, refreshTasks));
+  div.appendChild(row);
+
+  if (hasMeta && openMeta.has(t.id)) div.appendChild(metaDetail(t));
+  if (hasNotes && openNotes.has(t.id)) div.appendChild(notesDetail(t));
+  if (hasPlan && openPlan.has(t.id)) div.appendChild(planDetail(t));   // async fill-in
+
+  return div;
+}
+
+// A small "label ▾/▴" span that flips a per-task Set membership and re-renders.
+function toggle(label, set, id, onchange) {
+  const s = document.createElement("span");
+  s.className = "tmore";
+  const paint = () => { s.textContent = `${label} ${set.has(id) ? "▴" : "▾"}`; };
+  paint();
+  s.onclick = () => { set.has(id) ? set.delete(id) : set.add(id); onchange(); };
+  return s;
+}
+
+function metaDetail(t) {
+  const d = document.createElement("div");
+  d.className = "tdetail";
+  if (t.files && t.files.length) {
+    const f = document.createElement("div");
+    f.innerHTML = `<span class="lbl">files:</span> ${esc(t.files.join(", "))}`;
+    d.appendChild(f);
+  }
+  if (t.accept) {
+    const a = document.createElement("div");
+    a.innerHTML = `<span class="lbl">acceptance:</span> ${esc(t.accept)}`;
+    d.appendChild(a);
+  }
+  return d;
+}
+
+function notesDetail(t) {
+  const d = document.createElement("div");
+  d.className = "tdetail";
+  for (const n of t.notes) {
+    const row = document.createElement("div");
+    row.innerHTML = `<span class="lbl">·</span> ${esc(n)}`;
+    d.appendChild(row);
+  }
+  return d;
+}
+
+// The task's own `text` IS the latest amended contract (the server never
+// keeps the pre-amendment string). What CAN be recovered is the plan trail:
+// plan_seqs is an ordered list of board-message seqs, last one binding. This
+// fetches each on first expand and caches it - a plan post never changes.
+function planDetail(t) {
+  const d = document.createElement("div");
+  d.className = "tdetail";
+  d.textContent = "loading plan…";
+  (async () => {
+    const seqs = t.plan_seqs;
+    const msgs = await Promise.all(seqs.map(fetchMessageBySeq));
+    d.innerHTML = "";
+    seqs.forEach((seq, i) => {
+      const m = msgs[i];
+      const last = i === seqs.length - 1;
+      const row = document.createElement("div");
+      row.className = last ? "plan-cur" : "plan-old";
+      const lbl = document.createElement("span");
+      lbl.className = "lbl";
+      lbl.textContent = last ? `plan #${seq} (binding):` : `plan #${seq} (superseded):`;
+      row.appendChild(lbl);
+      row.appendChild(document.createTextNode(" "));
+      if (m) row.appendChild(formatText(m.text));
+      else row.appendChild(document.createTextNode("(not found - may predate the live window)"));
+      d.appendChild(row);
+    });
+  })();
+  return d;
+}
+
+async function fetchMessageBySeq(seq) {
+  if (planCache.has(seq)) return planCache.get(seq);
+  let found = null;
+  try {
+    const d = await (await fetch(`/delta?since=${seq - 1}`)).json();
+    found = d.messages.find(m => m.seq === seq) || null;
+  } catch (e) {}
+  planCache.set(seq, found);
+  return found;
+}
+
+// Jump from a task-bound message, or a superseded-by chip, to the task's row.
+function jumpToTask(id) {
+  tasksOpen = true;
+  $("tasks").style.display = "block";
+  refreshTasks();
+  requestAnimationFrame(() => {
+    const el = $(`task-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("task-flash");
+    setTimeout(() => el.classList.remove("task-flash"), 1400);
+  });
+}
+
+async function taskAct(action, t) {
   const agent = $("name").value.trim() || "glenn";
-  await fetch("/task", { method: "POST", body: JSON.stringify({ action, id, agent }) });
+  const body = { action, id: t.id, agent, rev: t.rev || 0 };
+  const r = await (await fetch("/task", { method: "POST", body: JSON.stringify(body) })).json();
+  if (r.error) {
+    const w = $("warn");
+    w.style.display = "block";
+    w.textContent = `task #${t.id} ${action} failed: ${r.error}`;
+  }
   refreshTasks();
 }
 

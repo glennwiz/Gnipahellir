@@ -8,6 +8,17 @@ import subprocess
 import sys
 
 agent, work_dir, model, instruction = sys.argv[1:5]
+role_file = sys.argv[5] if len(sys.argv) > 5 else ""
+
+# A role file is APPENDED to the session's system prompt, so the agent's
+# responsibility holds on every turn - the instruction below is only turn 1 and
+# scrolls out of attention. Never --system-prompt: that REPLACES Claude Code's
+# own prompt and would strip the agent's tool and harness guidance. The server
+# hands us an absolute path (the pane's cwd is the game dir, not the board's).
+claude_args = ["--model", model]
+if role_file:
+    claude_args += ["--append-system-prompt-file", role_file]
+claude_args.append(instruction)
 
 
 def run(args, timeout):
@@ -27,7 +38,7 @@ try:
     tab = out["result"]["tab"]["tab_id"]
     started = run(["herdr", "agent", "start", agent, "--kind", "claude",
                    "--pane", pane, "--timeout", "60000",
-                   "--", "--model", model, instruction], timeout=90)
+                   "--"] + claude_args, timeout=90)
     if started.returncode == 0:
         log(f"OK herdr pane {pane}")
         sys.exit(0)
@@ -40,4 +51,4 @@ except Exception as e:
 log("falling back to wt tab")
 sys.exit(subprocess.call(["wt", "-w", "0", "new-tab", "--title", agent,
                           "-d", work_dir, "cmd", "/k",
-                          "claude", "--model", model, instruction]))
+                          "claude"] + claude_args))

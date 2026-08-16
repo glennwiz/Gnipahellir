@@ -1,8 +1,15 @@
 *.exe
 *.pdb
-board.jsonl
-board_archive.jsonl
 access.log
-tasks.jsonl
 spawn_prompts/
 __pycache__/
+
+# Every append-only log the service writes at runtime. board_check.py asserts
+# this list stays complete — adding a runtime file without a rule here turns
+# the suite red, because remembering to update this by hand is exactly the
+# discipline that failed twice.
+board.jsonl
+board_archive.jsonl
+tasks.jsonl
+tasks_archive.jsonl
+agents.jsonl

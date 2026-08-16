@@ -52,6 +52,24 @@ Message :: struct {
 	files:    []string `json:"files"`,    // files/areas the agent is touching
 	to:       string   `json:"to"`,       // optional: addressed agent
 	reply_to: int      `json:"reply_to"`, // optional: seq of the request this answers
+
+	// ── v3, all additive (absent fields marshal to zero on old clients) ──
+	// Routing is RESOLVED AND STORED at post time, so the log is self-
+	// describing instead of relying on a reader re-deriving intent from `to`.
+	route:   string `json:"route"`,   // direct | broadcast | anyone
+	task_id: int    `json:"task_id"`, // optional: binds this post to a work item
+	accepts: int    `json:"accepts"`, // seq of an `anyone` request this post takes up
+}
+
+// Old clients never send `route`; derive it from `to` exactly as the board has
+// always behaved, so nothing changes for them.
+resolve_route :: proc(route, to: string) -> string {
+	if route != "" do return route
+	switch to {
+	case "":            return "broadcast"
+	case "anyone", "all": return "anyone"
+	}
+	return "direct"
 }
 
 Agent_Info :: struct {
@@ -61,26 +79,80 @@ Agent_Info :: struct {
 	status:      string   `json:"status"`,
 	status_unix: i64      `json:"status_unix"`,
 	files:       []string `json:"files"`,
+	// Additive: empty for every agent that never registered, so existing
+	// callers and the current UI read exactly what they always did.
+	role:         string   `json:"role"`,
+	model:        string   `json:"model"`,
+	capabilities: []string `json:"capabilities"`,
 }
 
 // Shared task list (glenn seq 175). State is a replay of an append-only event
 // log, so progress survives restarts and history is never lost.
+// Workflow v3 lifecycle. `status` is kept beside `state` as the legacy view
+// (open|doing|done) so every existing client and the current UI keep working
+// unchanged while v3 clients read `state`.
+TASK_LEASE_DEFAULT :: 45 * 60   // sized so a heads-down agent never has to chatter
+TASK_LEASE_MAX     :: 120 * 60  // one grant only; renew is unlimited
+
 Task :: struct {
 	id:      int    `json:"id"`,
 	unix:    i64    `json:"unix"`,    // created
 	updated: i64    `json:"updated"`,
 	creator: string `json:"creator"`,
 	owner:   string `json:"owner"`,   // set by claim/done, cleared by reopen
-	text:    string `json:"text"`,
-	status:  string `json:"status"`,  // open | doing | done
+	text:    string `json:"text"`,    // ALWAYS the amended contract, never the original
+	status:  string `json:"status"`,  // legacy view: open | doing | done
+
+	// ── v3, all additive ────────────────────────────────────────────────
+	state:         string   `json:"state"`,      // Draft|Ready|Doing|Review|Done|Blocked|Superseded
+	rev:           int      `json:"rev"`,        // bumps on every amend; mutations are rev-conditional
+	files:         []string `json:"files"`,      // exact file set of the contract
+	accept:        string   `json:"accept"`,     // acceptance criteria, stored WITH the work item
+	plan_id:       int      `json:"plan_id"`,    // seq of the original plan post
+	plan_rev:      int      `json:"plan_rev"`,   // 1 + number of plan amendments
+	plan_seqs:     []int    `json:"plan_seqs"`,  // ordered; last entry is binding
+	lease_until:   i64      `json:"lease_until"`,// absolute unix; expiry is DERIVED, never written
+	attempts:      int      `json:"attempts"`,
+	result_seq:    int      `json:"result_seq"`, // board seq of the completion report
+	reviewer:      string   `json:"reviewer"`,
+	blocked_from:  string   `json:"blocked_from"`,
+	superseded_by: int      `json:"superseded_by"`,
+	origin:        string   `json:"origin"`,     // "v3" (draft-born, review required) | "legacy"
+	notes:         [dynamic]string `json:"notes"`,
 }
 
 Task_Event :: struct {
 	unix:   i64    `json:"unix"`,
 	id:     int    `json:"id"`,
-	action: string `json:"action"`, // add | claim | done | reopen
+	action: string `json:"action"`, // legacy: add|claim|done|reopen · v3: see task_apply
 	agent:  string `json:"agent"`,
 	text:   string `json:"text"`,
+
+	rev:          int      `json:"rev"`,
+	files:        []string `json:"files"`,
+	accept:       string   `json:"accept"`,
+	plan_id:      int      `json:"plan_id"`,
+	plan_rev:     int      `json:"plan_rev"`,
+	plan_seq:     int      `json:"plan_seq"`,
+	lease_secs:   int      `json:"lease_secs"`,
+	result_seq:   int      `json:"result_seq"`,
+	by_id:        int      `json:"by_id"`,
+	// Recorded at write time on a takeover so the immutable log self-documents
+	// every Doing->Doing transition; expiry itself never synthesises an event.
+	expired_from: string   `json:"expired_from"`,
+}
+
+// A lease that has run out makes the task claimable again, but nothing is
+// written until someone actually claims it — GET never mutates the log.
+task_lease_expired :: proc(t: ^Task, now: i64) -> bool {
+	return t.lease_until != 0 && now > t.lease_until
+}
+
+// What a reader should see: a Doing task whose lease lapsed is served as
+// Ready, because that is what the next claim will find.
+task_effective_state :: proc(t: ^Task, now: i64) -> string {
+	if t.state == "Doing" && task_lease_expired(t, now) do return "Ready"
+	return t.state
 }
 
 Board :: struct {
@@ -91,6 +163,8 @@ Board :: struct {
 	tasks:        [dynamic]Task,
 	next_task_id: int,
 	tasks_fd:     ^os.File,
+	registry:     [dynamic]Agent_Record,  // durable identity, latest-wins
+	agents_fd:    ^os.File,
 	herdr_state:  string, // latest fleet snapshot from herdr_sync.py, "[]" until first post
 	// Poll-based liveness (glenn task #2): a GET /delta?for=<agent> is proof
 	// of life — a quietly-watching monitor stays active without posting
@@ -117,6 +191,11 @@ board_load :: proc() {
 				fmt.eprintfln("skipping bad line in %s: %v", LOG_FILE, err)
 				continue
 			}
+			// Every message written before routing existed carries no route.
+			// Resolve it on the way in so consumers never re-derive intent
+			// from `to` themselves — the disk stays append-only untouched,
+			// only the served view is complete.
+			m.route = resolve_route(m.route, m.to)
 			append(&board.messages, m)
 			if m.seq >= board.next_seq do board.next_seq = m.seq + 1
 		}
@@ -136,25 +215,154 @@ board_load :: proc() {
 	}
 
 	tasks_load()
+	agents_load()
+	task_archive_sweep()
 }
 
-TASKS_FILE :: "tasks.jsonl"
+TASKS_FILE         :: "tasks.jsonl"
+TASKS_ARCHIVE_FILE :: "tasks_archive.jsonl"
+AGENTS_FILE        :: "agents.jsonl"
+
+// Terminal tasks leave the live log after a week. Nothing is ever deleted —
+// the events move to the archive and replay reads both, so history survives
+// exactly as the messages' own archive does.
+TASK_RETENTION_SECS :: #config(TASK_RETENTION_SECS, 7 * 24 * 3600)
+
+// Who an agent IS, as opposed to what it last said. Identity used to be
+// inferred entirely from message traffic, so it evaporated the moment a
+// session went quiet; this is a durable statement, replayed latest-wins.
+Agent_Record :: struct {
+	unix:         i64      `json:"unix"`,
+	agent:        string   `json:"agent"`,
+	role:         string   `json:"role"`,
+	model:        string   `json:"model"`,
+	capabilities: []string `json:"capabilities"`,
+}
+
+registry_find :: proc(name: string) -> ^Agent_Record {
+	for &r in board.registry do if r.agent == name do return &r
+	return nil
+}
+
+// Latest-wins PER FIELD, not per record: a register event states what the
+// caller KNOWS, and silence is not an assertion of emptiness.
+//
+// This is not defensiveness against careless callers — the collision is
+// designed in. /spawn registers {agent, model, role} because that is all it
+// knows, and an agent checking in self-describes with capabilities it alone
+// knows. Whole-record overwrite made the second call silently blank the
+// first's fields. The cost is that omission can no longer CLEAR a field,
+// which nothing wants.
+registry_apply :: proc(rec: Agent_Record) {
+	existing := registry_find(rec.agent)
+	if existing == nil {
+		append(&board.registry, rec)
+		return
+	}
+	existing.unix = rec.unix
+	if rec.role != ""            do existing.role = rec.role
+	if rec.model != ""           do existing.model = rec.model
+	if len(rec.capabilities) > 0 do existing.capabilities = rec.capabilities
+}
+
+registry_post :: proc(rec: Agent_Record) {
+	stamped := rec
+	stamped.unix = time.time_to_unix(time.now())
+	if line, err := json.marshal(stamped, {}, context.temp_allocator); err == nil {
+		os.write(board.agents_fd, line)
+		os.write_string(board.agents_fd, "\n")
+	}
+	registry_apply(stamped)
+}
+
+agents_load :: proc() {
+	// Same torn-tail vs corrupt-interior policy as the task log: one write per
+	// line means a crash can only ever damage the last one.
+	apply_agent :: proc(line: string, ok: ^bool) {
+		rec: Agent_Record
+		if err := json.unmarshal(transmute([]u8)strings.clone(line), &rec); err != nil {
+			ok^ = false
+			return
+		}
+		if rec.agent == "" do return
+		registry_apply(rec)
+	}
+	replay_lines(AGENTS_FILE, apply_agent)
+
+	fd, err := os.open(AGENTS_FILE, {.Write, .Create, .Append})
+	if err != nil {
+		fmt.eprintfln("cannot open %s for writing: %v", AGENTS_FILE, err)
+		os.exit(1)
+	}
+	board.agents_fd = fd
+}
+
+// ── CRASH-SAFE APPEND, formalised ───────────────────────────────────────────
+//
+//  Every event is ONE os.write of ONE line. A crash can therefore only ever
+//  damage the LAST line of a log — anything earlier was completed by a prior
+//  write. That gives two distinct recovery rules, and the difference matters:
+//
+//    torn FINAL line     — expected. A power cut mid-append. Tolerated and
+//                          logged quietly; the event simply never happened.
+//    corrupt INTERIOR    — NOT expected, and not something a crash can cause.
+//                          Real corruption or an outside editor. Skipped so
+//                          the board still boots, but LOUDLY, because
+//                          something is wrong that recovery cannot explain.
+//
+//  Reading them the same way would let genuine corruption hide behind the
+//  ordinary case forever.
+@(private = "file")
+replay_lines :: proc(path: string, apply: proc(line: string, ok: ^bool)) {
+	data, read_err := os.read_entire_file_from_path(path, context.allocator)
+	if read_err != nil do return
+	defer delete(data)
+
+	lines := make([dynamic]string, context.temp_allocator)
+	it := string(data)
+	for line in strings.split_lines_iterator(&it) {
+		if len(strings.trim_space(line)) == 0 do continue
+		append(&lines, line)
+	}
+	for line, i in lines {
+		ok := true
+		apply(line, &ok)
+		if ok do continue
+		if i == len(lines) - 1 {
+			fmt.eprintfln("%s: torn final line tolerated (crash during append)", path)
+		} else {
+			fmt.eprintfln("WARNING %s: CORRUPT INTERIOR LINE %d skipped - a crash cannot cause this, something else wrote to the log",
+				path, i + 1)
+		}
+	}
+}
+
+// Events already applied from the archive, so the crash-between-archive-and-
+// rewrite window cannot double-apply them. Keyed on the exact event line:
+// (id,unix) was the contract, but two events for one task inside the same
+// second are ordinary (claim then submit), and that key would silently drop
+// the second. The archive is a byte-copy, so exact lines match exactly.
+@(private = "file")
+replayed: map[string]bool
 
 tasks_load :: proc() {
 	board.next_task_id = 1
-	if data, read_err := os.read_entire_file_from_path(TASKS_FILE, context.allocator); read_err == nil {
-		defer delete(data)
-		it := string(data)
-		for line in strings.split_lines_iterator(&it) {
-			if len(strings.trim_space(line)) == 0 do continue
-			ev: Task_Event
-			if err := json.unmarshal(transmute([]u8)strings.clone(line), &ev); err != nil {
-				fmt.eprintfln("skipping bad line in %s: %v", TASKS_FILE, err)
-				continue
-			}
-			task_apply(ev)
+	replayed = make(map[string]bool)
+	defer delete(replayed)
+
+	apply_task :: proc(line: string, ok: ^bool) {
+		if line in replayed do return          // already applied from the archive
+		ev: Task_Event
+		if err := json.unmarshal(transmute([]u8)strings.clone(line), &ev); err != nil {
+			ok^ = false
+			return
 		}
+		replayed[strings.clone(line)] = true
+		task_apply(ev)
 	}
+	// Archive first (older history), then the live log.
+	replay_lines(TASKS_ARCHIVE_FILE, apply_task)
+	replay_lines(TASKS_FILE, apply_task)
 
 	fd, err := os.open(TASKS_FILE, {.Write, .Create, .Append})
 	if err != nil {
@@ -164,6 +372,82 @@ tasks_load :: proc() {
 	board.tasks_fd = fd
 }
 
+// Move events belonging to long-finished tasks out of the live log.
+//
+//  ORDER IS THE SAFETY: append to the archive FIRST, then rewrite the live log
+//  via temp+rename. A crash anywhere in between leaves the events in BOTH
+//  files and loses nothing — replay dedupes them. The reverse order would have
+//  a window where they exist in NEITHER.
+task_archive_sweep :: proc() {
+	now := time.time_to_unix(time.now())
+
+	// Cheap in-memory check first: no eligible task means no file I/O at all,
+	// so this can hang off every mutation without cost.
+	stale := make(map[int]bool, 8, context.temp_allocator)
+	for &t in board.tasks {
+		if (t.state == "Done" || t.state == "Superseded") &&
+		   now - t.updated > TASK_RETENTION_SECS {
+			stale[t.id] = true
+		}
+	}
+	if len(stale) == 0 do return
+
+	data, read_err := os.read_entire_file_from_path(TASKS_FILE, context.temp_allocator)
+	if read_err != nil do return
+
+	keep    := strings.builder_make(context.temp_allocator)
+	archive := strings.builder_make(context.temp_allocator)
+	moved   := 0
+	it := string(data)
+	for line in strings.split_lines_iterator(&it) {
+		if len(strings.trim_space(line)) == 0 do continue
+		ev: Task_Event
+		if err := json.unmarshal(transmute([]u8)strings.clone(line), &ev); err != nil {
+			// Unreadable lines stay in the live log: this proc moves history,
+			// it does not get to decide anything is beyond saving.
+			strings.write_string(&keep, line)
+			strings.write_string(&keep, "\n")
+			continue
+		}
+		target := &keep
+		if ev.id in stale {
+			target = &archive
+			moved += 1
+		}
+		strings.write_string(target, line)
+		strings.write_string(target, "\n")
+	}
+	if moved == 0 do return
+
+	// 1. Archive first — after this the events are safe even if we die here.
+	if fd, err := os.open(TASKS_ARCHIVE_FILE, {.Write, .Create, .Append}); err == nil {
+		os.write_string(fd, strings.to_string(archive))
+		os.close(fd)
+	} else {
+		fmt.eprintfln("archive sweep: cannot open %s: %v", TASKS_ARCHIVE_FILE, err)
+		return
+	}
+
+	// 2. Then swap the live log atomically. The append fd must be closed
+	//    across the rename or it keeps writing to the replaced file.
+	tmp := fmt.tprintf("%s.tmp", TASKS_FILE)
+	if fd, err := os.open(tmp, {.Write, .Create, .Trunc}); err == nil {
+		os.write_string(fd, strings.to_string(keep))
+		os.close(fd)
+	} else {
+		fmt.eprintfln("archive sweep: cannot write %s: %v", tmp, err)
+		return
+	}
+	if board.tasks_fd != nil do os.close(board.tasks_fd)
+	if err := os.rename(tmp, TASKS_FILE); err != nil {
+		fmt.eprintfln("archive sweep: rename failed: %v", err)
+	}
+	if fd, err := os.open(TASKS_FILE, {.Write, .Create, .Append}); err == nil {
+		board.tasks_fd = fd
+	}
+	fmt.eprintfln("archived %d task events older than %d days", moved, TASK_RETENTION_SECS / 86400)
+}
+
 task_find :: proc(id: int) -> ^Task {
 	for &t in board.tasks do if t.id == id do return &t
 	return nil
@@ -171,27 +455,119 @@ task_find :: proc(id: int) -> ^Task {
 
 // Fold one event into the task list. Shared by the replay-on-load and the
 // live POST path, so the in-memory state always matches a fresh replay.
-task_apply :: proc(ev: Task_Event) {
-	switch ev.action {
-	case "add":
-		append(&board.tasks, Task{
-			id = ev.id, unix = ev.unix, updated = ev.unix,
-			creator = ev.agent, text = ev.text, status = "open",
-		})
-		if ev.id >= board.next_task_id do board.next_task_id = ev.id + 1
-	case "claim":
-		if t := task_find(ev.id); t != nil {
-			t.status, t.owner, t.updated = "doing", ev.agent, ev.unix
-		}
-	case "done":
-		if t := task_find(ev.id); t != nil {
-			t.status, t.owner, t.updated = "done", ev.agent, ev.unix
-		}
-	case "reopen":
-		if t := task_find(ev.id); t != nil {
-			t.status, t.owner, t.updated = "open", "", ev.unix
-		}
+// The legacy three-value view, derived from the v3 state so old clients and
+// the current UI never see a status that contradicts the lifecycle.
+@(private = "file")
+task_sync_status :: proc(t: ^Task) {
+	switch t.state {
+	case "Draft", "Ready", "Blocked": t.status = "open"
+	case "Doing", "Review":           t.status = "doing"
+	case:                             t.status = "done"   // Done, Superseded
 	}
+}
+
+task_apply :: proc(ev: Task_Event) {
+	// Legacy actions map forward forever: the 55 events already on disk replay
+	// into sane v3 states, and an un-upgraded client keeps working untouched.
+	switch ev.action {
+	case "add", "draft":
+		born := "legacy" if ev.action == "add" else "v3"
+		state := "Ready" if ev.action == "add" else "Draft"
+		t := Task{
+			id = ev.id, unix = ev.unix, updated = ev.unix,
+			creator = ev.agent, text = ev.text,
+			state = state, rev = 1, origin = born,
+			files = ev.files, accept = ev.accept,
+			plan_id = ev.plan_id, plan_rev = ev.plan_rev,
+		}
+		// Callers send plan_seq alone — the contract never asked for plan_id
+		// or plan_rev, so derive them. Without this the first v3-born task
+		// reported plan_id 0 / plan_rev 0 while its own log line held 600.
+		if t.plan_id == 0 && ev.plan_seq != 0 {
+			t.plan_id, t.plan_rev = ev.plan_seq, 1
+		}
+		// HEAP, not a composite literal. `[]int{ev.plan_seq}` does not own its
+		// backing store, so the slice outlived it and every task read [0] —
+		// deterministically, in the same request, before any heap churn. The
+		// event log was right the whole time; only this projection was wrong.
+		if ev.plan_seq != 0 {
+			seqs := make([]int, 1)
+			seqs[0] = ev.plan_seq
+			t.plan_seqs = seqs
+		}
+		task_sync_status(&t)
+		append(&board.tasks, t)
+		if ev.id >= board.next_task_id do board.next_task_id = ev.id + 1
+		return
+	}
+
+	t := task_find(ev.id)
+	if t == nil do return
+	t.updated = ev.unix
+
+	switch ev.action {
+	case "ready":
+		t.state = "Ready"
+	case "amend":
+		// THE fix for stale task text: the body IS the latest amendment, and
+		// every mutation is rev-conditional, so acting on an old description
+		// 409s rather than executing it.
+		t.rev += 1
+		if ev.text != ""   do t.text = ev.text
+		if ev.accept != "" do t.accept = ev.accept
+		if ev.files != nil do t.files = ev.files
+		if ev.plan_rev != 0 do t.plan_rev = ev.plan_rev
+		if ev.plan_seq != 0 {
+			// Explicit heap allocation, same ownership rule as the draft fold:
+			// whatever backs plan_seqs has to outlive this request.
+			seqs := make([]int, len(t.plan_seqs) + 1)
+			copy(seqs, t.plan_seqs)
+			seqs[len(t.plan_seqs)] = ev.plan_seq
+			t.plan_seqs = seqs
+			// A new plan post IS a new plan revision — PlanRevision answers
+			// "which contract", TaskRevision answers "which text of it".
+			if ev.plan_rev == 0 do t.plan_rev = max(t.plan_rev, 1) + 1
+			if t.plan_id == 0 do t.plan_id = ev.plan_seq
+		}
+	case "claim":
+		lease := ev.lease_secs
+		if lease <= 0 do lease = TASK_LEASE_DEFAULT
+		if lease > TASK_LEASE_MAX do lease = TASK_LEASE_MAX
+		t.state, t.owner = "Doing", ev.agent
+		t.lease_until = ev.unix + i64(lease)
+		t.attempts += 1
+	case "renew":
+		lease := ev.lease_secs
+		if lease <= 0 do lease = TASK_LEASE_DEFAULT
+		if lease > TASK_LEASE_MAX do lease = TASK_LEASE_MAX
+		t.lease_until = ev.unix + i64(lease)
+	case "release":
+		t.state, t.owner, t.lease_until = "Ready", "", 0
+	case "submit":
+		t.state, t.lease_until = "Review", 0
+		t.result_seq = ev.result_seq
+	case "approve":
+		t.state, t.reviewer, t.lease_until = "Done", ev.agent, 0
+	case "rework":
+		t.state, t.owner, t.lease_until = "Ready", "", 0
+	case "block":
+		if t.state != "Blocked" do t.blocked_from = t.state
+		t.state = "Blocked"
+	case "unblock":
+		t.state = t.blocked_from if t.blocked_from != "" else "Ready"
+		t.blocked_from = ""
+	case "supersede":
+		t.state, t.superseded_by, t.lease_until = "Superseded", ev.by_id, 0
+	case "note":
+		// Visibility, not workflow: annotate without claiming, so two agents
+		// doing the same recon can see each other instead of colliding.
+		append(&t.notes, ev.text)
+	case "done":   // legacy force-complete
+		t.state, t.owner, t.lease_until = "Done", ev.agent, 0
+	case "reopen":
+		t.state, t.owner, t.lease_until = "Ready", "", 0
+	}
+	task_sync_status(t)
 }
 
 task_post :: proc(ev: Task_Event) {
@@ -276,20 +652,50 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			append(&infos, Agent_Info{agent = m.agent})
 		}
 		infos[i].last_seen = m.unix
-		if m.kind == "status" {
+		// `release` carries the claim set too — it is the explicit way to drop
+		// files, and it always clears them. Without it here, a release would
+		// post cleanly and change nothing, which is the exact trap it exists
+		// to remove.
+		if m.kind == "status" || m.kind == "release" {
 			infos[i].status = m.text
 			infos[i].status_unix = m.unix
 			infos[i].files = m.files
 		}
 	}
+	// A registered agent is listed even when it has never spoken: identity is
+	// durable, presence is not.
+	for rec in board.registry {
+		if _, seen := index[rec.agent]; !seen {
+			index[rec.agent] = len(infos)
+			append(&infos, Agent_Info{agent = rec.agent})
+		}
+	}
+
 	now := time.time_to_unix(time.now())
 	for &info in infos {
+		if rec := registry_find(info.agent); rec != nil {
+			info.role, info.model, info.capabilities = rec.role, rec.model, rec.capabilities
+		}
 		// A recent /delta?for= poll counts as being seen: liveness comes
 		// from watching, not just talking.
 		if p, polled := board.last_poll[info.agent]; polled && p > info.last_seen {
 			info.last_seen = p
 		}
 		info.active = now - info.last_seen <= STALE_SECS
+		// A held lease IS liveness while it lasts. Without this the two
+		// windows disagree: an agent can hold a healthy 45-minute lease on a
+		// task, be heads-down editing the files it named, and have its file
+		// claims quietly stop counting at minute 20 — so someone else claims
+		// those files, sees no warning, and edits underneath it. One
+		// deliberate renew now protects both layers.
+		if !info.active {
+			for &t in board.tasks {
+				if t.owner == info.agent && t.state == "Doing" && !task_lease_expired(&t, now) {
+					info.active = true
+					break
+				}
+			}
+		}
 	}
 	return infos[:]
 }
@@ -429,6 +835,8 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		handle_tasks(client)
 	case method == "POST" && path == "/task":
 		handle_task_mut(client, body)
+	case method == "POST" && path == "/register":
+		handle_register(client, body)
 	case method == "POST" && path == "/kill":
 		handle_kill(client, body)
 	case method == "GET" && path == "/herdr":
@@ -469,12 +877,45 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 	}
 	switch incoming.kind {
 	case "status", "msg", "request", "reply":
+	case "release":
+		// An explicit verb, because the old way was a silent trap: claims ride
+		// on the latest STATUS, so a `reply` carrying files=[] announced a
+		// release that never happened and nothing errored. This always clears.
+		incoming.files = {}
+		if incoming.text == "" do incoming.text = "(claims released)"
 	case "":
 		incoming.kind = "msg"
 	case:
 		send_response(client, "400 Bad Request", "application/json",
-			`{"error":"kind must be one of: status, msg, request, reply"}`)
+			`{"error":"kind must be one of: status, msg, request, reply, release"}`)
 		return
+	}
+	incoming.route = resolve_route(incoming.route, incoming.to)
+
+	// First-wins uptake of an `anyone` request. The accept loop is single
+	// threaded, so one of two racing responders is literally second and gets a
+	// 409 naming the winner — they cannot both believe they won.
+	if incoming.accepts != 0 {
+		target: ^Message
+		for &m in board.messages do if m.seq == incoming.accepts { target = &m; break }
+		if target == nil {
+			send_response(client, "404 Not Found", "application/json",
+				fmt.tprintf(`{{"error":"no message with seq %d"}}`, incoming.accepts))
+			return
+		}
+		if resolve_route(target.route, target.to) != "anyone" {
+			send_response(client, "400 Bad Request", "application/json",
+				`{"error":"only an 'anyone' request can be accepted"}`)
+			return
+		}
+		for m in board.messages {
+			if m.accepts == incoming.accepts {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"already taken","accepted_by":"%s","seq":%d}}`,
+						m.agent, m.seq))
+				return
+			}
+		}
 	}
 
 	stored := board_post(incoming)
@@ -506,8 +947,42 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 	send_response(client, "200 OK", "application/json", string(out))
 }
 
+// A session describing itself on check-in. Re-registering is normal — the
+// latest statement wins, and the log keeps every prior one.
+handle_register :: proc(client: net.TCP_Socket, body: []u8) {
+	rec: Agent_Record
+	if err := json.unmarshal(body, &rec); err != nil {
+		send_response(client, "400 Bad Request", "application/json",
+			fmt.tprintf(`{{"error":"bad json: %v"}}`, err))
+		return
+	}
+	rec.agent = strings.trim_space(rec.agent)
+	if rec.agent == "" {
+		send_response(client, "400 Bad Request", "application/json",
+			`{"error":"'agent' is required"}`)
+		return
+	}
+	registry_post(rec)
+	send_response(client, "200 OK", "application/json",
+		fmt.tprintf(`{{"ok":true,"agent":"%s"}}`, rec.agent))
+}
+
 handle_tasks :: proc(client: net.TCP_Socket) {
-	out, err := json.marshal(board.tasks[:], {}, context.temp_allocator)
+	// Expiry is DERIVED, never written: a Doing task whose lease lapsed is
+	// SERVED as Ready — which is exactly what the next claim will find — but
+	// no event is synthesised, so a GET never touches the log.
+	now := time.time_to_unix(time.now())
+	view := make([dynamic]Task, 0, len(board.tasks), context.temp_allocator)
+	for &t in board.tasks {
+		shown := t
+		shown.state = task_effective_state(&t, now)
+		if shown.state != t.state {
+			shown.owner  = ""   // the lease lapsed; nobody holds it now
+			shown.status = "open"
+		}
+		append(&view, shown)
+	}
+	out, err := json.marshal(view[:], {}, context.temp_allocator)
 	if err != nil {
 		send_response(client, "500 Internal Server Error", "application/json", `{"error":"marshal failed"}`)
 		return
@@ -529,26 +1004,121 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 		send_response(client, "400 Bad Request", "application/json", `{"error":"'agent' is required"}`)
 		return
 	}
+	// ── ATOMICITY LAW ───────────────────────────────────────────────────
+	// The server handles ONE connection at a time (see the accept loop), so
+	// every check below and the append that follows are a single indivisible
+	// step: two agents racing a claim serialise, and the loser sees the
+	// winner's state. Going multithreaded VOIDS this correctness for free —
+	// it would need real locking around check-then-append, not just here.
+	now := time.time_to_unix(time.now())
+
 	switch ev.action {
-	case "add":
+	case "add", "draft":
 		if ev.text == "" {
-			send_response(client, "400 Bad Request", "application/json", `{"error":"'text' is required for add"}`)
+			send_response(client, "400 Bad Request", "application/json", `{"error":"'text' is required"}`)
 			return
 		}
 		ev.id = board.next_task_id
-	case "claim", "done", "reopen":
-		if task_find(ev.id) == nil {
+	case "ready", "amend", "claim", "renew", "release", "submit", "approve",
+	     "rework", "block", "unblock", "supersede", "note", "done", "reopen":
+		t := task_find(ev.id)
+		if t == nil {
 			send_response(client, "404 Not Found", "application/json",
 				fmt.tprintf(`{{"error":"no task with id %d"}}`, ev.id))
 			return
 		}
+		// Stale-revision guard: acting on an old description is refused, so a
+		// superseded contract can never be executed by mistake. rev 0 means
+		// "not checking" — legacy clients keep working.
+		if ev.rev != 0 && ev.rev != t.rev {
+			send_response(client, "409 Conflict", "application/json",
+				fmt.tprintf(`{{"error":"stale revision","rev":%d,"state":"%s","owner":"%s"}}`,
+					t.rev, task_effective_state(t, now), t.owner))
+			return
+		}
+		eff := task_effective_state(t, now)
+		switch ev.action {
+		case "claim":
+			// Conditional claim. A Doing task is claimable ONLY when its lease
+			// is provably expired, and then the takeover is recorded with the
+			// prior owner — so the log documents every Doing->Doing hop and an
+			// ambiguous one cannot exist.
+			if eff != "Ready" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"not claimable","state":"%s","owner":"%s","rev":%d}}`,
+						eff, t.owner, t.rev))
+				return
+			}
+			if t.state == "Doing" do ev.expired_from = t.owner
+		case "renew", "release", "submit":
+			if t.owner != ev.agent {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"not the owner","owner":"%s","state":"%s"}}`, t.owner, eff))
+				return
+			}
+			if ev.action != "renew" && eff != "Doing" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"not in progress","state":"%s"}}`, eff))
+				return
+			}
+			// result_seq is the audit link from a task to the evidence it was
+			// done, and it was accepted unvalidated: a submit once pointed at
+			// another agent's message about another task and nothing
+			// complained. It must exist and belong to the submitter.
+			// Deliberately NOT requiring task_id — legacy reports predate it.
+			if ev.action == "submit" && ev.result_seq != 0 {
+				found: ^Message
+				for &m in board.messages do if m.seq == ev.result_seq { found = &m; break }
+				if found == nil {
+					send_response(client, "400 Bad Request", "application/json",
+						fmt.tprintf(`{{"error":"result_seq %d does not exist"}}`, ev.result_seq))
+					return
+				}
+				if found.agent != ev.agent {
+					send_response(client, "400 Bad Request", "application/json",
+						fmt.tprintf(`{{"error":"result_seq %d belongs to %s, not you"}}`,
+							ev.result_seq, found.agent))
+					return
+				}
+			}
+		case "approve":
+			if eff != "Review" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"nothing to approve","state":"%s"}}`, eff))
+				return
+			}
+			// No self-review: the human outranks the workflow, nobody else does.
+			if t.owner == ev.agent && ev.agent != "glenn" {
+				send_response(client, "409 Conflict", "application/json",
+					`{"error":"the owner cannot approve their own work"}`)
+				return
+			}
+		case "done":
+			// A v3 contract carries acceptance criteria, so it goes through
+			// review. Legacy-born tasks keep force-Done, which is safe because
+			// nothing silently STRENGTHENS under an old client.
+			if t.origin == "v3" && ev.agent != "glenn" {
+				send_response(client, "409 Conflict", "application/json",
+					`{"error":"v3 tasks complete via submit + approve (glenn may override)"}`)
+				return
+			}
+		}
 	case:
 		send_response(client, "400 Bad Request", "application/json",
-			`{"error":"action must be one of: add, claim, done, reopen"}`)
+			`{"error":"unknown action"}`)
 		return
 	}
 
 	task_post(ev)
+	// Hangs off every mutation so a long-running board still keeps its live
+	// log tidy; it costs nothing until something is actually eligible.
+	task_archive_sweep()
+	if t := task_find(ev.id); t != nil {
+		send_response(client, "200 OK", "application/json",
+			fmt.tprintf(`{{"ok":true,"id":%d,"rev":%d,"state":"%s"}}`,
+				ev.id, t.rev, task_effective_state(t, now)))
+		return
+	}
 	send_response(client, "200 OK", "application/json",
 		fmt.tprintf(`{{"ok":true,"id":%d}}`, ev.id))
 }
@@ -608,6 +1178,7 @@ handle_kill :: proc(client: net.TCP_Socket, body: []u8) {
 // request-derived text in the command is the topic, sanitized to [a-z0-9-].
 
 SPAWN_DIR :: "spawn_prompts"
+ROLES_DIR :: "roles"
 
 sanitize_topic :: proc(s: string, allocator := context.temp_allocator) -> string {
 	b := strings.builder_make(allocator)
@@ -631,6 +1202,7 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 		name:   string `json:"name"`,
 		prompt: string `json:"prompt"`,
 		model:  string `json:"model"`, // "" = default; else allowlisted below
+		role:   string `json:"role"`,  // "" = no role; else roles/<role>.md
 	}
 	req: Spawn_Request
 	if err := json.unmarshal(body, &req, allocator = context.temp_allocator); err != nil {
@@ -658,6 +1230,26 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 			`{"error":"cannot resolve working directory"}`)
 		return
 	}
+	// Role system prompt (glenn seq 368).  An APPENDED system prompt holds for
+	// every turn of the session; the instruction below is only turn 1 and
+	// scrolls away, which is not what "so all agents know their responsibility"
+	// means.  sanitize_topic already strips everything outside [a-z0-9-], so a
+	// role name can never carry dots or slashes back out of roles/.  Resolved
+	// to an ABSOLUTE path because the pane's cwd is the game directory, not
+	// this one — a relative path would launch the agent role-less and look
+	// like success.  Validated here, before any prompt file is written, so a
+	// bad role leaves no artifacts behind.
+	role_file := ""
+	if want := sanitize_topic(req.role); want != "" {
+		role_file, _ = filepath.join({wd, ROLES_DIR, fmt.tprintf("%s.md", want)},
+			context.temp_allocator)
+		if !os.exists(role_file) {
+			send_response(client, "400 Bad Request", "application/json",
+				fmt.tprintf(`{{"error":"no role file for '%s'"}}`, want))
+			return
+		}
+	}
+
 	os.make_directory(SPAWN_DIR)
 	prompt_path, _ := filepath.join({wd, SPAWN_DIR,
 		fmt.tprintf("%s_%d.txt", topic, time.time_to_unix(time.now()))}, context.temp_allocator)
@@ -684,13 +1276,22 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 	// falling back to a Windows Terminal tab. Dispatched detached via start /b:
 	// herdr's readiness wait must never block this single-threaded server.
 	launcher, _ := filepath.join({wd, "spawn_herdr.py"}, context.temp_allocator)
-	cmd := fmt.tprintf(`cmd /c start /b "" python "%s" "%s" "%s" %s "%s"`,
-		launcher, agent, work_dir, model, instruction)
+	cmd := fmt.tprintf(`cmd /c start /b "" python "%s" "%s" "%s" %s "%s" "%s"`,
+		launcher, agent, work_dir, model, instruction, role_file)
 	if rc := libc.system(strings.clone_to_cstring(cmd, context.temp_allocator)); rc != 0 {
 		send_response(client, "500 Internal Server Error", "application/json",
 			fmt.tprintf(`{{"error":"launcher exited with %d"}}`, rc))
 		return
 	}
+
+	// The spawner already knows exactly who this is — model from the
+	// allowlist, role from the file it just resolved — so the agent starts
+	// with an identity instead of having to assert one.
+	registry_post(Agent_Record{
+		agent = strings.clone(agent),
+		model = strings.clone(model),
+		role  = strings.clone(sanitize_topic(req.role)),
+	})
 
 	board_post(Message{
 		agent = "board",
@@ -755,6 +1356,16 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 			if message_is_for(m, name) do append(&filtered, m)
 		}
 		fresh = filtered[:]
+	}
+
+	// ?task=N: everything bound to one work item — the correlation trail for a
+	// task, without reading the whole board.
+	if v, found := query_param(query, "task"); found {
+		if want, ok := strconv.parse_int(v); ok {
+			bound := make([dynamic]Message, 0, len(fresh), context.temp_allocator)
+			for m in fresh do if m.task_id == want do append(&bound, m)
+			fresh = bound[:]
+		}
 	}
 
 	Delta :: struct {
