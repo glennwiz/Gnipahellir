@@ -218,20 +218,28 @@ if ((Get-SidecarProcess).Count -gt 0) {
     # sidecar that died took its explanation with it. Its whole job is
     # reporting on other processes, and it is the one we cannot ask.
     #
-    # THIS IS NOT THE COLD-BOOT HANG FIX, though #55 was written expecting it
-    # to be, and the correction belongs here rather than only on the board.
-    # The theory was that an unredirected child INHERITS this shell's stdout
-    # and holds it open for its whole life, so a capturing caller waits on
-    # end-of-stream rather than on our exit. Measured, it does not:
-    #   - the committed script, sidecar killed, run from a capturing shell:
-    #     returned in 3s with an unredirected long-lived child running
-    #   - minimal probe, Start-Process -WindowStyle Hidden, no redirect, child
-    #     sleeping 45s: parent returned in 1s
-    # PowerShell's Start-Process defaults to ShellExecute when no redirection
-    # is asked for, so the child never receives our handles at all; asking for
-    # redirection is what forces the CreateProcess path. The child does not
-    # hold our stdout in EITHER form, so this line is neutral for the hang.
-    # It earns its place on the logging alone.
+    # THIS LINE IS NEUTRAL FOR THE COLD-BOOT HANG - it neither causes it nor
+    # cures it - and the measurements are recorded here because #55 was
+    # written expecting it to be the cure and I twice reported it settled.
+    #
+    # WITHOUT A PIPELINE, nothing holds: the committed script with the sidecar
+    # killed returned in 3s from a direct `pwsh -File`, and a minimal probe
+    # returned in ~1s with a child that had 39s left - identically with and
+    # without redirection.
+    #
+    # THROUGH A PIPELINE IT IS A DIFFERENT STORY, and this is the part I got
+    # wrong the first time by measuring only the direct case: with the board
+    # already up, `run.ps1 -ServiceOnly | cat` starts the sidecar and then does
+    # NOT return - held to a 30s ceiling, with this redirect already in place.
+    # So the caller's stdout genuinely can be held open past our exit, and the
+    # redirect does not prevent it.
+    #
+    # BUT THE HOLDER IS NOT Start-Process AND SO NOT THIS LINE: the same
+    # minimal probe through the same pipeline, redirected and unredirected,
+    # both released in under a second. A plain hidden child does not hold the
+    # pipe; herdr_sync.py does. It shells out to `herdr agent list` on every
+    # tick, so it has grandchildren of its own, and those are the untested
+    # part. Whoever chases this should start there and not here.
     #
     # Both names end in .log so the blanket *.log rule already covers them -
     # deliberately NOT a new gitignore rule, because a runtime file this
