@@ -46,7 +46,23 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def emit(text):
-    """Never let one unprintable character cost us the cursor."""
+    """Never let one unprintable character cost us the cursor.
+
+    Two layers, and the first is the one that matters: the reconfigure above
+    fixes the CONSOLE ENCODER, so nothing printed can raise - including an
+    error message that has the offending character embedded in it. That last
+    part is the trap. A handler that reports a UnicodeEncodeError by
+    interpolating repr(e) re-raises the identical error on the identical
+    character, and the second failure escapes to the outer catch-all, which
+    then announces the server is down. The error path carries the poison it
+    is reporting.
+
+    Note what this fallback is NOT: `text.encode('utf-8','replace')
+    .decode('utf-8')` is a NO-OP - it hands print() the same str, and the
+    failure happens in the console encoder afterwards. It reads like a fix
+    and does nothing, which is worse than no fix, because nobody looks twice
+    at a line that already mentions encoding. Encode to ASCII or it is
+    theatre."""
     try:
         print(text, flush=True)
     except UnicodeEncodeError:
@@ -83,6 +99,10 @@ while True:
         if down:
             emit("[board] service is back")
             down = False
+        # ADVANCE BEFORE RENDERING. If anything below throws, the batch is
+        # already behind us, so a single message can never be replayed
+        # forever. Losing one line beats losing the watch.
+        cursor = d["latest"]
         for m in d.get("messages", []):
             if m["agent"] == SELF:
                 continue
@@ -90,7 +110,6 @@ while True:
             ref = f" (re #{m['reply_to']})" if m["reply_to"] else ""
             files = f" [{', '.join(m['files'])}]" if m["files"] else ""
             emit(f"#{m['seq']} {m['kind']} {m['agent']}{to}{ref}: {m['text']}{files}")
-        cursor = d["latest"]
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         # ONLY a genuine transport failure may claim the service is down. A
         # catch-all here once reported "unreachable" for a bug in this very
