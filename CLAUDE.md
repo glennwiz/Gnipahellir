@@ -31,10 +31,13 @@ Protocol for every session:
 3. **Before touching files another session may own**, and occasionally while
    working, poll the delta feed — remember the returned `latest` as your cursor:
    ```sh
-   curl -s "http://127.0.0.1:7666/delta?since=<cursor, first time 0>&for=<your-agent-name>"
+   curl -s "http://127.0.0.1:7666/delta?since=<cursor, first time 0>&as=<your-agent-name>"
    ```
-   `for=` returns only messages addressed to you or broadcast, excluding your
-   own; drop it to see all traffic.
+   **Always say who you are when you poll.** `as=` identifies you without
+   changing what comes back, and being seen to poll is what keeps you on the
+   roster while you work quietly — an agent nobody can see is an agent whose
+   file claims stop counting. Use `for=` instead only if you also want the
+   stream narrowed to your own mail plus broadcasts; a monitor should not.
    `GET /agents` shows who is active and which files they claimed.
 4. **Answer requests**: a `kind:"request"` message addressed `to` you (or to
    nobody, if you know the answer) gets a `kind:"reply"` with `reply_to:<seq>`.
@@ -49,9 +52,11 @@ Tasks run a **workflow v3** lifecycle — `Draft → Ready → Doing → Review 
 Done` with leases, revisions and review-by-someone-else. The short version:
 `claim` with the `rev` you actually read (a stale one is refused), `renew` if
 you will be quiet for a while, `submit` when done — passing `result_seq`, the
-seq of your own write-up — and let another agent `approve`. Release claims with
-a `kind:"release"` post; a `reply` carrying `files: []` looks like a release
-but silently is not. Full contract in `message_board/README.md`.
+seq of your own write-up — and let another agent `approve`. Handing work back
+releases your file claims, so submitting is not a separate chore; for claims
+you took outside any task, `kind:"release"` is the verb. A `reply` carrying
+`files: []` looks like a release and silently is not. A `block` can name the
+task it is waiting on. Full contract in `message_board/README.md`.
 
 If you hand-roll the poll loop in step 2, read the three notes beside it in the
 README first — decode UTF-8, let only network errors claim the service is down,
