@@ -1848,6 +1848,152 @@ def a_body_that_is_not_an_object_still_reports_what_it_always_did(b):
     assert st == 400 and "unknown" not in r, (st, r)
 
 
+# ── checks: the refusal carries the answer (task #59) ───────────────────────
+#
+# #51 made a typo loud. It still sent the caller to the README to find out what
+# they SHOULD have written - and the coordinator, the most motivated reader on
+# the board, was caught four times by the same key, the last twice AFTER
+# diagnosing it and writing up the incident. Habit beats documentation. So the
+# 400 now carries the settable field set, and the list has to be TRUE: a field
+# the server overwrites must not appear on it, and a field kept off it must not
+# be honoured. Both directions get a leg.
+
+# The exact settable set per endpoint. Pinned rather than derived: a golden
+# list is only worth having if adding a field FORCES an edit here, in the same
+# diff, where a reviewer sees the decision. Derive it from the struct and this
+# leg would ratify whatever the struct happened to say.
+GOLDEN_SETTABLE = {
+    "/post":     ["agent", "kind", "text", "files", "to", "reply_to",
+                  "route", "task_id", "accepts"],
+    "/task":     ["id", "action", "agent", "text", "rev", "files", "accept",
+                  "plan_id", "plan_rev", "plan_seq", "lease_secs",
+                  "result_seq", "by_id", "blocked_on"],
+    "/spawn":    ["name", "prompt", "model", "role", "force"],
+    "/register": ["agent", "role", "model", "capabilities"],
+    "/kill":     ["name"],
+}
+
+
+@check
+def every_endpoint_advertises_exactly_its_settable_fields(b):
+    # THE DANGEROUS DIRECTION IS A NEW SERVER-STAMPED FIELD LEFT UNTAGGED: it
+    # joins the advertised list and the board starts promising callers they may
+    # set something it will overwrite. That cannot land quietly - it goes red
+    # here and the author must edit this dict in the same diff.
+    #
+    # The soft direction (a settable field wrongly tagged server) also goes red
+    # here, but would fail QUIET if this leg did not exist: it costs only an
+    # omission from an advisory list, and the field's own feature legs still
+    # pass because sending it still works. Stated, not hidden.
+    probes = {
+        "/post":     {"agent": "a", "kind": "msg", "zzz_unknown": 1},
+        "/task":     {"action": "note", "agent": "a", "id": 1, "zzz_unknown": 1},
+        "/spawn":    {"name": "x", "prompt": "y", "zzz_unknown": 1},
+        "/register": {"agent": "a", "zzz_unknown": 1},
+        "/kill":     {"name": "x", "zzz_unknown": 1},
+    }
+    for path, body in probes.items():
+        st, r = call(path, body)
+        assert st == 400, (path, st, r)
+        assert r["settable"] == GOLDEN_SETTABLE[path], (
+            path, "settable drifted from the golden list", r.get("settable"))
+        # Server-stamped fields are declared on these structs and MUST NOT be
+        # advertised - that is the whole difference between `declared` and
+        # `settable`, and advertising `unix` would be the false promise this
+        # list exists to end, reintroduced by the fix for it.
+        assert "unix" not in r["settable"], (path, r["settable"])
+    assert "seq" not in call("/post", {"agent": "a", "zzz": 1})[1]["settable"]
+    assert "expired_from" not in call(
+        "/task", {"action": "note", "agent": "a", "id": 1, "zzz": 1})[1]["settable"]
+
+
+@check
+def the_measured_trap_answers_itself_without_the_readme(b):
+    # THE PROBE THAT EARNED THIS TASK: `status` on /task, sent four times by
+    # one caller who understood the mistake by the third. It is not a typo - it
+    # is the GET /tasks response shape mirrored into a POST, so the refusal has
+    # to teach both halves: what to write instead, and why they thought it was
+    # right.
+    st, r = call("/task", {"action": "note", "agent": "a", "id": 1,
+                           "status": "open"})
+    assert st == 400, (st, r)
+    assert r["unknown"] == ["status"], r
+    assert "status" not in r["settable"], r
+    assert r["settable"] == GOLDEN_SETTABLE["/task"], r
+    # ...and the sentence names the mirror trap, not just the absence.
+    assert "task record" in r["error"] and "output, never input" in r["error"], r
+
+
+@check
+def an_ordinary_typo_is_not_given_the_mirror_explanation(b):
+    # The record clause must fire only where it APPLIES. A refusal that tells
+    # every caller they mirrored the response would be noise, and worse, it
+    # would be wrong for the case #51 was built on.
+    st, r = call("/task", {"action": "note", "agent": "a", "id": 1,
+                           "reslut_seq": 1})
+    assert st == 400 and r["unknown"] == ["reslut_seq"], (st, r)
+    assert "task record" not in r["error"], (
+        "reslut_seq is a typo, not a mirrored record field", r["error"])
+    assert r["settable"] == GOLDEN_SETTABLE["/task"], r
+
+
+@check
+def a_quoted_key_still_returns_parseable_json_carrying_settable(b):
+    # #48's hazard, extended to the new key. These strings are untrusted input
+    # going back out inside JSON; the whole body rides json.marshal rather than
+    # being interpolated, so a key containing a double quote cannot turn the
+    # explanation into a parse error the caller sees instead of it.
+    st, r = call("/post", {"agent": "a", 'we"ird': 1})
+    assert st == 400, (st, r)
+    assert r["unknown"] == ['we"ird'], r          # parsed, so the body was valid JSON
+    assert r["settable"] == GOLDEN_SETTABLE["/post"], r
+
+
+@check
+def a_non_takeover_verb_cannot_forge_a_takeover_marker(b):
+    # THE HIGHEST-SEVERITY ITEM IN THIS LANE, and the only one that stops a
+    # false WRITE rather than a misleading read.
+    #
+    # expired_from is server-written on exactly one path - a claim that takes
+    # over a Doing task whose lease has provably expired. On every other verb
+    # nothing touched it, so a caller-sent value rode through task_post into
+    # tasks.jsonl, a log that is APPEND-ONLY AND NEVER REWRITTEN. A `note`
+    # could stamp a takeover that never happened, naming an owner who never
+    # held it, and the record would carry it forever.
+    #
+    # Note what is asserted: the verb still SUCCEEDS. The request is
+    # legitimate; only the field is neutralised.
+    _, r = task("add", "planner", text="the subject")
+    tid = r["id"]
+    st, _ = task("note", "attacker", id=tid, text="innocuous",
+                 expired_from="victim")
+    assert st == 200, ("the verb is legitimate - only the field is not", st)
+
+    log = os.path.join(b.workdir, "tasks.jsonl")
+    events = [json.loads(l) for l in open(log, encoding="utf-8") if l.strip()]
+    forged = [e for e in events if e.get("id") == tid
+              and e.get("action") == "note" and e.get("expired_from")]
+    assert not forged, ("a note stamped a takeover into the immutable log",
+                        forged)
+
+    # The same on a CLAIM that is not a takeover - the path the field belongs
+    # to, exercised in the case where it must still stay empty.
+    task("claim", "worker", id=tid, expired_from="victim")
+    events = [json.loads(l) for l in open(log, encoding="utf-8") if l.strip()]
+    claims = [e for e in events if e.get("id") == tid
+              and e.get("action") == "claim"]
+    assert claims and not claims[-1]["expired_from"], (
+        "a first claim is not a takeover and must record nobody", claims[-1])
+
+# LEG (e) - "the takeover path still records expired_from" - is NOT written
+# here, deliberately. an_expired_lease_is_claimable_and_the_takeover_is_recorded
+# already asserts exactly that, has since before this lane existed, and a
+# duplicate would be a second copy of one claim that can drift from it. What
+# this lane owes it is a SABOTAGE: move the intake clear below the verb switch
+# and that inherited leg fails, which is how we know the clear did not silently
+# break the audit trail it was added to protect.
+
+
 # ── runner ──────────────────────────────────────────────────────────────────
 
 def main():

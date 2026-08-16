@@ -65,8 +65,12 @@ TRIM_TO :: #config(TRIM_TO, 1000)
 STALE_SECS :: #config(STALE_SECS, 1200)
 
 Message :: struct {
-	seq:      int      `json:"seq"`,
-	unix:     i64      `json:"unix"`,     // server-side receive time, unix seconds
+	// `board:"server"` marks a field the SERVER writes, so it is excluded from
+	// the `settable` list a refusal advertises. board_post overwrites both of
+	// these unconditionally; a caller-sent value cannot survive one line past
+	// the handler. See settable_keys.
+	seq:      int      `json:"seq" board:"server"`,
+	unix:     i64      `json:"unix" board:"server"`, // server-side receive time, unix seconds
 	agent:    string   `json:"agent"`,    // required: who is speaking
 	kind:     string   `json:"kind"`,     // status | msg | request | reply
 	text:     string   `json:"text"`,
@@ -148,7 +152,7 @@ Task :: struct {
 }
 
 Task_Event :: struct {
-	unix:   i64    `json:"unix"`,
+	unix:   i64    `json:"unix" board:"server"`, // task_post stamps this
 	id:     int    `json:"id"`,
 	action: string `json:"action"`, // legacy: add|claim|done|reopen · v3: see task_apply
 	agent:  string `json:"agent"`,
@@ -166,7 +170,15 @@ Task_Event :: struct {
 	blocked_on:   int      `json:"blocked_on"`,
 	// Recorded at write time on a takeover so the immutable log self-documents
 	// every Doing->Doing transition; expiry itself never synthesises an event.
-	expired_from: string   `json:"expired_from"`,
+	//
+	// SERVER-WRITTEN, AND IT HAD TO BE MADE TRUE. Until the intake clear in
+	// handle_task_mut, this was the one field the server wrote on ONE path and
+	// honoured from the caller on every other - so a `note` could stamp a
+	// takeover naming a prior owner into the append-only log, and nothing
+	// anywhere said so. Excluding it from `settable` while the server still
+	// took it would be the same lie the list exists to end, pointing the other
+	// way. The tag and the clear are one change; neither is honest alone.
+	expired_from: string   `json:"expired_from" board:"server"`,
 }
 
 // A lease that has run out makes the task claimable again, but nothing is
@@ -284,7 +296,7 @@ TASK_RETENTION_SECS :: #config(TASK_RETENTION_SECS, 7 * 24 * 3600)
 // inferred entirely from message traffic, so it evaporated the moment a
 // session went quiet; this is a durable statement, replayed latest-wins.
 Agent_Record :: struct {
-	unix:         i64      `json:"unix"`,
+	unix:         i64      `json:"unix" board:"server"`, // registry_post stamps this
 	agent:        string   `json:"agent"`,
 	role:         string   `json:"role"`,
 	model:        string   `json:"model"`,
@@ -1066,8 +1078,16 @@ handle_connection :: proc(client: net.TCP_Socket) {
 // needs tolerating it is spelled out here, not dropped on the floor.
 //
 // Returns true to proceed. On false the 400 has already been sent.
+// `record` is the endpoint's RESPONSE struct, passed only where it differs
+// from the request struct — /task, where Task_Event goes in and Task comes
+// out. An unknown key that is a declared tag of that record is not a typo at
+// all: the caller mirrored the shape they read back. Naming that is the
+// difference between "wrong" and "wrong, and here is why you thought it was
+// right". Four catches on one caller, all `status`, the last after they had
+// diagnosed and written up the first, is what earned it its own sentence.
 request_has_only_declared_keys :: proc(
 	client: net.TCP_Socket, body: []u8, T: typeid, allow: []string = {},
+	record: Maybe(typeid) = nil,   // Maybe, because Odin refuses a default on a bare typeid
 ) -> bool {
 	// A body that will not parse, or is not an object at all, is NOT this
 	// check's business: the handler's own unmarshal reports it, in the wording
@@ -1095,13 +1115,30 @@ request_has_only_declared_keys :: proc(
 	// quote produce a body the caller cannot parse — turning the explanation
 	// this refusal exists to give into a parse error.
 	Unknown_Keys_Error :: struct {
-		error:   string   `json:"error"`,
-		unknown: []string `json:"unknown"`,
+		error:    string   `json:"error"`,
+		unknown:  []string `json:"unknown"`,
+		settable: []string `json:"settable"`,
 	}
+	settable := settable_keys(T)
 	msg := fmt.tprintf(
-		"unknown field(s): %s - this endpoint declares no such key, and a key it cannot use is refused rather than dropped",
-		strings.join(unknown[:], ", ", context.temp_allocator))
-	out, merr := json.marshal(Unknown_Keys_Error{msg, unknown[:]}, {}, context.temp_allocator)
+		"unknown field(s): %s - this endpoint declares no such key, and a key it cannot use is refused rather than dropped. Settable fields: %s",
+		strings.join(unknown[:], ", ", context.temp_allocator),
+		strings.join(settable, ", ", context.temp_allocator))
+
+	// The mirror-the-response clause. Only the keys that are genuinely record
+	// tags get named, so an ordinary typo never collects an explanation that
+	// does not apply to it.
+	if rec, has_record := record.?; has_record {
+		mirrored := make([dynamic]string, 0, len(unknown), context.temp_allocator)
+		for k in unknown do if json_key_is_declared(rec, k) do append(&mirrored, k)
+		if len(mirrored) > 0 {
+			msg = fmt.tprintf(
+				"%s. %s belongs to the task record you read back from GET /tasks, derived by the server - output, never input",
+				msg, strings.join(mirrored[:], ", ", context.temp_allocator))
+		}
+	}
+
+	out, merr := json.marshal(Unknown_Keys_Error{msg, unknown[:], settable}, {}, context.temp_allocator)
 	if merr != nil {
 		send_response(client, "400 Bad Request", "application/json",
 			`{"error":"unknown field(s) in request"}`)
@@ -1111,15 +1148,21 @@ request_has_only_declared_keys :: proc(
 	return false
 }
 
-// True when `key` is a name json.unmarshal would bind to a field of T: the
-// `json:"..."` tag if the field has one (options after a comma stripped), and
-// the Odin field name only for fields that do not.
+// The `json:"..."` name a tag declares, options after a comma stripped. Empty
+// when the field carries no json tag — in which case unmarshal binds the Odin
+// field name instead, and so does everything here.
+json_tag_name :: proc(tag: reflect.Struct_Tag) -> string {
+	name := reflect.struct_tag_get(tag, "json")
+	if comma := strings.index_byte(name, ','); comma >= 0 do name = name[:comma]
+	return name
+}
+
+// True when `key` is a name json.unmarshal would bind to a field of T.
 json_key_is_declared :: proc(T: typeid, key: string) -> bool {
 	names := reflect.struct_field_names(T)
 	tags  := reflect.struct_field_tags(T)
 	for name, i in names {
-		tag := reflect.struct_tag_get(tags[i], "json")
-		if comma := strings.index_byte(tag, ','); comma >= 0 do tag = tag[:comma]
+		tag := json_tag_name(tags[i])
 		if tag == "" {
 			if key == name do return true
 		} else if key == tag {
@@ -1127,6 +1170,39 @@ json_key_is_declared :: proc(T: typeid, key: string) -> bool {
 		}
 	}
 	return false
+}
+
+// The fields a caller may actually SET on T: every declared name, minus the
+// ones tagged `board:"server"`.
+//
+// DECLARED IS NOT SETTABLE, and advertising the first while meaning the second
+// is how this list would become the very defect it exists to cure. `unix` is
+// declared on three request structs and overwritten by the server at all three
+// write sites — listing it would teach a caller to send a field that is
+// discarded, which is seq 949's false promise reintroduced by the fix for it.
+// So settable-ness gets a source of truth AT THE DECLARATION SITE, where the
+// field lives and where the next person to add one is already looking.
+//
+// The list must be TRUE BOTH WAYS. Excluding a field asserts the server does
+// not honour caller values for it, and that assertion is checkable: it was
+// FALSE for Task_Event.expired_from until the intake clear in handle_task_mut
+// made it true. A tag is a claim about behaviour, not a decoration.
+//
+// DECLARATION ORDER, not sorted. Struct field order is specified, so there is
+// no determinism to buy here — `unknown` is sorted only because map iteration
+// order is not specified. What order buys instead is teaching: the caller
+// reads the endpoint's own shape, agent and kind and text first, the same
+// order the README documents. Alphabetising would scramble that for nothing.
+settable_keys :: proc(T: typeid, allocator := context.temp_allocator) -> []string {
+	names := reflect.struct_field_names(T)
+	tags  := reflect.struct_field_tags(T)
+	out := make([dynamic]string, 0, len(names), allocator)
+	for name, i in names {
+		if reflect.struct_tag_get(tags[i], "board") == "server" do continue
+		tag := json_tag_name(tags[i])
+		append(&out, tag if tag != "" else name)
+	}
+	return out[:]
 }
 
 handle_post :: proc(client: net.TCP_Socket, body: []u8) {
@@ -1271,7 +1347,7 @@ handle_tasks :: proc(client: net.TCP_Socket) {
 handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 	// Before anything reads a field: `reslut_seq` is the probe that made this
 	// task, and it submitted with no audit link and a 200.
-	if !request_has_only_declared_keys(client, body, Task_Event) do return
+	if !request_has_only_declared_keys(client, body, Task_Event, record = typeid_of(Task)) do return
 	// Heap unmarshal: "add" events keep their strings in the task list.
 	ev: Task_Event
 	if err := json.unmarshal(body, &ev); err != nil {
@@ -1279,6 +1355,25 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 			fmt.tprintf(`{{"error":"bad json: %v"}}`, err))
 		return
 	}
+	// INTAKE CLEAR — the one line in this lane that stops a false WRITE rather
+	// than a misleading read, and the reason it is here and not in the claim
+	// case is that its absence was invisible everywhere else.
+	//
+	// expired_from is server-written on exactly ONE path: a claim that takes
+	// over a Doing task whose lease has provably expired. On every OTHER verb
+	// nothing touched it, so a caller-sent value rode straight through
+	// task_post into tasks.jsonl — an append-only log that is never rewritten.
+	// A `note` could stamp `expired_from: "<someone>"` and the record would
+	// then document a takeover that never happened, from an owner who never
+	// held it. Reproduced on a throwaway board before this line was written;
+	// deliberately NOT on the live board, because probing it there would have
+	// manufactured the very forged record the probe was looking for.
+	//
+	// Cleared for every verb; the takeover path re-sets it a few lines below,
+	// which is why the pair of legs matters more than either alone — one
+	// proves the forgery cannot land, the other proves the clear did not
+	// silently break the audit trail it was added to protect.
+	ev.expired_from = ""
 	ev.agent = strings.trim_space(ev.agent)
 	ev.text = strings.trim_space(ev.text)
 	if ev.agent == "" {
