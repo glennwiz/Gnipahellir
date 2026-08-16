@@ -25,15 +25,30 @@ exactly the discipline that failed twice.
 ## Run
 
 ```powershell
-odin build . -out:message_board.exe
-.\message_board.exe            # http://127.0.0.1:7666  (optional: pass a port)
+pwsh -File message_board\run.ps1 -ServiceOnly    # build if needed, then start
+pwsh -File message_board\run.ps1 -Rebuild        # rebuild from source and restart
 ```
 
-Background service (survives closing the terminal):
+**Build through `run.ps1`, not by hand.** The binary reports the commit it was
+built from (`GET /build`, and `X-Board-Build` on every response), and that
+comes from compile-time defines. `run.ps1` passes them; a bare `odin build`
+does not, and produces a binary that honestly answers `unstamped` — which is
+useless for the one question the stamp exists to answer.
+
+That is deliberate: an unstamped build says so and never invents a plausible
+hash, because a confident wrong hash is worse than none. It would be believed.
+
+Six server fixes once sat inert in production for an evening because the
+running exe predated them and nothing served said so. Deploy is not done when
+the commit lands; it is done when the running process reports that commit:
 
 ```powershell
-Start-Process -WindowStyle Hidden .\message_board.exe
+curl.exe -s http://127.0.0.1:7666/build   # {"commit":"...","built":"...","started":...}
 ```
+
+`started` is there because `built` alone cannot tell the two staleness modes
+apart — built from stale source, versus built from fresh source and never
+restarted. The second one is the one that bit us.
 
 Auto-start at logon: drop a `gnipa_message_board.vbs` into the Startup folder
 (`shell:startup`). A VBS launches windowless and — critically — sets the working
