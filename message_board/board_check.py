@@ -445,6 +445,40 @@ def rework_clears_the_evidence_it_declined_to_accept(b):
 
 
 @check
+def evidence_dies_on_the_way_back_to_the_queue_not_on_the_way_to_a_grave(b):
+    # THE TWO FIELDS DEPART DIFFERENTLY and one predicate for both loses an
+    # audit link. superseded_by is false anywhere but Superseded. result_seq
+    # is only MISLEADING when the task is back on the queue: a Ready, unowned,
+    # claimable task citing evidence tells the next agent the work is done.
+    # In a terminal state it is history rather than an offer, so superseding a
+    # finished task must not wipe the link to the write-up it really produced.
+    def finished(label):
+        _, r = task("draft", "planner", text=label, accept="x")
+        tid = r["id"]
+        task("ready", "planner", id=tid)
+        task("claim", "worker", id=tid)
+        seq = post("worker", text=f"write-up for {label}", task_id=tid)[1]["seq"]
+        task("submit", "worker", id=tid, result_seq=seq)
+        task("approve", "reviewer", id=tid)
+        assert tasks()[tid]["state"] == "Done"
+        return tid, seq
+
+    tid, seq = finished("superseded after the fact")
+    _, repl = task("add", "planner", text="what replaced it")
+    task("supersede", "planner", id=tid, by_id=repl["id"])
+    t = tasks()[tid]
+    assert t["state"] == "Superseded" and t["result_seq"] == seq, \
+        ("a terminal task keeps the link to the work it really did", t)
+
+    tid, _ = finished("reopened later")
+    task("reopen", "planner", id=tid)
+    t = tasks()[tid]
+    assert t["state"] == "Ready" and t["result_seq"] == 0, \
+        ("reopen puts it back on the queue, so it offers nothing — same shape "
+         "as rework, which is why the clear is keyed on the state", t)
+
+
+@check
 def a_block_round_trip_is_not_a_departure(b):
     # Blocked is an OVERLAY, not a state anyone departs to: it stashes where it
     # came from and unblock puts it back. A clear that read `state` alone would

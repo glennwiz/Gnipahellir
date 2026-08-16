@@ -658,9 +658,18 @@ task_apply :: proc(ev: Task_Event) {
 	//
 	// Being in the replay fold IS the migration: every stale marker on disk
 	// corrects itself on the next boot and tasks.jsonl is never rewritten.
+	// The two fields depart differently, and collapsing them into one
+	// predicate loses an audit link. superseded_by is false anywhere but
+	// Superseded. result_seq is only MISLEADING when the task is back on the
+	// queue: a Ready, unowned, claimable task citing evidence tells the next
+	// agent the work is done. In a TERMINAL state it is history, not an offer
+	// — a Done task superseded later still has a real write-up, and wiping
+	// that link buys nothing.
 	held := t.blocked_from if t.state == "Blocked" else t.state
-	if held != "Superseded"                 do t.superseded_by = 0
-	if held != "Review" && held != "Done"   do t.result_seq = 0
+	if held != "Superseded" do t.superseded_by = 0
+	if held != "Review" && held != "Done" && held != "Superseded" {
+		t.result_seq = 0
+	}
 
 	task_sync_status(t)
 }
