@@ -10,6 +10,7 @@
     background: #0c0a0e; color: #cfc8bd;
     font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
     height: 100vh; display: flex; flex-direction: column;
+    position: relative;
   }
   header {
     padding: 10px 14px; border-bottom: 1px solid #2a2028;
@@ -141,6 +142,50 @@
     border-radius: 3px; margin-bottom: 8px;
   }
   #loadarch:hover { background: #14181f; }
+
+  /* ── Fleet status panel (task #28) ──────────────────────────────────── */
+  #fleettoggle { cursor: pointer; color: #6aa5d8; }
+  #fleettoggle:hover { color: #9ccbf0; }
+  #fleetpanel {
+    display: none; position: absolute; top: 38px; right: 14px; z-index: 20;
+    width: 420px; max-height: 60vh; overflow-y: auto;
+    background: #14101a; border: 1px solid #2a2028; border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5); padding: 6px;
+  }
+  .frow { padding: 5px 6px; border-bottom: 1px solid #1a1620; }
+  .frow:last-child { border-bottom: none; }
+  .fmain { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .fname { font-weight: bold; }
+  /* Three independent facts, three columns - never fused into one badge.
+     Conflating identity/presence/pane liveness is what caused the
+     duplicate-fleet spawn incident earlier today. */
+  .frole {
+    padding: 0 5px; border-radius: 3px; font-size: 10px; flex-shrink: 0;
+    text-transform: uppercase; letter-spacing: 0.3px;
+  }
+  .frole.planner     { background: #1c1826; color: #9a8fb0; }
+  .frole.implementer { background: #1a2733; color: #6aa5d8; }
+  .frole.reviewer    { background: #16291a; color: #7dc687; }
+  .frole.verifier    { background: #33210f; color: #e0a153; }
+  .frole.coordinator { background: #2a1a33; color: #c98fe0; }
+  .frole.human    { background: #3a1712; color: #e8886f; }
+  .frole.service  { background: #1a1620; color: #6f6660; }
+  .frole.unknown  { background: #1a1620; color: #5d5650; }
+  .fherdr { flex-shrink: 0; }
+  .fstate { font-size: 11px; flex-shrink: 0; }
+  .fstate.working { color: #7dc687; }
+  .fstate.active  { color: #6aa5d8; }
+  .fstate.quiet   { color: #8a7f74; }
+  .fstate.stale   { color: #5d5650; }
+  .fdetail {
+    margin: 2px 0 0 2px; font-size: 12px; color: #a99bb8;
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .fwork { color: #a99bb8; }
+  .flease { color: #6f6660; font-size: 11px; }
+  .fstatus { color: #6f6660; font-style: italic; }
+  .fclaims { color: #5d7b5d; font-size: 11px; }
+  #fleetpanel .fempty { color: #6f6660; padding: 8px; text-align: center; }
 </style>
 </head>
 <body>
@@ -148,8 +193,10 @@
   <h1>GNIPAHELLIR BOARD</h1>
   <span id="stats"></span>
   <span id="tasktoggle"></span>
+  <span id="fleettoggle">FLEET</span>
   <span id="roster"></span>
 </header>
+<div id="fleetpanel"></div>
 <div id="tasks">
   <div id="tasklist"></div>
   <div id="taskadd">
@@ -355,15 +402,27 @@ async function loadArchive() {
 
 const HERDR_ICON = { working: "⚒", idle: "·", blocked: "✋", done: "✓" };
 
+// Piggybacked by the fleet panel (#28) - the same 10s cycle that already
+// fetches /agents and /herdr for the roster, so the panel costs zero extra
+// polling. Populated every refreshAgents() tick regardless of whether the
+// panel is open; refreshTasks() populates lastTasksAll the same way.
+let lastAgentsAll = [];
+let lastHerdr = {};
+let lastTasksAll = [];
+
 async function refreshAgents() {
   try {
-    const active = (await (await fetch("/agents")).json()).filter(a => a.active);
+    const all = await (await fetch("/agents")).json();
+    lastAgentsAll = all;
+    const active = all.filter(a => a.active);
     let herdr = {};
     try {
       for (const h of await (await fetch("/herdr")).json()) {
         if (h.name) herdr[h.name] = h;
       }
     } catch (e) {}
+    lastHerdr = herdr;
+    renderFleetPanel();
     const to = $("to"), kept = to.value;
     to.innerHTML = '<option value="">anyone</option>';
     for (const a of active) {
@@ -476,6 +535,8 @@ function stateActions(t) {
 async function refreshTasks() {
   try {
     const ts = await (await fetch("/tasks")).json();
+    lastTasksAll = ts;
+    renderFleetPanel();
     const open = ts.filter(t => t.state !== "Done" && t.state !== "Superseded").length;
     $("tasktoggle").textContent = `tasks: ${open} open ${tasksOpen ? "▴" : "▾"}`;
     if (!tasksOpen) return;
@@ -650,6 +711,157 @@ async function taskAdd() {
   $("ttext").value = "";
   refreshTasks();
 }
+
+// ── Fleet status panel (task #28) ───────────────────────────────────────
+// Merges three already-polled sources client-side: GET /agents (identity +
+// presence), GET /tasks (owned work, the rev-gated leased truth), GET /herdr
+// (pane liveness). Deliberately does NOT fuse them into one badge - identity,
+// presence and pane are different machine facts, and conflating them is what
+// produced the duplicate-fleet spawn incident earlier today.
+
+const KNOWN_ROLES = new Set(["planner", "implementer", "reviewer", "verifier", "coordinator"]);
+
+// glenn (the human) and board (the service) are not under-registered agents;
+// they simply are not agents, and the panel should say so rather than render
+// them as broken registrations.
+function fleetRoleTag(agent, role) {
+  if (agent === "glenn") return { cls: "human", label: "human" };
+  if (agent === "board") return { cls: "service", label: "service" };
+  if (KNOWN_ROLES.has(role)) return { cls: role, label: role };
+  return { cls: "unknown", label: role || "—" };
+}
+
+function fleetState(a, now, ownedTask) {
+  if (ownedTask) return { cls: "working", label: "working" };
+  if (a.active) return { cls: "active", label: "active" };
+  if (a.role || a.model) return { cls: "quiet", label: "quiet" };
+  const mins = Math.max(0, Math.round((now - a.last_seen) / 60));
+  return { cls: "stale", label: `stale ${mins}m` };
+}
+
+function fleetRow(a, now) {
+  const div = document.createElement("div");
+  div.className = "frow";
+
+  // Owned non-terminal task wins as "what they are working on" - it is
+  // rev-gated, leased truth. Status text is prose and only a fallback.
+  const owned = lastTasksAll.find(t => t.owner === a.agent && (t.state === "Doing" || t.state === "Review"));
+  const state = fleetState(a, now, owned);
+  const role = fleetRoleTag(a.agent, a.role);
+  const herdr = lastHerdr[a.agent];
+
+  const main = document.createElement("div");
+  main.className = "fmain";
+  const roleTag = document.createElement("span");
+  roleTag.className = "frole " + role.cls;
+  roleTag.textContent = role.label;
+  main.appendChild(roleTag);
+  const name = document.createElement("span");
+  name.className = "fname";
+  name.textContent = a.agent;
+  main.appendChild(name);
+  if (herdr) {
+    const h = document.createElement("span");
+    h.className = "fherdr";
+    h.textContent = HERDR_ICON[herdr.status] || herdr.status;
+    h.title = `herdr pane: ${herdr.status}`;
+    main.appendChild(h);
+  }
+  const st = document.createElement("span");
+  st.className = "fstate " + state.cls;
+  st.textContent = state.label;
+  main.appendChild(st);
+  if (a.model) {
+    const m = document.createElement("span");
+    m.className = "flease";
+    m.textContent = a.model;
+    main.appendChild(m);
+  }
+  div.appendChild(main);
+
+  const detail = document.createElement("div");
+  detail.className = "fdetail";
+  let any = false;
+  if (owned) {
+    any = true;
+    const w = document.createElement("div");
+    w.className = "fwork";
+    const left = owned.state === "Doing" && owned.lease_until
+      ? ` (${Math.max(0, Math.round((owned.lease_until - now) / 60))}m left)` : "";
+    w.textContent = `#${owned.id}: ${owned.text}${left}`;
+    detail.appendChild(w);
+  }
+  if (a.status) {
+    any = true;
+    const s = document.createElement("div");
+    s.className = "fstatus";
+    s.textContent = a.status.split("\n")[0];
+    detail.appendChild(s);
+  }
+  if (a.files && a.files.length) {
+    any = true;
+    const c = document.createElement("div");
+    c.className = "fclaims";
+    c.textContent = "[" + a.files.join(", ") + "]";
+    detail.appendChild(c);
+  }
+  if (any) div.appendChild(detail);
+  return div;
+}
+
+let fleetOpen = false;
+
+function renderFleetPanel() {
+  const panel = $("fleetpanel");
+  if (!fleetOpen) return;
+  panel.innerHTML = "";
+  if (!lastAgentsAll.length) {
+    const e = document.createElement("div");
+    e.className = "fempty";
+    e.textContent = "no agents yet";
+    panel.appendChild(e);
+    return;
+  }
+  const now = Date.now() / 1000;
+  // Working first, then active, then quiet, then stale - matches the state
+  // precedence, so the agents doing something are always at the top.
+  const order = { working: 0, active: 1, quiet: 2, stale: 3 };
+  const rows = [...lastAgentsAll].sort((a, b) => {
+    const oa = lastTasksAll.find(t => t.owner === a.agent && (t.state === "Doing" || t.state === "Review"));
+    const ob = lastTasksAll.find(t => t.owner === b.agent && (t.state === "Doing" || t.state === "Review"));
+    return order[fleetState(a, now, oa).cls] - order[fleetState(b, now, ob).cls]
+      || a.agent.localeCompare(b.agent);
+  });
+  for (const a of rows) panel.appendChild(fleetRow(a, now));
+}
+
+function openFleetPanel() {
+  fleetOpen = true;
+  $("fleetpanel").style.display = "block";
+  renderFleetPanel();
+}
+
+function closeFleetPanel() {
+  fleetOpen = false;
+  $("fleetpanel").style.display = "none";
+}
+
+let fleetCloseTimer = null;
+function armFleetClose() {
+  clearTimeout(fleetCloseTimer);
+  fleetCloseTimer = setTimeout(closeFleetPanel, 300);
+}
+function cancelFleetClose() {
+  clearTimeout(fleetCloseTimer);
+}
+
+// Hover for mouse users; click for touch/keyboard, since hover does not
+// exist there.
+$("fleettoggle").addEventListener("mouseenter", () => { cancelFleetClose(); openFleetPanel(); });
+$("fleettoggle").addEventListener("mouseleave", armFleetClose);
+$("fleetpanel").addEventListener("mouseenter", cancelFleetClose);
+$("fleetpanel").addEventListener("mouseleave", armFleetClose);
+$("fleettoggle").addEventListener("click", () => { fleetOpen ? closeFleetPanel() : openFleetPanel(); });
 
 $("tasktoggle").addEventListener("click", () => {
   tasksOpen = !tasksOpen;
