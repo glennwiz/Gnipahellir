@@ -12,6 +12,7 @@ spawn surfaces in minutes, not on someone's hunch.
 import json
 import subprocess
 import time
+import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:7666"
@@ -35,8 +36,17 @@ def http_post(path, obj):
 
 
 def herdr_agents():
+    # encoding= not text=. herdr's JSON carries each pane's terminal_title, and
+    # those hold the agent spinner glyphs - multi-byte UTF-8 that a Windows
+    # cp1252 default cannot decode. It fails in subprocess's reader THREAD, so
+    # the caller sees a bare IndexError (empty buffer) and the real
+    # UnicodeDecodeError only appears on a stderr nobody is reading.
+    #
+    # The cruelty is the correlation: titles carry spinner glyphs precisely
+    # WHILE agents are working, so the query dies exactly when it has something
+    # worth reporting and succeeds whenever the fleet is idle.
     p = subprocess.run(["herdr", "agent", "list"], capture_output=True,
-                       text=True, timeout=10)
+                       encoding="utf-8", errors="replace", timeout=10)
     out = json.loads(p.stdout)["result"]["agents"]
     return [{
         "name": a.get("name", ""),
@@ -83,15 +93,34 @@ def main():
         except Exception:
             time.sleep(POLL)  # board still booting
     while True:
+        # THE REAL DEFECT WAS HERE, not in the decode. This used to be
+        # `except Exception: fleet = []`, which turns a failed query into a
+        # confident assertion that the fleet is EMPTY - and downstream cannot
+        # tell that apart from the truth. The badge column went blank for hours
+        # and looked like a working feature with nothing to show.
+        #
+        # So: on failure, publish NOTHING. The board keeps its last honest
+        # snapshot and the error gets named. An empty list is posted only when
+        # herdr genuinely reports zero agents. Silence beats a confident wrong
+        # answer.
+        fleet = None
         try:
             fleet = herdr_agents()
-        except Exception:
-            fleet = []
-        try:
-            http_post("/herdr_state", fleet)
-            watch_spawns(fleet)
-        except Exception:
-            pass  # board restarting - state re-posts next tick
+        except Exception as e:
+            print(f"[herdr_sync] query failed, keeping last snapshot: "
+                  f"{type(e).__name__}: {e}", flush=True)
+
+        if fleet is not None:
+            try:
+                http_post("/herdr_state", fleet)
+                watch_spawns(fleet)
+            except (urllib.error.URLError, OSError, TimeoutError) as e:
+                # Only a real transport failure means the board is unreachable.
+                print(f"[herdr_sync] board unreachable ({type(e).__name__}) - "
+                      f"retrying", flush=True)
+            except Exception as e:
+                print(f"[herdr_sync] bug posting state: {type(e).__name__}: {e}",
+                      flush=True)
         time.sleep(POLL)
 
 
