@@ -3,3 +3,6 @@
 board.jsonl
 board_archive.jsonl
 access.log
+tasks.jsonl
+spawn_prompts/
+__pycache__/
