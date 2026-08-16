@@ -6,6 +6,7 @@
 // board survives restarts and stays greppable by hand.
 //
 //   POST /post              — add a message (status / msg / request / reply)
+//   POST /spawn             — open a terminal running a claude agent on a task
 //   GET  /delta?since=N     — every message with seq > N, plus the latest seq
 //   GET  /agents            — last-seen + latest status per agent
 //   GET  /                  — plain-text summary for humans
@@ -14,9 +15,11 @@
 // Run:   ./message_board.exe [port]        (default 7666 — Garm guards it)
 package message_board
 
+import "core:c/libc"
 import "core:fmt"
 import "core:net"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import "core:strconv"
 import "core:time"
@@ -36,8 +39,9 @@ TRIM_TO :: #config(TRIM_TO, 1000)
 
 // An agent silent for this long is stale: still listed, but its file claims
 // no longer count as conflicts. Sessions rarely say goodbye — time-decay
-// beats politeness.
-STALE_SECS :: #config(STALE_SECS, 7200)
+// beats politeness. 20 min per Glenn (seq 155): dead sessions were haunting
+// their claims for two hours.
+STALE_SECS :: #config(STALE_SECS, 1200)
 
 Message :: struct {
 	seq:      int      `json:"seq"`,
@@ -59,11 +63,40 @@ Agent_Info :: struct {
 	files:       []string `json:"files"`,
 }
 
+// Shared task list (glenn seq 175). State is a replay of an append-only event
+// log, so progress survives restarts and history is never lost.
+Task :: struct {
+	id:      int    `json:"id"`,
+	unix:    i64    `json:"unix"`,    // created
+	updated: i64    `json:"updated"`,
+	creator: string `json:"creator"`,
+	owner:   string `json:"owner"`,   // set by claim/done, cleared by reopen
+	text:    string `json:"text"`,
+	status:  string `json:"status"`,  // open | doing | done
+}
+
+Task_Event :: struct {
+	unix:   i64    `json:"unix"`,
+	id:     int    `json:"id"`,
+	action: string `json:"action"`, // add | claim | done | reopen
+	agent:  string `json:"agent"`,
+	text:   string `json:"text"`,
+}
+
 Board :: struct {
 	messages:  [dynamic]Message,
 	next_seq:  int,
 	log_fd:    ^os.File,
 	access_fd: ^os.File,
+	tasks:        [dynamic]Task,
+	next_task_id: int,
+	tasks_fd:     ^os.File,
+	herdr_state:  string, // latest fleet snapshot from herdr_sync.py, "[]" until first post
+	// Poll-based liveness (glenn task #2): a GET /delta?for=<agent> is proof
+	// of life — a quietly-watching monitor stays active without posting
+	// heartbeat noise. In-memory only: after a restart every live watcher
+	// re-polls within its next cycle, so the map rebuilds itself.
+	last_poll:    map[string]i64,
 }
 
 // Set by send_response; safe as a package global because the server handles
@@ -101,6 +134,74 @@ board_load :: proc() {
 	} else {
 		fmt.eprintfln("cannot open %s - running without access log: %v", ACCESS_LOG, aerr)
 	}
+
+	tasks_load()
+}
+
+TASKS_FILE :: "tasks.jsonl"
+
+tasks_load :: proc() {
+	board.next_task_id = 1
+	if data, read_err := os.read_entire_file_from_path(TASKS_FILE, context.allocator); read_err == nil {
+		defer delete(data)
+		it := string(data)
+		for line in strings.split_lines_iterator(&it) {
+			if len(strings.trim_space(line)) == 0 do continue
+			ev: Task_Event
+			if err := json.unmarshal(transmute([]u8)strings.clone(line), &ev); err != nil {
+				fmt.eprintfln("skipping bad line in %s: %v", TASKS_FILE, err)
+				continue
+			}
+			task_apply(ev)
+		}
+	}
+
+	fd, err := os.open(TASKS_FILE, {.Write, .Create, .Append})
+	if err != nil {
+		fmt.eprintfln("cannot open %s for writing: %v", TASKS_FILE, err)
+		os.exit(1)
+	}
+	board.tasks_fd = fd
+}
+
+task_find :: proc(id: int) -> ^Task {
+	for &t in board.tasks do if t.id == id do return &t
+	return nil
+}
+
+// Fold one event into the task list. Shared by the replay-on-load and the
+// live POST path, so the in-memory state always matches a fresh replay.
+task_apply :: proc(ev: Task_Event) {
+	switch ev.action {
+	case "add":
+		append(&board.tasks, Task{
+			id = ev.id, unix = ev.unix, updated = ev.unix,
+			creator = ev.agent, text = ev.text, status = "open",
+		})
+		if ev.id >= board.next_task_id do board.next_task_id = ev.id + 1
+	case "claim":
+		if t := task_find(ev.id); t != nil {
+			t.status, t.owner, t.updated = "doing", ev.agent, ev.unix
+		}
+	case "done":
+		if t := task_find(ev.id); t != nil {
+			t.status, t.owner, t.updated = "done", ev.agent, ev.unix
+		}
+	case "reopen":
+		if t := task_find(ev.id); t != nil {
+			t.status, t.owner, t.updated = "open", "", ev.unix
+		}
+	}
+}
+
+task_post :: proc(ev: Task_Event) {
+	stamped := ev
+	stamped.unix = time.time_to_unix(time.now())
+	if line, err := json.marshal(stamped, {}, context.temp_allocator); err == nil {
+		os.write(board.tasks_fd, line)
+		os.write_string(board.tasks_fd, "\n")
+	}
+	task_apply(stamped)
 }
 
 board_post :: proc(m: Message) -> Message {
@@ -183,6 +284,11 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 	}
 	now := time.time_to_unix(time.now())
 	for &info in infos {
+		// A recent /delta?for= poll counts as being seen: liveness comes
+		// from watching, not just talking.
+		if p, polled := board.last_poll[info.agent]; polled && p > info.last_seen {
+			info.last_seen = p
+		}
 		info.active = now - info.last_seen <= STALE_SECS
 	}
 	return infos[:]
@@ -210,7 +316,7 @@ access_log :: proc(method, target: string, req_bytes: int) {
 send_response :: proc(client: net.TCP_Socket, status: string, content_type: string, body: string) {
 	resp_status = status
 	head := fmt.tprintf(
-		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+		"HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
 		status, content_type, len(body),
 	)
 	send_all(client, head)
@@ -317,6 +423,21 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		send_response(client, "204 No Content", "text/plain", "")
 	case method == "POST" && path == "/post":
 		handle_post(client, body)
+	case method == "POST" && path == "/spawn":
+		handle_spawn(client, body)
+	case method == "GET" && path == "/tasks":
+		handle_tasks(client)
+	case method == "POST" && path == "/task":
+		handle_task_mut(client, body)
+	case method == "POST" && path == "/kill":
+		handle_kill(client, body)
+	case method == "GET" && path == "/herdr":
+		send_response(client, "200 OK", "application/json",
+			board.herdr_state if board.herdr_state != "" else "[]")
+	case method == "POST" && path == "/herdr_state":
+		if len(board.herdr_state) > 0 do delete(board.herdr_state)
+		board.herdr_state = strings.clone(string(body))
+		send_response(client, "200 OK", "application/json", `{"ok":true}`)
 	case method == "GET" && (path == "/delta" || path == "/messages"):
 		handle_delta(client, query)
 	case method == "GET" && path == "/agents":
@@ -385,6 +506,204 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 	send_response(client, "200 OK", "application/json", string(out))
 }
 
+handle_tasks :: proc(client: net.TCP_Socket) {
+	out, err := json.marshal(board.tasks[:], {}, context.temp_allocator)
+	if err != nil {
+		send_response(client, "500 Internal Server Error", "application/json", `{"error":"marshal failed"}`)
+		return
+	}
+	send_response(client, "200 OK", "application/json", string(out))
+}
+
+handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
+	// Heap unmarshal: "add" events keep their strings in the task list.
+	ev: Task_Event
+	if err := json.unmarshal(body, &ev); err != nil {
+		send_response(client, "400 Bad Request", "application/json",
+			fmt.tprintf(`{{"error":"bad json: %v"}}`, err))
+		return
+	}
+	ev.agent = strings.trim_space(ev.agent)
+	ev.text = strings.trim_space(ev.text)
+	if ev.agent == "" {
+		send_response(client, "400 Bad Request", "application/json", `{"error":"'agent' is required"}`)
+		return
+	}
+	switch ev.action {
+	case "add":
+		if ev.text == "" {
+			send_response(client, "400 Bad Request", "application/json", `{"error":"'text' is required for add"}`)
+			return
+		}
+		ev.id = board.next_task_id
+	case "claim", "done", "reopen":
+		if task_find(ev.id) == nil {
+			send_response(client, "404 Not Found", "application/json",
+				fmt.tprintf(`{{"error":"no task with id %d"}}`, ev.id))
+			return
+		}
+	case:
+		send_response(client, "400 Bad Request", "application/json",
+			`{"error":"action must be one of: add, claim, done, reopen"}`)
+		return
+	}
+
+	task_post(ev)
+	send_response(client, "200 OK", "application/json",
+		fmt.tprintf(`{{"ok":true,"id":%d}}`, ev.id))
+}
+
+// Close a board-spawned agent's herdr tab (glenn seq 226 - the roster's per-
+// agent close button). The name resolves against the sidecar's latest fleet
+// snapshot, so only agents herdr lists by name (board-spawned ones) can be
+// closed; glenn's own unnamed sessions never match. The tab id is charset-
+// checked before use.
+handle_kill :: proc(client: net.TCP_Socket, body: []u8) {
+	Kill_Request :: struct {
+		name: string `json:"name"`,
+	}
+	req: Kill_Request
+	if err := json.unmarshal(body, &req, allocator = context.temp_allocator); err != nil || strings.trim_space(req.name) == "" {
+		send_response(client, "400 Bad Request", "application/json", `{"error":"'name' is required"}`)
+		return
+	}
+	name := strings.trim_space(req.name)
+
+	Herdr_Row :: struct {
+		name: string `json:"name"`,
+		tab:  string `json:"tab"`,
+	}
+	rows: []Herdr_Row
+	if board.herdr_state == "" ||
+	   json.unmarshal(transmute([]u8)board.herdr_state, &rows, allocator = context.temp_allocator) != nil {
+		send_response(client, "500 Internal Server Error", "application/json",
+			`{"error":"no herdr fleet snapshot - is herdr_sync.py running?"}`)
+		return
+	}
+	tab := ""
+	for r in rows do if r.name == name { tab = r.tab; break }
+	if tab == "" {
+		send_response(client, "404 Not Found", "application/json",
+			fmt.tprintf(`{{"error":"herdr knows no spawned agent named %s"}}`, name))
+		return
+	}
+	for ch in tab do if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == ':') {
+		send_response(client, "400 Bad Request", "application/json", `{"error":"bad tab id"}`)
+		return
+	}
+
+	libc.system(strings.clone_to_cstring(fmt.tprintf("herdr tab close %s", tab), context.temp_allocator))
+	board_post(Message{
+		agent = "board",
+		kind  = "msg",
+		text  = strings.clone(fmt.tprintf("closed %s (herdr tab %s) from the board UI", name, tab)),
+	})
+	send_response(client, "200 OK", "application/json", `{"ok":true}`)
+}
+
+// ------------------------------------------------------------- agent spawning
+//
+// The task text never touches a command line: it is written to a prompt file
+// and the terminal gets a fixed instruction pointing at that file. The only
+// request-derived text in the command is the topic, sanitized to [a-z0-9-].
+
+SPAWN_DIR :: "spawn_prompts"
+
+sanitize_topic :: proc(s: string, allocator := context.temp_allocator) -> string {
+	b := strings.builder_make(allocator)
+	for ch in s {
+		switch ch {
+		case 'a' ..= 'z', '0' ..= '9', '-':
+			strings.write_rune(&b, ch)
+		case 'A' ..= 'Z':
+			strings.write_rune(&b, ch + 32)
+		case ' ', '_':
+			strings.write_rune(&b, '-')
+		}
+	}
+	out := strings.to_string(b)
+	if len(out) > 24 do out = out[:24]
+	return out
+}
+
+handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
+	Spawn_Request :: struct {
+		name:   string `json:"name"`,
+		prompt: string `json:"prompt"`,
+		model:  string `json:"model"`, // "" = default; else allowlisted below
+	}
+	req: Spawn_Request
+	if err := json.unmarshal(body, &req, allocator = context.temp_allocator); err != nil {
+		send_response(client, "400 Bad Request", "application/json",
+			fmt.tprintf(`{{"error":"bad json: %v"}}`, err))
+		return
+	}
+	prompt := strings.trim_space(req.prompt)
+	if prompt == "" {
+		send_response(client, "400 Bad Request", "application/json",
+			`{"error":"'prompt' is required"}`)
+		return
+	}
+
+	topic := sanitize_topic(req.name)
+	topic = strings.trim_prefix(topic, "claude-") // typing the prefix must not double it
+	if topic == "" do topic = "worker"
+	// Unique suffix so repeat topics never collide on the board (glenn seq 163).
+	tag := (u32(time.time_to_unix(time.now())) * 2654435761 + u32(board.next_seq)) & 0xFFFF
+	agent := fmt.tprintf("claude-%s-%04x", topic, tag)
+
+	wd, wd_err := os.get_working_directory(context.temp_allocator)
+	if wd_err != nil {
+		send_response(client, "500 Internal Server Error", "application/json",
+			`{"error":"cannot resolve working directory"}`)
+		return
+	}
+	os.make_directory(SPAWN_DIR)
+	prompt_path, _ := filepath.join({wd, SPAWN_DIR,
+		fmt.tprintf("%s_%d.txt", topic, time.time_to_unix(time.now()))}, context.temp_allocator)
+	if werr := os.write_entire_file(prompt_path, transmute([]u8)prompt); werr != nil {
+		send_response(client, "500 Internal Server Error", "application/json",
+			fmt.tprintf(`{{"error":"cannot write prompt file: %v"}}`, werr))
+		return
+	}
+
+	work_dir, _ := filepath.join({filepath.dir(wd), "Gnipahellir3"}, context.temp_allocator)
+	instruction := fmt.tprintf(
+		"You are agent %s, spawned from the message board. Your task from Glenn is in the file %s - read it now and carry it out. Follow the full board protocol in CLAUDE.md as %s, including its monitor step.",
+		agent, prompt_path, agent)
+	// Model routing (glenn seq 180): cheap models for routine work. Strict
+	// allowlist — the model string goes on the command line. Always explicit:
+	// glenn's global claude default is haiku (seq 189), which would otherwise
+	// silently apply to every spawn.
+	model := "fable"
+	switch req.model {
+	case "sonnet", "opus", "haiku":
+		model = req.model
+	}
+	// The launcher script herds the agent into a herdr pane (glenn seq 196),
+	// falling back to a Windows Terminal tab. Dispatched detached via start /b:
+	// herdr's readiness wait must never block this single-threaded server.
+	launcher, _ := filepath.join({wd, "spawn_herdr.py"}, context.temp_allocator)
+	cmd := fmt.tprintf(`cmd /c start /b "" python "%s" "%s" "%s" %s "%s"`,
+		launcher, agent, work_dir, model, instruction)
+	if rc := libc.system(strings.clone_to_cstring(cmd, context.temp_allocator)); rc != 0 {
+		send_response(client, "500 Internal Server Error", "application/json",
+			fmt.tprintf(`{{"error":"launcher exited with %d"}}`, rc))
+		return
+	}
+
+	board_post(Message{
+		agent = "board",
+		kind  = "msg",
+		text  = strings.clone(fmt.tprintf("spawned %s (herdr pane, model %s) - task: %s", agent,
+			model,
+			prompt if len(prompt) <= 120 else fmt.tprintf("%s...", prompt[:120]))),
+	})
+
+	send_response(client, "200 OK", "application/json",
+		fmt.tprintf(`{{"ok":true,"agent":"%s"}}`, agent))
+}
+
 handle_claims :: proc(client: net.TCP_Socket) {
 	Claim :: struct {
 		file:      string `json:"file"`,
@@ -425,7 +744,12 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 	// ?for=<agent>: only messages addressed to that agent or broadcast,
 	// never the agent's own posts. Cursor semantics are unchanged — 'latest'
 	// stays global, so filtered and unfiltered polls share one cursor.
+	// The poll also refreshes the agent's liveness stamp: the query string
+	// is temp-allocated, so the key is cloned once on first sight.
 	if name, found := query_param(query, "for"); found && name != "" {
+		key := name
+		if key not_in board.last_poll do key = strings.clone(name)
+		board.last_poll[key] = time.time_to_unix(time.now())
 		filtered := make([dynamic]Message, 0, len(fresh), context.temp_allocator)
 		for m in fresh {
 			if message_is_for(m, name) do append(&filtered, m)
@@ -497,7 +821,7 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintln(&b, "POST /post            body: {\"agent\":\"name\",\"kind\":\"status|msg|request|reply\",\"text\":\"...\",\"files\":[\"...\"],\"to\":\"agent\",\"reply_to\":seq}")
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
 	fmt.sbprintln(&b, "     &for=agent      only messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
-	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = seen within 2h)")
+	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = posted OR polled /delta?for= within 20 min)")
 	fmt.sbprintln(&b, "GET  /claims          file -> active claimant; POST answers carry 'warnings' when your files overlap another active agent's")
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "recent:")

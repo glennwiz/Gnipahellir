@@ -19,9 +19,34 @@
   #stats { color: #6f6660; }
   #roster { color: #8f857c; }
   #roster b { font-weight: normal; }
+  .rkill {
+    cursor: pointer; color: #a05248; padding: 0 3px; border-radius: 3px;
+  }
+  .rkill:hover { color: #ff8878; background: #2a1512; }
+  .rrel {
+    cursor: pointer; color: #7a8a5d; padding: 0 3px; border-radius: 3px;
+  }
+  .rrel:hover { color: #c9e08a; background: #1d2412; }
   #log { flex: 1; overflow-y: auto; padding: 10px 14px; }
-  .m { padding: 3px 0; display: flex; gap: 8px; align-items: baseline; }
+  .m { padding: 3px 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .m:hover { background: #14101a; }
+  /* A multi-line or long post drops its text onto its own full-width line
+     under the metadata — the inline column was ~300px in from the left, so
+     long posts wrapped into a tall unreadable ribbon. Short one-liners keep
+     the dense inline look. */
+  .m.block { padding: 7px 0; }
+  .m.block .txt, .m.block .more {
+    flex: 0 0 100%; border-left: 2px solid #2a2028; padding-left: 9px; margin-top: 2px;
+  }
+  .m.block .txt.clip { max-height: 16em; overflow: hidden; }
+  .ln { white-space: pre-wrap; }
+  .blank { height: 7px; }
+  /* Hanging indent: the marker is its own flex item, so wrapped list text
+     lines up under the text rather than under the bullet. */
+  .li { display: flex; gap: 6px; }
+  .li .mark { flex-shrink: 0; color: #8a7f74; }
+  .more { cursor: pointer; color: #6aa5d8; font-size: 11px; }
+  .more:hover { color: #9ccbf0; }
   .t { color: #56505a; flex-shrink: 0; }
   .seq { color: #56505a; flex-shrink: 0; min-width: 34px; text-align: right; }
   .agent { flex-shrink: 0; font-weight: bold; }
@@ -47,6 +72,29 @@
   button { background: #3a1712; color: #e8886f; cursor: pointer; }
   button:hover { background: #55201a; }
   #warn { color: #e0a153; padding: 0 14px 6px; display: none; }
+  #tasktoggle { cursor: pointer; color: #e0a153; }
+  #tasktoggle:hover { color: #f0b873; }
+  #tasks {
+    display: none; border-bottom: 1px solid #2a2028; padding: 8px 14px;
+    max-height: 40vh; overflow-y: auto; background: #0f0c12;
+  }
+  .task { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
+  .task .tid { color: #56505a; min-width: 30px; text-align: right; flex-shrink: 0; }
+  .task .ttext { flex: 1; }
+  .tstat { padding: 0 6px; border-radius: 3px; font-size: 11px; flex-shrink: 0; }
+  .tstat.open  { background: #33210f; color: #e0a153; }
+  .tstat.doing { background: #1a2733; color: #6aa5d8; }
+  .tstat.done  { background: #16291a; color: #7dc687; }
+  .task.done .ttext { color: #5d5650; text-decoration: line-through; }
+  .task button { padding: 1px 7px; font-size: 11px; }
+  #taskadd { display: flex; gap: 8px; margin-top: 6px; }
+  #ttext { flex: 1; }
+  #spawnbar { border-top: 1px dashed #2a2028; }
+  #sname { width: 130px; }
+  #stask { flex: 1; }
+  #spawn { background: #12301a; color: #7dc687; }
+  #spawn:hover { background: #1a4525; }
+  #spawn:disabled { opacity: 0.5; cursor: wait; }
   #loadarch {
     display: none; cursor: pointer; text-align: center;
     color: #6aa5d8; padding: 6px; border: 1px dashed #2a3a48;
@@ -59,10 +107,29 @@
 <header>
   <h1>GNIPAHELLIR BOARD</h1>
   <span id="stats"></span>
+  <span id="tasktoggle"></span>
   <span id="roster"></span>
 </header>
+<div id="tasks">
+  <div id="tasklist"></div>
+  <div id="taskadd">
+    <input id="ttext" placeholder="new task&hellip;" autocomplete="off">
+    <button id="tadd">Add Task</button>
+  </div>
+</div>
 <div id="log"><div id="loadarch"></div></div>
 <div id="warn"></div>
+<footer id="spawnbar">
+  <input id="sname" placeholder="topic (e.g. raids)" title="agent topic - becomes claude-&lt;topic&gt;-&lt;hex&gt;" autocomplete="off">
+  <select id="smodel" title="model - cheaper models for routine work">
+    <option value="fable">fable</option>
+    <option value="opus">opus</option>
+    <option value="sonnet">sonnet</option>
+    <option value="haiku">haiku</option>
+  </select>
+  <input id="stask" placeholder="task for a new claude agent&hellip;" autocomplete="off">
+  <button id="spawn">Spawn Agent</button>
+</footer>
 <footer>
   <input id="name" title="your name">
   <select id="kind"><option>msg</option><option>request</option></select>
@@ -80,18 +147,88 @@ const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'
 const hue = s => { let h = 0; for (const c of s) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
 const when = u => new Date(u * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 
+const BULLET = /^(\s*)([-*•])\s+(.*)$/;
+const NUMBER = /^(\s*)(\d{1,3}[.)])\s+(.*)$/;
+const CLIP_LINES = 16;    // more lines than this gets a preview + show-more
+const CLIP_CHARS = 900;   // ...and so does one very long unbroken line
+
+// Block treatment only for posts that are actually long or actually
+// multi-line.  Never re-flow one-line prose: a paragraph break appears
+// only where the poster typed a blank line.
+const isBlock = t => t.includes("\n") || t.length > 160;
+
+// Poster text enters ONLY through textContent, so a message can never
+// become markup — the formatter appends nothing but elements it builds
+// itself.  Lines already starting with a bullet or "1." marker get a
+// hanging indent; every other line is passed through under pre-wrap.
+function formatText(text) {
+  const frag = document.createDocumentFragment();
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line) {
+      const gap = document.createElement("div");
+      gap.className = "blank";
+      frag.appendChild(gap);
+      continue;
+    }
+    const hit = BULLET.exec(line) || NUMBER.exec(line);
+    const row = document.createElement("div");
+    if (hit) {
+      row.className = "li";
+      if (hit[1]) row.style.marginLeft = Math.min(hit[1].length, 8) * 6 + "px";
+      const mark = document.createElement("span");
+      mark.className = "mark";
+      mark.textContent = hit[2];
+      const body = document.createElement("span");
+      body.textContent = hit[3];
+      row.append(mark, body);
+    } else {
+      row.className = "ln";
+      row.textContent = line;
+    }
+    frag.appendChild(row);
+  }
+  return frag;
+}
+
 function render(m) {
   const div = document.createElement("div");
-  div.className = "m";
+  const block = isBlock(m.text);
+  div.className = "m" + (block ? " block" : "");
   div.innerHTML =
     `<span class="t">${when(m.unix)}</span>` +
     `<span class="seq">#${m.seq}</span>` +
     `<span class="agent" style="color:hsl(${hue(m.agent)} 45% 65%)">${esc(m.agent)}</span>` +
     `<span class="kind ${esc(m.kind)}">${esc(m.kind)}${m.reply_to ? "&#8594;#" + m.reply_to : ""}</span>` +
-    (m.to ? `<span class="to">@${esc(m.to)}</span>` : "") +
-    `<span class="txt">${esc(m.text)}` +
-    (m.files && m.files.length ? ` <span class="files">[${esc(m.files.join(", "))}]</span>` : "") +
-    `</span>`;
+    (m.to ? `<span class="to">@${esc(m.to)}</span>` : "");
+
+  const txt = document.createElement(block ? "div" : "span");
+  txt.className = "txt";
+  if (block) txt.appendChild(formatText(m.text));
+  else txt.textContent = m.text;
+  div.appendChild(txt);
+
+  // Clip on either axis: many lines, or one enormous unbroken line — the
+  // wall-of-text posts that started this are single-line and 2000+ chars,
+  // so a line count alone would never catch them.
+  const lines = block ? m.text.split("\n").length : 1;
+  if (lines > CLIP_LINES || m.text.length > CLIP_CHARS) {
+    txt.classList.add("clip");
+    const more = document.createElement("span");
+    more.className = "more";
+    const shut = lines > 1 ? `▾ show all ${lines} lines` : "▾ show more";
+    const label = () => txt.classList.contains("clip") ? shut : "▴ collapse";
+    more.textContent = label();
+    more.onclick = () => { txt.classList.toggle("clip"); more.textContent = label(); };
+    div.appendChild(more);
+  }
+
+  if (m.files && m.files.length) {
+    const f = document.createElement("span");
+    f.className = "files";
+    f.textContent = "[" + m.files.join(", ") + "]";
+    div.appendChild(f);
+  }
   return div;
 }
 
@@ -137,9 +274,17 @@ async function loadArchive() {
   } catch (e) { la.textContent = "archive load failed - retry"; }
 }
 
+const HERDR_ICON = { working: "⚒", idle: "·", blocked: "✋", done: "✓" };
+
 async function refreshAgents() {
   try {
     const active = (await (await fetch("/agents")).json()).filter(a => a.active);
+    let herdr = {};
+    try {
+      for (const h of await (await fetch("/herdr")).json()) {
+        if (h.name) herdr[h.name] = h;
+      }
+    } catch (e) {}
     const to = $("to"), kept = to.value;
     to.innerHTML = '<option value="">anyone</option>';
     for (const a of active) {
@@ -148,7 +293,38 @@ async function refreshAgents() {
       to.appendChild(o);
     }
     to.value = [...to.options].some(o => o.value === kept) ? kept : "";
-    $("roster").textContent = "active: " + (active.map(a => a.agent).join(", ") || "nobody");
+    // Union of board-active agents and herdr-named panes: a spawn that died
+    // before checking in still shows up here, with its close button.
+    const names = [...new Set([...active.map(a => a.agent), ...Object.keys(herdr)])];
+    const byName = {};
+    for (const a of active) byName[a.agent] = a;
+    const roster = $("roster");
+    roster.textContent = "active: ";
+    roster.title = "herdr: ⚒ working · idle ✋ blocked ✓ done — ✕ closes a spawned agent's pane — ⊘ releases an agent's file claims";
+    if (!names.length) roster.append("nobody");
+    names.forEach((n, i) => {
+      if (i) roster.append(", ");
+      const h = herdr[n];
+      roster.append(h ? `${n}[${HERDR_ICON[h.status] || h.status}]` : n);
+      if (h) {
+        const x = document.createElement("span");
+        x.className = "rkill";
+        x.textContent = "✕";
+        x.title = `close ${n}'s herdr pane`;
+        x.onclick = () => closeAgent(n);
+        roster.appendChild(x);
+      }
+      // One-click broom for claims: dead sessions never say goodbye.
+      const a = byName[n];
+      if (a && a.files && a.files.length) {
+        const r = document.createElement("span");
+        r.className = "rrel";
+        r.textContent = "⊘";
+        r.title = `release ${n}'s file claims: ${a.files.join(", ")}`;
+        r.onclick = () => releaseClaims(n, a.files);
+        roster.appendChild(r);
+      }
+    });
   } catch (e) {}
 }
 
@@ -168,6 +344,112 @@ async function send() {
   await poll();
 }
 
+// Claims release the same way agents release them: a files=[] status as that
+// agent. The text names the operator so the log never reads as the agent's
+// own words.
+async function releaseClaims(name, files) {
+  if (!confirm(`Release ${name}'s file claims?\n\n${files.join("\n")}`)) return;
+  const operator = $("name").value.trim() || "glenn";
+  await fetch("/post", {
+    method: "POST",
+    body: JSON.stringify({ agent: name, kind: "status", files: [],
+      text: `(claims released from the board roster by ${operator})` }),
+  });
+  await poll();
+  refreshAgents();
+}
+
+async function closeAgent(name) {
+  if (!confirm(`Close ${name}'s session (herdr pane)?`)) return;
+  const r = await (await fetch("/kill", { method: "POST", body: JSON.stringify({ name }) })).json();
+  const w = $("warn");
+  if (r.error) { w.style.display = "block"; w.textContent = "close failed: " + r.error; }
+  await poll();
+  refreshAgents();
+}
+
+let tasksOpen = false;
+
+async function refreshTasks() {
+  try {
+    const ts = await (await fetch("/tasks")).json();
+    const open = ts.filter(t => t.status !== "done").length;
+    $("tasktoggle").textContent = `tasks: ${open} open ${tasksOpen ? "▴" : "▾"}`;
+    if (!tasksOpen) return;
+    const tl = $("tasklist");
+    tl.innerHTML = "";
+    const order = { open: 0, doing: 1, done: 2 };
+    for (const t of [...ts].sort((a, b) => order[a.status] - order[b.status] || b.id - a.id)) {
+      const div = document.createElement("div");
+      div.className = "task" + (t.status === "done" ? " done" : "");
+      div.innerHTML =
+        `<span class="tid">#${t.id}</span>` +
+        `<span class="tstat ${esc(t.status)}">${esc(t.status)}</span>` +
+        `<span class="ttext">${esc(t.text)}</span>` +
+        `<span class="files">${esc(t.creator)}${t.owner ? " → " + esc(t.owner) : ""}</span>`;
+      const btn = (label, action) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.onclick = () => taskAct(action, t.id);
+        div.appendChild(b);
+      };
+      if (t.status === "open") { btn("start", "claim"); btn("done", "done"); }
+      else if (t.status === "doing") btn("done", "done");
+      else btn("reopen", "reopen");
+      tl.appendChild(div);
+    }
+  } catch (e) {}
+}
+
+async function taskAct(action, id) {
+  const agent = $("name").value.trim() || "glenn";
+  await fetch("/task", { method: "POST", body: JSON.stringify({ action, id, agent }) });
+  refreshTasks();
+}
+
+async function taskAdd() {
+  const text = $("ttext").value.trim();
+  const agent = $("name").value.trim() || "glenn";
+  if (!text) return;
+  await fetch("/task", { method: "POST", body: JSON.stringify({ action: "add", text, agent }) });
+  $("ttext").value = "";
+  refreshTasks();
+}
+
+$("tasktoggle").addEventListener("click", () => {
+  tasksOpen = !tasksOpen;
+  $("tasks").style.display = tasksOpen ? "block" : "none";
+  refreshTasks();
+});
+$("tadd").addEventListener("click", taskAdd);
+$("ttext").addEventListener("keydown", e => { if (e.key === "Enter") taskAdd(); });
+
+async function spawnAgent() {
+  const prompt = $("stask").value.trim();
+  if (!prompt) return;
+  const btn = $("spawn"), w = $("warn");
+  btn.disabled = true;
+  try {
+    const r = await (await fetch("/spawn", {
+      method: "POST",
+      body: JSON.stringify({ name: $("sname").value.trim(), prompt, model: $("smodel").value }),
+    })).json();
+    if (r.error) {
+      w.style.display = "block";
+      w.textContent = "spawn failed: " + r.error;
+    } else {
+      w.style.display = "none";
+      $("stask").value = "";
+      await poll();
+    }
+  } catch (e) {
+    w.style.display = "block";
+    w.textContent = "spawn failed: board unreachable";
+  } finally { btn.disabled = false; }
+}
+
+$("spawn").addEventListener("click", spawnAgent);
+$("stask").addEventListener("keydown", e => { if (e.key === "Enter") spawnAgent(); });
 $("send").addEventListener("click", send);
 $("loadarch").addEventListener("click", loadArchive);
 $("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
@@ -175,8 +457,10 @@ $("name").value = localStorage.getItem("board_name") || "glenn";
 
 poll().then(() => { const log = $("log"); log.scrollTop = log.scrollHeight; });
 refreshAgents();
+refreshTasks();
 setInterval(poll, 2500);
 setInterval(refreshAgents, 10000);
+setInterval(refreshTasks, 5000);
 </script>
 </body>
 </html>
