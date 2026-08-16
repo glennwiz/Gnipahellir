@@ -1454,9 +1454,51 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 		return
 	}
 
+	// A PROCESS-LAUNCHING ENDPOINT IS NOT A PLACE FOR A HELPFUL GUESS.
+	//
+	// `name` used to be optional and fall back to a default topic. A typo in
+	// the identity field therefore did not fail - it started a real agent
+	// under a name the caller never chose, from input the server already knew
+	// it could not read. That is how a coordinator probing with {"topic":...}
+	// instead of {"name":...} launched a stray: the unknown key was dropped,
+	// the name went missing, and the default did something plausible.
+	//
+	// Get-or-create made the second such caller worse rather than better -
+	// they would silently SHARE the first one's agent, each believing it was
+	// theirs. A stray spawn is at least visible; a plausible success is not.
+	//
+	// So there is no default topic, and there must never be one: any default
+	// recreates that shared-stranger agent under a new name.
+	if strings.trim_space(req.name) == "" {
+		send_response(client, "400 Bad Request", "application/json",
+			`{"error":"'name' is required"}`)
+		return
+	}
 	topic := sanitize_topic(req.name)
 	topic = strings.trim_prefix(topic, "claude-") // typing the prefix must not double it
-	if topic == "" do topic = "worker"
+	// "Usable" means at least one letter or digit, not merely non-empty.
+	// sanitize_topic turns spaces into dashes, so "!!! ???" survives as "-"
+	// and would have spawned claude---xxxx — a name nobody chose, which is
+	// the very thing this refusal exists to prevent. Found by the leg that
+	// asserts the refusal explains itself.
+	usable := false
+	for ch in topic do if ch != '-' { usable = true; break }
+	if !usable {
+		// Self-explaining refusal: the caller learns the charset from the
+		// error rather than from the README, which is the point of refusing
+		// loudly instead of substituting quietly.
+		// %q for the WHOLE value, not for a fragment inside it. Interpolating
+		// a quoted %q into an already-quoted JSON string produces
+		// {"error":"name "!!! ???" has..."} — invalid JSON, and the caller
+		// gets a parse failure instead of the explanation this refusal
+		// exists to give. Quoting once, at the outside, escapes the echoed
+		// input rather than injecting it.
+		send_response(client, "400 Bad Request", "application/json",
+			fmt.tprintf(`{{"error":%q}}`,
+				fmt.tprintf("name %s has no usable characters - topics are [a-z0-9-]",
+					req.name)))
+		return
+	}
 	// GET-OR-CREATE. A topic already held returns the agent that holds it
 	// rather than launching a second one — /spawn is idempotent per topic,
 	// which is the property run.ps1's own checks were always reaching for.

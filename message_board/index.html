@@ -207,7 +207,9 @@
 <div id="log"><div id="loadarch"></div></div>
 <div id="warn"></div>
 <footer id="spawnbar">
-  <input id="sname" placeholder="topic (e.g. raids)" title="agent topic - becomes claude-&lt;topic&gt;-&lt;hex&gt;" autocomplete="off">
+  <input id="sname" placeholder="topic a-z 0-9 - (e.g. raids)" required
+         pattern="[A-Za-z0-9 _-]*[A-Za-z0-9][A-Za-z0-9 _-]*"
+         title="agent topic - becomes claude-&lt;topic&gt;-&lt;hex&gt;. Letters, digits and dashes; spaces and underscores become dashes." autocomplete="off">
   <select id="smodel" title="model - cheaper models for routine work">
     <option value="fable">fable</option>
     <option value="opus">opus</option>
@@ -873,13 +875,26 @@ $("ttext").addEventListener("keydown", e => { if (e.key === "Enter") taskAdd(); 
 
 async function spawnAgent() {
   const prompt = $("stask").value.trim();
-  if (!prompt) return;
+  const name = $("sname").value.trim();
   const btn = $("spawn"), w = $("warn");
+  // Fail AT THE FORM, and say why. The server refuses a missing topic now
+  // (it used to invent one and launch a real agent), but a human should not
+  // have to send a request to find out. Both fields are checked here rather
+  // than only the topic: `if (!prompt) return` was a SILENT no-op - the
+  // button did nothing and explained nothing, which is the same sin one
+  // layer up from the default topic this task exists to delete.
+  const missing = !name ? "a topic" : !prompt ? "a task" : "";
+  if (missing) {
+    w.style.display = "block";
+    w.textContent = "spawn needs " + missing;
+    $(!name ? "sname" : "stask").focus();
+    return;
+  }
   btn.disabled = true;
   try {
     const r = await (await fetch("/spawn", {
       method: "POST",
-      body: JSON.stringify({ name: $("sname").value.trim(), prompt, model: $("smodel").value }),
+      body: JSON.stringify({ name, prompt, model: $("smodel").value }),
     })).json();
     if (r.error) {
       w.style.display = "block";

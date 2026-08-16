@@ -891,6 +891,45 @@ def force_spawns_a_deliberate_second(b):
     assert st == 400, ("force must bypass the guard", st, r)
 
 
+@check
+def spawn_refuses_a_missing_name_instead_of_inventing_one(b):
+    # It used to substitute the topic "worker" and LAUNCH. A typo in the
+    # identity field of a process-launching endpoint started a real agent
+    # under a name nobody chose - which is exactly how a probe sending
+    # {"topic":...} instead of {"name":...} produced a stray.
+    st, r = call("/spawn", {"prompt": "no name at all"})
+    assert st == 400 and "name" in r["error"], (st, r)
+    st, r = call("/spawn", {"name": "   ", "prompt": "whitespace is not a name"})
+    assert st == 400 and "name" in r["error"], (st, r)
+
+
+@check
+def an_unusable_name_is_refused_and_says_why(b):
+    # Self-explaining refusal: the caller learns the charset from the error
+    # rather than from the README. Refusing loudly is only better than
+    # substituting quietly if the refusal teaches.
+    st, r = call("/spawn", {"name": "!!! ???", "prompt": "nothing usable"})
+    assert st == 400, (st, r)
+    assert "a-z0-9-" in r["error"], r
+    assert "!!! ???" in r["error"], ("the refusal should quote what was sent", r)
+    # ...and the echo must not break the JSON it travels in. A name carrying
+    # a double quote once produced {"error":"name "x"" ..."} - the caller got
+    # a parse error instead of the explanation the refusal exists to give.
+    st, r = call("/spawn", {"name": '"', "prompt": "a lone double quote"})
+    assert st == 400 and "error" in r, ("the refusal must stay valid JSON", st, r)
+    assert '"' in r["error"], ("the quote must survive into the message", r)
+
+
+@check
+def a_valid_name_is_unaffected_by_the_new_refusals(b):
+    # The guard must not have tightened anything else. A real name still
+    # reaches the launcher path - proven by the bad role, which is refused
+    # AFTER the name checks and before any process starts.
+    st, r = call("/spawn", {"name": "Raids Team", "role": "no-such-role",
+                            "prompt": "valid name, bad role"})
+    assert st == 400 and "role" in r["error"],         ("a usable name must get past the name checks", st, r)
+
+
 # ── checks: crash safety + retention (task #18) ─────────────────────────────
 
 @check
