@@ -76,11 +76,6 @@ function Test-Board {
     catch { return $false }
 }
 
-function Get-BoardAgents {
-    try { return @(Invoke-RestMethod -Uri "$board/agents" -TimeoutSec 5) }
-    catch { return @() }
-}
-
 # Names of agents herdr currently has a pane for. The board's own "active" flag
 # is a CHATTINESS measure - it goes false after 20 minutes of silence - and a
 # standing agent waiting for work is silent by design. Pane liveness is the
@@ -179,52 +174,37 @@ $fleet = @(
        task  = 'Standing verifier. Run builds, tests, greps and lookups on request and report counts and failures promptly.' }
 )
 
-# Bind the roster to a variable BEFORE filtering. Piping a function's returned
-# array straight into Where-Object does not reliably unroll it, and an
-# un-unrolled array makes `$_.agent -like ...` filter the array instead of
-# testing one agent - which is truthy, so every topic would look "already
-# active" and the whole fleet would silently never spawn.
-$agents = Get-BoardAgents
-$active = @($agents | Where-Object { $_.active })
-
-# The pane snapshot is what the guard leans on, so give a just-started sidecar
-# its first tick - without it every standing agent looks absent and the fleet
-# doubles.
-$panes = Get-LivePaneNames
-if ($panes.Count -eq 0) {
+# The endpoint decides whether a topic is already held - this script does not.
+# It used to keep its own duplicate checks (live pane, then board activity),
+# and they worked, but coordinator-first spawning calls POST /spawn directly
+# and routes around anything that lives out here. Two implementations of one
+# rule is how the rule drifts, so there is one, and it is the one every caller
+# reaches. See topic_holder() in main.odin.
+#
+# Still worth giving a just-started sidecar its first tick: the server treats
+# an empty pane snapshot as unknown rather than free, so it falls back to
+# board activity - correct, but the pane signal is the honest one and it costs
+# seconds to wait for it.
+if ((Get-LivePaneNames).Count -eq 0) {
     foreach ($i in 1..8) {
         Start-Sleep -Seconds 3
-        $panes = Get-LivePaneNames
-        if ($panes.Count -gt 0) { break }
+        if ((Get-LivePaneNames).Count -gt 0) { break }
     }
-}
-if ($panes.Count -eq 0) {
-    Write-Warning "no herdr pane snapshot - falling back to board activity alone, which can duplicate a quiet agent"
 }
 
 foreach ($a in $fleet) {
-    # Idempotence: names carry a random suffix, so a second run would
-    # otherwise fork a duplicate fleet rather than collide visibly. Check BOTH
-    # signals: a live pane (running, however quiet) and board activity (spoke
-    # recently, pane snapshot maybe stale).
-    $existing = @($active | Where-Object { $_.agent -like "claude-$($a.topic)-*" })
-    $running  = @($panes  | Where-Object { $_ -like "claude-$($a.topic)-*" })
-    if ($running.Count -gt 0) {
-        Write-Warning "[$($a.topic)] pane already running as $($running[0]) - skipping"
-        continue
-    }
-    if ($existing.Count -gt 0) {
-        Write-Warning "[$($a.topic)] already active as $($existing[0].agent) - skipping"
-        continue
-    }
     $body = @{ name = $a.topic; model = $a.model; role = $a.role; prompt = $a.task } | ConvertTo-Json -Compress
     try {
         $r = Invoke-RestMethod -Uri "$board/spawn" -Method Post -Body $body -TimeoutSec 30
-        Write-Host "[$($a.topic)] spawned as $($r.agent) (model $($a.model), role $($a.role))"
+        if ($r.reused) {
+            Write-Host "[$($a.topic)] already up as $($r.agent) (by $($r.signal))"
+        } else {
+            Write-Host "[$($a.topic)] spawned as $($r.agent) (model $($a.model), role $($a.role))"
+            Start-Sleep -Seconds 2   # let herdr finish one pane before the next
+        }
     } catch {
         Write-Warning "[$($a.topic)] spawn failed: $($_.Exception.Message)"
     }
-    Start-Sleep -Seconds 2   # let herdr finish one pane before the next
 }
 
 Write-Host ""

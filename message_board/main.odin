@@ -1396,12 +1396,50 @@ sanitize_topic :: proc(s: string, allocator := context.temp_allocator) -> string
 	return out
 }
 
+// Who already holds a topic, and by which signal — "" if nobody does.
+//
+// THE ORDER IS THE HONESTY ORDER, not convenience. A live herdr pane is
+// machine truth: the process exists. Board activity is weaker — it now
+// includes leaseholders, so it covers an agent working silently, but it is
+// still inference from behaviour. Ask the honest signal first.
+//
+// AN EMPTY SNAPSHOT IS NOT EVIDENCE OF ABSENCE. herdr_sync may simply not
+// have reported yet, which is exactly the window after a restart, so a
+// missing pane list falls through to activity rather than concluding the
+// topic is free. Absence proves nothing — the same distinction as deployed
+// versus exercised, and as a doc that is wrong versus one that is silent.
+//
+// Stale agents block nothing: identity is durable, presence is not, and a
+// topic held by someone who stopped existing is a topic that is free.
+topic_holder :: proc(topic: string, allocator := context.temp_allocator) -> (agent: string, signal: string) {
+	prefix := fmt.tprintf("claude-%s-", topic)
+
+	Herdr_Row :: struct {
+		name: string `json:"name"`,
+	}
+	rows: []Herdr_Row
+	if board.herdr_state != "" &&
+	   json.unmarshal(transmute([]u8)board.herdr_state, &rows, allocator = allocator) == nil {
+		for r in rows {
+			if strings.has_prefix(r.name, prefix) do return strings.clone(r.name, allocator), "pane"
+		}
+	}
+
+	for info in collect_agents(allocator) {
+		if info.active && strings.has_prefix(info.agent, prefix) {
+			return strings.clone(info.agent, allocator), "activity"
+		}
+	}
+	return "", ""
+}
+
 handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 	Spawn_Request :: struct {
 		name:   string `json:"name"`,
 		prompt: string `json:"prompt"`,
 		model:  string `json:"model"`, // "" = default; else allowlisted below
 		role:   string `json:"role"`,  // "" = no role; else roles/<role>.md
+		force:  bool   `json:"force"`, // spawn a deliberate second on a held topic
 	}
 	req: Spawn_Request
 	if err := json.unmarshal(body, &req, allocator = context.temp_allocator); err != nil {
@@ -1419,6 +1457,28 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 	topic := sanitize_topic(req.name)
 	topic = strings.trim_prefix(topic, "claude-") // typing the prefix must not double it
 	if topic == "" do topic = "worker"
+	// GET-OR-CREATE. A topic already held returns the agent that holds it
+	// rather than launching a second one — /spawn is idempotent per topic,
+	// which is the property run.ps1's own checks were always reaching for.
+	//
+	// Returning rather than refusing: a caller that wants hands gets hands.
+	// But the outcome is MARKED — reused:true and the signal that proved it —
+	// because a friendly response is fine and an unmarked one is not. A spawn
+	// that quietly did nothing would be the empty-files release bug wearing a
+	// launcher, and that bug cost an afternoon.
+	//
+	// force:true still creates a deliberate second (two reviewers on one
+	// topic is a real thing to want) and says so in the announcement, so the
+	// log records the intent rather than leaving a mystery duplicate.
+	if !req.force {
+		if held, signal := topic_holder(topic); held != "" {
+			send_response(client, "200 OK", "application/json",
+				fmt.tprintf(`{{"ok":true,"agent":"%s","reused":true,"signal":"%s"}}`,
+					held, signal))
+			return
+		}
+	}
+
 	// Unique suffix so repeat topics never collide on the board (glenn seq 163).
 	tag := (u32(time.time_to_unix(time.now())) * 2654435761 + u32(board.next_seq)) & 0xFFFF
 	agent := fmt.tprintf("claude-%s-%04x", topic, tag)
@@ -1492,16 +1552,20 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 		role  = strings.clone(sanitize_topic(req.role)),
 	})
 
+	// A forced spawn says so. Two agents on one topic is legitimate but
+	// unusual, and the difference between "we meant this" and "something
+	// spawned twice" has to be readable a day later, from the log alone.
+	forced := " (FORCED second on this topic)" if req.force else ""
 	board_post(Message{
 		agent = "board",
 		kind  = "msg",
-		text  = strings.clone(fmt.tprintf("spawned %s (herdr pane, model %s) - task: %s", agent,
-			model,
+		text  = strings.clone(fmt.tprintf("spawned %s (herdr pane, model %s)%s - task: %s", agent,
+			model, forced,
 			prompt if len(prompt) <= 120 else fmt.tprintf("%s...", prompt[:120]))),
 	})
 
 	send_response(client, "200 OK", "application/json",
-		fmt.tprintf(`{{"ok":true,"agent":"%s"}}`, agent))
+		fmt.tprintf(`{{"ok":true,"agent":"%s","reused":false,"forced":%t}}`, agent, req.force))
 }
 
 handle_claims :: proc(client: net.TCP_Socket) {

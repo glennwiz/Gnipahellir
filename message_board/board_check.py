@@ -808,6 +808,89 @@ def a_refused_spawn_registers_nobody(b):
     assert before == after, after - before
 
 
+# ── checks: /spawn is idempotent per topic ──────────────────────────────────
+#
+# None of these launch a real agent. The duplicate guard returns BEFORE the
+# role file is validated, so an invalid role is a clean discriminator:
+#
+#   topic held  -> 200 {reused: true}   (guard answers, nothing launched)
+#   topic free  -> 400 no role file     (guard passed, launcher never reached)
+#
+# So "did the guard fire" is readable without ever starting a process.
+
+def spawn_probe(topic, **kw):
+    body = {"name": topic, "model": "haiku", "role": "no-such-role",
+            "prompt": "never runs"}
+    body.update(kw)
+    return call("/spawn", body)
+
+
+@check
+def a_held_topic_returns_the_agent_that_holds_it(b):
+    # GET-OR-CREATE, not refuse: a caller wanting hands gets hands. But the
+    # outcome is MARKED - an unmarked no-op is the empty-files release bug
+    # wearing a launcher.
+    call("/herdr_state", [{"name": "claude-taken-1111", "tab": "a:1"}])
+    st, r = spawn_probe("taken")
+    assert st == 200, (st, r)
+    assert r["reused"] is True and r["agent"] == "claude-taken-1111", r
+    assert r["signal"] == "pane", r
+
+
+@check
+def a_working_agent_with_no_pane_still_holds_its_topic(b):
+    # Pane is the honest signal, but the sidecar can be down or behind. Board
+    # activity - which includes leaseholders - is the fallback, not nothing.
+    call("/herdr_state", [])
+    post("claude-busy-2222", kind="status", text="mid-lane")
+    st, r = spawn_probe("busy")
+    assert st == 200, (st, r)
+    assert r["reused"] is True and r["signal"] == "activity", r
+
+
+@check
+def an_empty_pane_snapshot_does_not_mean_the_topic_is_free(b):
+    # THE SUBTLE ONE. An absent signal is not evidence of absence: herdr may
+    # simply not have reported yet, which is exactly the window after a
+    # restart. Concluding "no pane, therefore free" is how a fleet doubles.
+    call("/herdr_state", [])
+    post("claude-quiet-3333", kind="status", text="working, sidecar is behind")
+    st, r = spawn_probe("quiet")
+    assert st == 200 and r["reused"] is True, (st, r)
+    # ...and the same holds when the snapshot was never posted at all.
+    b.restart()                      # herdr_state is in-memory only
+    post("claude-quiet2-4444", kind="status", text="no snapshot has ever arrived")
+    st, r = spawn_probe("quiet2")
+    assert st == 200 and r["reused"] is True, (st, r)
+
+
+@check
+def a_stale_agent_blocks_nothing(b):
+    # Identity is durable, presence is not. A topic held by someone who
+    # stopped existing is a topic that is free - so this must fall THROUGH the
+    # guard and reach the launcher path (400 on the bad role), not reuse.
+    b.stop()
+    with open(os.path.join(b.workdir, "board.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"seq": 7000, "unix": int(time.time()) - 86400,
+                            "agent": "claude-ghost-5555", "kind": "status",
+                            "text": "left hours ago"}) + "\n")
+    b.start()
+    call("/herdr_state", [])
+    st, r = spawn_probe("ghost")
+    assert st == 400, ("a stale holder must not reuse", st, r)
+
+
+@check
+def force_spawns_a_deliberate_second(b):
+    # Two agents on one topic is legitimate but unusual; force says you meant
+    # it. Proven by the guard being bypassed - without force this exact call
+    # reuses, with force it reaches the launcher path instead.
+    call("/herdr_state", [{"name": "claude-double-6666", "tab": "a:2"}])
+    assert spawn_probe("double")[0] == 200, "sanity: it reuses without force"
+    st, r = spawn_probe("double", force=True)
+    assert st == 400, ("force must bypass the guard", st, r)
+
+
 # ── checks: crash safety + retention (task #18) ─────────────────────────────
 
 @check
