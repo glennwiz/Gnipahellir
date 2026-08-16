@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -21,8 +22,10 @@ import time
 import urllib.error
 import urllib.request
 
-PORT = 7677
-BASE = f"http://127.0.0.1:{PORT}"
+# The suite talks to whichever board is currently running; Board.start()
+# rebinds this. It is NOT a fixed port, and that is the whole point - see
+# free_port below.
+BASE = None
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
@@ -67,19 +70,52 @@ def tasks():
     return {t["id"]: t for t in call("/tasks")[1]}
 
 
+def free_port():
+    """A port the OS says is free, right now.
+
+    The suite used to hardcode 7677. Two runs on one machine then shared a
+    port, and the failure was silent in the worst way: the second bind
+    SUCCEEDS, the newer board hijacks the port, the older starves, and
+    ownership flips again at every restart leg. The result was a random
+    subset of failures on green code, plus connection resets - which reads
+    exactly like flaky infrastructure, so it got diagnosed as flaky
+    infrastructure. It cost a real review before it was reproduced.
+
+    An instrument that quietly reports failures the code did not cause is
+    worse than one that is merely broken, because a broken instrument is
+    obvious and this one looked like evidence."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 class Board:
     """A board process on a scratch directory. Restartable, so replay-equivalence
     is checkable rather than assumed."""
 
     def __init__(self, exe, workdir):
         self.exe, self.workdir, self.proc = exe, workdir, None
+        # One port per board, chosen once so a restart reconnects to the same
+        # address, and never shared with another run of this suite.
+        self.port = free_port()
 
     def start(self):
-        self.proc = subprocess.Popen([self.exe, str(PORT)], cwd=self.workdir,
+        global BASE
+        BASE = f"http://127.0.0.1:{self.port}"
+        self.proc = subprocess.Popen([self.exe, str(self.port)], cwd=self.workdir,
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         for _ in range(60):
             time.sleep(0.1)
+            # Belt and braces: if our child is already dead, something else is
+            # answering on this port and every check after this would be
+            # testing a stranger. The ephemeral port is what PREVENTS that;
+            # this is what makes it LOUD if it ever happens anyway, because
+            # the old failure mode was invisible rather than noisy.
+            if self.proc.poll() is not None:
+                raise SystemExit(
+                    f"board exited immediately (rc={self.proc.returncode}) - "
+                    f"port {self.port} may be taken by another process")
             try:
                 call("/agents")
                 return
