@@ -767,6 +767,74 @@ def submit_release_and_rework_let_the_files_go(b):
 
 
 @check
+def submitting_also_drops_the_status_claims_nobody_remembers_to_release(b):
+    # Sonnet's real miss: the task files let go on submit, but the files named
+    # in a STATUS post stayed claimed until a separate `release` POST that is
+    # easy to forget - index.html sat claimed all afternoon that way.
+    post("worker", kind="status", text="editing the page by hand",
+         files=["index.html"])
+    assert "index.html" in claims_of("worker")
+    _, r = task("draft", "planner", text="unrelated contract", accept="x")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "worker", id=tid)
+    task("submit", "worker", id=tid, rev=tasks()[tid]["rev"])
+    assert "index.html" not in claims_of("worker"), \
+        "submit must be a release - that is the whole point of combining them"
+    # The status TEXT survives: it is still the last thing they said.
+    me = [a for a in call("/agents")[1] if a["agent"] == "worker"][0]
+    assert me["status"] == "editing the page by hand", me
+
+
+@check
+def a_status_after_a_submit_claims_again(b):
+    # The clear is a moment, not a mute. An agent picking up new work right
+    # after submitting must be able to claim files the normal way.
+    _, r = task("add", "planner", text="some work")
+    tid = r["id"]
+    task("claim", "worker", id=tid)
+    task("submit", "worker", id=tid)
+    time.sleep(1.1)  # these timestamps are whole seconds
+    post("worker", kind="status", text="on to the next thing",
+         files=["src/next.odin"])
+    assert "src/next.odin" in claims_of("worker"), \
+        "a submit must not deafen the agent to its own later claims"
+
+
+@check
+def the_release_verb_still_works_on_its_own(b):
+    # Combining the two must not remove either. `release` as a message kind
+    # and as a task action both still drop claims by themselves.
+    post("solo", kind="status", text="ad-hoc work", files=["src/solo.odin"])
+    assert "src/solo.odin" in claims_of("solo")
+    post("solo", kind="release", text="done with it")
+    assert "src/solo.odin" not in claims_of("solo")
+
+    post("hand", kind="status", text="ad-hoc too", files=["src/hand.odin"])
+    _, r = task("add", "planner", text="handed back")
+    tid = r["id"]
+    task("claim", "hand", id=tid)
+    task("release", "hand", id=tid)
+    assert "src/hand.odin" not in claims_of("hand"), \
+        "giving the task back releases everything, same as submit"
+
+
+@check
+def a_submit_release_survives_a_restart(b):
+    # claims_cleared is derived from the task log, so replay must rebuild it -
+    # otherwise every claim an agent ever dropped comes back on restart.
+    post("worker", kind="status", text="holding a file", files=["src/gone.odin"])
+    _, r = task("add", "planner", text="work")
+    tid = r["id"]
+    task("claim", "worker", id=tid)
+    task("submit", "worker", id=tid)
+    assert "src/gone.odin" not in claims_of("worker")
+    b.restart()
+    assert "src/gone.odin" not in claims_of("worker"), \
+        "a released claim must not rise from the dead on replay"
+
+
+@check
 def block_keeps_the_files_because_that_is_when_it_matters_most(b):
     # A blocked owner is the one most likely to have half-edited files sitting
     # in the tree - dropping the warning there removes it exactly when needed.

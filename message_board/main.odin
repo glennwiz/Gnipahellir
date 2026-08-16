@@ -177,6 +177,24 @@ Board :: struct {
 	// heartbeat noise. In-memory only: after a restart every live watcher
 	// re-polls within its next cycle, so the map rebuilds itself.
 	last_poll:    map[string]i64,
+	// When each agent last handed work back (task submit/release). Status
+	// claims older than this are dropped — see claims_clear. Rebuilt by the
+	// task fold on every replay, so it is derived state, not remembered
+	// state, and nothing synthetic is written to the message log to carry it.
+	claims_cleared: map[string]i64,
+}
+
+// Mark everything `agent` had claimed as let go, as of `unix`.
+//
+// The alternative was for the server to append a `release` MESSAGE on the
+// agent's behalf, which would have put words in their mouth in an
+// append-only log that people read as testimony. This records the same fact
+// where it actually happened — on the task event — and the message log stays
+// something only agents write.
+claims_clear :: proc(agent: string, unix: i64) {
+	if agent == "" do return
+	if prev, ok := board.claims_cleared[agent]; ok && prev >= unix do return
+	board.claims_cleared[agent] = unix
 }
 
 // Set by send_response; safe as a package global because the server handles
@@ -549,9 +567,17 @@ task_apply :: proc(ev: Task_Event) {
 		t.lease_until = ev.unix + i64(lease)
 	case "release":
 		t.state, t.owner, t.lease_until = "Ready", "", 0
+		claims_clear(ev.agent, ev.unix)
 	case "submit":
 		t.state, t.lease_until = "Review", 0
 		t.result_seq = ev.result_seq
+		// SUBMIT IS A RELEASE. Handing the work back already drops the
+		// task-derived claims; the status-derived ones used to survive it and
+		// needed a separate `release` POST that is easy to forget — Sonnet
+		// left index.html claimed all afternoon exactly this way. Four
+		// actions where three would do is a class of error, not a lapse, so
+		// the second one stopped being separate.
+		claims_clear(ev.agent, ev.unix)
 	case "approve":
 		t.state, t.reviewer, t.lease_until = "Done", ev.agent, 0
 	case "rework":
@@ -704,6 +730,22 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			info.last_seen = p
 		}
 		info.active = now - info.last_seen <= STALE_SECS
+
+		// A submit or release since that status post means those files were
+		// handed back. The status TEXT stays — it is still the last thing
+		// they said and readers want it — only the claim is dropped, because
+		// a claim is a statement about right now and that one expired.
+		//
+		// Newer-OR-EQUAL, and the equal half is load-bearing. These stamps
+		// are whole seconds, and a short task genuinely finishes inside the
+		// same second it was announced in — so requiring strictly-newer
+		// switches the fix off for exactly the quick jobs where forgetting
+		// the release is likeliest. The reverse tie (a NEW status posted in
+		// the same second as a submit) loses its claim for one second and is
+		// far rarer than the case this protects.
+		if c, cleared := board.claims_cleared[info.agent]; cleared && c >= info.status_unix {
+			info.files = nil
+		}
 
 		// THE CONTRACT IS THE CLAIM. A task's files[] register as its owner's
 		// file claims for as long as they hold the lease — no status post
