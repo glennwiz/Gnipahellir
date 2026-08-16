@@ -10,7 +10,10 @@
     Run it from anywhere:  pwsh -File message_board\run.ps1
 
     Building is THIS script's job, not a command to memorise:
-      -Rebuild       rebuild the service from source and restart it
+      -Rebuild       rebuild the service from source and restart it,
+                     AND restart the herdr sidecar - the system is two
+                     processes and a board rebuild does not touch the
+                     second one.
     A missing binary is built automatically. Either way the commit
     hash is stamped in, so GET /build can answer "is the running
     server the code we reviewed" without anyone having to remember
@@ -30,6 +33,13 @@ param(
     # Rebuild the service from source and restart it, then carry on. This is
     # the deploy drill: a server fix is not finished when it is committed, it
     # is finished when the RUNNING process reports its hash.
+    #
+    # It restarts the SIDECAR as well. There are two processes and only the
+    # board can currently report which commit it runs, so a herdr_sync.py fix
+    # deployed by rebuilding the board would silently not be deployed at all.
+    # This covers the restarts that go through the drill; it cannot see
+    # someone restarting either process by hand, which is what the sidecar
+    # version report (task #62) is for.
     [switch]$Rebuild
 )
 
@@ -87,6 +97,21 @@ function Get-LivePaneNames {
     } catch { return @() }
 }
 
+# The sidecar is a SEPARATE PROCESS, so finding it means asking the OS, not
+# the board. Get-CimInstance and not pkill/pgrep: those cannot see Windows
+# processes here at all, and every cleanup built on them has been a silent
+# no-op that reported success.
+#
+# One implementation, two callers - the -Rebuild stop below and the
+# already-running check in section 2. This file already carries the reason
+# (see the POST /spawn note in section 3): two implementations of one rule is
+# how the rule drifts, and a stop that matched a different set than the
+# detect would either kill nothing or start a second sidecar.
+function Get-SidecarProcess {
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |
+             Where-Object { $_.CommandLine -and $_.CommandLine -match 'herdr_sync\.py' })
+}
+
 # ── 1. Board service ────────────────────────────────────────────────────
 # Everything downstream depends on this: an agent that cannot reach the
 # board fails its check-in and comes up unaware of the rest of the fleet.
@@ -109,6 +134,26 @@ if ($Rebuild) {
         Write-Host "[board] stopping for rebuild"
         Get-Process message_board -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Milliseconds 1200
+    }
+    # STOP THE SIDECAR TOO - it is a second process and rebuilding the board
+    # does not touch it. Tonight measured the cost: two board rebuilds
+    # (528f48b, 4f3f28f), zero sidecar restarts, so herdr_sync.py edits sat on
+    # disk while the old code kept running and nothing served said otherwise.
+    # -Rebuild is THE deploy drill, so it covers both processes by
+    # construction rather than by anyone remembering the second one.
+    #
+    # Deliberately OUTSIDE the Test-Board guard above: that guard asks whether
+    # the BOARD is up, and the sidecar can be running when it is not. Nesting
+    # this inside it would skip the sidecar restart on exactly the path where
+    # the board had already died - which is when the fleet is most confused
+    # about what is running.
+    #
+    # Nothing restarts it here; the start branch in section 2 finds no running
+    # sidecar and brings it back, which is why this is a stop and not a
+    # stop-and-start pair.
+    foreach ($p in (Get-SidecarProcess)) {
+        Write-Host "[sidecar] stopping for rebuild (pid $($p.ProcessId))"
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Build-Board
 }
@@ -164,15 +209,39 @@ if (Test-Board) {
 # ── 2. herdr sidecar ────────────────────────────────────────────────────
 # Feeds live pane state into the roster badges and warns about spawns that
 # never check in. Optional: the fleet works without it, just blinder.
-$sidecarRunning = $false
-foreach ($p in (Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue)) {
-    if ($p.CommandLine -and $p.CommandLine -match 'herdr_sync\.py') { $sidecarRunning = $true; break }
-}
-if ($sidecarRunning) {
+if ((Get-SidecarProcess).Count -gt 0) {
     Write-Host "[sidecar] already running"
 } elseif (Test-Path (Join-Path $here 'herdr_sync.py')) {
     Write-Host "[sidecar] starting herdr_sync.py"
-    Start-Process -WindowStyle Hidden -FilePath 'python' -ArgumentList 'herdr_sync.py' -WorkingDirectory $here
+    # KEEP WHAT THE SIDECAR SAYS, for the same reason the service got this
+    # treatment above: unredirected, everything it printed went nowhere, so a
+    # sidecar that died took its explanation with it. Its whole job is
+    # reporting on other processes, and it is the one we cannot ask.
+    #
+    # THIS IS NOT THE COLD-BOOT HANG FIX, though #55 was written expecting it
+    # to be, and the correction belongs here rather than only on the board.
+    # The theory was that an unredirected child INHERITS this shell's stdout
+    # and holds it open for its whole life, so a capturing caller waits on
+    # end-of-stream rather than on our exit. Measured, it does not:
+    #   - the committed script, sidecar killed, run from a capturing shell:
+    #     returned in 3s with an unredirected long-lived child running
+    #   - minimal probe, Start-Process -WindowStyle Hidden, no redirect, child
+    #     sleeping 45s: parent returned in 1s
+    # PowerShell's Start-Process defaults to ShellExecute when no redirection
+    # is asked for, so the child never receives our handles at all; asking for
+    # redirection is what forces the CreateProcess path. The child does not
+    # hold our stdout in EITHER form, so this line is neutral for the hang.
+    # It earns its place on the logging alone.
+    #
+    # Both names end in .log so the blanket *.log rule already covers them -
+    # deliberately NOT a new gitignore rule, because a runtime file this
+    # SCRIPT writes is invisible to board_check.py's declared-runtime-file
+    # scan (that derives from main.odin), so a bespoke rule here would be one
+    # nothing enforces. Verified with `git check-ignore -v` rather than
+    # assumed: both resolve to .gitignore:7 *.log.
+    Start-Process -WindowStyle Hidden -FilePath 'python' -ArgumentList 'herdr_sync.py' -WorkingDirectory $here `
+        -RedirectStandardOutput (Join-Path $here 'sidecar.log') `
+        -RedirectStandardError  (Join-Path $here 'sidecar.err.log')
 } else {
     Write-Warning "[sidecar] herdr_sync.py not found - skipping (roster badges will be blank)"
 }
