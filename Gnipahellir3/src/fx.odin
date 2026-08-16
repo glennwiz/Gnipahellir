@@ -18,6 +18,7 @@ Tile_Fx_Kind :: enum u8 {
     Maw_Snap,    // the chomp: jaws slammed shut, flashing out (auto-chained from Ghost_Maw)
     Fire_Charge, // a gathering ember swelling toward launch — a ranged-attack windup
     Raid_Rumble, // soot-red fault lines gathering around industry that drew a raid
+    Cage_Spark,  // hell-light gathering in the cell where Garm's next stone lands
 }
 
 MAW_SNAP_TIME :: f32(0.15)
@@ -84,6 +85,8 @@ draw_tile_fx :: proc(gs: ^Game_State) {
             draw_fire_charge(cx, cy, t, f.color)
         case .Raid_Rumble:
             draw_raid_rumble(cx, cy, t, f.color)
+        case .Cage_Spark:
+            draw_cage_spark(cx, cy, t, f.color)
         }
     }
 }
@@ -106,6 +109,20 @@ draw_raid_rumble :: proc(cx, cy, t: f32, col: rl.Color) {
     rl.DrawRectangleRec({cx - 1, cy - reach, 2, reach - 2}, body)
     rl.DrawRectangleRec({cx - 1, cy + 2, 2, reach - 2}, body)
     rl.DrawRectangleRec({cx - 2, cy - 2, 4, 4}, hot)
+}
+
+// One beat of warning before a cage stone lands: hell-light gathers INTO the
+// empty cell (a shrinking square closing on the centre) rather than flashing
+// outward, so the eye reads "something is about to fill this" and can still
+// step out of the slot.  Deliberately small — a wall goes up one tile at a
+// time and 30 of these must not become a strobe.
+@(private = "file")
+draw_cage_spark :: proc(cx, cy, t: f32, col: rl.Color) {
+    r    := 6 * (1 - t) + 1.5          // closes inward over the windup
+    a    := u8(200 * (0.4 + 0.6*t))    // and brightens as the stone nears
+    edge := rl.Color{col.r, col.g, col.b, a}
+    rl.DrawRectangleLinesEx({cx - r, cy - r, r*2, r*2}, 1, edge)
+    rl.DrawRectangleRec({cx - 1, cy - 1, 2, 2}, rl.Color{255, 230, 255, a})
 }
 
 // The maw itself: two fanged jaw bars over the point, gap (px from the bite

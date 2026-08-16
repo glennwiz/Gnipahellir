@@ -134,6 +134,18 @@ Raid_State :: struct {
     warning_active: bool,
 }
 
+// Garm's combat cage — the stone box he conjures around the player at low hp
+// and then floods.  Transient on purpose, and that IS the mechanism: a zero
+// anchor means "snapshot the player's tile next tick", so a reload, an escape
+// and a stalled cage all recover through the same single path.  No build
+// progress lives here either; the slot generator scans the world, so walls
+// always precede lava even on a save loaded mid-flood.
+Cage_State :: struct {
+    anchor:         [2]i32,  // {0,0} = no cage; next tick snapshots the player
+    stall:          f32,     // seconds since a slot last landed
+    announced_fill: bool,    // the fill notify fires once per anchor
+}
+
 // ─── Friendly Clay Golems ───────────────────────────────────────────────────
 
 GOLEM_PROJECT_CELLS :: 128
@@ -632,6 +644,7 @@ Game_State :: struct {
     player:      Player,
     enemies:     Enemy_Store,
     raid:        Raid_State, // transient industry-pressure director (enemy.odin)
+    cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,
     golem_marks: Golem_Mark_Index,

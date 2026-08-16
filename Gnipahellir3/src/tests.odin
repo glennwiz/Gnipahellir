@@ -4239,24 +4239,43 @@ garm_phases_follow_hp :: proc(t: ^testing.T) {
     }
     testing.expect(t, !is_solid(&gs.world, ARENA_CX, ARENA_Y0 + 1), "the column leaves a gap at the top")
 
-    // Phase 3: the perimeter seals; its completion breaks into the flood.
+    // Phase 3 is the CAGE now (glenn seq 396): it boxes the player in wherever
+    // they stand rather than sealing the arena, so the last phase needs someone
+    // to cage.  Stand a live player well clear of Garm and let it close.
+    gs.player.dead = false
+    gs.player.hp   = 20
+    px, py := snap_to_standable(&gs.world, ARENA_X1 - 5, ARENA_Y1 - 1)
+    gs.player.pos = {f32(px) + (1 - PLAYER_W)*0.5, f32(py) - PLAYER_H + 1}
     g.hp = GARM_PHASE3_HP
-    for _ in 0 ..< 800 { step(gs) }
+
+    for _ in 0 ..< 1200 { step(gs) }
     testing.expect_value(t, g.garm.phase, Garm_Phase.Flood)
-    for i in 0 ..= ARENA_Y1 - ARENA_Y0 {
-        testing.expectf(t, is_solid(&gs.world, ARENA_X0, ARENA_Y1 - i), "left ring cell %d", i)
-        testing.expectf(t, is_solid(&gs.world, ARENA_X1, ARENA_Y1 - i), "right ring cell %d", i)
+
+    a := gs.cage.anchor
+    testing.expect(t, a != {0, 0}, "a cage should be anchored on the player")
+    x0 := int(a.x) - GARM_CAGE_HALF_W - 1
+    x1 := int(a.x) + GARM_CAGE_HALF_W + 1
+    y0 := int(a.y) - GARM_CAGE_HALF_H - 1
+    y1 := int(a.y) + GARM_CAGE_HALF_H + 1
+    for x in x0 ..= x1 {
+        testing.expectf(t, is_solid(&gs.world, x, y0), "cage roof cell x=%d", x)
+        testing.expectf(t, is_solid(&gs.world, x, y1), "cage floor cell x=%d", x)
     }
-    for x in ARENA_X0 + 1 ..< ARENA_X1 {
-        testing.expectf(t, is_solid(&gs.world, x, ARENA_Y0), "ring roof cell x=%d", x)
+    for y in y0 ..= y1 {
+        testing.expectf(t, is_solid(&gs.world, x0, y), "cage left cell y=%d", y)
+        testing.expectf(t, is_solid(&gs.world, x1, y), "cage right cell y=%d", y)
     }
 
-    // Flood: lava fills the arena floor up to GARM_LAVA_DEPTH rows.
-    for _ in 0 ..< int(GARM_FLOOD_INTERVAL * f32(GARM_FLOOD_LEN) * 60) + 300 { step(gs) }
-    for x in ARENA_X0 + 1 ..< ARENA_X1 {
-        lava_or_stone := get_tile(&gs.world, x, ARENA_Y1) == .Lava || is_solid(&gs.world, x, ARENA_Y1)
-        testing.expectf(t, lava_or_stone, "arena floor row should be flooded at x=%d", x)
+    // And it fills from the floor up.
+    for _ in 0 ..< 1200 { step(gs) }
+    lava := 0
+    for y in y0 + 1 ..< y1 do for x in x0 + 1 ..< x1 {
+        if get_tile(&gs.world, x, y) == .Lava do lava += 1
     }
+    testing.expect(t, lava > 0, "the sealed cage should be filling with lava")
+    testing.expectf(t, get_tile(&gs.world, int(a.x), y1 - 1) == .Lava ||
+        is_solid(&gs.world, int(a.x), y1 - 1),
+        "the lowest interior row floods first (got %v)", get_tile(&gs.world, int(a.x), y1 - 1))
 }
 
 @(test)
@@ -4594,6 +4613,229 @@ garm_disowns_a_roof_anchor_left_by_an_old_save :: proc(t: ^testing.T) {
 
     testing.expect(t, g2.builder.den_built, "a wounded Garm stays in the hunt")
     testing.expect_value(t, g2.builder.anchor, roof)
+}
+
+// Shared cage driver: a Garm already in the cage phase, and a player parked
+// wherever the caller wants him boxed.
+@(private = "file")
+cage_fixture :: proc(gs: ^Game_State, px, py: int) -> (gi: int) {
+    gi = garm_fixture(gs)
+    g := &gs.enemies.data[gi]
+    g.hp = GARM_PHASE3_HP
+    g.garm.phase = .Ring
+    sx, sy := snap_to_standable(&gs.world, px, py)
+    gs.player.dead = false
+    gs.player.hp   = 20
+    gs.player.pos  = {f32(sx) + (1 - PLAYER_W)*0.5, f32(sy) - PLAYER_H + 1}
+    // Keep Garm off the player so bites do not end the run under test.
+    g.pos.x = f32(sx) + 14
+    return
+}
+
+@(private = "file")
+cage_step :: proc(gs: ^Game_State) {
+    update_enemies(gs)
+    process_events(gs)
+    eq_clear(&gs.events)
+}
+
+@(test)
+the_cage_follows_the_player_not_the_arena :: proc(t: ^testing.T) {
+    // The old Ring/Flood sealed ARENA_* constants and only caged Glenn because
+    // he happened to be standing in the arena. The cage must form wherever the
+    // fight is - here, deliberately far from it.
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE3
+
+    far_x, far_y := ARENA_X0 - 40, ARENA_Y1 - 4
+    cage_fixture(gs, far_x, far_y)
+
+    for _ in 0 ..< 1500 { cage_step(gs) }
+
+    a := gs.cage.anchor
+    testing.expect(t, a != {0, 0}, "a cage should be anchored")
+    testing.expect(t, abs(int(a.x) - far_x) <= GARM_CAGE_HALF_W + 2,
+        "the cage sits on the player, far from the arena")
+    testing.expect(t, int(a.x) < ARENA_X0, "the anchor is outside the arena entirely")
+
+    x0 := int(a.x) - GARM_CAGE_HALF_W - 1
+    x1 := int(a.x) + GARM_CAGE_HALF_W + 1
+    y0 := int(a.y) - GARM_CAGE_HALF_H - 1
+    y1 := int(a.y) + GARM_CAGE_HALF_H + 1
+    walls, total := 0, 0
+    for y in y0 ..= y1 do for x in x0 ..= x1 {
+        if x != x0 && x != x1 && y != y0 && y != y1 do continue
+        total += 1
+        if is_solid(&gs.world, x, y) do walls += 1
+    }
+    testing.expect_value(t, walls, total)
+}
+
+@(test)
+a_cage_always_walls_before_it_floods :: proc(t: ^testing.T) {
+    // The ordering is derived from the world, never from saved progress - so a
+    // Garm loaded mid-Flood with no transient state still builds walls first.
+    // This is the leg that would catch a re-introduced build-cursor.
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE3
+
+    gi := cage_fixture(gs, ARENA_X0 + 10, ARENA_Y1 - 1)
+    g  := &gs.enemies.data[gi]
+    g.garm.phase = .Flood   // as if loaded mid-flood
+    gs.cage      = {}       // transient state is zero after a load
+
+    // Until every wall cell is solid, not one drop of lava may land.
+    for _ in 0 ..< 900 {
+        cage_step(gs)
+        a := gs.cage.anchor
+        if a == {0, 0} do continue
+        x0 := int(a.x) - GARM_CAGE_HALF_W - 1
+        x1 := int(a.x) + GARM_CAGE_HALF_W + 1
+        y0 := int(a.y) - GARM_CAGE_HALF_H - 1
+        y1 := int(a.y) + GARM_CAGE_HALF_H + 1
+        sealed := true
+        for y in y0 ..= y1 do for x in x0 ..= x1 {
+            if x != x0 && x != x1 && y != y0 && y != y1 do continue
+            if !is_solid(&gs.world, x, y) do sealed = false
+        }
+        if sealed do break
+        for y in y0 + 1 ..< y1 do for x in x0 + 1 ..< x1 {
+            testing.expectf(t, get_tile(&gs.world, x, y) != .Lava,
+                "lava at (%d,%d) before the walls closed", x, y)
+        }
+    }
+}
+
+@(test)
+a_cage_wall_never_buries_a_machine_or_its_contents :: proc(t: ^testing.T) {
+    // Glenn's 1a: Garm may cage your base. He still deletes nothing solid to
+    // do it - a smelter in a wall slot simply BECOMES that wall segment, with
+    // everything in it untouched.
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE3
+
+    px, py := ARENA_X0 + 10, ARENA_Y1 - 1
+    cage_fixture(gs, px, py)
+
+    // Put a loaded smelter squarely in the left wall column.
+    a  := [2]i32{i32(px), i32(py)}
+    mx := int(a.x) - GARM_CAGE_HALF_W - 1
+    my := int(a.y)
+    set_tile(&gs.world, mx, my, .Smelter)
+    sd := &gs.world.sim_data[grid_idx(mx, my)]
+    sd.store_item, sd.store_count = .Iron_Bar, 2
+    sd.in_item,    sd.in_count    = .Iron_Ore, 3
+    sd.fuel_count = 4
+
+    for _ in 0 ..< 1500 { cage_step(gs) }
+
+    testing.expect_value(t, get_tile(&gs.world, mx, my), Tile_Type.Smelter)
+    testing.expect_value(t, sd.store_count, 2)
+    testing.expect_value(t, sd.in_count, 3)
+    testing.expect_value(t, sd.fuel_count, 4)
+}
+
+@(test)
+a_cage_that_cannot_close_gives_up_and_re_boxes :: proc(t: ^testing.T) {
+    // A cage he can never finish must not hold him forever. Wall the player
+    // inside solid rock so every slot is pre-satisfied except one the player
+    // stands in, and confirm the stall path re-anchors rather than livelocking.
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE3
+
+    gi := cage_fixture(gs, ARENA_X0 + 10, ARENA_Y1 - 1)
+    g  := &gs.enemies.data[gi]
+
+    for _ in 0 ..< 120 { cage_step(gs) }
+    first := gs.cage.anchor
+    testing.expect(t, first != {0, 0}, "a cage should be anchored")
+
+    // Teleport the player clean out of the rect: that is the escape path, and
+    // the abandoned walls stay behind as a scar.
+    sx, sy := snap_to_standable(&gs.world, int(first.x) + 30, int(first.y))
+    gs.player.pos = {f32(sx) + (1 - PLAYER_W)*0.5, f32(sy) - PLAYER_H + 1}
+    g.pos.x = f32(sx) + 14
+
+    for _ in 0 ..< 600 { cage_step(gs) }
+    testing.expect(t, gs.cage.anchor != first, "he should abandon a cage the player left")
+    testing.expect(t, gs.cage.anchor != {0, 0}, "and immediately box them again")
+    testing.expect(t, abs(int(gs.cage.anchor.x) - sx) <= GARM_CAGE_HALF_W + 2,
+        "the new cage is on the player's new ground")
+}
+
+@(test)
+cage_soak_a_running_player_is_never_buried :: proc(t: ^testing.T) {
+    // Two scripted minutes of a player refusing to hold still. The invariants
+    // that matter under movement: he never conjures stone into a body, every
+    // cell he places belongs to SOME cage he actually anchored (no stray
+    // masonry across the map), and he never gets stuck on one doomed box.
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE3
+
+    gi := cage_fixture(gs, ARENA_X0 + 8, ARENA_Y1 - 1)
+    g  := &gs.enemies.data[gi]
+
+    before: [GRID_W * GRID_H]Tile_Type
+    for i in 0 ..< GRID_W * GRID_H do before[i] = gs.world.terrain[i]
+
+    anchors: [dynamic][2]i32
+    defer delete(anchors)
+    seen :: proc(list: ^[dynamic][2]i32, a: [2]i32) -> bool {
+        for v in list do if v == a do return true
+        return false
+    }
+
+    hop := 0
+    for f in 0 ..< 120 * 60 {
+        cage_step(gs)
+
+        if a := gs.cage.anchor; a != {0, 0} && !seen(&anchors, a) {
+            append(&anchors, a)
+        }
+        // Never entombed: no solid tile may ever overlap the player's body.
+        pl := &gs.player
+        if !pl.dead {
+            x0, x1 := int(pl.pos.x), int(pl.pos.x + PLAYER_W - 0.01)
+            y0, y1 := int(pl.pos.y), int(pl.pos.y + PLAYER_H - 0.01)
+            for y in y0 ..= y1 do for x in x0 ..= x1 {
+                testing.expectf(t, !is_solid(&gs.world, x, y),
+                    "frame %d: solid tile conjured into the player at (%d,%d)", f, x, y)
+            }
+        }
+        // Bolt for fresh ground every ~1.5 s, the way a player actually runs.
+        if f % 90 == 89 {
+            hop += 1
+            nx := 120 + (hop % 5) * 10   // stays well inside the grid
+            sx, sy := snap_to_standable(&gs.world, nx, ARENA_Y1 - 1)
+            gs.player.pos = {f32(sx) + (1 - PLAYER_W)*0.5, f32(sy) - PLAYER_H + 1}
+            gs.player.hp  = 20            // the soak studies masonry, not damage
+            g.pos.x       = f32(sx) + 14
+        }
+    }
+
+    testing.expect(t, len(anchors) >= 2, "a running player should draw more than one cage")
+
+    // Every cell he changed belongs to a rect he actually anchored.
+    for i in 0 ..< GRID_W * GRID_H {
+        now := gs.world.terrain[i]
+        if now == before[i] do continue
+        if now != .Stone && now != .Lava do continue
+        T := [2]i32{i32(i % GRID_W), i32(i / GRID_W)}
+        owned := false
+        for a in anchors {
+            if abs(int(T.x) - int(a.x)) <= GARM_CAGE_HALF_W + 1 &&
+               abs(int(T.y) - int(a.y)) <= GARM_CAGE_HALF_H + 1 {
+                owned = true
+                break
+            }
+        }
+        testing.expectf(t, owned, "stray %v at (%d,%d) outside every cage", now, T.x, T.y)
+    }
 }
 
 @(test)

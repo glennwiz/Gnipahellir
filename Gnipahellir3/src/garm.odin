@@ -61,6 +61,13 @@ GARM_PHASE3_HP       :: GARM_HP / 3       // ring starts
 GARM_COLUMN_INTERVAL :: f32(0.4)
 GARM_RING_INTERVAL   :: f32(0.15)
 GARM_FLOOD_INTERVAL  :: f32(0.3)
+
+// The combat cage (glenn seq 396). Interior 7x5 around the player: wide enough
+// to fight in for a moment, tight enough that the walls read as a trap.
+GARM_CAGE_HALF_W :: 3
+GARM_CAGE_HALF_H :: 2
+GARM_CAGE_STALL  :: f32(6.0)  // nothing landed this long -> give up, re-box
+GARM_CAGE_FLASH  :: f32(0.3)  // warning beat in a cell before its stone lands
 GARM_LAVA_DEPTH      :: 4          // flood stops this many rows above the floor
 
 // Arena interior carved by gen_cave_level (depth_tier 2).
@@ -219,9 +226,15 @@ garm_update_phase :: proc(e: ^Enemy, gs: ^Game_State) {
         garm_enter_phase(e, gs, target, msg)
     }
 
-    // The ring finishing is what breaks the ground open: flood follows.
-    if g.phase == .Ring && g.build_i >= GARM_RING_LEN {
-        garm_enter_phase(e, gs, .Flood, "The ground splits - lava rises!")
+    // Walls closing is what breaks the ground open: flood follows.  The cage
+    // scan is the source of truth, so a Garm loaded already in .Flood still
+    // rebuilds walls first — the phase only picks the words.
+    // (Only once a cage exists: an unset anchor means the box has not been
+    // sited yet, and a rect around {0,0} would promote on nothing.)
+    if g.phase == .Ring && gs.cage.anchor != {0, 0} {
+        if _, tile, ok := garm_cage_slot(gs, e); !ok || tile == .Lava {
+            garm_enter_phase(e, gs, .Flood, "The ground splits - lava rises!")
+        }
     }
 }
 
@@ -231,6 +244,151 @@ garm_update_phase :: proc(e: ^Enemy, gs: ^Game_State) {
 //  channels; he does not commute to worksites like a builder).  Solid tiles
 //  are never placed into a body — a blocked slot retries next tick, so a
 //  player standing on the slot delays the structure but never dies to it.
+
+// ─── The cage ────────────────────────────────────────────────────────────────
+//
+//  Glenn's call (board seq 396): wherever the fight goes, Garm boxes you in
+//  and floods the box.  The old Ring/Flood were ARENA constants and only
+//  caged him by coincidence of where the arena is; this follows the player.
+//
+//  The generator is STATELESS and that is the whole design: it scans the rect
+//  and returns the first unsatisfied wall cell, and only when every wall cell
+//  is solid does it return an interior cell to flood.  Nothing records "which
+//  step am I on", so a reload mid-flood, an escape, and a stalled cage all
+//  rebuild walls before a drop of lava — by construction, not by bookkeeping.
+
+// Walls sit one ring outside the 7x5 interior, clamped so a cage against the
+// world edge simply uses the edge.
+@(private = "file")
+garm_cage_rect :: proc(a: [2]i32) -> (x0, y0, x1, y1: int) {
+    x0 = clamp(int(a.x) - GARM_CAGE_HALF_W - 1, 1, GRID_W - 2)
+    x1 = clamp(int(a.x) + GARM_CAGE_HALF_W + 1, 1, GRID_W - 2)
+    y0 = clamp(int(a.y) - GARM_CAGE_HALF_H - 1, 1, GRID_H - 2)
+    y1 = clamp(int(a.y) + GARM_CAGE_HALF_H + 1, 1, GRID_H - 2)
+    return
+}
+
+@(private = "file")
+garm_cage_holds :: proc(a: [2]i32, T: [2]i32) -> bool {
+    x0, y0, x1, y1 := garm_cage_rect(a)
+    return int(T.x) >= x0 && int(T.x) <= x1 && int(T.y) >= y0 && int(T.y) <= y1
+}
+
+// Next cell to conjure, or ok=false when the cage is finished.  Walls are
+// picked NEAREST TO GARM first, so the far side closes last and you can see
+// the gap you are meant to run through shrinking.
+@(private = "file")
+garm_cage_slot :: proc(gs: ^Game_State, e: ^Enemy) -> (T: [2]i32, tile: Tile_Type, ok: bool) {
+    x0, y0, x1, y1 := garm_cage_rect(gs.cage.anchor)
+    bt := builder_tile(e)
+
+    best := max(i32)
+    for y in y0 ..= y1 {
+        for x in x0 ..= x1 {
+            if x != x0 && x != x1 && y != y0 && y != y1 { continue }  // interior
+            // ANY solid already counts as wall — natural rock, your stone, a
+            // smelter.  Glenn's 1a lets him cage your base, but he still
+            // deletes nothing solid to do it: your machine becomes a segment.
+            if is_solid(&gs.world, x, y) { continue }
+            if is_sacred_tile(get_tile(&gs.world, x, y)) { continue }
+            if d := chebyshev(bt, {i32(x), i32(y)}); d < best {
+                best, T, ok = d, {i32(x), i32(y)}, true
+            }
+        }
+    }
+    if ok { return T, .Stone, true }
+
+    // Sealed. Now it fills, lowest row first, so the stand-space shrinks
+    // upward and there is always an early window to mine out.
+    for y := y1 - 1; y > y0; y -= 1 {
+        for x in x0 + 1 ..< x1 {
+            t := get_tile(&gs.world, x, y)
+            if is_solid(&gs.world, x, y) || t == .Lava { continue }
+            if is_sacred_tile(t) { continue }
+            return {i32(x), i32(y)}, .Lava, true
+        }
+    }
+    return
+}
+
+@(private = "file")
+garm_cage_tick :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
+    g := &e.garm
+    c := &gs.cage
+
+    // A zero anchor is the reset state for every cause at once: first entry,
+    // a load, an escape, a stall.  Snapshot wherever the player stands now.
+    if c.anchor == {0, 0} {
+        if gs.player.dead { return }
+        c.anchor         = player_tile(&gs.player)
+        c.stall          = 0
+        c.announced_fill = false
+        notify(gs, "GARM shapes a cage of stone around you!")
+        log_action(gs, "GARM cages the player at (%d,%d)", c.anchor.x, c.anchor.y)
+        eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Garm_Roar)}})
+    }
+
+    // Out of the box entirely: this one is abandoned where it stands (a scar
+    // on the map) and a fresh one starts around you. The cage is a trap you
+    // can escape, never a cage that follows.
+    if !gs.player.dead && !garm_cage_holds(c.anchor, player_tile(&gs.player)) {
+        log_action(gs, "GARM abandons his cage at (%d,%d) - the player broke out",
+            c.anchor.x, c.anchor.y)
+        c.anchor = {}
+        return
+    }
+
+    T, tile, ok := garm_cage_slot(gs, e)
+    if !ok {
+        c.stall = 0   // sealed and full; he simply fights on
+        return
+    }
+
+    // A cage that cannot finish must not hold him forever: if nothing lands
+    // for long enough he gives this one up and re-boxes you.
+    c.stall += gs.delta_time
+    if c.stall >= GARM_CAGE_STALL {
+        log_action(gs, "GARM's cage at (%d,%d) stalls - re-siting", c.anchor.x, c.anchor.y)
+        c.anchor = {}
+        return
+    }
+
+    if g.build_timer > 0 { return }
+
+    x, y := int(T.x), int(T.y)
+    if tile == .Stone {
+        // Never conjure stone into a body — the slot just waits, so standing
+        // in the last gap delays the seal instead of killing you.
+        pl := &gs.player
+        on_slot := !pl.dead &&
+            f32(x) < pl.pos.x + PLAYER_W && f32(x+1) > pl.pos.x &&
+            f32(y) < pl.pos.y + PLAYER_H && f32(y+1) > pl.pos.y
+        if on_slot || builder_overlaps_tile(e, x, y) {
+            g.build_timer = garm_interval(g.phase)
+            return
+        }
+        // Something loose in the slot (a torch, a sapling) is knocked down
+        // recoverably rather than erased — the same conservation path the den
+        // carve uses.
+        if get_tile(&gs.world, x, y) != .Air && get_tile(&gs.world, x, y) != .Void {
+            handle_tile_mined(gs, Event{
+                type   = .Tile_Mined,
+                source = enemy_entity_id(id),
+                tile   = T,
+            })
+        }
+    } else if !c.announced_fill {
+        c.announced_fill = true
+        notify(gs, "The cage fills with fire!")
+    }
+
+    // One beat of warning in the cell before the stone arrives.
+    spawn_tile_fx(gs, .Cage_Spark, T, GARM_CAGE_FLASH, GARM_MAW_COLOR)
+    set_tile(&gs.world, x, y, tile)
+    eq_push(&gs.events, Event{type = .Builder_Placed, tile = T})
+    c.stall       = 0
+    g.build_timer = garm_interval(g.phase)
+}
 
 @(private = "file")
 garm_structure_tile :: proc(g: ^Garm_State) -> (T: [2]i32, tile: Tile_Type, ok: bool) {
@@ -268,9 +426,15 @@ garm_interval :: proc(phase: Garm_Phase) -> f32 {
 }
 
 @(private = "file")
-garm_build_tick :: proc(e: ^Enemy, gs: ^Game_State) {
+garm_build_tick :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     g := &e.garm
     if g.phase == .Chase { return }
+    // Ring and Flood are the cage now: player-anchored, world-driven.  Column
+    // keeps its arena pillar — it is a landmark, not a trap.
+    if g.phase >= .Ring {
+        garm_cage_tick(e, id, gs)
+        return
+    }
     if g.build_timer > 0 { return }
 
     for {
@@ -409,7 +573,7 @@ update_garm :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     e.builder.pocket = POCKET_MAX
 
     garm_update_phase(e, gs)
-    garm_build_tick(e, gs)
+    garm_build_tick(e, id, gs)
 
     // First blood ends the ceremony: a wounded Garm abandons the half-raised
     // lair and hunts — construction never again outranks the intruder, so
