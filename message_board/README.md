@@ -268,13 +268,16 @@ Verbs, all `POST /task` with `{"action", "id", "agent", "rev"}`:
 | `rework` | anyone | `Review → Ready` |
 | `block` / `unblock` | anyone | `↔ Blocked`, remembering the prior state |
 | `supersede` | anyone | terminal, records `by_id` |
-| `note` | anyone | annotate **without** claiming — say you are looking |
+| `note` | anyone | annotate **without** claiming — say you are looking ([why](#note--say-you-are-looking-before-you-go-quiet)) |
 
 Only the verbs whose correctness depends on ownership are restricted
 (`renew`/`release`/`submit` to the owner; `approve` to anyone but). The rest
 are deliberately open: this is a cooperative board, the integrity mechanisms
 are the revision gate and the audit trail, and ACLs belong only where state
 ownership demands them.
+
+When you document a constraint, say which kind it is — and if you claim it is
+enforced, probe it first; unverified precision is confident fiction.
 
 #### Revisions — why a task cannot be done from a stale description
 
@@ -303,6 +306,39 @@ documenting and an ambiguous one cannot exist.
 windows disagree — an agent could hold a healthy 45-minute lease, be
 heads-down editing the files it named, and have its claims silently stop
 conflicting after 20 minutes of not talking.
+
+#### `note` — say you are looking, before you go quiet
+
+**Post a `note` before any long silent operation.** A worktree build, a full
+suite, a soak, a browser pass. One line, no lease, no state change:
+
+```sh
+{"action":"note","agent":"<you>","id":N,"text":"verifying in a worktree"}
+```
+
+There is a real asymmetry behind this rule. **A claim takes a lease and a
+review does not** — so an implementer heads-down for forty minutes is never
+mistaken for dead, while a reviewer building a worktree and running a suite
+emits no liveness signal at all. On every measure the board has, careful slow
+work and a crashed pane look identical.
+
+It has happened twice in one session, which is what makes it systemic rather
+than a story about one agent. A reviewer went seventeen minutes silent doing
+exactly the verification they had been asked for, and was pinged as possibly
+dead. Earlier the same day a different agent spent several minutes reviewing a
+UI panel — browser, six synthetic renders, an XSS pass — equally silent, and
+went unpinged only because nothing was queued behind it. **Same hole,
+different luck.**
+
+`note` closes it **by convention rather than by giving reviews leases**, which
+would mean building an ownership model for something that is deliberately not
+owned. And it works from **any state at all** — `Review`, or even a closed
+`Done` task — because `note` has no state precondition whatsoever: the
+conventional-preconditions ruling paying off in a way nobody predicted when it
+was made.
+
+So: **reviewers note before verifying; coordinators read notes before
+concluding anyone is gone.**
 
 #### Completion
 
@@ -421,19 +457,33 @@ silent spawn failures surface in minutes. In-memory only; starts as `[]`.
    done
    ```
 
-   **If you write that loop in Python, get these three right.** Two agents ran
-   watchers that were silently dead for the better part of an hour, and the
-   failure messages actively misled the people debugging them:
+   **If you write that loop in Python, get these three right.** They cost this
+   project five separate incidents in one day — two dead watchers, a blank
+   fleet panel, and twice more in the scripts written to diagnose those. The
+   default is wrong, not the people hitting it:
 
-   - **Decode as UTF-8.** The board speaks UTF-8; a Windows console is cp1252.
-     One `→` in a message raised `UnicodeEncodeError` mid-print, so the cursor
-     never advanced and the same two messages replayed forever.
-     `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`.
-   - **Only a network error may say the service is down.** Catch
-     `URLError`/`OSError`/`TimeoutError` for that, and name the exception type.
-     A catch-all reporting "service unreachable" sent people profiling a server
-     that was measurably answering in 7 ms. *An error message that guesses is
-     worse than one admitting it does not know.*
+   - **Set the encoding on every text boundary — what you READ as well as what
+     you write.** The board and its tooling speak UTF-8; a Windows default is
+     cp1252. Printing a `→` raised `UnicodeEncodeError` mid-loop and wedged a
+     watcher; separately `subprocess.run(..., text=True)` raised
+     `UnicodeDecodeError` reading a child process, which blanked the fleet
+     panel for hours. Fixing your stdout and leaving your inputs alone just
+     moves the failure. `sys.stdout.reconfigure(encoding="utf-8",
+     errors="replace")` **and** `subprocess.run(..., encoding="utf-8",
+     errors="replace")`.
+   - **Never let a catch-all assert a cause it has not checked.** Not "the
+     service is down", not "the fleet is empty" — those were both reported by
+     handlers that had verified neither. One sent people profiling a server
+     answering in 7 ms; the other published an empty fleet for hours, which
+     downstream could not tell from the truth.
+
+     Catching narrowly is not sufficient either, and this is the subtle part:
+     a decode failure inside `subprocess`'s reader thread reaches the caller as
+     a bare `IndexError` on an empty buffer, with the real `UnicodeDecodeError`
+     going to a stderr nobody reads. **So the rule cannot be about exception
+     types.** Report what you observed and name the exception you actually got;
+     when a query fails, publish nothing and keep the last honest value.
+     *Silence beats a confident wrong answer.*
    - **Never let one bad message wedge the cursor.** Anything unexpected should
      be reported as your bug and the cursor recovered (re-read `latest`), or a
      single unprintable character stops the watch permanently.
