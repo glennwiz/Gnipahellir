@@ -3305,6 +3305,85 @@ bridging_spends_pocket_blocks :: proc(t: ^testing.T) {
     testing.expect_value(t, e.builder.pocket, u8(0))
 }
 
+// A den template carves whatever sits in one of its slots, and
+// builder_pick_den_site roams the caves — so an ordinary builder can pick a
+// site over a player's machine with no boss and no cage involved. The carve
+// has to knock the machine loose, never delete it: the raw set_tile it used to
+// do dropped nothing and silently voided everything the machine held.
+@(test)
+a_den_carve_spills_a_loaded_machine_instead_of_voiding_it :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    T := [2]i32{60, 60}
+    tx, ty := int(T.x), int(T.y)
+    set_tile(&gs.world, tx, ty, .Smelter)
+    sd := &gs.world.sim_data[grid_idx(tx, ty)]
+    sd.store_item, sd.store_count = .Iron_Bar, 2
+    sd.in_item,    sd.in_count    = .Iron_Ore, 3
+    sd.fuel_count = 4
+
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "a builder slot should be free")
+    e := &gs.enemies.data[id]
+    e.kind           = .Builder
+    e.builder.anchor = T
+    // Stand well clear of the slot: builder_place_tile's body check is not what
+    // is under test here.
+    e.pos = {f32(tx) - 4, f32(ty) - BUILDER_H + 1}
+
+    machine := terrain_table[.Smelter].drop_item
+    mach0 := ground_count(&gs.world, machine)
+    bar0  := ground_count(&gs.world, .Iron_Bar)
+    ore0  := ground_count(&gs.world, .Iron_Ore)
+    fuel0 := ground_count(&gs.world, FUEL_ITEM)
+
+    // The template wants .Void here, so the smelter is the "wrong tile".
+    builder_do_step(e, id, gs, T, .Void)
+
+    testing.expect(t, !is_solid(&gs.world, tx, ty), "the slot should be carved open")
+    testing.expect_value(t, ground_count(&gs.world, machine) - mach0, 1)
+    testing.expect_value(t, ground_count(&gs.world, .Iron_Bar) - bar0, 2)
+    testing.expect_value(t, ground_count(&gs.world, .Iron_Ore) - ore0, 3)
+    testing.expect_value(t, ground_count(&gs.world, FUEL_ITEM) - fuel0, 4)
+    testing.expect_value(t, sd^, Sim_Tile_Data{})
+}
+
+// The other half: a loaded silo is never demolished, so the carve is refused —
+// and the template must step PAST it instead of hammering the same slot for the
+// rest of the session.
+@(test)
+a_den_carve_refuses_a_loaded_silo_and_steps_past :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    T := [2]i32{62, 60}
+    tx, ty := int(T.x), int(T.y)
+    set_tile(&gs.world, tx, ty, .Silo)
+    silo_on_placed(gs, T)
+    s := silo_at(gs, gs.level_index, T)
+    testing.expect(t, s != nil, "the silo should have a record")
+    silo_add(s, .Iron_Ore, 40)
+
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "a builder slot should be free")
+    e := &gs.enemies.data[id]
+    e.kind           = .Builder
+    e.builder.anchor = T
+    e.pos            = {f32(tx) - 4, f32(ty) - BUILDER_H + 1}
+
+    ore0  := ground_count(&gs.world, .Iron_Ore)
+    step0 := e.builder.step
+
+    builder_do_step(e, id, gs, T, .Void)
+
+    testing.expect_value(t, get_tile(&gs.world, tx, ty), Tile_Type.Silo)
+    testing.expect_value(t, silo_total(s), 40)
+    testing.expect_value(t, ground_count(&gs.world, .Iron_Ore) - ore0, 0)
+    testing.expect(t, e.builder.step > step0,
+        "a refused slot must advance the template, or the den livelocks on it")
+}
+
 // ─── Industry-drawn tunneller raids ─────────────────────────────────────────
 
 @(private = "file")

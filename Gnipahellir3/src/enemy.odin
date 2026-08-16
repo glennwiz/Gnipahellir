@@ -1249,8 +1249,37 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
     w := &gs.world
 
     if is_solid(w, x, y) {
+        old := get_tile(w, x, y)
         // Wrong tile in the slot — carve it out first.
-        if is_builder_mineable(w, x, y) {
+        //
+        // A player's machine or container is NOT plain rock: builder_pick_den_site
+        // roams the caves, so a den slot can land on a working smelter with no
+        // boss and no raid involved.  The raw carve below would delete it —
+        // dropping nothing, voiding the ore/fuel/bars in its buffers, and walking
+        // straight past the loaded-silo refusal.  handle_tile_mined is the path
+        // that spills a machine whole (the tunneller demolition pins it), routes
+        // the barrel/silo records, and refuses a loaded container.  It also
+        // consumes the tile itself, so no Builder_Mined goes out for it — the
+        // handler plays its own dig sound.  Only .Placeable tiles qualify; plain
+        // terrain keeps the cheap carve, and with it the pocket economy.
+        if .Placeable in terrain_table[old].flags {
+            handle_tile_mined(gs, Event{
+                type   = .Tile_Mined,
+                source = enemy_entity_id(id),
+                tile   = T,
+            })
+            if get_tile(w, x, y) == old {
+                // Refused — a loaded barrel or silo stands its ground.  Step
+                // past it like any other obstruction rather than hammering the
+                // same slot for the rest of the session.
+                e.builder.step += 1
+            } else {
+                // No pocket block here: the machine went to the ground as an
+                // item, and conjuring a block on top of it would mint matter.
+                log_action(gs, "Builder#%d knocks %v loose at (%d,%d)", id, old, x, y)
+                nav.mine_timer = MINE_TIME
+            }
+        } else if is_builder_mineable(w, x, y) {
             set_tile(w, x, y, .Void)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = T})
             log_action(gs, "Builder#%d carves (%d,%d)", id, x, y)
