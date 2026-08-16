@@ -1415,6 +1415,57 @@ draw_altar_menu :: proc(gs: ^Game_State) {
 	}
 }
 
+// ─── Raid Debug Menu (F4, debug builds only) ──────────────────────────────────
+
+RAID_MENU_X :: ALT_MENU_X + ALT_MENU_W + 36
+RAID_MENU_Y :: DBG_MENU_Y
+RAID_MENU_W :: 200
+RAID_MENU_ROWS :: 3 // 0: warn now; 1: spawn tunnellers now; 2: clear + reset
+
+// Menu row under the cursor, or -1.
+raid_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
+	mx := i32(gs.input.mouse_screen.x)
+	my := i32(gs.input.mouse_screen.y)
+	if mx < RAID_MENU_X || mx >= RAID_MENU_X + RAID_MENU_W do return -1
+	r := int((my - RAID_MENU_Y) / DBG_MENU_ROW_H)
+	if my < RAID_MENU_Y || r >= RAID_MENU_ROWS do return -1
+	return r
+}
+
+draw_raid_menu :: proc(gs: ^Game_State) {
+	h := i32(RAID_MENU_ROWS * DBG_MENU_ROW_H)
+	rl.DrawRectangle(RAID_MENU_X - 6, RAID_MENU_Y - 26, RAID_MENU_W + 12, h + 34, panel_bg)
+	rl.DrawRectangleLines(RAID_MENU_X - 6, RAID_MENU_Y - 26, RAID_MENU_W + 12, h + 34, panel_border)
+	rl.DrawText("RAIDS (F4)", RAID_MENU_X, RAID_MENU_Y - 20, 10, rl.YELLOW)
+
+	warn_col := gs.raid.warning_active ? rl.GREEN : rl.YELLOW
+	rl.DrawText("Warn now (skip 20s heat) >", RAID_MENU_X, RAID_MENU_Y + 7, 10, warn_col)
+	rl.DrawText(
+		"Spawn tunnellers now >",
+		RAID_MENU_X,
+		RAID_MENU_Y + DBG_MENU_ROW_H + 7,
+		10,
+		rl.YELLOW,
+	)
+	rl.DrawText(
+		"Clear raiders + reset >",
+		RAID_MENU_X,
+		RAID_MENU_Y + 2 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.YELLOW,
+	)
+
+	if r := raid_menu_row_at_cursor(gs); r >= 0 {
+		rl.DrawRectangleLines(
+			RAID_MENU_X - 2,
+			RAID_MENU_Y + i32(r) * DBG_MENU_ROW_H + 1,
+			RAID_MENU_W + 4,
+			DBG_MENU_ROW_H - 2,
+			rl.YELLOW,
+		)
+	}
+}
+
 // ─── Pixel Art Editor (F1 debug menu, debug builds only) ──────────────────────
 //
 //  Paints editable structure sprites (pixel_art.odin) using the shared
@@ -1586,6 +1637,13 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 		   mx < ALT_MENU_X + ALT_MENU_W + 6 &&
 		   my >= ALT_MENU_Y - 26 &&
 		   my < ALT_MENU_Y + ALT_MENU_ROWS * DBG_MENU_ROW_H + 8 {
+			return true
+		}
+		if gs.debug.raid_menu &&
+		   mx >= RAID_MENU_X - 6 &&
+		   mx < RAID_MENU_X + RAID_MENU_W + 6 &&
+		   my >= RAID_MENU_Y - 26 &&
+		   my < RAID_MENU_Y + RAID_MENU_ROWS * DBG_MENU_ROW_H + 8 {
 			return true
 		}
 		if gs.ui.show_pixel_editor &&
@@ -1766,6 +1824,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	when GAME_DEBUG {
 		if gs.debug.menu_open do draw_debug_menu(gs)
 		if gs.debug.altar_menu do draw_altar_menu(gs)
+		if gs.debug.raid_menu do draw_raid_menu(gs)
 		if gs.debug.item_palette do draw_item_palette(gs)
 		if gs.ui.show_pixel_editor do draw_pixel_editor(gs)
 	}

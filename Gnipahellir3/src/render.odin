@@ -2305,6 +2305,8 @@ draw_enemy :: proc(e: ^Enemy, t: f32) {
 		draw_garm(e, t)
 	case .Undead:
 		draw_draugr(e)
+	case .Raider:
+		draw_builder(e, true)
 	case .Fire_Sprite:
 		px := i32(e.pos.x * CELL_SIZE)
 		py := i32(e.pos.y * CELL_SIZE)
@@ -2579,7 +2581,22 @@ builder_frames := [2][BUILDER_FRAME_H]string {
 	},
 }
 
-builder_pixel_color :: proc(ch: u8, hunting: bool) -> rl.Color {
+builder_pixel_color :: proc(ch: u8, hunting: bool, raider := false) -> rl.Color {
+	if raider {
+		switch ch {
+		case 'O': return rl.Color{18, 14, 17, 255}       // soot-black outline
+		case 'I': return rl.Color{54, 48, 52, 255}       // blackened iron
+		case 'i': return rl.Color{126, 92, 70, 255}      // fire-worn edge
+		case 'L': return rl.Color{62, 36, 31, 255}       // charred leather
+		case 'l': return rl.Color{39, 22, 23, 255}
+		case 'B': return rl.Color{88, 34, 27, 255}       // soot-dark beard
+		case 'b': return rl.Color{47, 22, 23, 255}
+		case 'R': return rl.Color{205, 61, 24, 255}      // ember beard streak
+		case 'K': return rl.Color{128, 74, 58, 255}
+		case 'E': return rl.Color{255, 118, 35, 255}     // furnace eyes
+		}
+		return {}
+	}
 	switch ch {
 	case 'O':
 		return rl.Color{24, 20, 24, 255} // heavy chest outline
@@ -2658,7 +2675,7 @@ draw_builder_carry :: proc(e: ^Enemy, ox, oy: f32) {
 	draw_builder_rect(ox, oy, e.facing, 9, 2, 1, 1, rl.Color{132, 136, 146, 255})
 }
 
-draw_builder :: proc(e: ^Enemy) {
+draw_builder :: proc(e: ^Enemy, raider := false) {
 	moving := abs(e.vel.x) > 0.2
 	frame_i := 0
 	if moving do frame_i = int(abs(e.pos.x) * 4) % 2
@@ -2682,7 +2699,7 @@ draw_builder :: proc(e: ^Enemy) {
 			if e.facing < 0 do draw_col = BUILDER_FRAME_W - 1 - col
 			rl.DrawRectangleRec(
 				{ox + f32(draw_col), oy + f32(row), 1, 1},
-				builder_pixel_color(ch, hunting),
+				builder_pixel_color(ch, hunting, raider),
 			)
 		}
 	}
@@ -2694,7 +2711,16 @@ draw_builder :: proc(e: ^Enemy) {
 	}
 
 	// The hunt face opens into a tiny black shout under ember-bright eyes.
-	if hunting do draw_builder_rect(ox, oy, e.facing, 5, 5, 2, 1, rl.Color{24, 20, 24, 255})
+	if hunting do draw_builder_rect(ox, oy, e.facing, 5, 5, 2, 1,
+		rl.Color{12, 8, 11, 255} if raider else rl.Color{24, 20, 24, 255})
+
+	// A wounded raider carries a soot-red health bar; ordinary builders keep
+	// their quieter established silhouette.
+	if raider && e.hp < e.hp_max {
+		w := i32(pw * f32(e.hp) / f32(e.hp_max))
+		rl.DrawRectangle(i32(px), i32(py) - 5, i32(pw), 3, rl.Color{45, 12, 12, 255})
+		rl.DrawRectangle(i32(px), i32(py) - 5, w, 3, rl.Color{210, 58, 25, 255})
+	}
 }
 
 // The draugr wears the dead builder's frame recolored to the grave: corpse-pale

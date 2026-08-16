@@ -531,12 +531,17 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     // The loose stratum the cave mouth cuts through pays a clod of dirt on top
     // of the tile's normal drop — a small starter reward for digging right
     // beside the descent shaft (the tiles draw_shaft_mouth scuffs brown).  The
-    // rock drops to the ground as usual; the dirt is banked directly (below).
-    shaft_earth := gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, x, y)
+    // rock drops to the ground as usual; the dirt is banked directly (below) —
+    // into the PLAYER's bag, so only the player's own mining earns it.
+    shaft_earth := e.source == PLAYER_ID &&
+        gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, x, y)
 
-    // Mining into a den's structure is a break-in: the owner hunts.
-    // (Only the player pushes Tile_Mined — builders emit Builder_Mined.)
-    if owner := den_owner_index(gs, e.tile); owner >= 0 {
+    // Mining into a den's structure is a break-in: the owner hunts — but only
+    // a PLAYER break-in. Raiders route their demolition through Tile_Mined
+    // too (update_raider), and a machine standing in a den footprint must not
+    // make its owner hunt the player over a raider's smash — the shriek
+    // notify would blame the player for a crime they watched happen.
+    if owner := den_owner_index(gs, e.tile); owner >= 0 && e.source == PLAYER_ID {
         builder_alert(gs, owner)
     }
 

@@ -146,6 +146,8 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
         seal_loose_rune_scrolls(&gs.world)
         for i in 0 ..< len(gs.levels.worlds) do if gs.levels.generated[i] do seal_loose_rune_scrolls(&gs.levels.worlds[i])
         migrate_hand_gear_to_bag(gs)
+        clear_tile_fx_kind(gs, .Raid_Rumble)
+        gs.raid = {}
         log_action(gs, "run migrated from save v23")
         gs.save_dirty = true
         return true
@@ -170,6 +172,12 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
     gs.dimension    = sd.dimension
     gs.elapsed_time = sd.elapsed_time
     gs.frame        = sd.frame
+
+    // The raid director is transient by design — reloading during a buildup
+    // cancels it — and the pre-load session's rumble telegraph must not
+    // outlive the director it announced.
+    clear_tile_fx_kind(gs, .Raid_Rumble)
+    gs.raid = {}
 
     // v21 previously stored progression rune scrolls as loose world items.
     // Seal both the active grid and every already-generated stashed grid.

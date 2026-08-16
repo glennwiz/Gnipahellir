@@ -36,6 +36,7 @@ Enemy_Kind :: enum u8 {
     Undead,
     Fire_Sprite,
     Builder,
+    Raider, // industry-drawn tunneller; appended for save compatibility
 }
 
 Enemy_Nav :: struct {
@@ -119,6 +120,18 @@ Enemy_Store :: struct {
     data:   [MAX_ENEMIES]Enemy,
     active: [MAX_ENEMIES]bool,   // enemy_alloc scans this linearly
     count:  int,
+}
+
+// Surface industry slowly draws a tunneller raid. Transient on purpose: the
+// enemy store is saved once the raid exists, while an unfinished warning is
+// harmless to cancel on save/load just like the tile effect that announces it.
+Raid_State :: struct {
+    pressure:       f32,
+    warning_timer:  f32,
+    cooldown:       f32,
+    quiet_timer:    f32,
+    target:         [2]i32,
+    warning_active: bool,
 }
 
 // ─── Friendly Clay Golems ───────────────────────────────────────────────────
@@ -516,6 +529,7 @@ Debug_State :: struct {
     place_tile: Tile_Type,  // armed stamp: next world click sets this tile (.Air = off)
 	place_golem: bool,    // armed stamp: next world click deploys a Clay Golem
     altar_menu: bool,   // F2: altar/ritual debug menu
+    raid_menu:  bool,   // F4: industry-raid debug menu
     place_tier: int,    // armed altar stamp: next click raises this tier's sky structure (0 = off, else tier+1)
     life:       bool,   // easter egg: Conway's Game of Life eats the world (life.odin)
     life_timer: f32,
@@ -617,6 +631,7 @@ Game_State :: struct {
 
     player:      Player,
     enemies:     Enemy_Store,
+    raid:        Raid_State, // transient industry-pressure director (enemy.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,
     golem_marks: Golem_Mark_Index,

@@ -27,6 +27,8 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     // when it finally stays down.
     .Undead      = {{.Stone_Block, 1, 2, 1.0}, {.Silver_Ore, 1, 2, 0.35}, {}},
     .Fire_Sprite = {},
+    // Raiders arrive provisioned for digging and spill that material when stopped.
+    .Raider      = {{.Stone_Block, 2, 4, 1.0}, {.Iron_Ore, 1, 2, 0.45}, {}},
 }
 
 // xorshift64 step.  Zero-guards so a zeroed test state still rolls.

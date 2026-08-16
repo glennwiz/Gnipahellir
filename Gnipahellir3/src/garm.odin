@@ -130,20 +130,41 @@ garm_den_site :: proc(w: ^World_Grid) -> (T: [2]i32, ok: bool) {
     return {}, false
 }
 
+// A den anchor worth trusting: a site he actually chose, standing INSIDE the
+// arena.  Deliberately no ground test — a player who digs under a finished
+// lair must not make Garm disown it and start over.
+garm_den_anchor_ok :: proc(a: [2]i32) -> bool {
+    if a == DEN_UNSET { return false }
+    return a.x >= ARENA_X0 && a.x <= ARENA_X1 && a.y > ARENA_Y0 && a.y <= ARENA_Y1
+}
+
+// The gate wants everything the den wants, plus real ground to stand the
+// portal on.  Lava passes — the pour is what he floods his own floor with,
+// and the gate overwrites it.
+garm_gate_anchor_ok :: proc(gs: ^Game_State, a: [2]i32) -> bool {
+    return garm_den_anchor_ok(a) && is_solid(&gs.world, int(a.x), int(a.y) + 1)
+}
+
 // His death tears the way open: a two-tile walk-in gate in the heart of his
 // lair — the monument he raised (or began) was always guarding it.  Only a
 // Garm felled before ever choosing his den site leaves the gate on the
 // floor where he happened to die.  The Hell Key he drops is what turns it —
 // player_interact refuses the step without it.
 garm_open_hell_gate :: proc(gs: ^Game_State, en: ^Enemy) {
-    // The live den site outranks the saved anchor: an older save may carry a
-    // roof-sited anchor from before garm_den_site existed, and the gate must
-    // stand where the fight happens — on the arena floor.
+    // The anchor he actually chose outranks a fresh scan.  garm_den_site is a
+    // top-down column scan, so the moment his own roof stands over GARM_DEN_X
+    // it reports the tile ON the roof — nine rows above the fight — and the
+    // sink loop below stops dead on that solid roof.  The anchor was picked
+    // before any masonry existed, so it is the floor.
+    // The live site is still the fallback, and the validity check is what
+    // preserves the repair it was added for: an old save carrying a
+    // roof-sited anchor from before garm_den_site existed fails the check and
+    // falls through to a fresh scan of an unroofed column.
     T: [2]i32
-    if site, ok := garm_den_site(&gs.world); ok {
+    if a := en.builder.anchor; garm_gate_anchor_ok(gs, a) {
+        T = a
+    } else if site, ok := garm_den_site(&gs.world); ok {
         T = site
-    } else if en.builder.anchor != DEN_UNSET {
-        T = en.builder.anchor
     } else {
         T = builder_tile(en)
     }
@@ -405,6 +426,24 @@ update_garm :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     // site, carving, placing (the material is conjured, never fetched).
     // While he works, only a player inside biting reach gets punished; the
     // hunt and the fireballs wait for a finished lair.
+    // A save from before dens were sited on the arena FLOOR carries a roof
+    // anchor — Glenn's snapshot 8 holds (158,85), one row above the ceiling.
+    // The old relic up there even satisfies most of a fresh template, so the
+    // den "completes" after a handful of blocks and the hunt starts: from the
+    // floor that reads as Garm laying three stones and then charging you.
+    // Send him back to pick a real site.  Never after first blood — hp below
+    // max means the ceremony is already over by design (below), and breaking
+    // off a live fight to lay masonry would be worse than the relic.
+    if e.builder.anchor != DEN_UNSET && !garm_den_anchor_ok(e.builder.anchor) &&
+       e.hp >= e.hp_max {
+        log_action(gs, "GARM disowns his roof lair at (%d,%d) - re-siting in the arena",
+            e.builder.anchor.x, e.builder.anchor.y)
+        e.builder.anchor    = DEN_UNSET
+        e.builder.step      = 0
+        e.builder.den_built = false
+        e.nav.path          = {}
+    }
+
     if !e.builder.den_built {
         b := &e.builder
         if b.anchor == DEN_UNSET {

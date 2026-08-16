@@ -17,6 +17,7 @@ Tile_Fx_Kind :: enum u8 {
     Ghost_Maw,   // jaws of ghost-light opening over the duration — a bite windup telegraph
     Maw_Snap,    // the chomp: jaws slammed shut, flashing out (auto-chained from Ghost_Maw)
     Fire_Charge, // a gathering ember swelling toward launch — a ranged-attack windup
+    Raid_Rumble, // soot-red fault lines gathering around industry that drew a raid
 }
 
 MAW_SNAP_TIME :: f32(0.15)
@@ -41,6 +42,10 @@ spawn_tile_fx :: proc(gs: ^Game_State, kind: Tile_Fx_Kind, tile: [2]i32, duratio
         return
     }
     // Pool full: the telegraph is lost, like a dropped particle.
+}
+
+clear_tile_fx_kind :: proc(gs: ^Game_State, kind: Tile_Fx_Kind) {
+    for &f in gs.tile_fx.data do if f.active && f.kind == kind do f.active = false
 }
 
 // Step 9c — visual only, pushes no events.  An expiring Ghost_Maw chains
@@ -77,8 +82,30 @@ draw_tile_fx :: proc(gs: ^Game_State) {
             draw_ghost_maw(cx, cy, 0, 1 - t, f.color, t < 0.5)
         case .Fire_Charge:
             draw_fire_charge(cx, cy, t, f.color)
+        case .Raid_Rumble:
+            draw_raid_rumble(cx, cy, t, f.color)
         }
     }
+}
+
+// A warning bound to the machine that attracted the raid: hard-edged fault
+// lines push outward, then close back in as the tunnellers approach. The
+// square pulse is deliberately terrain-like rather than a generic glow.
+@(private = "file")
+draw_raid_rumble :: proc(cx, cy, t: f32, col: rl.Color) {
+    pulse := f32(1) if int(t * 12) % 2 == 0 else f32(0.55)
+    body  := rl.Color{col.r, col.g, col.b, u8(210 * pulse)}
+    glow  := rl.Color{col.r, col.g, col.b, u8(45 * pulse)}
+    hot   := rl.Color{255, 185, 90, u8(235 * pulse)}
+    reach := 5 + 9 * (1 - t)
+
+    rl.DrawRectangleRec({cx - reach - 3, cy - reach - 3, (reach + 3)*2, (reach + 3)*2}, glow)
+    // Four stepped cracks aimed into the hot machine.
+    rl.DrawRectangleRec({cx - reach, cy - 1, reach - 2, 2}, body)
+    rl.DrawRectangleRec({cx + 2, cy - 1, reach - 2, 2}, body)
+    rl.DrawRectangleRec({cx - 1, cy - reach, 2, reach - 2}, body)
+    rl.DrawRectangleRec({cx - 1, cy + 2, 2, reach - 2}, body)
+    rl.DrawRectangleRec({cx - 2, cy - 2, 4, 4}, hot)
 }
 
 // The maw itself: two fanged jaw bars over the point, gap (px from the bite

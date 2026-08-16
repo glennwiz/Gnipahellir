@@ -17,6 +17,12 @@ ASTAR_H_WEIGHT  :: f32(2.0)   // greedy-ish A*: with mining the whole rock mass 
                               // searchable and an admissible h floods the budget
 
 BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
+// Garm's lair is 8 interior rows tall, so its roof sits 9 above the floor —
+// far past a builder's arm.  He could not climb to it either: pathing onto
+// his own masonry invites astar_dig to chew the walls he just raised.  So the
+// boss places at boss range, the same conjuring licence as his masonry pocket
+// and his MAX_NAV_PATH plan budget.  Only Garm gets it (builder_build_den).
+GARM_BUILD_REACH :: i32(9)
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
 STUCK_TIME      :: f32(3.0)   // no path progress for this long => strike
 MAX_STRIKES     :: 3          // strikes before the current objective is dropped
@@ -53,6 +59,19 @@ LOS_MEMORY     :: f32(3.0)  // keep hunting this long after losing sight
 ATTACK_TIME    :: f32(0.8)  // seconds between bites
 ATTACK_DAMAGE  :: 1
 
+// Industry raids. A working surface furnace/kettle must stay hot for the full
+// pressure + warning window; shutting it down during the warning cancels the
+// attack. Once spawned, tunnellers break the marked machine and then fight.
+RAID_PRESSURE_TIME :: f32(20.0)
+RAID_WARNING_TIME  :: f32(10.0)
+RAID_QUIET_CANCEL  :: f32(2.0)  // tolerate a machine's one-frame cycle reset
+RAID_COOLDOWN      :: f32(180.0)
+RAID_COUNT         :: 2
+RAIDER_HP          :: 8
+RAIDER_SPEED       :: f32(6.0)
+RAIDER_ATTACK_TIME :: f32(0.9)
+RAIDER_DAMAGE      :: 2
+
 // Den shell.  Tuned 3 -> 2 after playtest round 1: with 3 layers a dome
 // took ~an hour of builder time, so the floor stockpile (the raid payout)
 // never appeared in a real session.
@@ -66,6 +85,9 @@ DEN_UNSET :: [2]i32{0, 0}   // anchor sentinel: no den site chosen yet
 //  Steps are ordered so each is placeable from the ground: carves (.Void)
 //  first, then solids bottom-up.  Everything stays within BUILDER_REACH of
 //  the anchor area, so a whole structure is buildable without re-pathing.
+//  One exception: Garm's .Lair is 9 rows tall and reaches past any arm, so
+//  he alone builds at GARM_BUILD_REACH (builder_build_den).  A template for
+//  an ordinary builder must still obey BUILDER_REACH.
 
 Template_Tile :: struct {
     off:  [2]i32,
@@ -103,39 +125,56 @@ SHELTER_TILES := [?]Template_Tile{
     {{-2, -3}, .Wood}, {{-1, -3}, .Wood}, {{0, -3}, .Wood}, {{1, -3}, .Wood}, {{2, -3}, .Wood},
 }
 
-// Garm's lair: a real vault, not a hut — a wide stone hall (9x4 interior)
-// he raises and then FILLS with fire: twin lava pools laid on the floor,
-// flanking a clear center span (where his death later tears the Hell Gate
-// open — reaching Hell means crossing his fire).  The doorway is one tile
-// wide: a player fits, his 1.6-wide body never did — the den is his
-// monument to guard, not a house.  Interior carves over open arena air
-// auto-satisfy, so the real work is the shell and the pour; static lava
-// (fluid.odin) holds a floor-level pool without any basin, forever.
+// Garm's lair: a real vault, not a hut — a stone hall 10 wide and 8 tall
+// that he raises and then FILLS with fire.  Glenn's call (board seq 308):
+// the walls and roof close FIRST, and only then does the floor flood, wall
+// to wall, the gate ground included — reaching Hell means crossing his fire,
+// so there is no dry plinth to stand on.  The doorway is one tile wide: a
+// player fits, his 1.6-wide body never did — the den is his monument to
+// guard, not a house, and its threshold {5,0} is the one floor cell left
+// unpoured so the hall can be entered on foot.
+//
+// The step order IS the build sequence (builder_build_den walks it strictly
+// in order): carve, then shell bottom-up, then roof, then the pour.  Interior
+// carves over open arena air auto-satisfy — tile_satisfied treats any
+// non-solid tile as a finished .Void — so the real work is the 34 placements,
+// not the 80 carves.  Static lava (fluid.odin) holds a floor-level pool with
+// no basin, forever; nothing is targeted below the floor row, so his own
+// wide-body descent smashes have no excuse to chew through it.
 @(rodata)
 GARM_LAIR_TILES := [?]Template_Tile{
-    // carve the hall (9 wide, 4 tall) + the 2-tall doorway on the right
+    // carve the hall: x -4..5, y 0..-7, doorway included at {5,0}/{5,-1}
     {{-4, 0}, .Void}, {{-3, 0}, .Void}, {{-2, 0}, .Void}, {{-1, 0}, .Void}, {{0, 0}, .Void},
     {{1, 0}, .Void}, {{2, 0}, .Void}, {{3, 0}, .Void}, {{4, 0}, .Void}, {{5, 0}, .Void},
     {{-4, -1}, .Void}, {{-3, -1}, .Void}, {{-2, -1}, .Void}, {{-1, -1}, .Void}, {{0, -1}, .Void},
     {{1, -1}, .Void}, {{2, -1}, .Void}, {{3, -1}, .Void}, {{4, -1}, .Void}, {{5, -1}, .Void},
     {{-4, -2}, .Void}, {{-3, -2}, .Void}, {{-2, -2}, .Void}, {{-1, -2}, .Void}, {{0, -2}, .Void},
-    {{1, -2}, .Void}, {{2, -2}, .Void}, {{3, -2}, .Void}, {{4, -2}, .Void},
+    {{1, -2}, .Void}, {{2, -2}, .Void}, {{3, -2}, .Void}, {{4, -2}, .Void}, {{5, -2}, .Void},
     {{-4, -3}, .Void}, {{-3, -3}, .Void}, {{-2, -3}, .Void}, {{-1, -3}, .Void}, {{0, -3}, .Void},
-    {{1, -3}, .Void}, {{2, -3}, .Void}, {{3, -3}, .Void}, {{4, -3}, .Void},
-    // shell, bottom-up: solid left wall, right wall above the doorway gap
+    {{1, -3}, .Void}, {{2, -3}, .Void}, {{3, -3}, .Void}, {{4, -3}, .Void}, {{5, -3}, .Void},
+    {{-4, -4}, .Void}, {{-3, -4}, .Void}, {{-2, -4}, .Void}, {{-1, -4}, .Void}, {{0, -4}, .Void},
+    {{1, -4}, .Void}, {{2, -4}, .Void}, {{3, -4}, .Void}, {{4, -4}, .Void}, {{5, -4}, .Void},
+    {{-4, -5}, .Void}, {{-3, -5}, .Void}, {{-2, -5}, .Void}, {{-1, -5}, .Void}, {{0, -5}, .Void},
+    {{1, -5}, .Void}, {{2, -5}, .Void}, {{3, -5}, .Void}, {{4, -5}, .Void}, {{5, -5}, .Void},
+    {{-4, -6}, .Void}, {{-3, -6}, .Void}, {{-2, -6}, .Void}, {{-1, -6}, .Void}, {{0, -6}, .Void},
+    {{1, -6}, .Void}, {{2, -6}, .Void}, {{3, -6}, .Void}, {{4, -6}, .Void}, {{5, -6}, .Void},
+    {{-4, -7}, .Void}, {{-3, -7}, .Void}, {{-2, -7}, .Void}, {{-1, -7}, .Void}, {{0, -7}, .Void},
+    {{1, -7}, .Void}, {{2, -7}, .Void}, {{3, -7}, .Void}, {{4, -7}, .Void}, {{5, -7}, .Void},
+    // shell, bottom-up: solid left wall the full height, right wall only
+    // above the 2-tall doorway gap at {5,0} and {5,-1}
     {{-5, 0}, .Stone}, {{-5, -1}, .Stone}, {{-5, -2}, .Stone}, {{-5, -3}, .Stone},
-    {{5, -2}, .Stone}, {{5, -3}, .Stone},
+    {{-5, -4}, .Stone}, {{-5, -5}, .Stone}, {{-5, -6}, .Stone}, {{-5, -7}, .Stone},
+    {{5, -2}, .Stone}, {{5, -3}, .Stone}, {{5, -4}, .Stone}, {{5, -5}, .Stone},
+    {{5, -6}, .Stone}, {{5, -7}, .Stone},
     // roof
-    {{-5, -4}, .Stone}, {{-4, -4}, .Stone}, {{-3, -4}, .Stone}, {{-2, -4}, .Stone},
-    {{-1, -4}, .Stone}, {{0, -4}, .Stone}, {{1, -4}, .Stone}, {{2, -4}, .Stone},
-    {{3, -4}, .Stone}, {{4, -4}, .Stone}, {{5, -4}, .Stone},
-    // and the fire — the pour comes last, twin pools laid ON the floor of
-    // the finished vault (static lava holds a floor-level pool without any
-    // basin: no pressure, no spread — and no below-floor build targets for
-    // his own wide-body descent smashes to chew the floor over).  The
-    // center -1..1 stays clear stone: the Hell Gate's future ground.
-    {{-4, 0}, .Lava}, {{-3, 0}, .Lava}, {{-2, 0}, .Lava},
-    {{2, 0}, .Lava}, {{3, 0}, .Lava}, {{4, 0}, .Lava},
+    {{-5, -8}, .Stone}, {{-4, -8}, .Stone}, {{-3, -8}, .Stone}, {{-2, -8}, .Stone},
+    {{-1, -8}, .Stone}, {{0, -8}, .Stone}, {{1, -8}, .Stone}, {{2, -8}, .Stone},
+    {{3, -8}, .Stone}, {{4, -8}, .Stone}, {{5, -8}, .Stone},
+    // and the fire — poured last, into a vault that is already closed.  The
+    // gate cells {0,0} and {1,0} flood with the rest: his death overwrites
+    // them with .Hell_Gate, so the only way to the gate is across the pour.
+    {{-4, 0}, .Lava}, {{-3, 0}, .Lava}, {{-2, 0}, .Lava}, {{-1, 0}, .Lava},
+    {{0, 0}, .Lava}, {{1, 0}, .Lava}, {{2, 0}, .Lava}, {{3, 0}, .Lava}, {{4, 0}, .Lava},
 }
 
 // Static table; cannot be @(rodata) because the slice initializers are not
@@ -242,6 +281,7 @@ enemy_speed :: proc(kind: Enemy_Kind) -> f32 {
     #partial switch kind {
     case .Garm:   return GARM_SPEED
     case .Undead: return DRAUGR_SPEED
+    case .Raider: return RAIDER_SPEED
     }
     return BUILDER_SPEED
 }
@@ -785,6 +825,212 @@ spawn_level_1_enemies :: proc(gs: ^Game_State) {
     spawn_builder(gs, CAVE_RIGHT - 20)
     spawn_builder(gs, CAVE_LEFT  + 20)
     spawn_builder(gs, GRID_W / 2)
+}
+
+// ─── Industry Raids ─────────────────────────────────────────────────────────
+
+is_raid_machine :: proc(t: Tile_Type) -> bool {
+    return t == .Smelter || t == .Boiler || t == .Magic_Kettle
+}
+
+// `growth_timer` advances only while a machine is genuinely producing, and it
+// is the sole heat signal here. spread_timer must NOT count: an idle kettle
+// consumes nothing by contract (tick_boiler), so a boiler that drank its
+// source dry mid-burn keeps its residual burn clock frozen >0 forever — with
+// it in this predicate, that machine was a permanent raid magnet no player
+// action could cool. The one frame where a completing cycle zeroes
+// growth_timer is already bridged by RAID_QUIET_CANCEL's 2 s tolerance.
+raid_machine_hot :: proc(gs: ^Game_State, T: [2]i32) -> bool {
+    x, y := int(T.x), int(T.y)
+    if !in_bounds(x, y) || !is_raid_machine(get_tile(&gs.world, x, y)) do return false
+    return gs.world.sim_data[grid_idx(x, y)].growth_timer > 0
+}
+
+// Nearest currently working heat source to the player. This makes the warning
+// name a machine the player can actually reach and shut down in ten seconds.
+raid_heat_target :: proc(gs: ^Game_State) -> (best: [2]i32, ok: bool) {
+    pt := player_tile(&gs.player)
+    best_d := max(i64)
+    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+        T := [2]i32{i32(x), i32(y)}
+        if !raid_machine_hot(gs, T) do continue
+        dx, dy := i64(T.x - pt.x), i64(T.y - pt.y)
+        if d := dx*dx + dy*dy; d < best_d {
+            best, best_d, ok = T, d, true
+        }
+    }
+    return
+}
+
+spawn_raider :: proc(gs: ^Game_State, target: [2]i32, hint_x: int) -> bool {
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return false
+
+    tx, ty, found := find_cave_floor(&gs.world, hint_x, 3)
+    if !found {
+        enemy_free(&gs.enemies, id)
+        return false
+    }
+
+    e := &gs.enemies.data[id]
+    e.kind   = .Raider
+    e.hp     = RAIDER_HP
+    e.hp_max = RAIDER_HP
+    e.facing = 1 if target.x >= i32(tx) else -1
+    e.pos    = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1}
+    e.builder.goal        = .Hunt
+    e.builder.target_tile = target
+    e.builder.has_target  = true
+    e.builder.plan_target = target
+    // pocket stays 0: tunnellers earn every block by digging, like builders.
+    // A primed pocket was 8 conjured mineable blocks per raider; the escape
+    // pillar already conjures on its own when the pocket runs dry, and the
+    // first carve restores the A* bridging budget within one MINE_TIME.
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    log_action(gs, "Tunneller#%d enters at (%d,%d), drawn to (%d,%d)", id, tx, ty, target.x, target.y)
+    return true
+}
+
+spawn_tunneller_raid :: proc(gs: ^Game_State, target: [2]i32) -> int {
+    // Two approach columns bracket the target. `find_cave_floor` snaps each
+    // into the nearest upper-cave pocket; the dig-aware A* handles the rest.
+    hints := [RAID_COUNT]int{
+        clamp(int(target.x) - 18, CAVE_LEFT + 4, CAVE_RIGHT - 5),
+        clamp(int(target.x) + 18, CAVE_LEFT + 4, CAVE_RIGHT - 5),
+    }
+    spawned := 0
+    for hint in hints do if spawn_raider(gs, target, hint) do spawned += 1
+    return spawned
+}
+
+// Called after the tile sim, so machine growth_timer describes this frame's
+// actual work. The director is transient; spawned enemies themselves save in
+// Enemy_Store, while reloading during a warning harmlessly resets the buildup.
+update_raids :: proc(gs: ^Game_State) {
+    r := &gs.raid
+    if r.cooldown > 0 do r.cooldown = max(0, r.cooldown - gs.delta_time)
+
+    // The first rune scroll is the grace-period boundary: industry may be
+    // built earlier, but raids do not begin before the player enters the loop.
+    if gs.level_index != LEVEL_SURFACE || !gs.progression.rune_scroll_found[0] {
+        if r.warning_active do clear_tile_fx_kind(gs, .Raid_Rumble)
+        r.pressure, r.quiet_timer = 0, 0
+        r.warning_active = false
+        return
+    }
+
+    // A loaded raid lives in Enemy_Store even though the director is
+    // transient. Never stack a fresh wave on surviving saved tunnellers.
+    raiders_present := false
+    for &e, i in gs.enemies.data do if gs.enemies.active[i] && e.kind == .Raider {
+        raiders_present = true
+        break
+    }
+    if raiders_present && !r.warning_active {
+        r.pressure = 0
+        return
+    }
+
+    if r.warning_active {
+        if raid_machine_hot(gs, r.target) {
+            r.quiet_timer = 0
+        } else {
+            r.quiet_timer += gs.delta_time
+            if r.quiet_timer >= RAID_QUIET_CANCEL {
+                notify(gs, "The underground rumbling fades - the fires are quiet")
+                clear_tile_fx_kind(gs, .Raid_Rumble)
+                r^ = {cooldown = 20}
+                return
+            }
+        }
+        r.warning_timer -= gs.delta_time
+        if r.warning_timer > 0 do return
+
+        spawned := spawn_tunneller_raid(gs, r.target)
+        if spawned > 0 {
+            notify(gs, "%d tunnellers break toward the hot machine!", spawned)
+            spawn_tile_fx(gs, .Raid_Rumble, r.target, 0.6, {205, 55, 24, 255})
+            eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
+            log_action(gs, "Industry raid begins: %d tunnellers target (%d,%d)", spawned, r.target.x, r.target.y)
+            r^ = {cooldown = RAID_COOLDOWN}
+        } else {
+            r^ = {cooldown = 10}
+        }
+        return
+    }
+
+    if r.cooldown > 0 do return
+    target, hot := raid_heat_target(gs)
+    if !hot {
+        r.pressure = max(0, r.pressure - gs.delta_time*2)
+        return
+    }
+    r.pressure += gs.delta_time
+    if r.pressure < RAID_PRESSURE_TIME do return
+
+    r.target         = target
+    r.warning_timer  = RAID_WARNING_TIME
+    r.warning_active = true
+    r.quiet_timer    = 0
+    spawn_tile_fx(gs, .Raid_Rumble, target, RAID_WARNING_TIME, {205, 55, 24, 255})
+    notify(gs, "The ground growls beneath the hot machine - kill its fire!")
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
+    log_action(gs, "Industry raid warning at (%d,%d)", target.x, target.y)
+}
+
+// ─── Raid Debug Actions (F4 menu, input.odin drives these) ──────────────────
+
+// Skip the 20 s pressure build: arm the warning at the nearest hot machine
+// right now. Honors the real gates so the forced warning survives update_raids.
+debug_raid_warn_now :: proc(gs: ^Game_State) {
+    if gs.level_index != LEVEL_SURFACE || !gs.progression.rune_scroll_found[0] {
+        notify(gs, "Debug: raids need the surface level + the first rune scroll")
+        return
+    }
+    target, hot := raid_heat_target(gs)
+    if !hot {
+        notify(gs, "Debug: no working Smelter/Boiler/Kettle to threaten")
+        return
+    }
+    r := &gs.raid
+    r.target         = target
+    r.warning_timer  = RAID_WARNING_TIME
+    r.warning_active = true
+    r.quiet_timer    = 0
+    spawn_tile_fx(gs, .Raid_Rumble, target, RAID_WARNING_TIME, {205, 55, 24, 255})
+    notify(gs, "The ground growls beneath the hot machine - kill its fire!")
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
+    log_action(gs, "Debug: raid warning forced at (%d,%d)", target.x, target.y)
+}
+
+// Skip warning and gates both: land the pair immediately, aimed at the nearest
+// hot machine or, with no industry running, at the player's own tile.
+debug_raid_spawn_now :: proc(gs: ^Game_State) {
+    target, hot := raid_heat_target(gs)
+    if !hot do target = player_tile(&gs.player)
+    if gs.raid.warning_active do clear_tile_fx_kind(gs, .Raid_Rumble)
+    spawned := spawn_tunneller_raid(gs, target)
+    if spawned > 0 {
+        notify(gs, "Debug: %d tunnellers break toward (%d,%d)!", spawned, target.x, target.y)
+        spawn_tile_fx(gs, .Raid_Rumble, target, 0.6, {205, 55, 24, 255})
+        eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
+        log_action(gs, "Debug: raid forced, %d tunnellers target (%d,%d)", spawned, target.x, target.y)
+        gs.raid = {cooldown = RAID_COOLDOWN}
+    } else {
+        notify(gs, "Debug: no cave pocket found - tunnellers have nowhere to enter")
+    }
+}
+
+// Repeatable testing: despawn every tunneller and factory-reset the director.
+debug_raid_clear :: proc(gs: ^Game_State) {
+    cleared := 0
+    for &e, i in gs.enemies.data do if gs.enemies.active[i] && e.kind == .Raider {
+        despawn_enemy(gs, i)
+        cleared += 1
+    }
+    clear_tile_fx_kind(gs, .Raid_Rumble)
+    gs.raid = {}
+    notify(gs, "Debug: %d tunnellers cleared, raid pressure reset", cleared)
 }
 
 // ─── Builder Path Actions (mine / place) ──────────────────────────────────────
@@ -1359,7 +1605,8 @@ builder_build_den :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     t := tmpl.tiles[b.step]
     T := b.anchor + t.off
-    if builder_travel(e, id, gs, dt, T, BUILDER_REACH) {
+    reach := GARM_BUILD_REACH if e.kind == .Garm else BUILDER_REACH
+    if builder_travel(e, id, gs, dt, T, reach) {
         builder_do_step(e, id, gs, T, t.tile)
         // do_step resets stuck_timer on every completed action; a builder
         // frozen at the worksite (step-aside pinned) must still strike out.
@@ -1578,6 +1825,91 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     }
 }
 
+// A raid tunneller follows the heat-marked machine without LOS and uses the
+// shared dig-aware travel. A defender who intercepts it gets priority; after
+// the machine falls it relentlessly hunts the nearest player/golem.
+update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
+    b := &e.builder
+    e.nav.mine_timer -= dt
+    b.replan_timer   -= dt
+    b.attack_timer   -= dt
+
+    if b.escaping {
+        builder_escape_pillar(e, id, gs, dt)
+        return
+    }
+
+    bt := builder_tile(e)
+    pt := player_tile(&gs.player)
+    golem_id := -1
+    if gt, gid, gok := nearest_deployed_golem(gs, bt); gok &&
+       (gs.player.dead || chebyshev(bt, gt) < chebyshev(bt, pt)) {
+        pt = gt
+        golem_id = gid
+    }
+    defender_alive := !gs.player.dead || golem_id >= 0
+
+    strike_defender :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, golem_id: int) {
+        e.facing = 1 if T.x >= builder_tile(e).x else -1
+        e.builder.attack_timer = RAIDER_ATTACK_TIME
+        if golem_id >= 0 {
+            eq_push(&gs.events, Event{type = .Golem_Damaged, tile = {i32(golem_id), 0}, payload = {int_val = RAIDER_DAMAGE}})
+            log_action(gs, "Tunneller#%d strikes golem#%d", id, golem_id)
+        } else {
+            eq_push(&gs.events, Event{
+                type    = .Damage_Dealt,
+                source  = enemy_entity_id(id),
+                target  = PLAYER_ID,
+                payload = {int_val = RAIDER_DAMAGE},
+            })
+            log_action(gs, "Tunneller#%d strikes the player", id)
+        }
+    }
+
+    // An adjacent defender can body-block the siege and draw the blow.
+    if defender_alive && chebyshev(bt, pt) <= 1 {
+        e.vel.x = 0
+        if b.attack_timer <= 0 do strike_defender(e, id, gs, pt, golem_id)
+        return
+    }
+
+    if b.has_target && is_raid_machine(get_tile(&gs.world, int(b.target_tile.x), int(b.target_tile.y))) {
+        if chebyshev(b.plan_target, b.target_tile) > 0 {
+            b.plan_target = b.target_tile
+            e.nav.path = {}
+        }
+        if builder_travel(e, id, gs, dt, b.target_tile, 1) && b.attack_timer <= 0 {
+            T := b.target_tile
+            e.facing = 1 if T.x >= bt.x else -1
+            b.attack_timer = RAIDER_ATTACK_TIME
+            // The normal mined-tile path drops the machine and every buffered
+            // input/fuel/output item. The raid threatens the base, never the
+            // conservation law.
+            handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(id), tile = T})
+            spawn_tile_fx(gs, .Raid_Rumble, T, 0.5, {235, 75, 28, 255})
+            notify(gs, "A tunneller smashes the hot machine!")
+            log_action(gs, "Tunneller#%d demolishes industry at (%d,%d)", id, T.x, T.y)
+            b.has_target  = false
+            b.plan_target = {-99, -99}
+            e.nav.path    = {}
+        }
+        return
+    }
+    b.has_target = false
+
+    if !defender_alive {
+        e.vel.x = 0
+        return
+    }
+    if chebyshev(b.plan_target, pt) > 2 {
+        b.plan_target = pt
+        e.nav.path = {}
+    }
+    if builder_travel(e, id, gs, dt, pt, 1) && b.attack_timer <= 0 {
+        strike_defender(e, id, gs, pt, golem_id)
+    }
+}
+
 // ─── Update All Enemies ───────────────────────────────────────────────────────
 
 update_enemies :: proc(gs: ^Game_State) {
@@ -1599,6 +1931,10 @@ update_enemies :: proc(gs: ^Game_State) {
             move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_undead(e, i, gs, dt)
+        case .Raider:
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
+            update_raider(e, i, gs, dt)
         case .Fire_Sprite:
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))

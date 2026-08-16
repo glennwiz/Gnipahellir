@@ -3305,6 +3305,285 @@ bridging_spends_pocket_blocks :: proc(t: ^testing.T) {
     testing.expect_value(t, e.builder.pocket, u8(0))
 }
 
+// ─── Industry-drawn tunneller raids ─────────────────────────────────────────
+
+@(private = "file")
+ground_count :: proc(w: ^World_Grid, item: Item) -> int {
+    total := 0
+    for i in 0 ..< GRID_W * GRID_H do if w.items[i] == item {
+        total += int(w.item_counts[i])
+    }
+    return total
+}
+
+@(test)
+hot_industry_warns_and_shutdown_cancels_the_raid :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.progression.rune_scroll_found[0] = true
+    T := [2]i32{76, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Smelter)
+    sd := &gs.world.sim_data[grid_idx(int(T.x), int(T.y))]
+    sd.growth_timer = 1 // a genuinely working furnace
+    gs.delta_time = 1
+
+    for _ in 0 ..< int(RAID_PRESSURE_TIME) do update_raids(gs)
+    testing.expect(t, gs.raid.warning_active, "sustained industry should arm a raid warning")
+    testing.expect_value(t, gs.raid.target, T)
+    warned := false
+    for f in gs.tile_fx.data do if f.active && f.kind == .Raid_Rumble && f.tile == T {
+        warned = true
+    }
+    testing.expect(t, warned, "the threatened machine should carry a visible rumble")
+
+    // Kill the fire during the warning. A short tolerance bridges machine
+    // cycle resets; sustained quiet cancels the attack before anything spawns.
+    sd.growth_timer, sd.spread_timer = 0, 0
+    for _ in 0 ..< int(RAID_QUIET_CANCEL) + 1 do update_raids(gs)
+    testing.expect(t, !gs.raid.warning_active, "quiet industry should cancel the warning")
+    raiders := 0
+    for e, i in gs.enemies.data do if gs.enemies.active[i] && e.kind == .Raider do raiders += 1
+    testing.expect_value(t, raiders, 0)
+}
+
+@(test)
+a_hot_machine_draws_two_tunnellers_after_the_warning :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.progression.rune_scroll_found[0] = true
+    T := [2]i32{76, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Boiler)
+    sd := &gs.world.sim_data[grid_idx(int(T.x), int(T.y))]
+    sd.growth_timer = 1
+    gs.delta_time = 1
+
+    for _ in 0 ..< int(RAID_PRESSURE_TIME + RAID_WARNING_TIME) do update_raids(gs)
+
+    raiders := 0
+    for &e, i in gs.enemies.data {
+        if !gs.enemies.active[i] || e.kind != .Raider do continue
+        raiders += 1
+        testing.expect_value(t, e.builder.target_tile, T)
+        testing.expect(t, e.builder.has_target, "a new tunneller should carry the warned machine target")
+        // pocket 0 is the conservation pin: every block a tunneller places
+        // must trace to a tile it carved, never to spawn-conjured stock.
+        testing.expect_value(t, e.builder.pocket, u8(0))
+    }
+    testing.expect_value(t, raiders, RAID_COUNT)
+    testing.expect(t, gs.raid.cooldown > 0, "a completed raid starts the quiet interval")
+}
+
+@(test)
+the_f4_raid_menu_forces_and_clears_a_raid :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Warn-now honors the real gates: with no hot machine it refuses.
+    gs.progression.rune_scroll_found[0] = true
+    debug_raid_warn_now(gs)
+    testing.expect(t, !gs.raid.warning_active, "warn-now must refuse without a hot machine")
+
+    T := [2]i32{76, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Smelter)
+    gs.world.sim_data[grid_idx(int(T.x), int(T.y))].growth_timer = 1
+    debug_raid_warn_now(gs)
+    testing.expect(t, gs.raid.warning_active, "a hot machine arms the forced warning instantly")
+    testing.expect_value(t, gs.raid.target, T)
+
+    // Spawn-now skips the warning entirely and lands the pair at once.
+    debug_raid_spawn_now(gs)
+    raiders := 0
+    for e, i in gs.enemies.data do if gs.enemies.active[i] && e.kind == .Raider do raiders += 1
+    testing.expect_value(t, raiders, RAID_COUNT)
+    testing.expect(t, !gs.raid.warning_active, "a forced spawn consumes the warning")
+    testing.expect(t, gs.raid.cooldown > 0, "a forced raid starts the quiet interval")
+
+    // Clear-and-reset leaves a quiet arena and a factory-reset director.
+    debug_raid_clear(gs)
+    raiders = 0
+    for e, i in gs.enemies.data do if gs.enemies.active[i] && e.kind == .Raider do raiders += 1
+    testing.expect_value(t, raiders, 0)
+    testing.expect_value(t, gs.raid, Raid_State{})
+}
+
+@(test)
+a_dry_boiler_reads_cold_and_its_raid_warning_cancels :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.progression.rune_scroll_found[0] = true
+    T := [2]i32{76, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Boiler)
+    sd := &gs.world.sim_data[grid_idx(int(T.x), int(T.y))]
+    gs.delta_time = 1
+
+    // A boiler that drank its source dry mid-burn: residual lit fuel on the
+    // burn clock, spares in the hopper, nothing adjacent left to boil.
+    sd.spread_timer = 4
+    sd.fuel_count   = 5
+
+    // The idle contract holds: a dry kettle ticks without consuming...
+    for _ in 0 ..< 3 do tick_boiler(gs, int(T.x), int(T.y))
+    testing.expect_value(t, sd.fuel_count, u8(5))
+    testing.expect_value(t, sd.spread_timer, f32(4))
+    // ...and its frozen residual burn is not raid heat. (With spread_timer
+    // in the predicate this machine was a permanent raid magnet no player
+    // action could cool — the advertised shutdown counter-play was dead.)
+    testing.expect(t, !raid_machine_hot(gs, T), "a dry idle boiler must read cold to the raid director")
+
+    // So a warning over it cancels: dry and quiet through the tolerance
+    // window despawns the threat before anything spawns.
+    gs.raid = {warning_active = true, target = T, warning_timer = RAID_WARNING_TIME}
+    for _ in 0 ..< int(RAID_QUIET_CANCEL) + 1 {
+        tick_boiler(gs, int(T.x), int(T.y))
+        update_raids(gs)
+    }
+    testing.expect(t, !gs.raid.warning_active, "a dry boiler's raid warning must cancel")
+    raiders := 0
+    for e, i in gs.enemies.data do if gs.enemies.active[i] && e.kind == .Raider do raiders += 1
+    testing.expect_value(t, raiders, 0)
+}
+
+@(test)
+loading_a_save_resets_the_transient_raid_director :: proc(t: ^testing.T) {
+    // The director and its rumble telegraph are transient by design: a
+    // reload cancels unfinished buildup instead of resuming a warning whose
+    // target may not even exist in the loaded world.
+    path :: "gnipahellir_raid_load_scratch.dat"
+    defer os.remove(path)
+
+    gs := test_state()
+    defer free(gs)
+    testing.expect(t, save_game_to(gs, path), "clean save written")
+
+    T := [2]i32{76, i32(SURFACE_Y - 1)}
+    gs.raid = {warning_active = true, target = T, warning_timer = 5, pressure = 12}
+    spawn_tile_fx(gs, .Raid_Rumble, T, RAID_WARNING_TIME, {205, 55, 24, 255})
+
+    testing.expect(t, load_game_from(gs, path), "save loads")
+    testing.expect_value(t, gs.raid, Raid_State{})
+    for f in gs.tile_fx.data do if f.active && f.kind == .Raid_Rumble {
+        testing.expect(t, false, "no rumble telegraph may outlive its director across a load")
+    }
+}
+
+@(test)
+a_raiders_demolition_never_frames_the_player :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // A finished den whose structure footprint holds a hot machine.
+    owner := -1
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == .Builder {
+        owner = i
+        break
+    }
+    testing.expect(t, owner >= 0, "level 0 should have a builder")
+    b := &gs.enemies.data[owner].builder
+    b.den_built = true
+    b.build     = .Shelter
+    b.anchor    = {60, i32(SURFACE_Y + 10)}
+    T := b.anchor + {-3, 0} // shell ring cell — structure, never the door
+    set_tile(&gs.world, int(T.x), int(T.y), .Smelter)
+
+    // A raider's smash routes through the same Tile_Mined handler, but the
+    // den owner must not hunt the player over a crime they only watched.
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(owner + 1), tile = T})
+    testing.expect(t, b.goal != .Hunt, "a raider's demolition must not alert the den owner against the player")
+
+    // The player's own break-in still shrieks.
+    set_tile(&gs.world, int(T.x), int(T.y), .Stone)
+    handle_tile_mined(gs, Event{type = .Tile_Mined, tile = T}) // zero source IS the player
+    testing.expect(t, b.goal == .Hunt, "a player break-in must still alert the den owner")
+
+    // And the shaft apron's dirt bonus stays a player-only earning: an
+    // enemy-source mine on apron stone banks nothing into the player's bag.
+    ax, ay, apron_found := 0, 0, false
+    apron: for y in SURFACE_Y ..< CAVE_TOP do for x in 0 ..< GRID_W {
+        if in_shaft_apron(&gs.world, x, y) && get_tile(&gs.world, x, y) == .Stone {
+            ax, ay, apron_found = x, y, true
+            break apron
+        }
+    }
+    testing.expect(t, apron_found, "the surface fixture should carry shaft-apron stone")
+    if apron_found {
+        before := inventory_count(&gs.player.inventory, .Dirt)
+        handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(owner + 1), tile = {i32(ax), i32(ay)}})
+        testing.expect_value(t, inventory_count(&gs.player.inventory, .Dirt), before)
+    }
+}
+
+@(test)
+tunnellers_dig_from_the_cave_to_surface_industry :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Production terrain, no fixture tunnel: the pair must use astar_dig to
+    // chew through the cave roof toward a surface machine.
+    gs.enemies = {}
+    gs.world.entity_map = {}
+    T := [2]i32{76, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Smelter)
+    testing.expect_value(t, spawn_tunneller_raid(gs, T), RAID_COUNT)
+    gs.player.pos = {20, f32(SURFACE_Y) - PLAYER_H}
+    gs.delta_time = 1.0 / 30.0
+
+    reached := false
+    for _ in 0 ..< 30 * 120 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, int(T.x), int(T.y)) != .Smelter {
+            reached = true
+            break
+        }
+    }
+    testing.expect(t, reached, "a warned tunneller should reach and break the surface machine within two minutes")
+}
+
+@(test)
+tunneller_demolition_spills_the_machine_and_every_buffer :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Isolate one raider beside a loaded surface smelter. The demolition uses
+    // the real mined-tile path, so this test pins the conservation promise.
+    gs.enemies = {}
+    gs.world.entity_map = {}
+    T := [2]i32{80, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Smelter)
+    gs.world.tile_flags[grid_idx(int(T.x), int(T.y))] += {.Placed}
+    sd := &gs.world.sim_data[grid_idx(int(T.x), int(T.y))]
+    sd.store_item, sd.store_count = .Iron_Bar, 1
+    sd.in_item,    sd.in_count    = .Iron_Ore, 2
+    sd.fuel_count = 2
+
+    smelter_item := terrain_table[.Smelter].drop_item
+    m0 := ground_count(&gs.world, smelter_item)
+    b0 := ground_count(&gs.world, .Iron_Bar)
+    o0 := ground_count(&gs.world, .Iron_Ore)
+    w0 := ground_count(&gs.world, FUEL_ITEM)
+
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "a raider slot should be free")
+    e := &gs.enemies.data[id]
+    e.kind, e.hp, e.hp_max = .Raider, RAIDER_HP, RAIDER_HP
+    e.pos = {f32(T.x - 1) + (1 - BUILDER_W)*0.5, f32(T.y)}
+    e.builder = {goal = .Hunt, target_tile = T, has_target = true, plan_target = T, pocket = POCKET_MAX}
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+
+    update_raider(e, id, gs, 0.1)
+
+    testing.expect_value(t, get_tile(&gs.world, int(T.x), int(T.y)), Tile_Type.Air)
+    testing.expect_value(t, ground_count(&gs.world, smelter_item) - m0, 1)
+    testing.expect_value(t, ground_count(&gs.world, .Iron_Bar) - b0, 1)
+    testing.expect_value(t, ground_count(&gs.world, .Iron_Ore) - o0, 2)
+    testing.expect_value(t, ground_count(&gs.world, FUEL_ITEM) - w0, 2)
+    testing.expect_value(t, sd^, Sim_Tile_Data{})
+}
+
 // Builder with a finished shelter den at (50, 50) — shared setup for the
 // stockpile and raid tests.
 @(private = "file")
@@ -4161,19 +4440,25 @@ garm_builds_his_lair_before_the_hunt :: proc(t: ^testing.T) {
     testing.expect(t, built_at >= 0, "den completion frame recorded")
     testing.expect_value(t, gs.player.hp, hp_start)   // no hunt while he worked
 
-    // The vault stands at his chosen site: stone roof and wall, twin lava
-    // basins sunk into the floor, a solid plinth between them (the Hell
-    // Gate's future ground), and a player-sized doorway left open.
+    // The vault stands at his chosen site: a 10x8 hall under a stone roof,
+    // walls to full height, the floor flooded wall to wall — gate ground
+    // included, so there is no dry plinth — and a player-sized doorway whose
+    // threshold is the one floor cell left unpoured.
     a := g.builder.anchor
     ax, ay := int(a.x), int(a.y)
     testing.expect(t, abs(ax - GARM_DEN_X) <= 6, "the lair sits near GARM_DEN_X")
-    testing.expect_value(t, get_tile(&gs.world, ax, ay - 4), Tile_Type.Stone)      // roof
-    testing.expect_value(t, get_tile(&gs.world, ax - 5, ay), Tile_Type.Stone)      // left wall
-    testing.expect_value(t, get_tile(&gs.world, ax - 3, ay), Tile_Type.Lava)       // west pool
-    testing.expect_value(t, get_tile(&gs.world, ax + 3, ay), Tile_Type.Lava)       // east pool
+    testing.expect_value(t, get_tile(&gs.world, ax, ay - 8), Tile_Type.Stone)      // roof, 8 up
+    testing.expect_value(t, get_tile(&gs.world, ax - 5, ay), Tile_Type.Stone)      // left wall foot
+    testing.expect_value(t, get_tile(&gs.world, ax - 5, ay - 7), Tile_Type.Stone)  // left wall head
+    testing.expect_value(t, get_tile(&gs.world, ax + 5, ay - 2), Tile_Type.Stone)  // right wall over the door
+    testing.expect(t, !is_solid(&gs.world, ax, ay - 4), "the hall is hollow to full height")
+    testing.expect_value(t, get_tile(&gs.world, ax - 3, ay), Tile_Type.Lava)       // west floor
+    testing.expect_value(t, get_tile(&gs.world, ax + 3, ay), Tile_Type.Lava)       // east floor
+    testing.expect_value(t, get_tile(&gs.world, ax, ay), Tile_Type.Lava)           // the center pours too
     testing.expect(t, is_solid(&gs.world, ax, ay + 1), "the gate's ground holds solid")
     testing.expect(t, !is_solid(&gs.world, ax + 5, ay) && !is_solid(&gs.world, ax + 5, ay - 1),
         "the doorway stands open")
+    testing.expect(t, get_tile(&gs.world, ax + 5, ay) != .Lava, "the threshold stays walkable")
 
     // Then the hunt: fireballs and bites are gated on the finished lair, so
     // any blood drawn now proves the hunt is on (he opens at fireball range).
@@ -4182,6 +4467,104 @@ garm_builds_his_lair_before_the_hunt :: proc(t: ^testing.T) {
         if gs.player.hp < hp_start { break }
     }
     testing.expect(t, gs.player.hp < hp_start, "the hunt begins once the lair stands")
+}
+
+@(test)
+garm_disowns_a_roof_anchor_left_by_an_old_save :: proc(t: ^testing.T) {
+    // Glenn's snapshot 8 (board seq 333): a Garm carrying anchor (158,85) from
+    // before dens were sited on the arena floor.  update_garm only re-picked a
+    // site when the anchor was DEN_UNSET, so he kept building on the ROOF —
+    // and the old relic up there satisfied most of the template, so the den
+    // "completed" after three blocks and the hunt began.  From the arena floor
+    // that looks exactly like a broken den phase.
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = 1.0 / 60.0
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+    gs.player.dead = true   // keep him off the hunt while we step him
+
+    roof := [2]i32{i32(GARM_DEN_X), i32(ARENA_Y0 - 1)}
+    g.builder.anchor    = roof
+    g.builder.den_built = true
+
+    update_enemies(gs)
+
+    testing.expect(t, !g.builder.den_built, "a roof relic must not pass for his lair")
+    testing.expect(t, g.builder.anchor != roof, "he should disown the roof anchor")
+    testing.expect(t, garm_den_anchor_ok(g.builder.anchor),
+        "he re-sites inside the arena")
+    testing.expect(t, is_solid(&gs.world, int(g.builder.anchor.x), int(g.builder.anchor.y) + 1),
+        "the new site stands on the arena floor")
+
+    // But first blood still ends the ceremony: a Garm anyone has already hit
+    // keeps hunting rather than breaking off to lay masonry mid-fight.
+    gs2 := test_state()
+    defer free(gs2)
+    gs2.delta_time = 1.0 / 60.0
+    gi2 := garm_fixture(gs2)
+    g2  := &gs2.enemies.data[gi2]
+    gs2.player.dead = true
+    g2.builder.anchor    = roof
+    g2.builder.den_built = true
+    g2.hp -= 1
+
+    update_enemies(gs2)
+
+    testing.expect(t, g2.builder.den_built, "a wounded Garm stays in the hunt")
+    testing.expect_value(t, g2.builder.anchor, roof)
+}
+
+@(test)
+the_hell_gate_opens_on_the_lair_floor_not_its_roof :: proc(t: ^testing.T) {
+    // Regression: garm_den_site is a top-down column scan, so once his own
+    // roof stands over GARM_DEN_X a fresh scan reports the tile ON the roof.
+    // garm_open_hell_gate used to prefer that scan over the anchor he chose,
+    // which tore the gate open nine rows above the fight.  The existing gate
+    // test never caught it — garm_fixture spawns him on a bare arena and kills
+    // him before a single stone is laid.
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+
+    // Stamp the finished lair rather than waiting out the build: what is
+    // under test is where the gate lands, not how long the masonry takes.
+    site, ok := garm_den_site(&gs.world)
+    testing.expect(t, ok, "the arena should offer a den site")
+    for step in GARM_LAIR_TILES {
+        T := site + step.off
+        set_tile(&gs.world, int(T.x), int(T.y), step.tile)
+    }
+    g.builder.anchor    = site
+    g.builder.den_built = true
+
+    // The trap itself: with the vault standing, a fresh scan now answers with
+    // the roof.  If this ever stops being true the bug is gone for another
+    // reason and this test should be re-read, not deleted.
+    roof, rok := garm_den_site(&gs.world)
+    testing.expect(t, rok && roof.y < site.y,
+        "the roof should shadow the top-down scan (that is the trap)")
+
+    eq_push(&gs.events, Event{
+        type    = .Damage_Dealt,
+        source  = PLAYER_ID,
+        target  = enemy_entity_id(gi),
+        payload = {int_val = GARM_HP},
+    })
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    sx, sy := int(site.x), int(site.y)
+    testing.expect_value(t, get_tile(&gs.world, sx, sy), Tile_Type.Hell_Gate)
+    testing.expect_value(t, get_tile(&gs.world, sx + 1, sy), Tile_Type.Hell_Gate)
+    testing.expect(t, is_solid(&gs.world, sx, sy + 1), "the gate stands on solid ground")
+    testing.expect(t, get_tile(&gs.world, int(roof.x), int(roof.y)) != .Hell_Gate,
+        "no gate on the roof")
 }
 
 @(test)

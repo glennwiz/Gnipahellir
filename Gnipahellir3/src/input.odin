@@ -692,8 +692,11 @@ update_input :: proc(gs: ^Game_State) {
     inp.fly_up   = rl.IsKeyDown(bind[.Jump]) || rl.IsKeyDown(.UP) || rl.IsKeyDown(.SPACE)
     inp.fly_down = rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)
     when GAME_DEBUG {
-        if rl.IsKeyPressed(.F4) {  // F3 belongs to the snapshot menu now
+        if rl.IsKeyPressed(.F5) {  // F4 belongs to the raid menu now, F3 to snapshots
             gs.ui.show_debug = !gs.ui.show_debug
+        }
+        if rl.IsKeyPressed(.F4) {
+            gs.debug.raid_menu = !gs.debug.raid_menu
         }
         if rl.IsKeyPressed(.F1) {
             gs.debug.menu_open = !gs.debug.menu_open
@@ -854,6 +857,14 @@ update_input :: proc(gs: ^Game_State) {
                 notify(gs, "Debug: all rune scrolls found")
             case 6:
                 debug_complete_next_ritual(gs)
+            }
+        }
+
+        if gs.debug.raid_menu && rl.IsMouseButtonPressed(.LEFT) {
+            switch raid_menu_row_at_cursor(gs) {
+            case 0: debug_raid_warn_now(gs)
+            case 1: debug_raid_spawn_now(gs)
+            case 2: debug_raid_clear(gs)
             }
         }
     }
