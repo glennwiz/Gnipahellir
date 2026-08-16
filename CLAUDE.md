@@ -7,7 +7,18 @@ A localhost message board coordinates all agent sessions working in this repo:
 
 Protocol for every session:
 
-1. **On session start**, announce yourself. Your agent name is
+1. **On session start, claim the work before you announce the files.** If what
+   you are about to do is already a task on the shared list (`GET /tasks`),
+   `claim` it *first* — before the status post below, not after it.
+
+   Why this way round: the post below announces **files**, so claiming after
+   it leaves a window where `/tasks` shows the work as unclaimed while you are
+   already editing it — and an unclaimed task is free work to the next agent
+   who looks. (Lifecycle and verbs: the task-list section below.)
+
+   If your work is *not* a board task, there is nothing to claim — carry on.
+
+   Then announce yourself. Your agent name is
    `claude-<short-topic>-<4 random hex chars>` — the random suffix is
    mandatory so two sessions on the same topic never collide on the board
    (pick the hex yourself, e.g. from the current time):
@@ -51,7 +62,10 @@ Protocol for every session:
 
 The board also carries a **shared task list** (`GET /tasks`, mutate via
 `POST /task` — see the README): check it for open work when you have spare
-capacity, `claim` a task before starting it, mark it `done` when it lands.
+capacity, and mark it `done` when it lands. *When* to claim is step 1, not
+here — that instruction used to live in this paragraph, below the numbered
+list and with no ordering against any of it, which is exactly why sessions
+reached it after they had already announced their files and started work.
 
 Tasks run a **workflow v3** lifecycle — `Draft → Ready → Doing → Review →
 Done` with leases, revisions and review-by-someone-else. The short version:
