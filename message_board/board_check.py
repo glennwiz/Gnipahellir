@@ -1722,6 +1722,40 @@ def ps_runtime_files(src=None):
     return set(PS_RUNTIME_RE.findall(src))
 
 
+# CANNOT-TELL IS NOT NOT-IGNORED (task #70).
+#
+# git check-ignore answers with three different exit codes and the check below
+# used to read only two of them:
+#
+#   0    ignored - there is a rule
+#   1    NOT ignored - there is no rule, which is the finding
+#   128  it could not answer at all - not a git repository, bad pathspec
+#
+# Testing `returncode != 0` folds 128 into 1, so a suite run from a tree copied
+# outside git reported a specific, alarming, false thing: that named files are
+# missing ignore rules. It bit f227 live during #58's variant run (seq 1203);
+# they diagnosed it by running the control on an unmodified copy, which is the
+# expensive way to learn your instrument was lying.
+#
+# The defect is the exact inverse of the rule 43f9612 put into /build twenty
+# lines from here - a checker that cannot see must SAY it cannot see, never
+# guess in the alarming direction. It survived because it can only be wrong
+# outside a git repository, and nobody had run it there until someone did.
+#
+# The reason comes from git's own stderr rather than a string we compose, so
+# the message stays true for the 128s nobody has met yet.
+def ignore_status(name, root):
+    """('ignored' | 'unignored' | 'unverifiable', detail) for one runtime file."""
+    r = subprocess.run(["git", "check-ignore", "-q",
+                        os.path.join("message_board", name)],
+                       cwd=root, capture_output=True, text=True)
+    if r.returncode == 0:
+        return "ignored", ""
+    if r.returncode == 1:
+        return "unignored", ""
+    return "unverifiable", (r.stderr.strip() or f"git exited {r.returncode}")
+
+
 # -- checks: the running binary can be identified --------------------------
 
 
@@ -1947,13 +1981,21 @@ def every_runtime_file_the_source_declares_is_gitignored(b):
     assert len(from_ps) >= PS_RUNTIME_MIN, (
         f"only found {sorted(from_ps)} in run.ps1 - that scan has drifted, "
         "and a scan that finds nothing must never pass")
-    missing = []
+    missing, unverifiable = [], []
     for name in sorted(declared | from_ps):
-        r = subprocess.run(["git", "check-ignore", "-q",
-                            os.path.join("message_board", name)],
-                           cwd=ROOT, capture_output=True)
-        if r.returncode != 0:
+        state, detail = ignore_status(name, ROOT)
+        if state == "unignored":
             missing.append(name)
+        elif state == "unverifiable":
+            unverifiable.append(detail)
+    # ASSERTED FIRST, so the true cause wins over a list of innocent files.
+    # Reversing these two would report the same misleading finding this task
+    # exists to remove, just with better wording available underneath it.
+    assert not unverifiable, (
+        "cannot verify ignore rules - git could not answer: "
+        f"{unverifiable[0]}. This says nothing about any runtime file; run the "
+        "suite from a git checkout (a worktree counts, a plain directory copy "
+        "does not)")
     assert not missing, (
         f"main.odin or run.ps1 writes {missing} but message_board/.gitignore "
         "does not cover them - add a rule, or they land in the next commit")
@@ -1977,6 +2019,47 @@ def the_declaration_scan_actually_catches_a_new_runtime_file(b):
                  'X :: #config(X, "tuned.jsonl")'):
         added = runtime_files(src + "\n" + fake) - base
         assert added, f"a new runtime constant escaped the scan: {fake}"
+
+
+@check
+def the_ignore_check_can_tell_no_rule_from_no_repository(b):
+    # BOTH DIRECTIONS, because a check that stops crying wolf by never barking
+    # is not a fix. Everything here runs against a THROWAWAY repository built
+    # in a temp dir - the real tree's .gitignore is never touched, so "the rule
+    # is genuinely absent" is a fact about this fixture rather than a hazardous
+    # edit to the checkout the suite is running from.
+    fixture = tempfile.mkdtemp(prefix="ignorechk_")
+    try:
+        os.makedirs(os.path.join(fixture, "message_board"))
+        subprocess.run(["git", "init", "-q"], cwd=fixture,
+                       capture_output=True, check=True)
+        # A rule for .log and deliberately NONE for .jsonl.
+        with open(os.path.join(fixture, "message_board", ".gitignore"), "w",
+                  encoding="utf-8") as f:
+            f.write("*.log\n")
+
+        # (a) the rule is there
+        assert ignore_status("access.log", fixture)[0] == "ignored"
+
+        # (b) THE RULE IS GENUINELY ABSENT - this must still go red, and it is
+        # the half a lazy fix would break by treating everything as unknown.
+        state, _ = ignore_status("board.jsonl", fixture)
+        assert state == "unignored", (
+            "a runtime file with no ignore rule must still be a finding", state)
+
+        # (c) NOT A REPOSITORY AT ALL - the case that used to masquerade as (b).
+        outside = tempfile.mkdtemp(prefix="norepo_")
+        try:
+            state, detail = ignore_status("board.jsonl", outside)
+            assert state == "unverifiable", (
+                "a tree outside git must be unverifiable, not a finding about "
+                "board.jsonl", state)
+            assert "not a git repository" in detail.lower(), (
+                "the reason must name what git actually said", detail)
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+    finally:
+        shutil.rmtree(fixture, ignore_errors=True)
 
 
 @check
