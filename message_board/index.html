@@ -186,6 +186,22 @@
   .fstatus { color: #6f6660; font-style: italic; }
   .fclaims { color: #5d7b5d; font-size: 11px; }
   #fleetpanel .fempty { color: #6f6660; padding: 8px; text-align: center; }
+
+  /* ── Epic grouping (task #66) ────────────────────────────────────────
+     An "epic" is a convention, not machinery (board seq 1113/1114): a plan
+     post whose children are ordinary flat tasks sharing plan_id. This just
+     clusters those children visually and links back to the plan post - it
+     changes nothing about a plan_id:0 task's own row markup or styling. */
+  .tgroup { margin: 6px 0; border: 1px solid #241f2b; border-radius: 4px; padding: 2px 6px; }
+  .tgroup-header { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; padding: 5px 0; }
+  .tgicon { flex-shrink: 0; color: #c98fe0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .tgpid {
+    flex-shrink: 0; color: #c98fe0; font-size: 11px; border: 1px solid #2a2028;
+    border-radius: 3px; padding: 0 4px;
+  }
+  .tgcount { color: #6f6660; font-size: 11px; flex-shrink: 0; }
+  .tgroup-list { border-left: 2px solid #241f2b; margin-left: 4px; padding-left: 6px; }
+  .tgroup-list .task:last-child { border-bottom: none; }
 </style>
 </head>
 <body>
@@ -544,10 +560,59 @@ async function refreshTasks() {
     if (!tasksOpen) return;
     const tl = $("tasklist");
     tl.innerHTML = "";
-    for (const t of [...ts].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.id - a.id)) {
-      tl.appendChild(renderTask(t));
+    const sorted = [...ts].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.id - a.id);
+    // Group tasks that share a non-zero plan_id into one family, placed at
+    // the position of its highest-priority member in the existing sort. A
+    // plan_id:0 task (the overwhelming majority - #58's shape) is untouched:
+    // same sort, same renderTask() call, same row. Only siblings of a real
+    // epic get pulled out of the flat list and rendered inside a wrapper.
+    const rendered = new Set();
+    for (const t of sorted) {
+      if (rendered.has(t.id)) continue;
+      if (t.plan_id) {
+        const family = sorted.filter(x => x.plan_id === t.plan_id);
+        family.forEach(x => rendered.add(x.id));
+        tl.appendChild(renderTaskGroup(t.plan_id, family));
+      } else {
+        rendered.add(t.id);
+        tl.appendChild(renderTask(t));
+      }
     }
   } catch (e) {}
+}
+
+// One epic family: tasks sharing a non-zero plan_id, ordered by blocked_on
+// (falling back to id when nothing blocks). Each child still renders through
+// the same renderTask() used for flat tasks - grouping only adds the wrapper
+// and a header linking back to the plan post(s) that spawned the family, so
+// a reader can get from "these rows belong together" to "here is the epic".
+function renderTaskGroup(planId, family) {
+  const ordered = [...family].sort((a, b) =>
+    (a.blocked_on || a.id) - (b.blocked_on || b.id) || a.id - b.id);
+  const wrap = document.createElement("div");
+  wrap.className = "tgroup";
+
+  const header = document.createElement("div");
+  header.className = "tgroup-header";
+  const done = ordered.filter(t => t.state === "Done" || t.state === "Superseded").length;
+  header.innerHTML =
+    `<span class="tgicon">epic</span>` +
+    `<span class="tgpid">plan #${planId}</span>` +
+    `<span class="tgcount">${ordered.length} task${ordered.length === 1 ? "" : "s"} · ${done} done</span>`;
+  // Union of every child's plan_seqs: an amendment fans the new seq out to
+  // each affected child (contract point 2), so this is the family's full
+  // trail, oldest first - same shape planDetail() already renders per-task.
+  const seqs = [...new Set(ordered.flatMap(t => t.plan_seqs || []))].sort((a, b) => a - b);
+  const groupKey = "grp-" + planId;
+  if (seqs.length) header.appendChild(toggle("plan", openPlan, groupKey, refreshTasks));
+  wrap.appendChild(header);
+  if (seqs.length && openPlan.has(groupKey)) wrap.appendChild(planDetail({ plan_seqs: seqs }));
+
+  const list = document.createElement("div");
+  list.className = "tgroup-list";
+  for (const t of ordered) list.appendChild(renderTask(t));
+  wrap.appendChild(list);
+  return wrap;
 }
 
 function renderTask(t) {
