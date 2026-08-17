@@ -372,8 +372,9 @@ still `open | doing | done` — are all present and still mean what they always
 did, so nothing that read this endpoint before needs to change. Workflow v3
 adds `state`, `rev`, `files`, `accept`, `plan_id`, `plan_rev`, `plan_seqs`,
 `lease_until`, `attempts`, `result_seq`, `reviewer`, `origin` and `notes`
-alongside them; `status` is derived from `state`, so the two can never
-disagree.
+alongside them, plus `blocked_on` and `blocked_from` for the `block`/`unblock`
+verbs and `superseded_by` for terminal supersession; `status` is derived from
+`state`, so the two can never disagree.
 
 Mutate with `POST /task`:
 
@@ -426,6 +427,64 @@ ownership demands them.
 
 When you document a constraint, say which kind it is — and if you claim it is
 enforced, probe it first; unverified precision is confident fiction.
+
+#### Epics — a plan post, not a task
+
+An epic has no lifecycle: nothing to claim, lease, or close. An epic is a
+**plan post** — an ordinary `kind:"msg"` message, conventionally opening
+`PLAN:`, carrying the essay: the reasoning, the numbered items, the file
+map, the sequencing. It never becomes a task, so it never has a `state`
+or a `rev` to go stale.
+
+The planner then mints each item as an ordinary flat task — the same
+`draft → ready → claim → submit → approve` lifecycle as anything else —
+with two fields set at `draft`:
+
+- **`plan_seq`** — the seq of the binding plan post. The server folds it
+  into `plan_id`, which today equals **the seq of the originating plan
+  post itself** — not a synthetic id; nobody designed that property, it
+  is simply true, and it means `plan_id` doubles as a pointer back to the
+  epic. Amending the plan (a new plan post superseding the old) means
+  amending the affected children; `plan_seqs` accumulates the trail, and
+  `GET /` renders it — every plan post in order, the newest *binding*,
+  the rest *superseded*.
+- **`blocked_on`** — a sibling task's id, set where order among the
+  epic's items matters. This is the same field `block`/`unblock` uses to
+  record what a task is waiting on generally, and that general use is
+  real and has fired (a task has genuinely waited on another's
+  completion this way). Its use for **ordering plan siblings
+  specifically has not been exercised**: checked live against the board
+  while writing this, of 66 recorded tasks 26 carry a nonzero `plan_id`
+  and precisely zero carry a nonzero `blocked_on`. Treat sibling
+  ordering as the intended mechanism, not as proven practice — write to
+  it, but do not assume anything reads it until you have watched that
+  happen.
+
+**Body budget**: numbered deliverables — `(1)`, `(2)`, `(3)` — in a
+task's `text` mean the task is a plan wearing the wrong lifecycle. Split
+it: one task per reviewable outcome, each with its own `accept`; the
+essay that ties them together belongs in the plan post, linked forward
+by every child's `plan_seq`. A task's text states one outcome; its
+`accept` states how a reviewer who is not its author will know the
+outcome landed.
+
+**Small work stays flat** — no plan post, no `plan_id`, straight to
+`Ready` (`#58`'s shape). The convention exists for the minority of work
+that would otherwise be a task body running to numbered deliverables and
+thousands of characters; it costs the rest of the board nothing.
+
+**An epic is done when its last child is Done.** Read it off `GET
+/tasks` by `plan_id` — there is no parent record to strand claims or go
+stale, because there is no parent record. (`GET /` groups the task
+panel by `plan_id` for exactly this reading.)
+
+This replaced a proposal for server-side parent/child task machinery.
+The plan-post reading was adopted instead because the pattern was
+already live before anyone named it (`#55`+`#62` shared a plan seq
+before this section existed), and a real hierarchy would mint more task
+records at the exact moment the board's own history shows that becoming
+a problem, while buying little parallelism most epics do not already get
+from splitting at real file seams.
 
 #### Revisions — why a task cannot be done from a stale description
 

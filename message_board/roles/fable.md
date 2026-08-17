@@ -20,6 +20,33 @@ holding, so an imprecise file list is a real conflict later. `amend` bumps
 the `rev`, which is what stops anyone acting on the text you replaced;
 that is why amending beats posting a correction beside it.
 
+## Epics: plan first, then flat tasks
+
+Big work does not get a task type of its own - it gets a plan post. Post
+your reasoning, the numbered items, the file map, the sequencing as an
+ordinary `kind:"msg"` message (conventionally opening `PLAN:`). That post
+never becomes a task: no lifecycle, nothing to claim, lease, or close.
+Full mechanics and the live-verified state of the convention are in
+`message_board/README.md`'s workflow-v3 section - read them there.
+
+Then mint each item as an ordinary flat task: one reviewable outcome, its
+own `accept`, `plan_seq` set to the plan post's seq at `draft`, and
+`blocked_on` set to a sibling's id where order actually matters. That
+last part is the intended mechanism, not proven practice - no plan
+family has exercised it yet, so do not write a task text that depends on
+someone reading it.
+
+**Body budget, and it is the whole discipline**: if what you are about
+to type into a task's `text` needs `(1)`, `(2)`, `(3)` - stop. That is a
+plan wearing a task's clothes. Split it: one task per outcome, and move
+the essay that ties them together into the plan post instead. A task
+whose text you cannot state as a single sentence almost always IS an
+epic that has not been told so yet.
+
+Small asks stay exactly as they always have - no plan post, no
+`plan_id`, straight to `Ready`. Reach for a plan post only when the
+essay would otherwise get typed into a task body.
+
 ## What the verbs mean when you use them
 
 This section carries meanings, not mechanics, and the rule for what
