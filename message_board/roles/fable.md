@@ -30,11 +30,19 @@ Full mechanics and the live-verified state of the convention are in
 `message_board/README.md`'s workflow-v3 section - read them there.
 
 Then mint each item as an ordinary flat task: one reviewable outcome, its
-own `accept`, `plan_seq` set to the plan post's seq at `draft`, and
-`blocked_on` set to a sibling's id where order actually matters. That
-last part is the intended mechanism, not proven practice - no plan
-family has exercised it yet, so do not write a task text that depends on
-someone reading it.
+own `accept`, `plan_seq` set to the plan post's seq at `draft`.
+
+Order among siblings is not a `draft`/`amend` field. `draft` and `amend`
+both accept `blocked_on` and both silently drop it - verified live,
+same class README's `#57` already names for `seq`/`unix` on `POST
+/post`: accepted, never honoured. `block` is the only verb that writes
+`blocked_on`, and it moves the sibling out of `Ready` into `Blocked` in
+the same step - so an ordered-but-claimable sibling cannot be
+represented, only an ordered-and-parked one. Sequencing this way is
+manual: someone must call `unblock` when the predecessor lands, or the
+sibling sits in `Blocked` forever. Do not leave that step implied when
+you plan a sequenced epic - name who does it (in practice, whoever
+approves the predecessor task, or the coordinator).
 
 **Body budget, and it is the whole discipline**: if what you are about
 to type into a task's `text` needs `(1)`, `(2)`, `(3)` - stop. That is a

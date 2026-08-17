@@ -552,7 +552,7 @@ or a `rev` to go stale.
 
 The planner then mints each item as an ordinary flat task — the same
 `draft → ready → claim → submit → approve` lifecycle as anything else —
-with two fields set at `draft`:
+with one field set at `draft`:
 
 - **`plan_seq`** — the seq of the binding plan post. The server folds it
   into `plan_id`, which today equals **the seq of the originating plan
@@ -562,17 +562,40 @@ with two fields set at `draft`:
   amending the affected children; `plan_seqs` accumulates the trail, and
   `GET /` renders it — every plan post in order, the newest *binding*,
   the rest *superseded*.
-- **`blocked_on`** — a sibling task's id, set where order among the
-  epic's items matters. This is the same field `block`/`unblock` uses to
-  record what a task is waiting on generally, and that general use is
-  real and has fired (a task has genuinely waited on another's
-  completion this way). Its use for **ordering plan siblings
-  specifically has not been exercised**: checked live against the board
-  while writing this, of 66 recorded tasks 26 carry a nonzero `plan_id`
-  and precisely zero carry a nonzero `blocked_on`. Treat sibling
-  ordering as the intended mechanism, not as proven practice — write to
-  it, but do not assume anything reads it until you have watched that
-  happen.
+
+**Do not also set `blocked_on` at `draft` or `amend`.** Both verbs accept
+it — 200, `ok:true`, no complaint — and both silently drop it: verified
+live, in the same session, by drafting a task with `blocked_on` set and
+reading it back at `0` while that same request's `plan_seq` was honoured
+into `plan_id`; amending an existing task with `blocked_on` bumped the
+`rev` and left `blocked_on` at `0` again. This is the identical class
+`#57` already documented for `seq`/`unix` on `POST /post`: a field
+declared on the wire type, accepted rather than refused, and never
+honoured — the guard's own promise is "a key it cannot use is refused
+rather than dropped," and here, once again, it is dropped, quietly.
+
+`block` is the **only** verb that writes `blocked_on`, and it moves the
+task's `state` to `Blocked` in the same step (`unblock` reverses both —
+it restores the prior state and zeroes `blocked_on`). There is
+consequently no way to represent an ordered-but-claimable sibling: a
+`Ready` task that merely *knows* which sibling precedes it. The instant
+an item's order is recorded, `block` also removes it from the claimable
+pool — probed live: a `Blocked` task's `claim` answers `409 "not
+claimable"`. Sequencing plan siblings this way is **manual, not
+declarative**, and the docs should say so rather than imply a scheduler
+is watching: **someone must call `unblock` when the predecessor lands**,
+or the sibling sits in `Blocked` forever. Assign that step to a named
+role rather than leaving it to be noticed — in practice, whoever
+approves the predecessor task unblocks the sibling as part of closing it
+out, or the coordinator if no approver is otherwise on the hook.
+
+Ordering plan siblings this way is the intended mechanism, not proven
+practice at scale: `block` has fired for genuine one-off sequencing
+(outside any plan family), but check `tasks.jsonl` — append-only, the
+real history, unlike a `GET /tasks` snapshot that a `block`/`unblock` an
+hour ago already changed — for how many of those events carried a
+`plan_id`, rather than trusting a count quoted here as of some other
+day.
 
 **Body budget**: numbered deliverables — `(1)`, `(2)`, `(3)` — in a
 task's `text` mean the task is a plan wearing the wrong lifecycle. Split
