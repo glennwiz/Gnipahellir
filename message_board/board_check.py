@@ -1989,8 +1989,27 @@ def every_runtime_file_the_source_declares_is_gitignored(b):
         elif state == "unverifiable":
             unverifiable.append(detail)
     # ASSERTED FIRST, so the true cause wins over a list of innocent files.
-    # Reversing these two would report the same misleading finding this task
-    # exists to remove, just with better wording available underneath it.
+    #
+    # THE ORDER IS LOAD-BEARING FOR A MIXED RUN, NOT FOR THE OUTSIDE-GIT CASE.
+    # The first version of this comment claimed the opposite - that reversing
+    # these two would restore the misleading finding - and that was a testable
+    # claim nobody had tested, sealed inside the check whose entire bug was
+    # asserting something it never distinguished. Caught in review (seq 1220)
+    # by someone who swapped the lines and ran it.
+    #
+    # MEASURED, outside a repository: the order makes no difference at all.
+    # Every file comes back unverifiable, so `missing` is empty and its assert
+    # cannot fire whichever line it sits on. Swapped, it still says "cannot
+    # verify".
+    #
+    # WHERE IT ACTUALLY BITES is a MIXED result inside a real repository, both
+    # lists non-empty - and that is reachable rather than hypothetical, which
+    # is why the ordering stays. DECLARED_RE captures [^"]+, which admits a
+    # path separator, so a declared constant carrying a subpath yields a
+    # pathspec git refuses (`message_board/../../x.log` -> 128) while its
+    # siblings answer a clean 1. Then this order is the difference between
+    # being told the cause and being handed a list of innocent files.
+    # the_ignore_check_reports_the_cause_before_the_symptom pins it.
     assert not unverifiable, (
         "cannot verify ignore rules - git could not answer: "
         f"{unverifiable[0]}. This says nothing about any runtime file; run the "
@@ -2059,6 +2078,52 @@ def the_ignore_check_can_tell_no_rule_from_no_repository(b):
         finally:
             shutil.rmtree(outside, ignore_errors=True)
     finally:
+        shutil.rmtree(fixture, ignore_errors=True)
+
+
+@check
+def the_ignore_check_reports_the_cause_before_the_symptom(b):
+    # THE MIXED RUN the comment above rests on, tested rather than argued. The
+    # first draft of that comment justified this ordering with a claim that was
+    # false and unrun; replacing it with a true claim that is also unrun would
+    # be the same defect with better wording.
+    #
+    # Drives the REAL check - shipped assertion order, no refactor of the loop -
+    # by pointing its two derivations and ROOT at a throwaway repository.
+    me = sys.modules[__name__]
+    fixture = tempfile.mkdtemp(prefix="mixedchk_")
+    saved = (me.ROOT, me.runtime_files, me.ps_runtime_files)
+    try:
+        os.makedirs(os.path.join(fixture, "message_board"))
+        subprocess.run(["git", "init", "-q"], cwd=fixture,
+                       capture_output=True, check=True)
+        with open(os.path.join(fixture, "message_board", ".gitignore"), "w",
+                  encoding="utf-8") as f:
+            f.write("*.log\n")
+        me.ROOT = fixture
+        # BOTH LISTS NON-EMPTY, which is the only situation where the order can
+        # decide anything: one name git refuses to answer for, one with a
+        # genuinely absent rule, and enough covered siblings to clear the floor.
+        me.runtime_files = lambda src=None: {
+            "../../escape.log",                    # 128 - git will not answer
+            "board.jsonl",                         # 1   - no rule for .jsonl
+            "a.log", "b.log", "c.log", "d.log",    # 0   - covered by *.log
+        }
+        me.ps_runtime_files = lambda src=None: {"service.log", "sidecar.log"}
+
+        failed = None
+        try:
+            me.every_runtime_file_the_source_declares_is_gitignored(b)
+        except AssertionError as e:
+            failed = str(e)
+        assert failed is not None, "a mixed fixture must not pass the check"
+        assert "could not answer" in failed, (
+            "the cause must lead when both lists are non-empty", failed)
+        assert "board.jsonl" not in failed, (
+            "the symptom led: a file was named as missing a rule while a "
+            "sibling could not even be asked about", failed)
+    finally:
+        me.ROOT, me.runtime_files, me.ps_runtime_files = saved
         shutil.rmtree(fixture, ignore_errors=True)
 
 
