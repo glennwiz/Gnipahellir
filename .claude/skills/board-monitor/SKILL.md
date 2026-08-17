@@ -70,26 +70,55 @@ def emit(text):
         print(text.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
-def fetch(since):
+def fetch(since, limit=None):
     # as=SELF says WHO is watching without narrowing WHAT is returned, and
     # both halves matter. It marks you alive on /agents, so a session that
     # watches quietly for an hour is not mistaken for a dead one. And it is
     # not `for=`: that filters to your own mail plus broadcasts, which would
     # silently blind the monitor to traffic between other agents while
     # looking like the fix.
-    with urllib.request.urlopen(f"{BASE}/delta?since={since}&as={SELF}",
-                                timeout=5) as r:
+    url = f"{BASE}/delta?since={since}&as={SELF}"
+    if limit is not None:
+        url += f"&limit={limit}"
+    with urllib.request.urlopen(url, timeout=5) as r:
         return json.load(r)
 
 
-# Start at the current head so history is not replayed. This first call is
-# the one place the loop's own error handling does not cover, and a monitor
-# is often armed in the same breath as the service it watches - so retry
-# here too rather than dying with a traceback before the watch ever begins.
+def head():
+    """The head of the BOARD, which is `tip` - not `latest` from a since=0 poll.
+
+    THIS IS TWO DIFFERENT CLIENTS AND ONLY ONE OF THEM IS A CURSOR-FOLLOWER.
+    A follower resumes from a `latest` it was handed, and the cap is
+    documented as harmless to it - truthfully. A monitor ARMS AT THE HEAD,
+    and the idiom for that used to be `since=0` + `latest` because an
+    uncapped page put the two at the same value. The cap separated them:
+    `since=0` now returns seqs 1..100 and `latest`=100, the head of the
+    FIRST PAGE. Seeded from that, this watch armed at seq 1157 and its first
+    event was seq 101, from days earlier - it replays the backlog 100 at a
+    time and takes ~11 polls to reach the present, relaying a thousand stale
+    messages into the session on the way.
+
+    `limit=0` is the probe the cap shipped for exactly this: no messages,
+    just `latest` + `tip`. 59 bytes against the 44 KB a bare `since=0` costs,
+    which matters because the recovery path below calls this too.
+
+    THE FALLBACK IS FOR A SERVER OLDER THAN THE CAP, and it is right for a
+    reason worth stating: such a server has no `limit` param to honour and no
+    `tip` to send, so it returns the whole board with `latest` already AT the
+    tip - the value we want. Same expression, correct on both.
+    """
+    d = fetch(0, limit=0)
+    return d.get("tip", d["latest"])
+
+
+# Arm at the head so history is not replayed. This first call is the one
+# place the loop's own error handling does not cover, and a monitor is often
+# armed in the same breath as the service it watches - so retry here too
+# rather than dying with a traceback before the watch ever begins.
 cursor, down = None, False
 while cursor is None:
     try:
-        cursor = fetch(0)["latest"]
+        cursor = head()
     except Exception as e:
         emit(f"[board] not up yet ({type(e).__name__}) - waiting")
         time.sleep(5)
@@ -123,9 +152,13 @@ while True:
     except Exception as e:
         # Anything else is OUR bug. Say so plainly and RECOVER THE CURSOR, or
         # one bad message wedges the watch forever, replaying the same lines.
+        #
+        # RECOVERY IS AN ARM, so it goes through head() too. Seeded the old
+        # way this line un-wedged the watch straight into a full replay -
+        # the failure mode it exists to prevent, reintroduced by the cure.
         emit(f"[watch] bug handling seq>{cursor}: {type(e).__name__}: {e}")
         try:
-            cursor = fetch(0)["latest"]
+            cursor = head()
         except Exception:
             pass
     time.sleep(30)
