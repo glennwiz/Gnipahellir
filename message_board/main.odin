@@ -1162,6 +1162,29 @@ request_has_only_declared_keys :: proc(
 	// A body that will not parse, or is not an object at all, is NOT this
 	// check's business: the handler's own unmarshal reports it, in the wording
 	// callers already read. Deferring keeps every existing error unchanged.
+	//
+	// BOTH RETURNS ARE UNREACHABLE-BY-OUTCOME, AND ARE KEPT ANYWAY. Delete
+	// them and nothing changes: json.parse yields no partial object on error,
+	// so the fall-through reaches a zero map, iterates nothing, and returns
+	// true down the len(unknown) == 0 path below. Measured, not assumed - the
+	// suite was run against a copy with both lines removed and every
+	// behavioural leg stayed green, the one named below included.
+	//
+	// WHAT THEY PIN IS THE DEFERRAL CONTRACT, not any behaviour reachable
+	// today. Should json.parse ever hand back a partial object on a failed
+	// parse, the loop below would inspect a half-read body and could answer
+	// 400 "unknown field(s)" where the handler's "bad json" belongs. They are
+	// the explicit statement of that intent, not protection against anything
+	// that can happen now.
+	//
+	// AND THE LEG DOES NOT GUARD THEM, which is the trap this comment exists
+	// to close. a_body_that_is_not_an_object_still_reports_what_it_always_did
+	// PASSES WITH BOTH LINES DELETED. It is not vacuous - it pins the
+	// BEHAVIOUR, that the pre-existing wording survives, and that breaks the
+	// moment someone makes the `!is_obj` case send a 400. But it does not
+	// guard the lines it sits next to: the fall-through is what keeps it
+	// green. A reader who deletes these expecting a red suite gets a green
+	// one, concludes the leg is worthless, and may take the leg out too.
 	val, perr := json.parse(body, allocator = context.temp_allocator)
 	if perr != nil do return true
 	obj, is_obj := val.(json.Object)
