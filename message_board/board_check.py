@@ -2698,6 +2698,282 @@ def the_panel_is_wired_to_show_and_set_an_assignment(b):
     assert 'const preClaim' in page and '"Draft"' in page, page[:0]
 
 
+# ── checks: /delta paging - limit= and brief= (task #71) ────────────────────
+#
+# These were verified once in a scratchpad and nowhere else, which is the same
+# as unverified the moment the scratchpad is gone: the suite passed 129/129
+# while covering none of it. What is pinned here is one property above all -
+# A CAPPED PAGE REPORTS THE LAST SEQ IT ACTUALLY SENT. `latest` is what the
+# caller hands back as `since`, so a truncated page that reported the global
+# tip would tell a follower it had seen messages it never received, and the
+# next poll starts past them. Nothing raises an error, no count looks wrong,
+# and the messages are gone. Silent loss is why this one gets a walk and not
+# just an equality.
+
+# Multibyte prose, the kind the board actually carries. An em-dash and an
+# arrow are 3 bytes each and the emoji is 4, so a cut made on BYTES at 120
+# lands mid-rune and the response stops being UTF-8 - the truncation bug that
+# does not show up on ASCII fixtures.
+BRIEF_PROSE = "em—dash and arrow→ plus emoji 🔥 " * 20
+
+
+def seed_delta(n, to=None):
+    """Post n messages; return their seqs in order.
+
+    `to` is a list of recipients cycled through. Pass one and every message is
+    DIRECTED - which is the difference between a real filter test and a
+    worthless one, because `for=` matches broadcasts, so a seed of broadcasts
+    filters nothing while looking exactly like it does."""
+    seqs = []
+    for i in range(n):
+        body = {"kind": "status", "text": f"message number {i} " + "x" * 200}
+        if to:
+            body["kind"], body["to"] = "msg", to[i % len(to)]
+        st, r = post(f"seeder{i % 3}", **body)
+        assert st == 200, (st, r)
+        seqs.append(r["seq"])
+    return seqs
+
+
+def walk(query, expect):
+    """Follow the cursor exactly as a client does, and assert it saw everything.
+
+    The loop IS the contract: poll, take `latest` as the next `since`, stop
+    when `more` goes false. Every message that matched must arrive exactly
+    once. A skip here is the failure that never announces itself in
+    production."""
+    seen, cursor, hops = [], 0, 0
+    for _ in range(len(expect) + 50):
+        st, d = call(f"/delta?since={cursor}&{query}")
+        assert st == 200, (st, d)
+        seen += [m["seq"] for m in d["messages"]]
+        cursor = d["latest"]
+        hops += 1
+        if not d["more"]:
+            break
+    else:
+        raise AssertionError(f"{query}: walk never reached the tip in {hops} hops")
+    missing = sorted(set(expect) - set(seen))
+    assert seen == expect, (
+        f"{query}: a follower SKIPPED {len(missing)} messages it will never ask "
+        f"for again: {missing[:8]}" if missing else
+        f"{query}: delivered out of order or extra: got {seen[:8]}")
+    dupes = sorted({s for s in seen if seen.count(s) > 1})
+    assert not dupes, f"{query}: delivered twice: {dupes[:8]}"
+    return seen
+
+
+@check
+def the_default_delta_page_is_capped_at_a_hundred_and_says_so(b):
+    seqs = seed_delta(140)
+    _, d = call("/delta?since=0")
+    assert d["count"] == 100, ("the default cap is what stops a cold poll from "
+                               "eating a context window", d["count"])
+    assert d["more"] is True, "a cap that does not say it capped strands the backlog"
+    assert d["tip"] == seqs[-1], ("tip is the newest seq on the board, so depth "
+                                  "is visible from inside a capped page", d["tip"])
+
+
+@check
+def a_capped_page_reports_the_last_seq_it_actually_sent_not_the_tip(b):
+    # THE cursor rule. Both halves are here on purpose: the equality states it,
+    # and the walk proves the consequence - break the rule and the walk names
+    # the messages the follower lost.
+    seqs = seed_delta(130)
+    _, d = call("/delta?since=0&limit=7")
+    assert d["count"] == 7, d["count"]
+    assert d["latest"] == d["messages"][-1]["seq"], \
+        ("latest must be the last seq handed over", d["latest"])
+    assert d["latest"] != d["tip"], \
+        (f"a truncated page reporting the tip tells the caller it has seen "
+         f"{d['tip'] - d['latest']} messages it has not", d["latest"], d["tip"])
+    walk("limit=7", seqs)
+    # And with no limit at all, so the walk crosses the DEFAULT cap - the page
+    # size almost every real caller will actually meet.
+    walk("as=follower", seqs)
+
+
+@check
+def a_capped_walk_at_the_page_boundary_delivers_everything_exactly_once(b):
+    # limit=1 is the worst case (one hop per message); n-1/n/n+1 straddle the
+    # point where `truncated` flips, which is where an off-by-one would drop
+    # the last message or loop forever.
+    seqs = seed_delta(30)
+    n = len(seqs)
+    for lim in (1, n - 1, n, n + 1):
+        walk(f"limit={lim}", seqs)
+    # The cap and the truncation are decided in one handler, so walk them
+    # together at least once.
+    walk("limit=3&brief=1", seqs)
+
+
+@check
+def limit_zero_probes_the_backlog_without_moving_the_cursor(b):
+    seqs = seed_delta(40)
+    tip = seqs[-1]
+    _, d = call("/delta?since=0&limit=0")
+    assert d["count"] == 0 and not d["messages"], d
+    assert d["latest"] == 0, \
+        ("a probe that advances the cursor eats the very backlog it was asked "
+         "to measure", d["latest"])
+    assert d["more"] is True and d["tip"] == tip, d
+    _, d = call(f"/delta?since={seqs[9]}&limit=0")
+    assert d["latest"] == seqs[9], ("a probe holds any cursor still, not just 0",
+                                    d["latest"])
+    _, d = call(f"/delta?since={tip}&limit=0")
+    assert d["more"] is False and d["latest"] == tip, \
+        ("a caught-up probe must not claim a backlog", d)
+    # The whole point of probing: it costs nothing and consumes nothing.
+    _, probe = call("/delta?since=0&limit=0")
+    _, pull = call(f"/delta?since={probe['latest']}&limit=all")
+    assert [m["seq"] for m in pull["messages"]] == seqs, "the probe ate messages"
+
+
+@check
+def limit_all_opts_out_of_the_cap_and_lands_on_the_tip(b):
+    seqs = seed_delta(140)
+    _, d = call("/delta?since=0&limit=all")
+    assert d["count"] == len(seqs), ("limit=all is the deliberate opt-out",
+                                     d["count"])
+    assert d["latest"] == d["tip"] == seqs[-1], d
+    assert d["more"] is False, "nothing was withheld, so nothing is waiting"
+    _, d = call("/delta?since=0&limit=all&brief=1")
+    assert d["count"] == len(seqs) and d["more"] is False, d
+
+
+@check
+def brief_truncation_counts_runes_and_text_len_carries_the_full_length(b):
+    post("scribe", kind="status", text=BRIEF_PROSE)
+    post("scribe", kind="status", text="short enough to survive whole")
+    _, d = call("/delta?since=0&brief=1&limit=all")
+    cut = [m for m in d["messages"] if m["text_len"] > 120]
+    assert len(cut) == 1, [m["text_len"] for m in d["messages"]]
+    m = cut[0]
+    assert m["text"] == BRIEF_PROSE[:120] + "…", \
+        ("brief must cut on RUNE 120, not byte 120 - a byte cut lands inside "
+         "the em-dash and the response stops being valid UTF-8", m["text"][-20:])
+    assert m["text_len"] == len(BRIEF_PROSE), \
+        ("text_len is the FULL length the board holds, which is the only way a "
+         "reader can tell how much it is missing", m["text_len"])
+    short = [x for x in d["messages"] if x["text_len"] <= 120]
+    assert all(not x["text"].endswith("…") for x in short), \
+        ("a post that fits is passed through untouched", short)
+    assert all(x["text_len"] == len(x["text"]) for x in short), short
+    _, d = call("/delta?since=0&brief=25&limit=all")
+    m = [x for x in d["messages"] if x["text_len"] > 25][0]
+    assert m["text"] == BRIEF_PROSE[:25] + "…", ("brief=N spends N, not the "
+                                                 "default", m["text"])
+
+
+@check
+def a_brief_message_keeps_every_key_of_a_full_one_plus_text_len(b):
+    # The regression this refuses is a wire break, not a cosmetic one:
+    # marshalling the brief form by EMBEDDING a Message nests every existing
+    # key one level down, and every client reading m["text"] breaks at once.
+    post("scribe", kind="msg", to="bob", text=BRIEF_PROSE, files=["a.odin"])
+    _, full = call("/delta?since=0&limit=1")
+    _, brief = call("/delta?since=0&limit=1&brief=1")
+    fm, bm = full["messages"][0], brief["messages"][0]
+    assert set(bm) - {"text_len"} == set(fm), \
+        ("a brief message must be a full one plus text_len, flat", set(bm))
+    assert set(brief) == set(full), ("the envelope keys must match too", set(brief))
+    assert bm["files"] == fm["files"] and bm["to"] == fm["to"], (bm, fm)
+
+
+@check
+def the_capping_params_refuse_a_value_they_cannot_honour(b):
+    # These two parameters exist to stop an accidental full-board pull, so a
+    # value they cannot honour must never DEGRADE to no cap - the refusal is
+    # the feature. `?limit` with no `=` is the trap worth naming: the shared
+    # query parser skips a valueless key, so the most natural way to type it
+    # by hand would have parsed as absent and dumped the board.
+    seed_delta(3)
+    for key in ("limit", "brief"):
+        st, r = call(f"/delta?since=0&{key}")
+        assert st == 400, (f"a hand-typed ?{key} must not read as absent", st, r)
+        assert key in r.get("error", ""), ("the refusal must name the parameter "
+                                           "and how to spell it", r)
+        assert not r.get("messages"), ("a refusal must not ship the board it "
+                                       "just refused to cap", r)
+    for bad in ("limit=abc", "limit=-1", "brief=0", "brief=-3", "brief=xyz"):
+        st, r = call(f"/delta?since=0&{bad}")
+        assert st == 400 and "error" in r, (bad, st, r)
+        assert bad.split("=")[0] in r["error"], (bad, r["error"])
+        assert not r.get("messages"), (bad, r)
+
+
+@check
+def a_filtered_poll_still_reports_the_global_tip(b):
+    # limit is the ONLY thing that moves `latest` off the tip. Filtered-out
+    # messages were evaluated and excluded, not withheld, so re-fetching them
+    # would only exclude them again - and filtered and unfiltered pollers share
+    # one cursor precisely because of that. If this regressed, a monitor using
+    # for= would silently skip: the same class of loss as the cursor rule.
+    seqs = seed_delta(30, to=["watcher", "other1", "other2"])
+    _, mine = call("/delta?since=0&for=watcher&limit=all")
+    got = [m["seq"] for m in mine["messages"]]
+    assert 0 < len(got) < len(seqs), \
+        ("the seed must be genuinely excluded or this proves nothing",
+         len(got), len(seqs))
+    assert all(m["to"] == "watcher" for m in mine["messages"]), "the filter leaked"
+    assert mine["latest"] == mine["tip"] == seqs[-1], \
+        ("a filtered poll shares the global cursor", mine["latest"], seqs[-1])
+    assert mine["more"] is False, mine
+
+    _, plan = post("planner", text="a plan")
+    _, t = task("draft", "planner", text="a task", plan_id=plan["seq"],
+                plan_seq=plan["seq"])
+    post("worker", text="bound to the task", task_id=t["id"])
+    _, d = call(f"/delta?since=0&task={t['id']}")
+    assert d["count"] == 1 and d["latest"] == d["tip"], \
+        ("task= filters without moving the cursor either", d)
+
+
+@check
+def a_filtered_walk_under_a_cap_never_skips_the_mail_it_matches(b):
+    # THE TRAP the original verification hit and disclosed: its first filtered
+    # walk seeded BROADCASTS, which for= matches, so the "filtered" walk was
+    # unfiltered and proved nothing about the interaction. Directed traffic
+    # only here, and the exclusion is asserted before the walk is trusted.
+    seqs = seed_delta(60, to=["watcher", "other1", "other2"])
+    _, full = call("/delta?since=0&for=watcher&limit=all")
+    mine = [m["seq"] for m in full["messages"]]
+    assert len(mine) == len(seqs) // 3, \
+        ("for= must genuinely exclude two thirds of this seed", len(mine))
+    # Where limit and for= actually meet: a page that is NOT truncated jumps
+    # latest to the global tip, so the boundary either side of the match count
+    # is where a follower would lose the remainder.
+    for lim in (5, len(mine) - 1, len(mine), len(mine) + 1):
+        walk(f"limit={lim}&for=watcher", mine)
+    _, d = call(f"/delta?since={full['latest']}&limit=5&for=watcher")
+    assert d["more"] is False, ("a caught-up filtered follower must not be told "
+                               "it is behind", d)
+
+
+@check
+def a_capped_walker_interleaved_with_live_writers_loses_nothing(b):
+    # A real follower polls a board that is still being written to. Every hop
+    # here leaves messages arriving after the page was cut, which is the case
+    # where a cursor that overshoots loses data for good.
+    seqs = seed_delta(40)
+    seen, cursor, added = [], 0, []
+    for step in range(10):
+        _, d = call(f"/delta?since={cursor}&limit=5")
+        seen += [m["seq"] for m in d["messages"]]
+        cursor = d["latest"]
+        _, p = post("racer", kind="status", text=f"interleaved write {step}")
+        added.append(p["seq"])
+    _, d = call(f"/delta?since={cursor}&limit=all")
+    seen += [m["seq"] for m in d["messages"]]
+    expect = sorted(seqs + added)
+    missing = sorted(set(expect) - set(seen))
+    assert sorted(seen) == expect, \
+        (f"a follower racing live writers SKIPPED {missing[:8]}" if missing
+         else f"unexpected extras: {sorted(set(seen) - set(expect))[:8]}")
+    assert len(seen) == len(set(seen)), \
+        f"delivered twice: {sorted({s for s in seen if seen.count(s) > 1})[:8]}"
+
+
 # ── runner ──────────────────────────────────────────────────────────────────
 
 def main():
