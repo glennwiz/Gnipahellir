@@ -135,6 +135,20 @@ Task :: struct {
 	text:    string `json:"text"`,    // ALWAYS the amended contract, never the original
 	status:  string `json:"status"`,  // legacy view: open | doing | done
 
+	// WHO IT IS FOR, which `owner` could never say. owner answers "who holds
+	// this", so unclaimed and unassigned were the same value — empty — and
+	// "spoken for, nobody working on it yet" had nowhere to live but a
+	// coordinator's memory. The hazard arms exactly at Ready: that is the
+	// state where work is claimable by anyone and an intention about who
+	// should take it is most likely to exist and least likely to be written
+	// down.
+	//
+	// It is PRE-CLAIM ONLY and cannot outlive the claim — see the clearing
+	// rule after the task_apply switch. Which is what keeps the expired-lease
+	// takeover path exactly as v3 built it: a task that reached Doing has no
+	// assignee to strand, so assignment can never block a takeover.
+	assignee: string `json:"assignee"`,
+
 	// ── v3, all additive ────────────────────────────────────────────────
 	state:         string   `json:"state"`,      // Draft|Ready|Doing|Review|Done|Blocked|Superseded
 	rev:           int      `json:"rev"`,        // bumps on every amend; mutations are rev-conditional
@@ -175,6 +189,18 @@ Task_Event :: struct {
 	result_seq:   int      `json:"result_seq"`,
 	by_id:        int      `json:"by_id"`,
 	blocked_on:   int      `json:"blocked_on"`,
+	// CALLER-SETTABLE, AND THEREFORE ON THE ADVERTISED LIST — unlike
+	// expired_from below, which is the field it otherwise resembles. The
+	// difference is the whole point: a caller MAY set this, on exactly one
+	// verb. So it is not tagged `board:"server"`, it appears in `settable`,
+	// and #59's golden list changes in the same diff — which is that list
+	// working as designed rather than being edited around.
+	//
+	// The seq 985 class is pre-closed by the intake clear in handle_task_mut:
+	// honoured on `assign`, wiped on every other verb before anything reads
+	// it. Without that, `note` could set an assignee — the structural key
+	// guard would wave it through, correctly, because it IS a declared field.
+	assignee:     string   `json:"assignee"`,
 	// Recorded at write time on a takeover so the immutable log self-documents
 	// every Doing->Doing transition; expiry itself never synthesises an event.
 	//
@@ -607,6 +633,19 @@ task_apply :: proc(ev: Task_Event) {
 			if ev.plan_rev == 0 do t.plan_rev = max(t.plan_rev, 1) + 1
 			if t.plan_id == 0 do t.plan_id = ev.plan_seq
 		}
+	case "assign":
+		// Assigned unconditionally, so assign carrying nothing CLEARS — the
+		// same shape as `block` writing blocked_on, and for the same reason:
+		// the field describes the assignment currently in force, not every
+		// intention anyone ever had about this task.
+		//
+		// IN THE FOLD, NOT IN THE HANDLER. This runs at boot over
+		// tasks.jsonl as well as live, so an assign written here survives a
+		// restart. The same function already carries the scar from the last
+		// new Task field — plan_id/plan_seq were mutated where the fold could
+		// not see them, and the note above reads "the event log was right the
+		// whole time; only this projection was wrong".
+		t.assignee = ev.assignee
 	case "claim":
 		lease := ev.lease_secs
 		if lease <= 0 do lease = TASK_LEASE_DEFAULT
@@ -696,6 +735,28 @@ task_apply :: proc(ev: Task_Event) {
 	if held != "Review" && held != "Done" && held != "Superseded" {
 		t.result_seq = 0
 	}
+
+	// assignee is the third field under this rule and the strictest: it means
+	// "spoken for, NOT YET CLAIMED", so every state from Doing onward
+	// contradicts it. Enforced here rather than in each verb, which is what
+	// makes the guarantee structural instead of remembered — claim, submit,
+	// approve and supersede all clear it without any of them mentioning it,
+	// and so will the next verb somebody adds.
+	//
+	// EFFECTIVE state, unlike the two rules above, and the difference is not
+	// cosmetic. A Doing task whose lease lapsed is served as Ready, is
+	// claimable by anyone, and shows no owner — so it is genuinely back on the
+	// queue, which is exactly where an assignment means something. Reading the
+	// raw state here would erase what `assign` just wrote for that task and
+	// make the verb a silent no-op; the gate in handle_task_mut asks the same
+	// question of the same procedure so the two cannot disagree.
+	//
+	// The consequence the contract cares about: a live Doing/Review/Done task
+	// can never SERVE a non-empty assignee, so the expired-lease takeover path
+	// is untouched by construction — there is never an assignee left on a task
+	// that reached Doing for a takeover to trip over.
+	assigned_held := t.blocked_from if t.state == "Blocked" else task_effective_state(t, ev.unix)
+	if assigned_held != "Draft" && assigned_held != "Ready" do t.assignee = ""
 
 	task_sync_status(t)
 }
@@ -1467,6 +1528,23 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 	// proves the forgery cannot land, the other proves the clear did not
 	// silently break the audit trail it was added to protect.
 	ev.expired_from = ""
+	// SAME TREATMENT, DIFFERENT REASON, AND THE DIFFERENCE IS WORTH READING.
+	// expired_from is cleared because NO caller may ever set it. assignee is
+	// cleared because only ONE verb may — so this is not "server-owned", it
+	// is "owned by its own verb", and the clear is what makes that true
+	// rather than merely intended.
+	//
+	// Without it the structural key guard passes `assignee` on every verb,
+	// correctly by its own rule (it IS declared), and `note` or `block` would
+	// quietly reassign a task as a side effect of doing something else. The
+	// sharp case is the one that looks like an override: a claim by the wrong
+	// agent carrying assignee=<self>, which would otherwise write itself the
+	// permission it is about to be checked against, one line later.
+	//
+	// Trimmed BEFORE the clear so assign-with-whitespace is assign-to-empty,
+	// i.e. a clear — not an assignment to a name made of spaces.
+	ev.assignee = strings.trim_space(ev.assignee)
+	if ev.action != "assign" do ev.assignee = ""
 	ev.agent = strings.trim_space(ev.agent)
 	ev.text = strings.trim_space(ev.text)
 	if ev.agent == "" {
@@ -1509,8 +1587,9 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 			return
 		}
 		ev.id = board.next_task_id
-	case "ready", "amend", "claim", "renew", "release", "submit", "approve",
-	     "rework", "block", "unblock", "supersede", "note", "done", "reopen":
+	case "ready", "amend", "assign", "claim", "renew", "release", "submit",
+	     "approve", "rework", "block", "unblock", "supersede", "note", "done",
+	     "reopen":
 		t := task_find(ev.id)
 		if t == nil {
 			send_response(client, "404 Not Found", "application/json",
@@ -1528,6 +1607,28 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 		}
 		eff := task_effective_state(t, now)
 		switch ev.action {
+		case "assign":
+			// OPEN, NOT AN ACL. Anyone may assign, reassign or clear — the
+			// openness IS the answer to the stranded-assignee problem. A stale
+			// assignment costs one recorded call to cure, so there is no need
+			// for a TTL or a second lease mechanism guarding something nobody
+			// ever held.
+			//
+			// EFFECTIVE state, deliberately, and it has to match the clearing
+			// rule after the task_apply switch or this verb answers 200 and
+			// changes nothing. A Doing task whose lease lapsed is SERVED as
+			// Ready and IS claimable by anyone; assignable is the same
+			// question, so it gets the same answer from the same procedure.
+			// Gate this on the raw state instead and an assign against such a
+			// task succeeds, then the clearing rule wipes it a few lines later
+			// — a silent no-op, which is the defect class this board has spent
+			// the day filing.
+			if eff != "Draft" && eff != "Ready" && eff != "Blocked" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"cannot assign in %s - assignment says who should CLAIM this, and this task is past that","state":"%s","rev":%d}}`,
+						eff, eff, t.rev))
+				return
+			}
 		case "claim":
 			// Conditional claim. A Doing task is claimable ONLY when its lease
 			// is provably expired, and then the takeover is recorded with the
@@ -1537,6 +1638,50 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 				send_response(client, "409 Conflict", "application/json",
 					fmt.tprintf(`{{"error":"not claimable","state":"%s","owner":"%s","rev":%d}}`,
 						eff, t.owner, t.rev))
+				return
+			}
+			// REFUSE, DO NOT WARN. A warn-and-proceed claim produces exactly
+			// the collision the field exists to prevent: the claim SUCCEEDED,
+			// the lease started, the agent is working, and the warning is an
+			// advisory field that momentum ignores. Seq 959 measured that on
+			// the most motivated reader on this board — four catches, the last
+			// two after they had diagnosed and written up the first. Habit
+			// beats documentation, and a warning is documentation delivered at
+			// speed. A 409 cannot be ignored: no lease, no work, nothing to
+			// unwind.
+			//
+			// The refusal TEACHES THE TAKEOVER rather than forbidding it. It
+			// names `assign` as the cure, so the path is two calls and not an
+			// override flag on this one — a flag becomes the habit, whereas a
+			// separate assign event makes the taker SAY the takeover, on the
+			// record, before doing it. Same philosophy as the rev gate and the
+			// expired_from marker: convert a silent grab into a recorded act.
+			//
+			// MARSHALLED, NOT INTERPOLATED, unlike its neighbours above. An
+			// agent name is caller-chosen and therefore untrusted: one
+			// containing a quote would turn this explanation into a body the
+			// caller cannot parse — the same failure request_has_only_declared
+			// _keys already learned. The neighbours interpolate `owner`, which
+			// carries the identical hazard; not fixing that here because it is
+			// not this lane, but it is why this one does not copy them.
+			if t.assignee != "" && t.assignee != ev.agent {
+				Assigned_Error :: struct {
+					error:    string `json:"error"`,
+					assignee: string `json:"assignee"`,
+					state:    string `json:"state"`,
+					rev:      int    `json:"rev"`,
+				}
+				msg := fmt.tprintf(
+					"assigned to %s - claim it only if you are them. To take it anyway, POST assign with the new assignee (anyone may, and the reassignment is recorded), then claim.",
+					t.assignee)
+				if out, merr := json.marshal(
+					Assigned_Error{msg, t.assignee, eff, t.rev}, {},
+					context.temp_allocator); merr == nil {
+					send_response(client, "409 Conflict", "application/json", string(out))
+				} else {
+					send_response(client, "409 Conflict", "application/json",
+						`{"error":"assigned to someone else"}`)
+				}
 				return
 			}
 			if t.state == "Doing" do ev.expired_from = t.owner

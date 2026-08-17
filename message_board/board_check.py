@@ -2169,9 +2169,13 @@ def a_body_that_is_not_an_object_still_reports_what_it_always_did(b):
 GOLDEN_SETTABLE = {
     "/post":     ["agent", "kind", "text", "files", "to", "reply_to",
                   "route", "task_id", "accepts"],
+    # `assignee` joins this list rather than being tagged server-owned,
+    # because a caller genuinely may set it - on `assign`, and nowhere else.
+    # This edit is the forced decision point working: the field could not be
+    # added without someone changing this line and a reviewer seeing it.
     "/task":     ["id", "action", "agent", "text", "rev", "files", "accept",
                   "plan_id", "plan_rev", "plan_seq", "lease_secs",
-                  "result_seq", "by_id", "blocked_on"],
+                  "result_seq", "by_id", "blocked_on", "assignee"],
     "/spawn":    ["name", "prompt", "model", "role", "force"],
     "/register": ["agent", "role", "model", "capabilities"],
     "/kill":     ["name"],
@@ -2296,6 +2300,254 @@ def a_non_takeover_verb_cannot_forge_a_takeover_marker(b):
 # this lane owes it is a SABOTAGE: move the intake clear below the verb switch
 # and that inherited leg fails, which is how we know the clear did not silently
 # break the audit trail it was added to protect.
+
+
+# ── checks: assignment is not ownership (task #60) ──────────────────────────
+#
+# `owner` answered "who holds this", so unclaimed and unassigned were the same
+# value and "spoken for" could not be written down at all. The hazard arms at
+# Ready, where work is claimable by anyone and an intention about who should
+# take it is most likely to exist and least likely to be recorded.
+#
+# The design choice these legs exist to hold: REFUSAL, NOT WARNING. A
+# warn-and-proceed claim produces the collision the field exists to prevent -
+# the lease started and the agent is already working by the time anyone reads
+# the warning.
+
+
+@check
+def a_task_can_record_who_it_is_for_in_every_pre_claim_state(b):
+    _, r = task("add", "planner", text="for someone")
+    tid = r["id"]
+    # ANYONE may assign - it is not an ACL. The openness is what cures a stale
+    # assignment in one recorded call instead of needing a TTL.
+    assert task("assign", "a-stranger", id=tid, assignee="opus")[0] == 200
+    assert tasks()[tid]["assignee"] == "opus"
+
+    _, r2 = task("draft", "planner", text="a draft")
+    did = r2["id"]
+    assert task("assign", "planner", id=did, assignee="opus")[0] == 200
+    assert tasks()[did]["assignee"] == "opus", "Draft is a pre-claim state"
+
+    task("block", "planner", id=tid)
+    assert tasks()[tid]["state"] == "Blocked"
+    assert task("assign", "someone-else", id=tid, assignee="sonnet")[0] == 200
+    assert tasks()[tid]["assignee"] == "sonnet", "Blocked is a pre-claim state"
+
+    # Rev-gated like ready/amend/rework: acting on a description you have not
+    # read is refused here too.
+    st, _ = task("assign", "planner", id=tid, assignee="haiku", rev=99)
+    assert st == 409, "assign must be rev-gated"
+    assert tasks()[tid]["assignee"] == "sonnet"
+
+
+@check
+def a_claim_by_anyone_but_the_assignee_is_refused_and_names_the_cure(b):
+    _, r = task("add", "planner", text="spoken for")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="opus")
+    before = tasks()[tid]
+
+    st, err = task("claim", "interloper", id=tid)
+    assert st == 409, (st, err)
+    # Its OWN key, not prose a caller has to parse out of a sentence.
+    assert err["assignee"] == "opus", err
+    # The refusal teaches the takeover instead of forbidding it.
+    assert "assign" in err["error"], err
+
+    # NOTHING HAPPENED, which is the half that separates a refusal from a
+    # warning. A 409 that still starts the lease is warn-and-proceed wearing
+    # a status code.
+    after = tasks()[tid]
+    assert after["state"] == "Ready" and after["owner"] == "", after
+    assert after["lease_until"] == 0, after
+    assert after["attempts"] == before["attempts"], (before, after)
+
+
+@check
+def the_assignee_claims_it_and_the_assignment_is_spent(b):
+    _, r = task("add", "planner", text="mine to take")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="opus")
+    assert task("claim", "opus", id=tid)[0] == 200
+    t = tasks()[tid]
+    assert t["owner"] == "opus" and t["state"] == "Doing", t
+    assert t["assignee"] == "", "assignment must not outlive the claim it caused"
+
+
+@check
+def a_claim_cannot_smuggle_an_assignee_past_its_own_refusal(b):
+    # Seq 985's class. `assignee` IS a declared field, so the structural key
+    # guard passes it on every verb - correctly, by its own rule. Only the
+    # intake clear stops a claimant writing themselves the permission that is
+    # checked one line later.
+    _, r = task("add", "planner", text="guarded")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="opus")
+    st, err = task("claim", "interloper", id=tid, assignee="interloper")
+    assert st == 409 and err["assignee"] == "opus", (st, err)
+    assert tasks()[tid]["assignee"] == "opus", "the smuggled value was honoured"
+
+
+@check
+def no_verb_but_assign_records_an_assignee_it_arrives_carrying(b):
+    # A LOOP, NOT A CLAIM-ONLY CASE. ready/amend/note/block are the ones
+    # nobody would think to send, and that is exactly what made seq 985 a
+    # class rather than a single bug.
+    #
+    # AND IT READS THE LOG, NOT GET /tasks - which is the lesson this leg
+    # carries. task_apply writes t.assignee only under `case "assign"`, so
+    # the PROJECTION is safe whether the intake clear exists or not: a note
+    # carrying an assignee changes nothing anybody can GET. The damage is in
+    # tasks.jsonl, which is APPEND-ONLY AND NEVER REWRITTEN - a note would
+    # record an assignment that was never made, permanently.
+    #
+    # The first version of this leg asserted only on /tasks and PASSED with
+    # the intake clear deleted. Found by deleting it, not by reading it, and
+    # that is why the assertion moved to the log.
+    log = os.path.join(b.workdir, "tasks.jsonl")
+    verbs = [("ready", {}), ("amend", {"text": "amended"}), ("note", {"text": "n"}),
+             ("block", {}), ("unblock", {}), ("renew", {}), ("release", {}),
+             ("submit", {}), ("approve", {}), ("rework", {}), ("done", {}),
+             ("reopen", {})]
+    for verb, extra in verbs:
+        _, r = task("draft", "planner", text=f"carrier for {verb}")
+        tid = r["id"]
+        task("assign", "planner", id=tid, assignee="rightful")
+        task(verb, "planner", id=tid, assignee="hijacker", **extra)
+
+        events = [json.loads(l) for l in open(log, encoding="utf-8") if l.strip()]
+        forged = [e for e in events if e.get("id") == tid
+                  and e.get("action") == verb and e.get("assignee")]
+        assert not forged, (verb, "recorded an assignee into the immutable log",
+                            forged)
+        # And the projection, which is the cheaper half of the same claim.
+        got = tasks()[tid]["assignee"]
+        assert got != "hijacker", (verb, got, tasks()[tid])
+
+
+@check
+def an_assignment_survives_a_board_restart(b):
+    # THE BOARD IS A REPLAY of tasks.jsonl and task_apply is the fold. An
+    # assign implemented in the handler instead of the fold passes every
+    # other leg in this section and then vanishes on the next boot - which is
+    # precisely what happened to plan_id/plan_seq, per the note in task_apply
+    # reading "the event log was right the whole time; only this projection
+    # was wrong". Proven by restarting, not by reading the handler.
+    _, r = task("add", "planner", text="durable")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="opus")
+    assert tasks()[tid]["assignee"] == "opus"
+    b.restart()
+    assert tasks()[tid]["assignee"] == "opus", "the fold does not project assignee"
+
+
+@check
+def an_assignment_clears_on_assign_to_empty_and_on_supersede(b):
+    _, r = task("add", "planner", text="clearable")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="opus")
+    assert task("assign", "planner", id=tid, assignee="")[0] == 200
+    assert tasks()[tid]["assignee"] == "", "assign-to-empty must clear"
+
+    # Whitespace is a clear, not an assignment to a name made of spaces.
+    task("assign", "planner", id=tid, assignee="opus")
+    task("assign", "planner", id=tid, assignee="   ")
+    assert tasks()[tid]["assignee"] == ""
+
+    task("assign", "planner", id=tid, assignee="opus")
+    _, other = task("add", "planner", text="the replacement")
+    task("supersede", "planner", id=tid, by_id=other["id"])
+    t = tasks()[tid]
+    assert t["state"] == "Superseded" and t["assignee"] == "", t
+
+
+@check
+def no_state_past_the_claim_ever_serves_an_assignee(b):
+    _, r = task("add", "planner", text="walked through the lifecycle")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="opus")
+    for verb, agent, state in [("claim", "opus", "Doing"),
+                               ("submit", "opus", "Review"),
+                               ("approve", "reviewer", "Done")]:
+        task(verb, agent, id=tid)
+        t = tasks()[tid]
+        assert t["state"] == state, (verb, t)
+        assert t["assignee"] == "", (state, "served an assignee", t)
+
+
+@check
+def assign_is_refused_once_a_task_is_past_being_claimable(b):
+    _, r = task("add", "planner", text="too late to speak for")
+    tid = r["id"]
+    task("claim", "opus", id=tid)
+    for agent, state in [("opus", "Doing"), ("opus", "Review"), ("reviewer", "Done")]:
+        if state == "Review":
+            task("submit", "opus", id=tid)
+        elif state == "Done":
+            task("approve", "reviewer", id=tid)
+        st, err = task("assign", "planner", id=tid, assignee="sonnet")
+        assert st == 409, (state, st, err)
+        assert err["state"] == state, (state, err)
+        assert state in err["error"], ("the refusal must name the state", err)
+        assert tasks()[tid]["assignee"] == ""
+
+
+@check
+def the_expired_lease_takeover_is_untouched_by_a_prior_assignment(b):
+    # The takeover path is the one thing assignment must never be able to
+    # block, and it cannot BY CONSTRUCTION: the claim spent the assignment,
+    # so by the time a lease can expire there is nothing left to strand.
+    _, r = task("add", "planner", text="assigned, claimed, then abandoned")
+    tid = r["id"]
+    task("assign", "planner", id=tid, assignee="ghost")
+    task("claim", "ghost", id=tid, lease_secs=1)
+    assert tasks()[tid]["assignee"] == "", "spent at the claim"
+    time.sleep(2)
+    assert tasks()[tid]["state"] == "Ready"
+    st, _ = task("claim", "rescuer", id=tid)
+    assert st == 200, "an old assignment must never strand a takeover"
+    assert tasks()[tid]["owner"] == "rescuer"
+
+
+@check
+def a_lapsed_lease_makes_a_task_assignable_again_and_the_assign_sticks(b):
+    # The one place raw and effective state disagree, and the reason the
+    # clearing rule reads the effective one. A lapsed task is SERVED as Ready
+    # and is claimable by anyone, so it is assignable - and if the gate and
+    # the clearing rule disagreed about that, assign would answer 200 here
+    # and the value would be erased before the next GET. A silent no-op is
+    # the failure this leg is watching for, not a refusal.
+    _, r = task("add", "planner", text="lapsed and re-spoken-for")
+    tid = r["id"]
+    task("claim", "ghost", id=tid, lease_secs=1)
+    time.sleep(2)
+    assert tasks()[tid]["state"] == "Ready"
+    st, _ = task("assign", "planner", id=tid, assignee="opus")
+    assert st == 200, (st, "a lapsed task reads as Ready, so it is assignable")
+    assert tasks()[tid]["assignee"] == "opus", "assign answered 200 and did nothing"
+    # And it still refuses the wrong claimant, exactly as a Ready task would.
+    assert task("claim", "interloper", id=tid)[0] == 409
+    assert task("claim", "opus", id=tid)[0] == 200
+
+
+@check
+def the_panel_is_wired_to_show_and_set_an_assignment(b):
+    # WHAT THIS PINS IS WIRING, NOT APPEARANCE, and saying so is the point -
+    # a check that greps a page cannot prove a chip is visible, and claiming
+    # otherwise is the "documented as enforced but never probed" defect in
+    # test form. It catches the regression that actually happens: the verb
+    # ships, the panel is never taught about it, and the field is invisible
+    # to the person most likely to be setting one. The render itself was
+    # checked in a browser against a scratch board; that is not automatable
+    # here and is not pretended to be.
+    page = urllib.request.urlopen(BASE + "/", timeout=5).read().decode()
+    assert 'action: "assign"' in page, "the panel cannot set an assignment"
+    assert "t.assignee" in page, "the panel never reads the field"
+    assert "tfor" in page, "no chip distinct from the owner"
+    # Pre-claim only, mirroring the server rule - a panel offering assignment
+    # on a Doing task would just be manufacturing 409s for its user.
+    assert 'const preClaim' in page and '"Draft"' in page, page[:0]
 
 
 # ── runner ──────────────────────────────────────────────────────────────────

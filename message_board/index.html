@@ -114,6 +114,15 @@
   }
   .task button { padding: 1px 7px; font-size: 11px; }
   .towner { color: #5d7b5d; font-size: 11px; flex-shrink: 0; }
+  /* "for: <name>" - who SHOULD claim this, which is not who holds it. A
+     different colour from .towner on purpose: the two are adjacent, mean
+     opposite halves of the same question, and can never appear together
+     (assignment is spent by the claim that sets an owner). */
+  .tfor {
+    color: #c8a45c; font-size: 11px; flex-shrink: 0; border: 1px solid #4a3a1e;
+    border-radius: 3px; padding: 0 4px;
+  }
+  .tassign { font-size: 11px; width: 92px; padding: 0 3px; }
   .tmore {
     cursor: pointer; color: #6aa5d8; font-size: 11px; flex-shrink: 0;
     border-bottom: 1px dotted #6aa5d8;
@@ -629,6 +638,33 @@ function renderTask(t) {
     `<span class="ttext">${esc(t.text)}</span>` +
     `<span class="towner">${esc(t.creator)}${t.owner ? " → " + esc(t.owner) : ""}</span>`;
 
+  // WHO IT IS FOR, on the states where that is still a live question. Glenn
+  // is the likeliest assigner and this panel is where he works, so a field he
+  // can neither see nor set from here does not exist for him.
+  const preClaim = t.state === "Draft" || t.state === "Ready" || t.state === "Blocked";
+  if (preClaim && t.assignee) {
+    const f = document.createElement("span");
+    f.className = "tfor";
+    f.textContent = `for: ${t.assignee}`;
+    f.title = "assigned - anyone else claiming this is refused, and told to reassign first";
+    row.appendChild(f);
+  }
+  if (preClaim) {
+    // Inline input rather than a prompt(): a modal blocks the page, and this
+    // panel polls every 5s behind it. Empty submit clears the assignment,
+    // which is the same "assign to nobody" the verb means.
+    const inp = document.createElement("input");
+    inp.className = "tassign";
+    inp.placeholder = t.assignee ? "reassign/clear" : "for…";
+    inp.value = "";
+    inp.onkeydown = e => { if (e.key === "Enter") taskAssign(t, inp.value.trim()); };
+    row.appendChild(inp);
+    const set = document.createElement("button");
+    set.textContent = "set";
+    set.onclick = () => taskAssign(t, inp.value.trim());
+    row.appendChild(set);
+  }
+
   if (t.state === "Blocked" && t.blocked_from) {
     const b = document.createElement("span");
     b.className = "towner";
@@ -766,6 +802,20 @@ async function taskAct(action, t) {
     const w = $("warn");
     w.style.display = "block";
     w.textContent = `task #${t.id} ${action} failed: ${r.error}`;
+  }
+  refreshTasks();
+}
+
+// Assignment is its own verb, not a flag on another one - so a takeover is
+// two deliberate calls and leaves its own event on the record.
+async function taskAssign(t, assignee) {
+  const agent = $("name").value.trim() || "glenn";
+  const body = { action: "assign", id: t.id, agent, rev: t.rev || 0, assignee };
+  const r = await (await fetch("/task", { method: "POST", body: JSON.stringify(body) })).json();
+  if (r.error) {
+    const w = $("warn");
+    w.style.display = "block";
+    w.textContent = `task #${t.id} assign failed: ${r.error}`;
   }
   refreshTasks();
 }

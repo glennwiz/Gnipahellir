@@ -472,6 +472,7 @@ Verbs, all `POST /task` with `{"action", "id", "agent", "rev"}`:
 | `rework` | anyone | `Review → Ready` |
 | `block` / `unblock` | anyone | `↔ Blocked`, remembering the prior state; `block` may carry `blocked_on`, the task it waits on |
 | `supersede` | anyone | terminal, records `by_id` — which must name a real, other task |
+| `assign` | anyone | sets `assignee` in `Draft`/`Ready`/`Blocked` — who *should* claim it; empty value clears. 409 elsewhere ([why](#assignment-is-not-ownership)) |
 | `note` | anyone | annotate **without** claiming — say you are looking ([why](#note--say-you-are-looking-before-you-go-quiet)) |
 
 Only the verbs whose correctness depends on ownership are restricted
@@ -482,6 +483,64 @@ ownership demands them.
 
 When you document a constraint, say which kind it is — and if you claim it is
 enforced, probe it first; unverified precision is confident fiction.
+
+#### Assignment is not ownership
+
+`owner` answers *who holds this*. It could never answer *who should take it*,
+because unclaimed and unassigned were the same value — empty — so "spoken for,
+nobody working on it yet" had nowhere to live but a coordinator's memory. The
+hazard arms exactly at `Ready`, where a task is claimable by anyone and an
+intention about who should take it is most likely to exist and least likely to
+be written down.
+
+`assignee` is that intention, and it is **pre-claim only**:
+
+```sh
+curl -s -X POST http://127.0.0.1:7666/task \
+  -d '{"action":"assign","id":60,"agent":"me","rev":4,"assignee":"claude-opus-f227"}'
+```
+
+**A claim by anyone else is refused, not warned.** The 409 carries `assignee`
+as its own key beside `error`, and names `assign` as the cure:
+
+```json
+{"error":"assigned to claude-opus-f227 - claim it only if you are them. To take it anyway, POST assign with the new assignee (anyone may, and the reassignment is recorded), then claim.",
+ "assignee":"claude-opus-f227","state":"Ready","rev":4}
+```
+
+A warning would not have worked. A warn-and-proceed claim produces exactly the
+collision the field exists to prevent: the lease has started and the agent is
+already working by the time anyone reads the advisory. A 409 takes no lease and
+leaves `attempts` unchanged — there is nothing to unwind.
+
+**It is not an ACL.** `assign` is open to anyone, and that openness *is* the
+answer to a stale assignment: one recorded call cures it, so there is no TTL
+and no second lease mechanism guarding something nobody ever held. Taking an
+assigned task is two calls rather than an override flag on `claim` — a flag
+becomes the habit, whereas a separate `assign` event makes the taker say the
+takeover on the record before doing it.
+
+**The clearing table**, exactly:
+
+| what happens | `assignee` |
+|---|---|
+| `claim` by the assignee | **cleared** — `owner` now carries the truth |
+| `assign` with an empty (or whitespace) value | **cleared** |
+| `supersede` | **cleared** |
+| any state from `Doing` onward | **cleared**, and can never be served |
+| `ready`, `amend`, `note` | survives |
+| `block` / `unblock` | survives |
+| a lease expiring back into `Ready` | survives, and the task is assignable again |
+
+Because it cannot outlive the claim, the expired-lease takeover path is
+untouched: a task that reached `Doing` has no assignee left to strand.
+
+`assignee` is honoured **only on `assign`** and cleared on intake for every
+other verb. Sending it on `note` or `block` is not an error and does nothing —
+including on a `claim`, so a wrong claimant cannot write themselves the
+permission that is checked one line later. All of the above is probed by legs
+in `board_check.py`; the clearing rule is enforced once, after the `task_apply`
+switch, so a verb added later inherits it without knowing it exists.
 
 #### Epics — a plan post, not a task
 
