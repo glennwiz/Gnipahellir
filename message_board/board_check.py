@@ -1230,6 +1230,98 @@ def the_watchdog_warns_about_facts_not_causes(b):
     assert "has not posted" in warned[-1] and "no pane" in warned[-1], warned[-1]
 
 
+# ── checks: task #56 - the watchdog reports, it does not translate ─────────
+#
+# rev 1 of #56 fixed the "no pane" lie by finding a status (blocked) and
+# guessing a cause (wants a keypress) from ONE observation - and was wrong an
+# hour later. rev 2's fix is dead_spawn_warning(): say what herdr returned,
+# verbatim, name the pane, and stop. Three legs, matching the three shapes
+# watch_spawns can find a pending name in: no entry at all, an entry with a
+# status that is not alive (herdr's whole enum minus working/idle, including
+# one it has never heard of), and an entry WITH an alive status.
+
+@check
+def dead_spawn_warning_is_a_pure_function_of_what_herdr_returned(b):
+    # Direct check of the extracted builder, no board round trip needed -
+    # this is the piece the contract asks to be checkable in isolation.
+    import importlib, herdr_sync as hs
+    importlib.reload(hs)
+
+    absent = hs.dead_spawn_warning("claude-x", 190, None)
+    assert "no pane" in absent and "status=" not in absent, absent
+
+    blocked = hs.dead_spawn_warning("claude-x", 190, {"status": "blocked", "pane": "w1M:p2"})
+    assert "status=blocked" in blocked and "w1M:p2" in blocked, blocked
+    assert "no pane" not in blocked, blocked
+    # rev 1's exact defect: no cause, no instruction, however plausible.
+    assert "keypress" not in blocked and "relaunch" not in blocked, blocked
+
+    # An enum value herdr has never returned before must still degrade to
+    # being named verbatim, not fall into either canned sentence - the
+    # manifest is versioned and owned by another program.
+    future = hs.dead_spawn_warning("claude-x", 5, {"status": "wobbling", "pane": "w2:p1"})
+    assert "status=wobbling" in future, future
+
+
+@check
+def the_dead_spawn_warning_still_says_absent_when_herdr_has_no_pane(b):
+    # Leg 1: absent. This is the one wording that must NOT change - it is the
+    # one thing that genuinely differs from every other status.
+    import importlib, herdr_sync as hs
+    importlib.reload(hs)
+    hs.BASE, hs.cursor, hs.pending, hs.GRACE = BASE, 0, {}, -1
+
+    post("board", kind="msg", text="launch requested for claude-absent-1234 (model fable) - task: x")
+    hs.watch_spawns([])   # empty fleet: herdr shows no pane for anyone
+    warned = [m["text"] for m in call("/delta?since=0")[1]["messages"]
+              if "WARNING" in m["text"]]
+    assert warned and "claude-absent-1234" in warned[-1], warned
+    assert "no pane" in warned[-1] and "status=" not in warned[-1], warned[-1]
+
+
+@check
+def the_dead_spawn_warning_names_herdrs_status_and_pane_instead_of_no_pane(b):
+    # Leg 2: present, with a status that is not "working"/"idle" - blocked,
+    # done, unknown, or anything else herdr's enum grows tomorrow. This is
+    # seq 934/935's exact bug: herdr showed a pane, and the old code said
+    # "no pane" anyway because "blocked" was not in its alive set.
+    import importlib, herdr_sync as hs
+    importlib.reload(hs)
+    hs.BASE, hs.cursor, hs.pending, hs.GRACE = BASE, 0, {}, -1
+
+    post("board", kind="msg", text="launch requested for claude-strict-parse-4e28 (model fable) - task: x")
+    fleet = [{"name": "claude-strict-parse-4e28", "status": "blocked", "pane": "w1M:p2"}]
+    hs.watch_spawns(fleet)
+    warned = [m["text"] for m in call("/delta?since=0")[1]["messages"]
+              if "WARNING" in m["text"]]
+    assert warned, "a non-alive status must still warn - the filter is unchanged"
+    last = warned[-1]
+    assert "no pane" not in last, ("herdr showed a pane; the message must not deny it", last)
+    assert "status=blocked" in last and "w1M:p2" in last, last
+    assert "keypress" not in last and "relaunch" not in last, \
+        ("rev 1's defect: translating a status into a cause or an instruction", last)
+
+
+@check
+def a_pending_spawn_herdr_shows_alive_is_given_time_not_warned(b):
+    # Leg 3: present WITH an alive status - watch_spawns must still give it
+    # room to finish booting rather than warn, same as before #56. Proves the
+    # fix touched only the sentence, not the alive-set filter the task
+    # explicitly says not to change.
+    import importlib, herdr_sync as hs
+    importlib.reload(hs)
+    hs.BASE, hs.cursor, hs.pending, hs.GRACE = BASE, 0, {}, -1
+
+    post("board", kind="msg", text="launch requested for claude-booting-5678 (model fable) - task: x")
+    fleet = [{"name": "claude-booting-5678", "status": "working", "pane": "w1M:p3"}]
+    hs.watch_spawns(fleet)
+    assert "claude-booting-5678" in hs.pending, \
+        "an alive status must not warn or drop the pending entry"
+    warned = [m["text"] for m in call("/delta?since=0")[1]["messages"]
+              if "WARNING" in m["text"]]
+    assert not warned, warned
+
+
 # ── checks: crash safety + retention (task #18) ─────────────────────────────
 
 @check

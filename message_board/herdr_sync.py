@@ -69,6 +69,34 @@ LAUNCH_PREFIX = "launch requested for "
 CLOSE_PREFIX = "closed "
 
 
+def dead_spawn_warning(name, elapsed, entry):
+    """Build the warning text for a launch that has not (yet) become a live
+    agent. `entry` is the fleet dict herdr returned for `name`, or None if
+    herdr shows no pane for it at all - that split is the one fact this
+    function is allowed to report a cause for, because it is the one thing
+    this code actually checked.
+
+    REPORT, DO NOT TRANSLATE (task #56): herdr's status is a point-in-time
+    inference from terminal-title and screen heuristics (a versioned
+    detection manifest owned by another program), not a fact about the
+    process - it can be transiently wrong and it lags. So for anything herdr
+    DOES show a pane for, this says the status and the pane VERBATIM and
+    stops there. It does not translate "blocked" into "wants a keypress", or
+    any other status into a cause or an instruction - rev 1 of this task did
+    exactly that from a single observation and was proven wrong within the
+    hour. An unrecognised status (herdr's enum is not ours to close over)
+    degrades the same way: named verbatim, not funnelled into either
+    sentence.
+    """
+    if entry is None:
+        return (f"WARNING: launch requested for {name} {elapsed}s ago; "
+                "it has not posted and herdr shows no pane for it")
+    status = entry.get("status", "unknown")
+    pane = entry.get("pane", "")
+    return (f"WARNING: launch requested for {name} {elapsed}s ago; it has "
+            f"not posted; herdr reports status={status} at pane {pane}")
+
+
 def watch_spawns(fleet):
     """Track launch announcements; warn once if one never becomes an agent."""
     global cursor
@@ -86,20 +114,20 @@ def watch_spawns(fleet):
             del pending[m["agent"]]  # it spoke - alive
     cursor = d["latest"]
 
+    by_name = {f["name"]: f for f in fleet}
     alive = {f["name"] for f in fleet if f["status"] in ("working", "idle")}
     now = time.time()
     for name, born in list(pending.items()):
         if name in alive:
             continue  # herdr sees it; give it time to finish booting
         if now - born > GRACE:
+            # DO NOT add "blocked" (or anything else) to `alive` above to
+            # silence this - that would also silence the warning for an
+            # agent genuinely stuck for an hour. The bug task #56 found was
+            # in this sentence, not in that filter.
             http_post("/post", {
                 "agent": "board", "kind": "msg",
-                # Facts, not a cause. What we can see is that a launch was
-                # requested, nothing has spoken, and herdr shows no pane -
-                # not WHY. Naming a cause we have not checked is how a
-                # reader ends up debugging a launcher that was never broken.
-                "text": f"WARNING: launch requested for {name} {int(now - born)}s "
-                        "ago; it has not posted and herdr shows no pane for it",
+                "text": dead_spawn_warning(name, int(now - born), by_name.get(name)),
             })
             del pending[name]
 
