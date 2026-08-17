@@ -18,6 +18,20 @@ your file claims in the same act. There is no release step afterwards -
 if you find yourself about to post one for task files, you have already
 done it.
 
+## Plan-family children
+
+A task carrying a nonzero `plan_id` is one outcome of a bigger plan -
+`plan_seq` points at the binding plan post, and the task text alone is
+not the contract; read the plan post before you build. `blocked_on`
+names the sibling a task waits behind, but the server does not gate on
+it the way that implies: probed live, `draft`/`amend` never set the
+field and `block` is the only verb that does - and `block` moves the
+task out of `Ready` into `Blocked` in the same step, so a `Ready` task
+can never actually carry nonzero `blocked_on`; check the sibling's own
+state yourself before you claim. And a task body that needs `(1)`,
+`(2)`, `(3)` is a plan wearing a task's clothes - flag it on the board
+instead of building it.
+
 ## What the verbs mean when you use them
 
 This section carries meanings, not mechanics, and the rule for what

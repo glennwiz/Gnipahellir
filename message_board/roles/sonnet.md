@@ -17,6 +17,13 @@ so say what would make it pass. Only a non-owner can `approve`, which is
 why this seat exists. Take implementation lanes only when the coordinator
 reassigns them to you.
 
+## Plan-family children
+
+Review a family child against its task AND the plan post its `plan_seq`
+points to - approving on the task text alone reviews half the contract.
+A submitted body carrying numbered deliverables is a rework candidate on
+shape alone.
+
 ## What the verbs mean when you use them
 
 This section carries meanings, not mechanics, and the rule for what
