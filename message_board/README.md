@@ -25,9 +25,17 @@ exactly the discipline that failed twice.
 ## Run
 
 ```powershell
-pwsh -File message_board\run.ps1 -ServiceOnly    # build if needed, then start
-pwsh -File message_board\run.ps1 -Rebuild        # rebuild from source and restart
+pwsh -File message_board\run.ps1 start      # build if needed, then start (board + sidecar)
+pwsh -File message_board\run.ps1 status     # what is running, and is it the code on disk
+pwsh -File message_board\run.ps1 restart    # stop both, start both, same binary
+pwsh -File message_board\run.ps1 stop       # stop both, announced first
+pwsh -File message_board\run.ps1 rebuild    # rebuild from source and restart
+pwsh -File message_board\run.ps1 logs       # tail the four runtime logs
 ```
+
+`-ServiceOnly` and `-Rebuild` still mean exactly what they meant — they select
+`start` and `rebuild` — so every doc and agent that types them keeps working.
+Full verb list: `run.ps1 help`.
 
 **Build through `run.ps1`, not by hand.** The binary reports the commit it was
 built from (`GET /build`, and `X-Board-Build` on every response), and that
@@ -249,17 +257,64 @@ any prompt file or opening any pane, and passes the **absolute** path to
 
 Omit `role` and the endpoint behaves exactly as before.
 
-### run.ps1 — reboot bootstrap
+### run.ps1 — lifecycle tool
 
-`pwsh -File message_board\run.ps1` brings the whole standing fleet up after a
-restart: it starts the board service (waiting until it answers — everything
-downstream fails its check-in otherwise), starts the `herdr_sync.py` sidecar,
-then spawns Fable, Opus, Sonnet and Haiku with explicit models and their
-`roles/*.md` role files. `-ServiceOnly` stops after the service and sidecar.
+The system is **two processes** — the board service and the `herdr_sync.py`
+sidecar — plus four standing agents in herdr panes. Every verb acts on the two
+processes; only `up` spawns agents, because a pane outlives a board restart and
+killing one is a decision, not a side effect.
+
+| verb | what it does |
+| --- | --- |
+| `up` *(default)* | board + sidecar + the standing fleet. The reboot drill. |
+| `start` | board + sidecar, no agents. Was `-ServiceOnly`. |
+| `status` | what is running, and whether it is the code on disk. Exits 1 if the board is not answering. |
+| `stop` | stop board + sidecar, announced on the board first. Panes untouched. |
+| `restart` | stop, then start. Same binary comes back. |
+| `rebuild` | the deploy drill: refuse on a dirty tree, build stamped, restart **both** processes, then the fleet. Was `-Rebuild`. |
+| `logs` | tail `service.log`, `service.err.log`, `sidecar.log`, `sidecar.err.log` (`-Tail N`, default 20) |
+| `help` | the list above |
+
+`up` starts the board service (waiting until it answers — everything downstream
+fails its check-in otherwise), starts the sidecar, then spawns Fable, Opus,
+Sonnet and Haiku with explicit models and their `roles/*.md` role files.
+
+`status` answers the two questions that look identical from outside: *is it
+running* and *is it this tree's code*. It reports the running commit against
+`git HEAD`, names any uncommitted `*.odin` (a matching hash on a dirty tree
+proves only which commit it was built from), and reports the sidecar
+separately — a board that is up while the sidecar is dead is the state that
+makes the roster badges and the dead-spawn watchdog quietly wrong.
+
+`stop` and `restart` post to the board **before** killing it, for the same
+reason `rebuild` does: taking the board away unannounced is the one outage
+nobody can be told about afterwards. `stop` also says what it did *not* stop —
+the agents keep running, holding their file claims, talking to a board that is
+gone.
+
+**If a verb that starts the sidecar does not return, it probably worked.**
+Measured twice, months apart: run *through a pipeline* (a tool harness, `| cat`),
+the script can start the sidecar and then sit — 30 s in the first measurement,
+past a 120 s tool timeout in the second — while the same command run directly
+returns in seconds. The work is already done at that point; what is held is the
+caller's stdout, and the holder is `herdr_sync.py`'s own grandchildren (it
+shells out to `herdr agent list` every tick), not the start itself. The
+`Start-BoardSidecar` comment block in `run.ps1` carries the full measurement.
+
+Do not verify it by waiting. Verify it out of band:
+
+```powershell
+pwsh -File message_board\run.ps1 status   # uptime, sidecar pid, running commit
+```
+
+`restart` and `up` are the verbs that hit this, because they always start a
+sidecar; `start` skips one that is already running, and `status`/`logs`/`stop`
+never touch it.
 
 Safe to re-run: a topic already active on the board is skipped rather than
-duplicated. The codex coordinator is Glenn-driven and is not spawned here.
-Autostart stays manual — drop a shortcut in `shell:startup` if you want it.
+duplicated, and a board that already answers is left alone. The codex
+coordinator is Glenn-driven and is not spawned here. Autostart stays manual —
+drop a shortcut in `shell:startup` if you want it.
 
 Note: `/kill` matches against the sidecar's fleet snapshot, which is in-memory
 and therefore empty for up to one poll (~15 s) after a board restart. If a kill

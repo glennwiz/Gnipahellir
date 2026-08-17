@@ -1,46 +1,70 @@
 <#
-    Reboot bootstrap for Glenn's four standing agents (board seq 368).
+    Lifecycle tool for the board system (board seq 368, verbs added seq 1092).
 
-    Brings the whole fleet up in one command after a machine restart:
-    the board service, the herdr sidecar, then Fable / Opus / Sonnet /
-    Haiku, each in its own herdr pane carrying its role as an APPENDED
-    system prompt (roles/*.md) so it knows its responsibility for the
-    whole session, not just its first turn.
+    The system is TWO PROCESSES - the board service and the herdr_sync.py
+    sidecar - plus four standing agents in herdr panes. Every verb below acts
+    on the two processes; only `up` spawns agents, because a pane outlives a
+    board restart and killing one is a decision, not a side effect.
 
-    Run it from anywhere:  pwsh -File message_board\run.ps1
+      run.ps1 [verb]        default verb is `up`
 
-    Building is THIS script's job, not a command to memorise:
-      -Rebuild       rebuild the service from source and restart it,
-                     AND restart the herdr sidecar - the system is two
-                     processes and a board rebuild does not touch the
-                     second one.
-    A missing binary is built automatically. Either way the commit
-    hash is stamped in, so GET /build can answer "is the running
-    server the code we reviewed" without anyone having to remember
-    two -define flags.
+      up        board + sidecar + the fleet (Fable/Opus/Sonnet/Haiku),
+                each in its own herdr pane carrying its role as an APPENDED
+                system prompt (roles/*.md) so it knows its responsibility for
+                the whole session, not just its first turn. The reboot drill.
+      start     board + sidecar, no agents
+      status    what is actually running, and whether it is the code on disk.
+                Exits 1 if the board is not answering, so it can gate a script.
+      stop      stop board + sidecar (announced first). Panes are left alone.
+      restart   stop, then start. No rebuild - same binary comes back.
+      rebuild   THE DEPLOY DRILL: refuse on a dirty tree, stop both processes,
+                build with the commit stamped in, start, then the fleet.
+      logs      tail the four runtime logs (-Tail N, default 20)
+      help      this list
+
+    Run it from anywhere:  pwsh -File message_board\run.ps1 <verb>
+
+    IF A VERB THAT STARTS THE SIDECAR DOES NOT RETURN, IT PROBABLY WORKED.
+    Through a pipeline (a tool harness, `| cat`) the script can start the
+    sidecar and then sit, while the same command run directly returns in
+    seconds - measured at 30s once and past a 120s tool timeout once. The
+    work is done; the caller's stdout is held. `restart` and `up` are the
+    verbs that hit it because they always start a sidecar. Do not verify by
+    waiting - run `status` from another shell and read the uptime and pid.
+    Full measurement in the Start-BoardSidecar comment block below.
+
+    Building is THIS script's job, not a command to memorise. A missing binary
+    is built automatically by `up`/`start`. Either way the commit hash is
+    stamped in, so GET /build can answer "is the running server the code we
+    reviewed" without anyone having to remember two -define flags.
     Windows PowerShell 5 and pwsh 7 both work.
 
-    Safe to run twice: an agent whose topic is already active on the
-    board is skipped rather than duplicated.
+    Safe to run twice: `up` skips an agent whose topic is already active on
+    the board rather than duplicating it, and skips a board that is already
+    answering.
 
     The codex coordinator is NOT spawned here - Glenn drives that one.
 #>
 [CmdletBinding()]
 param(
-    # Skip the fleet and only bring the service + sidecar up.
-    [switch]$ServiceOnly,
+    # What to do. Positional, so `run.ps1 status` works; defaults to `up`,
+    # which is what the bare invocation has always meant.
+    [Parameter(Position = 0)]
+    [ValidateSet('up', 'start', 'status', 'stop', 'restart', 'rebuild', 'logs', 'help')]
+    [string]$Command = 'up',
 
-    # Rebuild the service from source and restart it, then carry on. This is
-    # the deploy drill: a server fix is not finished when it is committed, it
-    # is finished when the RUNNING process reports its hash.
-    #
-    # It restarts the SIDECAR as well. There are two processes and only the
-    # board can currently report which commit it runs, so a herdr_sync.py fix
-    # deployed by rebuilding the board would silently not be deployed at all.
-    # This covers the restarts that go through the drill; it cannot see
-    # someone restarting either process by hand, which is what the sidecar
-    # version report (task #62) is for.
-    [switch]$Rebuild
+    # PRE-VERB SPELLINGS, STILL LOAD-BEARING. CLAUDE.md, AGENTS.md, the
+    # board-monitor skill and every agent that has read them type these, and
+    # a session that starts by failing its check-in is the exact outage this
+    # script exists to prevent. They are normalised to verbs below so there is
+    # ONE code path underneath and not two that can drift apart.
+    #   -ServiceOnly  == start        -Rebuild               == rebuild
+    #                                 -Rebuild -ServiceOnly  == rebuild, no fleet
+    [switch]$ServiceOnly,
+    [switch]$Rebuild,
+
+    # Lines per log for the `logs` verb.
+    [int]$Tail = 20
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +74,23 @@ $here  = Split-Path -Parent $MyInvocation.MyCommand.Path
 # The service resolves roles/ and spawn_prompts/ relative to its working
 # directory, and board.jsonl lives beside the exe - so it must run from here.
 Set-Location $here
+
+$exe = Join-Path $here 'message_board.exe'
+
+# ── flags → verbs ───────────────────────────────────────────────────────
+# Done once, here, before anything reads $Command. The switches only ever
+# CHOOSE a verb; nothing below this block tests $Rebuild, so there is no
+# second definition of what -Rebuild means waiting to disagree with the first.
+if ($Rebuild) {
+    if ($Command -eq 'start') { $Command = 'rebuild'; $ServiceOnly = $true }
+    elseif ($Command -eq 'up') { $Command = 'rebuild' }
+} elseif ($ServiceOnly -and $Command -eq 'up') {
+    $Command = 'start'
+}
+# -ServiceOnly alongside `rebuild` means rebuild and come back without agents.
+$doFleet = ($Command -eq 'up') -or ($Command -eq 'rebuild' -and -not $ServiceOnly)
+
+# ── shared helpers ──────────────────────────────────────────────────────
 
 # THE ONLY WAY THE SERVICE SHOULD EVER BE BUILT.
 #
@@ -137,9 +178,26 @@ function Deny-DirtyBuild($dirty) {
 # honest answer to "is this agent already running?".
 function Get-LivePaneNames {
     try {
-        $snap = @(Invoke-RestMethod -Uri "$board/herdr" -TimeoutSec 5)
+        $snap = Get-BoardJson '/herdr'
         return @($snap | Where-Object { $_.name } | ForEach-Object { $_.name })
     } catch { return @() }
+}
+
+# EVERY JSON ARRAY THIS SCRIPT READS GOES THROUGH HERE, and the reason is a
+# one-character difference that silently reports the wrong number:
+#
+#     @(Invoke-RestMethod $url).Count   ->  1     (any array, any length)
+#     $x = Invoke-RestMethod $url; @($x).Count  ->  52
+#
+# Invoke-RestMethod writes a JSON array to the pipeline as ONE object without
+# enumerating it, so the array subexpression wraps it instead of unrolling it.
+# Nothing throws: `status` cheerfully reported "1 active of 1 known" against a
+# 52-agent roster, and the pane check it feeds decides whether four agents get
+# spawned. A count that is wrong but plausible is worse than a crash, so the
+# unwrapping lives in one function rather than at four call sites.
+function Get-BoardJson([string]$path, [int]$timeout = 5) {
+    $r = Invoke-RestMethod -Uri "$board$path" -TimeoutSec $timeout
+    return @($r)
 }
 
 # The sidecar is a SEPARATE PROCESS, so finding it means asking the OS, not
@@ -147,8 +205,8 @@ function Get-LivePaneNames {
 # processes here at all, and every cleanup built on them has been a silent
 # no-op that reported success.
 #
-# One implementation, two callers - the -Rebuild stop below and the
-# already-running check in section 2. This file already carries the reason
+# One implementation, every caller - the stop path, the rebuild stop, the
+# already-running check and `status`. This file already carries the reason
 # (see the POST /spawn note in section 3): two implementations of one rule is
 # how the rule drifts, and a stop that matched a different set than the
 # detect would either kill nothing or start a second sidecar.
@@ -157,63 +215,62 @@ function Get-SidecarProcess {
              Where-Object { $_.CommandLine -and $_.CommandLine -match 'herdr_sync\.py' })
 }
 
+function Get-BoardProcess {
+    return @(Get-Process message_board -ErrorAction SilentlyContinue)
+}
+
+# SAY IT ON THE BOARD BEFORE DOING IT. The board is how the fleet coordinates,
+# so taking it away unannounced is the one outage nobody can be told about
+# afterwards. A bare `catch { }` here once swallowed the announcement whole:
+# the drill that exists to make restarts VISIBLE could fail invisibly. Say so
+# and carry on - the stop is still the right thing to do, but nobody should
+# have to infer that it happened.
+function Send-BoardNote($text) {
+    if (-not (Test-Board)) { return $false }
+    $note = @{ agent = 'run.ps1'; kind = 'status'; text = $text } | ConvertTo-Json -Compress
+    try { $null = Invoke-RestMethod -Uri "$board/post" -Method Post -Body $note -TimeoutSec 5; return $true }
+    catch {
+        Write-Warning "[board] could not announce '$text' ($($_.Exception.Message)) - proceeding anyway"
+        return $false
+    }
+}
+
+function Stop-BoardService($announce) {
+    if (Test-Board) {
+        if ($announce) { $null = Send-BoardNote $announce; Start-Sleep -Seconds 5 }
+    } elseif (-not (Get-BoardProcess)) {
+        Write-Host "[board] not running"
+        return
+    }
+    Write-Host "[board] stopping"
+    Get-BoardProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+    # CONFIRM THE PORT IS FREE, do not assume Stop-Process was instant. A start
+    # that races a dying process gets "address in use" and dies hidden behind
+    # -WindowStyle Hidden, which reads exactly like "the board never came up".
+    foreach ($i in 1..10) {
+        Start-Sleep -Milliseconds 300
+        if (-not (Get-BoardProcess) -and -not (Test-Board)) { return }
+    }
+    if (Test-Board) { Write-Warning "[board] still answering after the stop - something else is serving $board" }
+}
+
+function Stop-BoardSidecar {
+    $procs = Get-SidecarProcess
+    if ($procs.Count -eq 0) { Write-Host "[sidecar] not running"; return }
+    foreach ($p in $procs) {
+        Write-Host "[sidecar] stopping (pid $($p.ProcessId))"
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ── 1. Board service ────────────────────────────────────────────────────
 # Everything downstream depends on this: an agent that cannot reach the
 # board fails its check-in and comes up unaware of the rest of the fleet.
-$exe = Join-Path $here 'message_board.exe'
-
-if ($Rebuild) {
-    # REFUSE BEFORE ANNOUNCING, AND BEFORE STOPPING ANYTHING. The order is the
-    # whole point: a refusal that has already posted "hold writes for a minute"
-    # and killed the board has cost the fleet an outage to tell someone their
-    # tree was dirty. Nothing below this line has run yet, so the board serves
-    # straight through the refusal and the only casualty is the deploy.
-    $dirty = Get-DirtyCompileInputs
-    if ($dirty) { Deny-DirtyBuild $dirty; exit 1 }
-
-    # Announce BEFORE stopping it. The board is how the fleet coordinates, so
-    # taking it away unannounced is the one outage nobody can be told about
-    # afterwards.
+function Start-BoardService {
     if (Test-Board) {
-        $note = @{ agent = 'run.ps1'; kind = 'status'
-                   text  = 'rebuilding and restarting the board - hold writes for a minute' } | ConvertTo-Json -Compress
-        # A bare `catch { }` here swallowed the announcement whole: the drill
-        # that exists to make restarts VISIBLE could fail invisibly. Say so
-        # and carry on - the restart is still the right thing to do, but
-        # nobody should have to infer that it happened.
-        try { $null = Invoke-RestMethod -Uri "$board/post" -Method Post -Body $note -TimeoutSec 5 }
-        catch { Write-Warning "[board] could not announce the restart ($($_.Exception.Message)) - proceeding anyway" }
-        Start-Sleep -Seconds 5
-        Write-Host "[board] stopping for rebuild"
-        Get-Process message_board -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Milliseconds 1200
+        Write-Host "[board] already up"
+        return
     }
-    # STOP THE SIDECAR TOO - it is a second process and rebuilding the board
-    # does not touch it. Tonight measured the cost: two board rebuilds
-    # (528f48b, 4f3f28f), zero sidecar restarts, so herdr_sync.py edits sat on
-    # disk while the old code kept running and nothing served said otherwise.
-    # -Rebuild is THE deploy drill, so it covers both processes by
-    # construction rather than by anyone remembering the second one.
-    #
-    # Deliberately OUTSIDE the Test-Board guard above: that guard asks whether
-    # the BOARD is up, and the sidecar can be running when it is not. Nesting
-    # this inside it would skip the sidecar restart on exactly the path where
-    # the board had already died - which is when the fleet is most confused
-    # about what is running.
-    #
-    # Nothing restarts it here; the start branch in section 2 finds no running
-    # sidecar and brings it back, which is why this is a stop and not a
-    # stop-and-start pair.
-    foreach ($p in (Get-SidecarProcess)) {
-        Write-Host "[sidecar] stopping for rebuild (pid $($p.ProcessId))"
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-    }
-    Build-Board
-}
-
-if (Test-Board) {
-    Write-Host "[board] already up"
-} else {
     if (-not (Test-Path $exe)) {
         Write-Host "[board] no binary yet - building"
         Build-Board
@@ -253,18 +310,21 @@ if (Test-Board) {
     # board - but a restore after an unexplained outage is exactly when the
     # board most needs to say it is back, and it said nothing. Finding it
     # already up stays silent; that is not an event.
-    $back = @{ agent = 'run.ps1'; kind = 'status'
-               text  = "board started - running $(if ($b) { $b.commit } else { 'an unstamped binary' })" } | ConvertTo-Json -Compress
-    try { $null = Invoke-RestMethod -Uri "$board/post" -Method Post -Body $back -TimeoutSec 5 }
-    catch { Write-Warning "[board] started but could not announce it ($($_.Exception.Message))" }
+    $null = Send-BoardNote "board started - running $(if ($b) { $b.commit } else { 'an unstamped binary' })"
 }
 
 # ── 2. herdr sidecar ────────────────────────────────────────────────────
 # Feeds live pane state into the roster badges and warns about spawns that
 # never check in. Optional: the fleet works without it, just blinder.
-if ((Get-SidecarProcess).Count -gt 0) {
-    Write-Host "[sidecar] already running"
-} elseif (Test-Path (Join-Path $here 'herdr_sync.py')) {
+function Start-BoardSidecar {
+    if ((Get-SidecarProcess).Count -gt 0) {
+        Write-Host "[sidecar] already running"
+        return
+    }
+    if (-not (Test-Path (Join-Path $here 'herdr_sync.py'))) {
+        Write-Warning "[sidecar] herdr_sync.py not found - skipping (roster badges will be blank)"
+        return
+    }
     Write-Host "[sidecar] starting herdr_sync.py"
     # KEEP WHAT THE SIDECAR SAYS, for the same reason the service got this
     # treatment above: unredirected, everything it printed went nowhere, so a
@@ -282,7 +342,7 @@ if ((Get-SidecarProcess).Count -gt 0) {
     #
     # THROUGH A PIPELINE IT IS A DIFFERENT STORY, and this is the part I got
     # wrong the first time by measuring only the direct case: with the board
-    # already up, `run.ps1 -ServiceOnly | cat` starts the sidecar and then does
+    # already up, `run.ps1 start | cat` starts the sidecar and then does
     # NOT return - held to a 30s ceiling, with this redirect already in place.
     # So the caller's stdout genuinely can be held open past our exit, and the
     # redirect does not prevent it.
@@ -303,12 +363,250 @@ if ((Get-SidecarProcess).Count -gt 0) {
     Start-Process -WindowStyle Hidden -FilePath 'python' -ArgumentList 'herdr_sync.py' -WorkingDirectory $here `
         -RedirectStandardOutput (Join-Path $here 'sidecar.log') `
         -RedirectStandardError  (Join-Path $here 'sidecar.err.log')
-} else {
-    Write-Warning "[sidecar] herdr_sync.py not found - skipping (roster badges will be blank)"
 }
 
-if ($ServiceOnly) {
-    Write-Host "[done] service only, fleet not spawned"
+# ── reporting verbs ─────────────────────────────────────────────────────
+
+function Format-Age([double]$sec) {
+    if ($sec -lt 0)     { return '?' }
+    if ($sec -lt 60)    { return ("{0:n0}s" -f $sec) }
+    if ($sec -lt 3600)  { return ("{0:n0}m" -f ($sec / 60)) }
+    if ($sec -lt 86400) { return ("{0:n0}h{1:n0}m" -f [math]::Floor($sec / 3600), [math]::Floor(($sec % 3600) / 60)) }
+    return ("{0:n0}d{1:n0}h" -f [math]::Floor($sec / 86400), [math]::Floor(($sec % 86400) / 3600))
+}
+
+# WHAT IS RUNNING, AND IS IT THE CODE ON DISK. Those are two questions and the
+# second is the one that has cost evenings here: a board answering happily on
+# a binary six commits behind looks identical, from the outside, to a healthy
+# one. So this reports the running commit against HEAD and against the working
+# tree, and never says "healthy" on the strength of a 200 alone.
+#
+# Returns 0 if the board answers, 1 if it does not, so `run.ps1 status` can
+# gate a script instead of being read by a human every time.
+function Show-Status {
+    $root = Split-Path -Parent $here
+    $now  = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+
+    # --- the board ---
+    $b = $null
+    try { $b = Invoke-RestMethod -Uri "$board/build" -TimeoutSec 5 } catch { }
+    $bproc = Get-BoardProcess
+    $answering = [bool]$b
+    if (-not $b -and (Test-Board)) {
+        # Answers /agents but not /build: an older binary, still a live board.
+        $answering = $true
+        Write-Host "[board]   up   $board  (no /build endpoint - binary predates build identity)"
+    } elseif ($b) {
+        Write-Host "[board]   up   $board  commit $($b.commit)  built $($b.built)  uptime $(Format-Age ($now - $b.started))"
+    } elseif ($bproc.Count -gt 0) {
+        # THE WORST CASE TO MISREPORT: the process exists, so a naive check
+        # calls it up, while every agent's check-in is failing.
+        Write-Warning "[board]   process alive (pid $($bproc[0].Id)) but NOT answering $board - see service.err.log"
+    } else {
+        Write-Warning "[board]   DOWN - nothing listening on $board  (run.ps1 start)"
+    }
+
+    # --- is it the code on disk ---
+    $head = (& git -C $root rev-parse --short HEAD 2>$null)
+    if ($b -and $head) {
+        if ($b.commit -eq 'unstamped') {
+            Write-Host "          running an UNSTAMPED binary - it cannot say what code it is (HEAD is $head)"
+        } elseif ($b.commit -ne $head) {
+            # A STAMP MISMATCH IS NOT A DEPLOY GAP BY ITSELF, and this line
+            # used to claim it was. Caught within the hour by the state it
+            # misreported: b501d57 landed the watchdog fix, which touches only
+            # herdr_sync.py and board_check.py, and `restart` had already
+            # deployed it correctly - a sidecar runs its source, it is not
+            # compiled. The binary was byte-for-byte right for HEAD and this
+            # line called it "not this tree's code".
+            #
+            # The stamp names the commit the binary was BUILT from; what makes
+            # it stale is a change to something the compiler reads. So ask
+            # exactly that, and only cry drift when a rebuild would actually
+            # produce a different binary. A checker that cries wolf on every
+            # docs commit is one nobody reads by the time it is right.
+            $null = & git -C $root cat-file -e "$($b.commit)^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "          running $($b.commit), git HEAD is $head - $($b.commit) is not a commit here, so the two cannot be compared"
+            } else {
+                $changed = @(& git -C $root diff --name-only "$($b.commit)..HEAD" -- '*.odin' 2>$null | Where-Object { $_ })
+                if ($changed.Count -eq 0) {
+                    Write-Host "          running $($b.commit), git HEAD is $head - no compiled source changed between them,"
+                    Write-Host "          so the running binary is still HEAD's code and only the label is behind"
+                } else {
+                    Write-Host "          DRIFT: running $($b.commit), git HEAD is $head - $($changed.Count) compiled source(s) changed since (run.ps1 rebuild):"
+                    foreach ($c in $changed) { Write-Host "              $c" }
+                }
+            }
+        } else {
+            Write-Host "          stamp matches git HEAD ($head)"
+        }
+    }
+    $dirty = Get-DirtyCompileInputs
+    if ($dirty) {
+        # Deliberately said even when the stamp matches: a matching hash on a
+        # dirty tree proves the binary was built from THAT COMMIT, not from
+        # what the compiler would read now. That gap is the whole reason
+        # `rebuild` refuses.
+        Write-Host "          $($dirty.Count) uncommitted *.odin change(s) - a rebuild would refuse:"
+        foreach ($d in $dirty) { Write-Host "              $d" }
+    }
+    if (Test-Path $exe) {
+        $age = (Get-Date).ToUniversalTime() - (Get-Item $exe).LastWriteTimeUtc
+        Write-Host "          binary  $exe  built $(Format-Age $age.TotalSeconds) ago"
+    } else {
+        Write-Host "          binary  not built yet"
+    }
+
+    # --- the sidecar ---
+    $sc = Get-SidecarProcess
+    if ($sc.Count -gt 0) {
+        Write-Host "[sidecar] running (pid $(($sc | ForEach-Object { $_.ProcessId }) -join ', '))"
+    } else {
+        Write-Host "[sidecar] not running - roster badges and the dead-spawn watchdog are blind (run.ps1 start)"
+    }
+
+    if (-not $answering) { return 1 }
+
+    # --- panes and roster ---
+    # Two different signals, reported separately because they answer different
+    # questions: a pane says a session EXISTS, board activity says it has
+    # spoken in the last 20 minutes. A standing agent waiting for work is
+    # silent by design, so neither one alone is "the fleet is fine".
+    $panes = Get-LivePaneNames
+    Write-Host "[panes]   $($panes.Count) named herdr pane(s)$(if ($panes.Count) { ': ' + ($panes -join ', ') })"
+
+    try {
+        $agents = @(Get-BoardJson '/agents')
+        $live   = @($agents | Where-Object { $_.active })
+        Write-Host "[agents]  $($live.Count) active of $($agents.Count) known (active = spoke within 20m)"
+        foreach ($a in ($live | Sort-Object -Property last_seen -Descending)) {
+            $tag = if ($a.model) { " [$($a.model)]" } else { '' }
+            $f   = if ($a.files) { "  files: $($a.files -join ', ')" } else { '' }
+            Write-Host "            $($a.agent)$tag  $(Format-Age ($now - $a.last_seen)) ago$f"
+        }
+    } catch {
+        Write-Warning "[agents]  could not read the roster ($($_.Exception.Message))"
+    }
+
+    # One line, because an open task nobody owns is the fleet's idle capacity
+    # and it is invisible from the process list.
+    try {
+        $tasks = @(Get-BoardJson '/tasks')
+        $open  = @($tasks | Where-Object { $_.state -notin @('Done', 'Superseded') })
+        $byState = ($open | Group-Object state | Sort-Object Name | ForEach-Object { "$($_.Count) $($_.Name)" }) -join ', '
+        Write-Host "[tasks]   $($open.Count) open of $($tasks.Count)$(if ($byState) { " - $byState" })"
+    } catch {
+        Write-Warning "[tasks]   could not read the task list ($($_.Exception.Message))"
+    }
+
+    return 0
+}
+
+# The four runtime logs, in one place, because "check its window" is useless
+# advice for a process started with -WindowStyle Hidden.
+function Show-Logs([int]$n) {
+    foreach ($name in @('service.log', 'service.err.log', 'sidecar.log', 'sidecar.err.log')) {
+        $p = Join-Path $here $name
+        if (-not (Test-Path $p)) { Write-Host "--- $name (absent)"; continue }
+        $len = (Get-Item $p).Length
+        if ($len -eq 0) { Write-Host "--- $name (empty)"; continue }
+        Write-Host "--- $name (last $n of $len bytes)"
+        Get-Content -Path $p -Tail $n | ForEach-Object { Write-Host "    $_" }
+    }
+}
+
+function Show-Usage {
+    Write-Host "run.ps1 [verb]   - lifecycle for the board service + herdr sidecar"
+    Write-Host ""
+    Write-Host "  up        board + sidecar + the standing fleet   (default)"
+    Write-Host "  start     board + sidecar, no agents             (was -ServiceOnly)"
+    Write-Host "  status    what is running, and whether it is the code on disk"
+    Write-Host "  stop      stop board + sidecar, announced first; panes untouched"
+    Write-Host "  restart   stop, then start - same binary comes back"
+    Write-Host "  rebuild   the deploy drill: refuse on a dirty tree, build stamped,"
+    Write-Host "            restart both processes, then the fleet   (was -Rebuild)"
+    Write-Host "  logs      tail service/sidecar logs (-Tail N, default 20)"
+    Write-Host "  help      this list"
+    Write-Host ""
+    Write-Host "  -ServiceOnly and -Rebuild still work; they select the verbs above."
+    Write-Host "  status exits 1 when the board is not answering."
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────
+# The verbs that do not lead into a start fall out here with an exit code.
+switch ($Command) {
+    'help' {
+        Show-Usage
+        exit 0
+    }
+    'status' {
+        # Take the LAST value, not the whole stream. Show-Status prints with
+        # Write-Host precisely so its pipeline stays clean, but one stray
+        # uncaptured expression in there would turn $code into an array and
+        # `exit` would throw - reporting a broken script instead of a broken
+        # board, which is the one substitution this verb must never make.
+        $code = @(Show-Status)[-1]
+        exit ([int]$code)
+    }
+    'logs' {
+        Show-Logs $Tail
+        exit 0
+    }
+    'stop' {
+        Stop-BoardService 'board stopping (run.ps1 stop) - hold writes until it is back'
+        # BOTH PROCESSES, ALWAYS. Tonight measured the cost of forgetting the
+        # second one: two board rebuilds (528f48b, 4f3f28f), zero sidecar
+        # restarts, so herdr_sync.py edits sat on disk while the old code kept
+        # running and nothing served said otherwise. A stop that leaves half
+        # the system up is the same bug wearing a different verb.
+        Stop-BoardSidecar
+        # SAY WHAT WE DID NOT STOP. The agents are herdr panes and they are
+        # still there, still holding their file claims, now talking to a board
+        # that is gone. Whoever ran `stop` should know that before they walk
+        # away from it.
+        Write-Host "[done] board and sidecar stopped. herdr panes are untouched - the agents"
+        Write-Host "       are still running and their next board call will fail until 'run.ps1 start'."
+        exit 0
+    }
+}
+
+if ($Command -eq 'rebuild') {
+    # REFUSE BEFORE ANNOUNCING, AND BEFORE STOPPING ANYTHING. The order is the
+    # whole point: a refusal that has already posted "hold writes for a minute"
+    # and killed the board has cost the fleet an outage to tell someone their
+    # tree was dirty. Nothing below this line has run yet, so the board serves
+    # straight through the refusal and the only casualty is the deploy.
+    $dirty = Get-DirtyCompileInputs
+    if ($dirty) { Deny-DirtyBuild $dirty; exit 1 }
+
+    Stop-BoardService 'rebuilding and restarting the board - hold writes for a minute'
+    # STOP THE SIDECAR TOO - it is a second process and rebuilding the board
+    # does not touch it. `rebuild` is THE deploy drill, so it covers both
+    # processes by construction rather than by anyone remembering the second
+    # one.
+    #
+    # Deliberately OUTSIDE any "is the board up" guard: that asks whether the
+    # BOARD is up, and the sidecar can be running when it is not. Guarding it
+    # would skip the sidecar restart on exactly the path where the board had
+    # already died - which is when the fleet is most confused about what is
+    # running.
+    #
+    # Nothing restarts it here; Start-BoardSidecar below finds no running
+    # sidecar and brings it back, which is why this is a stop and not a
+    # stop-and-start pair.
+    Stop-BoardSidecar
+    Build-Board
+} elseif ($Command -eq 'restart') {
+    Stop-BoardService 'restarting the board (run.ps1 restart) - hold writes for a few seconds'
+    Stop-BoardSidecar
+}
+
+Start-BoardService
+Start-BoardSidecar
+
+if (-not $doFleet) {
+    Write-Host "[done] $Command - service and sidecar only, fleet not spawned"
     return
 }
 
