@@ -25,6 +25,8 @@ import "core:slice"
 import "core:strings"
 import "core:strconv"
 import "core:time"
+import "core:crypto/sha2"
+import "core:encoding/hex"
 import "core:encoding/json"
 
 DEFAULT_PORT :: 7666
@@ -210,6 +212,13 @@ Board :: struct {
 	registry:     [dynamic]Agent_Record,  // durable identity, latest-wins
 	agents_fd:    ^os.File,
 	herdr_state:  string, // latest fleet snapshot from herdr_sync.py, "[]" until first post
+	// sha256 the SIDECAR reported for its own source at ITS startup, "" until
+	// it first posts (task #62). In-memory and deliberately not replayed: it
+	// describes a process that is running right now, so surviving a restart of
+	// THIS process would make it a claim about a sidecar we have not heard
+	// from. A board that just came up knows nothing about the sidecar, and
+	// saying so is the honest answer until the next poll arrives.
+	herdr_src:    string,
 	// Poll-based liveness (glenn task #2): a GET /delta?for=<agent> is proof
 	// of life — a quietly-watching monitor stays active without posting
 	// heartbeat noise. In-memory only: after a restart every live watcher
@@ -964,6 +973,46 @@ query_param :: proc(query: string, key: string) -> (string, bool) {
 	return "", false
 }
 
+// THE SIDECAR'S HALF OF "WHAT CODE IS RUNNING" (task #62).
+//
+// The board is stamped at compile time; herdr_sync.py is a script and has no
+// compile step to stamp, so it reports the sha256 of the source it STARTED
+// from and this hashes the file on disk beside us. Three fields, and only the
+// third is a judgement:
+//
+//   reported  what the running sidecar says it started from, or "unreported"
+//   disk      what herdr_sync.py hashes to right now, or "absent"
+//   stale     asserted ONLY when both are known and they differ
+//
+// UNKNOWN IS NOT STALE, and that is the same rule as the unstamped build one
+// file over: a check that cannot see must say it cannot see rather than guess
+// in the alarming direction. A board_check workdir has no herdr_sync.py beside
+// it at all, and that must read as "cannot tell", never as a deploy failure -
+// a checker that cries wolf on its own test fixture gets waved through when it
+// is finally right.
+//
+// HASHED PER REQUEST, not once at startup. The question this answers is
+// whether someone edited the file without restarting the sidecar, and a hash
+// taken when the BOARD started cannot see an edit that arrived afterwards -
+// which is the majority of the window this exists to cover.
+HERDR_SRC :: "herdr_sync.py"
+
+sidecar_json :: proc() -> string {
+	disk := "absent"
+	if data, err := os.read_entire_file_from_path(HERDR_SRC, context.temp_allocator); err == nil {
+		ctx: sha2.Context_256
+		sha2.init_256(&ctx)
+		sha2.update(&ctx, data)
+		digest: [sha2.DIGEST_SIZE_256]byte
+		sha2.final(&ctx, digest[:])
+		disk = string(hex.encode(digest[:], context.temp_allocator))
+	}
+	reported := board.herdr_src if board.herdr_src != "" else "unreported"
+	stale := reported != "unreported" && disk != "absent" && reported != disk
+	return fmt.tprintf(`{{"reported":"%s","disk":"%s","stale":%t}}`,
+		reported, disk, stale)
+}
+
 handle_connection :: proc(client: net.TCP_Socket) {
 	defer net.close(client)
 	defer free_all(context.temp_allocator)
@@ -1027,6 +1076,17 @@ handle_connection :: proc(client: net.TCP_Socket) {
 	case method == "POST" && path == "/herdr_state":
 		if len(board.herdr_state) > 0 do delete(board.herdr_state)
 		board.herdr_state = strings.clone(string(body))
+		// The sidecar's own version rides as a QUERY PARAM so the body stays
+		// the bare array every existing caller and check already sends. An
+		// absent param is not an error and never clears what we know: an old
+		// sidecar that cannot report simply leaves the last known value, and
+		// a new one overwrites it on its very next poll (15s).
+		if src, found := query_param(query, "src"); found && src != "" {
+			if src != board.herdr_src {
+				if len(board.herdr_src) > 0 do delete(board.herdr_src)
+				board.herdr_src = strings.clone(src)
+			}
+		}
 		send_response(client, "200 OK", "application/json", `{"ok":true}`)
 	case method == "GET" && (path == "/delta" || path == "/messages"):
 		handle_delta(client, query)
@@ -1034,9 +1094,14 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		// The header carries this on every response; the endpoint exists so
 		// it is readable without asking for headers, and so a reviewer can
 		// diff a lane hash against the running service in one curl.
+		// The sidecar block makes THIS endpoint answer for both processes.
+		// Until it existed, /build could say what the board runs and nothing
+		// could say what the sidecar runs - so "was the sidecar actually
+		// restarted" had to be warned about in prose (#56's deploy note) and
+		// checked by hand against process start times. Now one GET answers it.
 		send_response(client, "200 OK", "application/json",
-			fmt.tprintf(`{{"commit":"%s","built":"%s","started":%d}}`,
-				BUILD_HASH, BUILD_TIME, board_started))
+			fmt.tprintf(`{{"commit":"%s","built":"%s","started":%d,"sidecar":%s}}`,
+				BUILD_HASH, BUILD_TIME, board_started, sidecar_json()))
 	case method == "GET" && path == "/agents":
 		handle_agents(client)
 	case method == "GET" && path == "/claims":

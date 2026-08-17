@@ -10,6 +10,7 @@ Every check is a real HTTP round trip against a real server process, because
 the thing under test IS the request path: the 409s are only correct because
 the accept loop is single-threaded, and that cannot be tested in isolation.
 """
+import hashlib
 import json
 import os
 import re
@@ -1697,6 +1698,30 @@ def runtime_files(src=None):
     return set(DECLARED_RE.findall(src))
 
 
+# THE SOURCE IS NOT THE ONLY THING THAT WRITES RUNTIME FILES (task #62).
+#
+# The scan above derives from main.odin, so it is structurally blind to files
+# the TOOLING creates: run.ps1 redirects the service and the sidecar into four
+# .log files that main.odin has never heard of. Those happen to be covered by
+# the blanket `*.log` rule today - which is luck holding a gap shut, and the
+# gap is the same one that was found three times in main.odin. A new
+# `-RedirectStandardOutput ... 'sidecar.state.json'` would be ignored by
+# nothing and committed by the next person.
+#
+# Quoted literals, because that is how PowerShell names a path - and it is
+# deliberately the same shape of derivation, matched on VALUE, so there is
+# still no hand-kept list anywhere.
+PS_RUNTIME_MIN = 2   # its own floor: a regex that stops matching must not pass
+PS_RUNTIME_RE = re.compile(
+    r"""['"]([A-Za-z0-9_.-]+\.(?:jsonl|log|json|dat))['"]""")
+
+
+def ps_runtime_files(src=None):
+    if src is None:
+        src = open(os.path.join(HERE, "run.ps1"), encoding="utf-8").read()
+    return set(PS_RUNTIME_RE.findall(src))
+
+
 # -- checks: the running binary can be identified --------------------------
 
 
@@ -1742,6 +1767,168 @@ def the_stamp_does_not_change_any_response_body(b):
     assert isinstance(call("/tasks")[1], list)
 
 
+# -- checks: the sidecar can say what code IT runs (task #62) --------------
+
+
+@check
+def a_never_reported_sidecar_is_neither_match_nor_mismatch(b):
+    # UNKNOWN IS NOT STALE. This workdir has no herdr_sync.py beside it and no
+    # sidecar has ever posted, so both sides are unknown - and the honest
+    # answer is "cannot tell", not an alarm. A checker that cries wolf against
+    # its own fixture is one that gets waved through when it is finally right,
+    # which is the failure the unstamped build stamp exists to avoid.
+    sc = call("/build")[1]["sidecar"]
+    assert sc["reported"] == "unreported", sc
+    assert sc["disk"] == "absent", sc
+    assert sc["stale"] is False, sc
+
+
+@check
+def a_wrong_sidecar_hash_reads_stale_and_the_real_one_does_not(b):
+    # THE CROSS-LANGUAGE LEG, and the one worth the most: Python hashes the
+    # file, Odin hashes the file, and nothing here assumes they agree - a
+    # disagreement over line endings or encoding would make every honest
+    # sidecar look permanently stale, which is indistinguishable from the
+    # feature working until someone checks the bytes.
+    call("/herdr_state?src=deadbeef", [])
+    sc = call("/build")[1]["sidecar"]
+    assert sc["reported"] == "deadbeef" and sc["disk"] == "absent", sc
+    assert sc["stale"] is False, ("one side unknown is still not stale", sc)
+
+    shutil.copy(os.path.join(HERE, "herdr_sync.py"), b.workdir)
+    sc = call("/build")[1]["sidecar"]
+    assert sc["disk"] != "absent", ("the file is beside the board now", sc)
+    assert sc["stale"] is True, ("both known and different IS stale", sc)
+
+    real = hashlib.sha256(
+        open(os.path.join(b.workdir, "herdr_sync.py"), "rb").read()).hexdigest()
+    call(f"/herdr_state?src={real}", [])
+    sc = call("/build")[1]["sidecar"]
+    assert sc["disk"] == real, (
+        "Odin and Python disagree on the sha256 of one identical file", sc, real)
+    assert sc["stale"] is False, sc
+
+
+@check
+def a_sidecar_that_cannot_report_does_not_erase_what_is_known(b):
+    # An old sidecar sends no param at all. That must read as "no new
+    # information", never as "the version is now empty" - otherwise upgrading
+    # the board before the sidecar would silently blank a true answer.
+    shutil.copy(os.path.join(HERE, "herdr_sync.py"), b.workdir)
+    real = hashlib.sha256(
+        open(os.path.join(b.workdir, "herdr_sync.py"), "rb").read()).hexdigest()
+    call(f"/herdr_state?src={real}", [])
+    call("/herdr_state", [])                      # the old-sidecar shape
+    assert call("/build")[1]["sidecar"]["reported"] == real
+
+
+@check
+def the_sidecar_report_did_not_change_the_wire_shape(b):
+    # The version rides as a QUERY PARAM precisely so the body stays the bare
+    # array every existing caller sends and /herdr returns. A fix for a
+    # version-visibility hazard that changed the wire shape would break the
+    # pairing it exists to make legible.
+    call("/herdr_state?src=abc123", [{"name": "x", "status": "working"}])
+    assert isinstance(call("/herdr")[1], list)
+    assert call("/herdr")[1][0]["name"] == "x"
+
+
+@check
+def the_sidecar_arms_its_watch_at_the_tip_not_at_the_first_page(b):
+    # The cap (98bbb86) made `since=0` return the head of the FIRST PAGE, and
+    # two start-at-head callers were seeded from it. For the SIDECAR the cost
+    # is a BLIND WINDOW, not false alarms - a restarted sidecar spends ~11
+    # polls (~2.75 min) walking days-old traffic and is not watching for real
+    # spawns while it does. The spurious-warning story that got this noticed
+    # was disproved by simulation before it was believed (seq 1170): zero
+    # warnings over the real log, because the sweep needs a launch and its
+    # cancel in different pages and this log cancels within 9 seqs of 100.
+    # That race is latent, not retired - a spawn storm would arrange it.
+    #
+    # Folded into #62 because #62's own deploy step restarts the sidecar,
+    # which is precisely when this fires.
+    import importlib
+    import herdr_sync as hs
+    importlib.reload(hs)
+
+    # The unit: tip wins, and a board too old to send one still works.
+    assert hs.head_cursor({"latest": 100, "tip": 1167}) == 1167
+    assert hs.head_cursor({"latest": 43}) == 43, "pre-cap board must still arm"
+
+    # The integration, against a board with more history than one page.
+    for i in range(105):
+        post("filler", text=f"m{i}")
+    seeded = hs.head_cursor(call("/delta?since=0&limit=0")[1])
+    tip = call("/delta?since=0&limit=0")[1]["tip"]
+    assert seeded == tip, (seeded, tip)
+    assert call(f"/delta?since={seeded}")[1]["count"] == 0, (
+        "an armed watch must see nothing yet - that is what 'at the head' is")
+
+    # And the bug itself, so this check knows what it is preventing.
+    assert call("/delta?since=0")[1]["latest"] < tip, (
+        "a bare since=0 no longer reports the tip - if that ever changes, "
+        "this whole check is testing a hazard that no longer exists")
+
+
+# ── checks: one source for the announcement prefixes (task #62) ─────────────
+#
+# The watchdog in herdr_sync.py recognises launches and closes by matching the
+# board's announcement text. Two files, one string, and no compiler that can
+# see both: reword main.odin's emitter and the watcher silently stops matching
+# - it does not crash, it just never warns again, which is the quietest
+# possible failure for a thing whose whole job is noticing silence.
+PREFIX_RE = re.compile(r'^(LAUNCH_PREFIX|CLOSE_PREFIX)\s*=\s*"([^"]*)"', re.M)
+
+
+def announce_prefixes(src=None):
+    if src is None:
+        src = open(os.path.join(HERE, "herdr_sync.py"), encoding="utf-8").read()
+    return dict(PREFIX_RE.findall(src))
+
+
+def emitters_matching(prefixes, src=None):
+    """Which prefixes main.odin actually emits, matched on VALUE."""
+    if src is None:
+        src = open(os.path.join(HERE, "main.odin"), encoding="utf-8").read()
+    return {name for name, value in prefixes.items()
+            if f'fmt.tprintf("{value}' in src}
+
+
+@check
+def the_announcement_prefixes_have_one_source_not_two(b):
+    prefixes = announce_prefixes()
+    assert set(prefixes) == {"LAUNCH_PREFIX", "CLOSE_PREFIX"}, (
+        "the derivation stopped seeing herdr_sync.py's prefixes", prefixes)
+    matched = emitters_matching(prefixes)
+    missing = sorted(set(prefixes) - matched)
+    assert not missing, (
+        f"herdr_sync.py watches for {[prefixes[m] for m in missing]} but "
+        "main.odin emits no announcement starting with it - the watcher is "
+        "matching text nothing sends")
+
+
+@check
+def rewording_either_side_of_the_announcement_turns_this_red(b):
+    # A derivation is only worth having if it can FAIL. Both directions, on
+    # COPIES - nothing real is modified.
+    odin = open(os.path.join(HERE, "main.odin"), encoding="utf-8").read()
+    py = open(os.path.join(HERE, "herdr_sync.py"), encoding="utf-8").read()
+    prefixes = announce_prefixes(py)
+
+    # (a) main.odin reworded alone
+    for value in prefixes.values():
+        broken = odin.replace(f'fmt.tprintf("{value}', 'fmt.tprintf("REWORDED ')
+        assert emitters_matching(prefixes, broken) != set(prefixes), (
+            f"main.odin stopped emitting {value!r} and the check stayed green")
+
+    # (b) herdr_sync.py reworded alone
+    for name, value in prefixes.items():
+        broken_py = py.replace(f'{name} = "{value}"', f'{name} = "reworded "')
+        assert emitters_matching(announce_prefixes(broken_py), odin) != {
+            "LAUNCH_PREFIX", "CLOSE_PREFIX"}, (
+            f"{name} was reworded and the check stayed green")
+
+
 @check
 def every_runtime_file_the_source_declares_is_gitignored(b):
     # Fixing the missing rules fixed instances; this fixes the pattern. The
@@ -1753,16 +1940,23 @@ def every_runtime_file_the_source_declares_is_gitignored(b):
     assert len(declared) >= RUNTIME_MIN, (
         f"only found {sorted(declared)} - the scan has drifted from main.odin, "
         "and a scan that finds nothing must never pass")
+    # run.ps1's redirects are runtime files too, and no derivation over
+    # main.odin can ever see them. Its own floor, so one scan silently
+    # breaking cannot be covered by the other one still finding things.
+    from_ps = ps_runtime_files()
+    assert len(from_ps) >= PS_RUNTIME_MIN, (
+        f"only found {sorted(from_ps)} in run.ps1 - that scan has drifted, "
+        "and a scan that finds nothing must never pass")
     missing = []
-    for name in sorted(declared):
+    for name in sorted(declared | from_ps):
         r = subprocess.run(["git", "check-ignore", "-q",
                             os.path.join("message_board", name)],
                            cwd=ROOT, capture_output=True)
         if r.returncode != 0:
             missing.append(name)
     assert not missing, (
-        f"main.odin writes {missing} but message_board/.gitignore does not "
-        "cover them - add a rule, or they land in the next commit")
+        f"main.odin or run.ps1 writes {missing} but message_board/.gitignore "
+        "does not cover them - add a rule, or they land in the next commit")
 
 
 @check
@@ -1783,6 +1977,24 @@ def the_declaration_scan_actually_catches_a_new_runtime_file(b):
                  'X :: #config(X, "tuned.jsonl")'):
         added = runtime_files(src + "\n" + fake) - base
         assert added, f"a new runtime constant escaped the scan: {fake}"
+
+
+@check
+def the_run_script_scan_actually_catches_a_new_redirect(b):
+    # Same standard as the main.odin scan above: a derivation nobody has seen
+    # fail is a derivation nobody knows works. Against a COPY of run.ps1.
+    src = open(os.path.join(HERE, "run.ps1"), encoding="utf-8").read()
+    base = ps_runtime_files(src)
+    assert "service.log" in base and "sidecar.log" in base, (
+        "the four redirects run.ps1 already writes must be visible", sorted(base))
+
+    # Both quoting styles, and a name that looks nothing like the existing
+    # ones - the point is to catch the redirect somebody adds next year.
+    for fake in ("""-RedirectStandardOutput (Join-Path $here 'watchdog.state.json')""",
+                 '''$p = Join-Path $here "spawn_audit.jsonl"''',
+                 """$x = 'herdr.dat'"""):
+        added = ps_runtime_files(src + "\n" + fake) - base
+        assert added, f"a new run.ps1 runtime file escaped the scan: {fake}"
 
 
 # ── checks: strict request parsing (task #51) ───────────────────────────────

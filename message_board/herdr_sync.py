@@ -16,6 +16,7 @@ and it said exactly that about an agent that started fine and was closed on
 purpose - while the message proving it had been closed sat in the same delta
 this watcher was already reading.
 """
+import hashlib
 import json
 import subprocess
 import time
@@ -26,6 +27,37 @@ BASE = "http://127.0.0.1:7666"
 POLL = 15
 GRACE = 180
 
+
+def _own_source_sha256():
+    """sha256 of this file's bytes, computed once at import (task #62).
+
+    The system is two processes and only one of them could say what code it
+    runs. The board is stamped at compile time; a script has no compile step,
+    so it reports the hash of the source it was STARTED from instead - and
+    startup is the only honest moment to take it. Read at request time it
+    would describe the file on disk, which after an edit is precisely NOT the
+    code executing here, and the answer would be confidently wrong exactly
+    when someone edited without restarting - the case this exists to catch.
+
+    Bytes, never decoded text: the board hashes the same file knowing nothing
+    of its encoding, and a text-mode read on Windows silently drops \\r, so
+    the two languages would disagree on an identical file and the mismatch
+    would look like a real staleness.
+
+    On failure, "" - reported as nothing at all rather than as a hash. An
+    unknown version is unknown; the unstamped principle, one process over.
+    """
+    try:
+        with open(__file__, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except Exception as e:
+        print(f"[herdr_sync] cannot hash own source ({type(e).__name__}) - "
+              f"reporting unversioned", flush=True)
+        return ""
+
+
+SRC_SHA = _own_source_sha256()
+
 pending = {}   # spawn name -> announce unix, dropped once seen or warned
 cursor = 0     # set to the live head at startup - history is not replayed
 
@@ -33,6 +65,40 @@ cursor = 0     # set to the live head at startup - history is not replayed
 def http_json(path):
     with urllib.request.urlopen(BASE + path, timeout=5) as r:
         return json.load(r)
+
+
+def head_cursor(d):
+    """The seq to ARM a new watch at, from a /delta response.
+
+    `latest` is the cursor for FOLLOWING a stream and it is the wrong value to
+    START one. Since the 100-message cap (98bbb86) a `since=0` page returns the
+    head of the FIRST PAGE - measured live at latest=100 against tip=1167 - so
+    arming from it starts this watcher 1067 messages in the past.
+
+    THE COST IS A BLIND WINDOW, NOT FALSE ALARMS - and the distinction was
+    measured rather than reasoned about (board seq 1170/1172). The obvious
+    fear is that paging the backlog re-ingests old `launch requested for`
+    announcements at their original stamps, all aged past GRACE, and posts
+    dead-spawn warnings for agents that closed hours ago. Replaying the real
+    1167-message log through watch_spawns' exact logic from the buggy seed,
+    with the simulation deliberately rigged to favour warnings, posted ZERO:
+    the sweep only fires when a launch's CANCELLING message lands in a LATER
+    page than the launch, and this log cancels every one within 9 seqs where
+    a page is 100. It is a page-boundary race, and a spawn storm could still
+    arrange it - "not today" is not "never".
+
+    What DOES happen every time is quieter: a restarted sidecar spends ~11
+    polls at POLL=15s - about 2.75 minutes - walking days-old traffic before
+    it reaches the head, and it is not watching for real spawns while it does.
+    A genuine dead spawn in the first three minutes after a restart is noticed
+    late or not at all. A missed warning, from the watcher whose whole job is
+    noticing silence.
+
+    `tip` is the newest seq on the board and is what "start at the head" means.
+    The fallback to `latest` keeps this correct against a board older than the
+    cap, where the two are the same number.
+    """
+    return d.get("tip", d["latest"])
 
 
 def http_post(path, obj):
@@ -136,7 +202,11 @@ def main():
     global cursor
     while cursor == 0:
         try:
-            cursor = http_json("/delta?since=0")["latest"]
+            # limit=0 is the probe: it returns NO messages, just the cursor
+            # fields. Arming a watch should not page the board at all, and
+            # this way it cannot - the bug above was possible only because
+            # the arming call was also a history request.
+            cursor = head_cursor(http_json("/delta?since=0&limit=0"))
         except Exception:
             time.sleep(POLL)  # board still booting
     while True:
@@ -159,7 +229,19 @@ def main():
 
         if fleet is not None:
             try:
-                http_post("/herdr_state", fleet)
+                # THE VERSION RIDES AS A QUERY PARAM, NOT IN THE BODY. The body
+                # stays the bare array it has always been: a fix for a
+                # version-visibility hazard must not itself change the wire
+                # shape, or every old/new pairing of these two processes breaks
+                # on the fix. As a param it degrades cleanly in all four - an
+                # old board ignores an unknown param, a new board reads an
+                # absent one as "unreported".
+                #
+                # Omitted entirely when unknown rather than sent empty, so the
+                # board distinguishes "no version" from "a version that is the
+                # empty string".
+                http_post("/herdr_state" + (f"?src={SRC_SHA}" if SRC_SHA else ""),
+                          fleet)
                 watch_spawns(fleet)
             except (urllib.error.URLError, OSError, TimeoutError) as e:
                 # Only a real transport failure means the board is unreachable.
