@@ -7,7 +7,7 @@
 //
 //   POST /post              — add a message (status / msg / request / reply)
 //   POST /spawn             — open a terminal running a claude agent on a task
-//   GET  /delta?since=N     — every message with seq > N, plus the latest seq
+//   GET  /delta?since=N     — messages with seq > N (capped; &limit=/&brief=), plus the cursor
 //   GET  /agents            — last-seen + latest status per agent
 //   GET  /                  — plain-text summary for humans
 //
@@ -84,6 +84,11 @@ Message :: struct {
 	route:   string `json:"route"`,   // direct | broadcast | anyone
 	task_id: int    `json:"task_id"`, // optional: binds this post to a work item
 	accepts: int    `json:"accepts"`, // seq of an `anyone` request this post takes up
+
+	// ADDING A FIELD HERE? Add it to Brief_Message and brief_of too. The two
+	// structs are spelled out separately on purpose (see Brief_Message), so
+	// nothing makes them drift loudly — a field added only here just goes
+	// missing from every GET /delta?brief= response.
 }
 
 // Old clients never send `route`; derive it from `to` exactly as the board has
@@ -1893,10 +1898,149 @@ handle_claims :: proc(client: net.TCP_Socket) {
 	send_response(client, "200 OK", "application/json", string(out))
 }
 
+// Truncate to at most `max_chars` RUNES, never splitting one — the board
+// carries non-ASCII (agent prose uses em dashes and arrows constantly), and a
+// byte-offset cut would emit invalid UTF-8 into a JSON string.
+brief_text :: proc(s: string, max_chars: int) -> (out: string, cut: bool) {
+	if max_chars <= 0 do return s, false
+	n := 0
+	for _, byte_idx in s {
+		if n == max_chars {
+			return strings.concatenate({s[:byte_idx], "…"}, context.temp_allocator), true
+		}
+		n += 1
+	}
+	return s, false
+}
+
+BRIEF_DEFAULT_CHARS :: 120
+
+// Messages returned by /delta when the caller names no limit. Sized so an
+// accidental cold pull is merely large (~25k tokens at the board's ~1000-char
+// average post) rather than context-destroying. `limit=all` opts out.
+DELTA_DEFAULT_LIMIT :: 100
+
+// query_param skips any `key` written without `=`, so a hand-typed `?brief`
+// would parse as absent and quietly return the whole board — the failure this
+// endpoint's cap exists to stop, reached by the most natural way to type it.
+// Rather than change the shared parser (every endpoint reads through it), the
+// two capping params refuse the valueless form by name.
+bare_query_flag :: proc(query: string, key: string) -> bool {
+	it := query
+	for pair in strings.split_iterator(&it, "&") {
+		if pair == key do return true
+	}
+	return false
+}
+
+// Same WIRE shape as Message plus `text_len`, so a reader can tell a short
+// post from a truncated one WITHOUT re-counting: `text_len` is the full rune
+// count the board holds, always, cut or not.
+//
+// The fields are spelled out rather than embedded with `using Message`:
+// json.marshal treats a `using` field as a named member and emits it NESTED
+// (`{"msg":{...},"text_len":N}`), which would move every existing key one
+// level down and break every client reading a brief response. Verified, not
+// assumed. The cost is that a new Message field must be added here too —
+// hence the pairing note on Message itself.
+Brief_Message :: struct {
+	seq:      int      `json:"seq"`,
+	unix:     i64      `json:"unix"`,
+	agent:    string   `json:"agent"`,
+	kind:     string   `json:"kind"`,
+	text:     string   `json:"text"`,
+	files:    []string `json:"files"`,
+	to:       string   `json:"to"`,
+	reply_to: int      `json:"reply_to"`,
+	route:    string   `json:"route"`,
+	task_id:  int      `json:"task_id"`,
+	accepts:  int      `json:"accepts"`,
+	text_len: int      `json:"text_len"`,
+}
+
+brief_of :: proc(m: Message, max_chars: int) -> Brief_Message {
+	cut, _ := brief_text(m.text, max_chars)
+	return Brief_Message{
+		seq = m.seq, unix = m.unix, agent = m.agent, kind = m.kind,
+		text = cut, files = m.files, to = m.to, reply_to = m.reply_to,
+		route = m.route, task_id = m.task_id, accepts = m.accepts,
+		text_len = strings.rune_count(m.text),
+	}
+}
+
 handle_delta :: proc(client: net.TCP_Socket, query: string) {
 	since := 0
 	if v, found := query_param(query, "since"); found {
 		if n, ok := strconv.parse_int(v); ok do since = n
+	}
+
+	// A CAP THE SERVER SILENTLY IGNORED WOULD BE WORSE THAN NO CAP: the caller
+	// believes it asked for 50 and gets the whole board, which is the exact
+	// 330k-token accident these two parameters exist to prevent. So a limit=
+	// or brief= that cannot be honoured is a refusal, never a default.
+	for key in ([]string{"limit", "brief"}) {
+		if bare_query_flag(query, key) {
+			how := `limit=N, limit=0 to probe, or limit=all`
+			if key == "brief" {
+				how = fmt.tprintf("brief=1 for the default %d chars, or brief=N", BRIEF_DEFAULT_CHARS)
+			}
+			// %q once, at the outside — see the note at handle_spawn.
+			send_response(client, "400 Bad Request", "application/json",
+				fmt.tprintf(`{{"error":%q}}`,
+					fmt.tprintf("%s needs a value: %s", key, how)))
+			return
+		}
+	}
+
+	// THE UNCAPPED CALL IS THE ONE NOBODY MEANS TO MAKE, so the cap is the
+	// default and the full backlog is what you ask for. A bare ?since=0 on a
+	// board this size was 1089 messages / 1.3 MB — roughly 330k tokens into an
+	// agent's context, and the callers making it were the ones that had simply
+	// never been told not to.
+	//
+	// An opt-in cap could not have fixed that: it only helps the caller who
+	// already knows. Existing cursor-followers need no change either way —
+	// `latest` comes back truncated, so the next poll resumes exactly where
+	// this page stopped and they catch up over a few round trips, having seen
+	// every message once. Only a caller assuming one poll returns EVERYTHING
+	// sees a difference, which is precisely the call being targeted.
+	limit, limited := DELTA_DEFAULT_LIMIT, true
+	if v, found := query_param(query, "limit"); found {
+		if v == "all" {
+			// The deliberate opt-out. Spelled, not overloaded: limit=0 already
+			// means the "am I behind?" probe.
+			limited = false
+		} else {
+			n, ok := strconv.parse_int(v)
+			if !ok || n < 0 {
+				// %q once, at the outside: the echoed value is caller input and
+				// a quote in it would otherwise close the JSON string early.
+				send_response(client, "400 Bad Request", "application/json",
+					fmt.tprintf(`{{"error":%q}}`,
+						fmt.tprintf("limit must be a non-negative integer or 'all', got %s", v)))
+				return
+			}
+			limit = n
+		}
+	}
+	brief_chars, brief := 0, false
+	if v, found := query_param(query, "brief"); found {
+		// `brief=1` is the boolean form (a 1-character preview has no use, so
+		// spending that value on "yes, default" costs nothing); any larger N
+		// is the character budget itself.
+		if v == "1" {
+			brief_chars, brief = BRIEF_DEFAULT_CHARS, true
+		} else {
+			n, ok := strconv.parse_int(v)
+			if !ok || n < 1 {
+				send_response(client, "400 Bad Request", "application/json",
+					fmt.tprintf(`{{"error":%q}}`,
+						fmt.tprintf("brief must be 1 (default %d chars) or a character budget >= 1, got %s",
+							BRIEF_DEFAULT_CHARS, v)))
+				return
+			}
+			brief_chars, brief = n, true
+		}
 	}
 
 	first := len(board.messages)
@@ -1954,17 +2098,66 @@ handle_delta :: proc(client: net.TCP_Socket, query: string) {
 		}
 	}
 
+	tip := board.next_seq - 1
+
+	// THE CAP MUST MOVE THE CURSOR, OR IT SILENTLY EATS THE BACKLOG. `latest`
+	// is what the caller sends back as `since`, so returning the global tip
+	// alongside a truncated page tells the caller it has seen messages it has
+	// not — and they are gone for good, because the next poll starts past
+	// them. So a page cut by `limit` reports the last seq actually handed
+	// over, and the caller walks the backlog forward without gaps.
+	//
+	// Only `limit` moves it. Filtering (`for=`, `task=`) still reports the
+	// global tip, exactly as before: those messages were evaluated and
+	// excluded, not withheld, and re-fetching them would only filter them out
+	// again. That is the invariant the `for=` comment above depends on —
+	// filtered and unfiltered polls share one cursor — and it is unchanged.
+	latest := tip
+	truncated := limited && len(fresh) > limit
+	if truncated {
+		fresh = fresh[:limit]
+		// limit=0 is a legitimate "am I behind?" probe: no messages, so the
+		// cursor cannot advance at all.
+		latest = len(fresh) > 0 ? fresh[len(fresh) - 1].seq : since
+	}
+
 	Delta :: struct {
 		latest:   int       `json:"latest"`,
 		count:    int       `json:"count"`,
 		messages: []Message `json:"messages"`,
+		// Additive: absent-as-false/zero on every client that predates them.
+		more: bool `json:"more"`, // a cap withheld messages; poll again from `latest`
+		tip:  int  `json:"tip"`,  // newest seq on the board, so backlog depth is visible
 	}
-	delta := Delta{
-		latest   = board.next_seq - 1,
-		count    = len(fresh),
-		messages = fresh,
+	Brief_Delta :: struct {
+		latest:   int             `json:"latest"`,
+		count:    int             `json:"count"`,
+		messages: []Brief_Message `json:"messages"`,
+		more:     bool            `json:"more"`,
+		tip:      int             `json:"tip"`,
 	}
-	out, err := json.marshal(delta, {}, context.temp_allocator)
+
+	out: []byte
+	err: json.Marshal_Error
+	if brief {
+		briefed := make([dynamic]Brief_Message, 0, len(fresh), context.temp_allocator)
+		for m in fresh do append(&briefed, brief_of(m, brief_chars))
+		out, err = json.marshal(Brief_Delta{
+			latest   = latest,
+			count    = len(briefed),
+			messages = briefed[:],
+			more     = truncated,
+			tip      = tip,
+		}, {}, context.temp_allocator)
+	} else {
+		out, err = json.marshal(Delta{
+			latest   = latest,
+			count    = len(fresh),
+			messages = fresh,
+			more     = truncated,
+			tip      = tip,
+		}, {}, context.temp_allocator)
+	}
 	if err != nil {
 		send_response(client, "500 Internal Server Error", "application/json", `{"error":"marshal failed"}`)
 		return
@@ -2050,6 +2243,8 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
 	fmt.sbprintln(&b, "     &as=agent       identity WITHOUT filtering: stamps you alive, returns everything. What a monitor wants.")
 	fmt.sbprintln(&b, "     &for=agent      the same stamp PLUS filtering to messages addressed to that agent or broadcast (to empty/anyone/all), excluding its own posts")
+	fmt.sbprintf(&b, "     &limit=N        CAPPED AT %d BY DEFAULT. 'more':true means more waits - poll again from 'latest'. limit=0 probes ('tip' vs your cursor), limit=all opts out.\n", DELTA_DEFAULT_LIMIT)
+	fmt.sbprintf(&b, "     &brief=N        truncate each 'text' to N chars (brief=1 = %d) and add 'text_len', the full length. For scanning before you pull.\n", BRIEF_DEFAULT_CHARS)
 	fmt.sbprintln(&b, "GET  /build           commit + build time of the RUNNING binary, and when it started. Also on every response as X-Board-Build.")
 	fmt.sbprintln(&b, "GET  /agents          last-seen + latest status per agent (active = posted OR polled /delta with as=/for= within 20 min)")
 	fmt.sbprintln(&b, "GET  /claims          file -> active claimant; POST answers carry 'warnings' when your files overlap another active agent's")
