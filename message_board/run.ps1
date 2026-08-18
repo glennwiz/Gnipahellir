@@ -116,7 +116,17 @@ function Build-Board {
             & odin build message_board -out:message_board/message_board.exe
         } else {
             Write-Host "[build] $hash ($time)"
-            & odin build message_board -out:message_board/message_board.exe "-define:BUILD_HASH=$hash" "-define:BUILD_TIME=$time"
+            # SINGLE QUOTES, NOT DOUBLE - Odin's -define parser tries bool,
+            # then int/float, before ever considering a string, and only
+            # strips '' (not "") as a string delimiter (odin/src/main.cpp,
+            # build_param_to_exact_value). An unquoted short hash that is
+            # all-digit, or digit-then-'e'-then-non-numeric (like 1ea0bf5,
+            # a real hash this repo has had), silently becomes an integer -
+            # X-Board-Build would then read "%!s(int=...)" and the deploy
+            # check this stamp exists for goes quietly blind. Board seq
+            # 1403/1405/1407 (Yggdrasil task #103): found live on Yggdrasil's
+            # own build.ps1, confirmed latent here too.
+            & odin build message_board -out:message_board/message_board.exe "-define:BUILD_HASH='$hash'" "-define:BUILD_TIME='$time'"
         }
     } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "odin build failed with exit code $LASTEXITCODE" }
