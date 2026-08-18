@@ -1681,12 +1681,18 @@ def a_status_claim_records_source_status_and_keeps_its_wording(b):
 
 
 @check
-def claiming_the_same_file_down_both_paths_records_both(b):
-    # An agent holding a file through a lease AND announcing it in a status is
-    # claiming twice down two paths with different bounds. Whether that
-    # duplicate should exist is someone else's question; this record is what
-    # makes it answerable, so `both` has to be a value rather than a coin flip
-    # between the two sources.
+def the_duplicate_claim_path_is_gone_at_the_record_level(b):
+    # THIS LEG USED TO ASSERT source 'both', AND IT IS THE SAME CONSTRUCTION.
+    # It was written for the task that made warnings structured, where an
+    # agent holding a file through a lease AND announcing it in a status was
+    # claiming twice down two paths with different bounds - and `both` had to
+    # be representable because that duplicate was 32% of every status claim
+    # this board had ever seen.
+    #
+    # The duplicate is now deleted, so the identical setup must record 'task'.
+    # Kept rather than removed BECAUSE it breaks: a leg that constructs the
+    # thing you deleted and still finds it gone is the proof, where deleting
+    # the leg would only have removed the evidence.
     _, r = task("draft", "planner", text="doubly held", files=["src/dbl.odin"])
     tid = r["id"]
     task("ready", "planner", id=tid)
@@ -1696,9 +1702,10 @@ def claiming_the_same_file_down_both_paths_records_both(b):
 
     _, resp = post("intruder", kind="status", text="editing", files=["src/dbl.odin"])
     w = one_warning(resp, "src/dbl.odin")
-    assert w["source"] == "both" and w["task_id"] == tid, w
-    assert w["status_unix"] > 0, w
-    assert "ago" in w["text"] and f"task #{tid}" in w["text"], w["text"]
+    assert w["source"] == "task", \
+        f"a task holder's status files[] must not create a claim: {w}"
+    assert w["task_id"] == tid, w
+    assert "ago" not in w["text"] and f"task #{tid}" in w["text"], w["text"]
 
 
 @check
@@ -2043,6 +2050,94 @@ def the_frontend_renders_warning_objects_by_their_text(b):
     rendered = " | ".join((w.get("text") or str(w)) for w in warnings)
     assert "[object Object]" not in rendered and "files claimed in one post" in rendered, \
         rendered
+
+
+@check
+def a_task_holders_status_files_are_ignored_even_when_they_differ(b):
+    # THE seq 826 SHAPE, and it is not hypothetical - claude-opus-01a3 did
+    # exactly this on task #42: a status claiming a file the task did not,
+    # overlap zero. Under the old rule that post silently added a claim with
+    # no bound of its own; the agent could hand back the task and still be
+    # holding the file it never meant to keep.
+    _, r = task("draft", "planner", text="the real contract",
+                files=["src/contract_a.odin", "src/contract_b.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+    post("holder", kind="status", text="what I think I am doing",
+         files=["src/elsewhere.odin"])
+
+    # EVERYTHING BELOW IS INSIDE CLAIM_TTL, so a status claim would still be
+    # live if the path existed - this is testing deletion, not expiry.
+    assert claims_of("holder") == {"src/contract_a.odin", "src/contract_b.odin"}, \
+        f"the contract is the claim, and nothing else is: {claims_of('holder')}"
+
+    _, resp = post("third", kind="status", text="editing",
+                   files=["src/contract_a.odin", "src/elsewhere.odin"])
+    warned = {w["file"] for w in resp["warnings"] if w["kind"] == "claim_conflict"}
+    assert warned == {"src/contract_a.odin"}, \
+        f"task files warn, the status file does not: {resp['warnings']}"
+
+
+@check
+def dropping_the_task_drops_everything_the_holder_claimed(b):
+    # The duplicate's real cost: two claims, one release. An agent could
+    # submit its task and still be holding files through a status post it made
+    # on check-in - which is how a file stayed claimed by someone who had
+    # demonstrably finished with it.
+    _, r = task("draft", "planner", text="work", files=["src/owned.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+    post("holder", kind="status", text="on it", files=["src/owned.odin", "src/extra.odin"])
+    assert claims_of("holder") == {"src/owned.odin"}
+
+    _, report = post("holder", text="done", task_id=tid)
+    task("submit", "holder", id=tid, result_seq=report["seq"])
+    assert claims_of("holder") == set(), \
+        f"handing back the task hands back everything: {claims_of('holder')}"
+
+
+@check
+def an_agent_with_no_task_still_claims_through_its_status(b):
+    # THE BOUNDARY, and the thing most easily broken by mistake: this deletes
+    # the DUPLICATE, not the status path. Ad-hoc work outside any task claims
+    # exactly as it always did, bounded by CLAIM_TTL.
+    post("freelance", kind="status", text="poking at something",
+         files=["src/adhoc.odin"])
+    assert claims_of("freelance") == {"src/adhoc.odin"}
+    _, resp = post("other", kind="status", text="me too", files=["src/adhoc.odin"])
+    w = one_warning(resp, "src/adhoc.odin")
+    assert w["source"] == "status" and w["task_id"] == 0, w
+
+
+@check
+def a_lapsed_lease_hands_the_status_path_back(b):
+    # The rule is "while you hold a live file-carrying lease", so it has to
+    # switch off again - otherwise claiming one task would silently disable an
+    # agent's status claims for the rest of its session.
+    _, r = task("draft", "planner", text="brief", files=["src/brief.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid, lease_secs=1)
+    post("holder", kind="status", text="and this too", files=["src/mine_too.odin"])
+    assert claims_of("holder") == {"src/brief.odin"}, claims_of("holder")
+
+    time.sleep(2)
+    assert claims_of("holder") == {"src/mine_too.odin"}, \
+        f"lease gone, the status path is this agent's again: {claims_of('holder')}"
+
+
+@check
+def a_task_carrying_no_files_leaves_the_status_path_alone(b):
+    # Legacy tasks carry no files[]. Owning one must not blank an agent's
+    # status claims - it has no contract to replace them WITH, so the agent
+    # would simply be holding nothing.
+    _, r = task("add", "planner", text="legacy work, no files")
+    tid = r["id"]
+    task("claim", "holder", id=tid)
+    post("holder", kind="status", text="working", files=["src/legacy.odin"])
+    assert claims_of("holder") == {"src/legacy.odin"}, claims_of("holder")
 
 
 @check

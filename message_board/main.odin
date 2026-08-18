@@ -1114,6 +1114,33 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 		//
 		// Status-derived claims still work for ad-hoc work outside any task,
 		// and for legacy tasks that carry no files.
+		//
+		// AND FOR A TASK HOLDER THEY DO NOT WORK AT ALL, WHICH IS THE POINT
+		// OF WHAT FOLLOWS. status files[] used to be a SECOND path to the
+		// same claim, and the two were never equivalent: a task claim is
+		// bounded by its lease and handed back by submit/release, while a
+		// status claim had no bound of its own at all. An agent holding both
+		// had claimed the same file twice and could only ever let go of one.
+		//
+		// It was not a rare mistake. Of 91 status claims in this board's
+		// history, 29 were double-claims — 32%, across thirteen different
+		// agents. AND THEY WERE COMPLIANCE, NOT SLOPPINESS: CLAUDE.md told
+		// every session to announce its files in a status post on check-in,
+		// so an agent claiming twice was following the protocol exactly.
+		// That is why asking for better release discipline never moved the
+		// number, and why the path is deleted here instead: you cannot train
+		// away an instruction.
+		//
+		// So: if this agent holds a live file-carrying lease, its claim set
+		// comes from the task and from nothing else. Drop what the status
+		// said BEFORE the merge below — which is also what makes source
+		// "both" unproducible from here on, the schema keeping it only so
+		// that rows already written still replay.
+		if agent_holds_task_files(info.agent, now) {
+			info.files = nil
+			info.file_source, info.file_task_id = nil, nil
+		}
+
 		for &t in board.tasks {
 			if t.owner != info.agent || len(t.files) == 0 do continue
 			if t.state != "Doing" && t.state != "Blocked" do continue
@@ -1145,11 +1172,23 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 				already := -1
 				for m, mi in merged do if m == f { already = mi; break }
 				if already >= 0 {
-					// Claimed down BOTH paths at once. This is the case the
-					// duplicate-path question turns on, so it gets its own
-					// value rather than one path silently winning.
-					srcs[already] = "both"
-					tids[already] = t.id
+					// Already claimed. Two ways that happens, and they are
+					// not the same thing:
+					//
+					// TASK + TASK — this agent owns two live tasks naming the
+					// same file. Still one claim, still from the task path,
+					// and the first lease named keeps it. Marking this "both"
+					// would be a plain lie: "both" means status AND task.
+					//
+					// STATUS + TASK — unproducible now that a task holder's
+					// status claims are dropped above, and kept only because
+					// removing the branch would leave the meaning of "both"
+					// nowhere in the code while historical rows carrying it
+					// still replay out of board.jsonl.
+					if srcs[already] == "status" {
+						srcs[already] = "both"
+						tids[already] = t.id
+					}
 					continue
 				}
 				append(&merged, f)
@@ -1165,6 +1204,20 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 
 // Parallel origin arrays for a claim set that came from ONE path — the shape
 // collect_agents starts from before any lease merges into it.
+// Does this agent hold a live lease that carries files? If so its claim set
+// comes from the task path alone — the same test the merge loop applies, kept
+// in one place so "which agents are task holders" cannot drift from "which
+// tasks contribute claims".
+agent_holds_task_files :: proc(agent: string, now: i64) -> bool {
+	for &t in board.tasks {
+		if t.owner != agent || len(t.files) == 0 do continue
+		if t.state != "Doing" && t.state != "Blocked" do continue
+		if task_lease_expired(&t, now) do continue
+		return true
+	}
+	return false
+}
+
 claim_origin_all :: proc(n: int, source: string, task_id: int) -> ([]string, []int) {
 	if n == 0 do return nil, nil
 	srcs := make([]string, n, context.temp_allocator)

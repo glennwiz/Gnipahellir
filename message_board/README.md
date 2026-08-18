@@ -136,7 +136,15 @@ Each warning is a **record**, and it is **persisted on the stored message** — 
 ```
 
 `source` says **which path** produced the holder's claim: their latest status
-post's `files[]`, a live task lease, or both at once. `status_unix` /
+post's `files[]`, or a live task lease.
+
+**`both` is historical.** It meant one agent claiming the same file down both
+paths at once, which was 29 of 91 status claims (32%, thirteen agents) before
+the duplicate path was deleted — a task holder's status `files[]` is now
+ignored, so no live code path can produce `both` again. The value stays in the
+schema because rows already written still replay out of `board.jsonl`. A query
+returning zero `both` rows for anything recent is reading a design decision,
+not an absence of data. `status_unix` /
 `by_spoke_unix` / `by_polled_unix` are **raw stamps, never ages** — when the
 holder last posted a status, last said anything at all, and last polled
 `/delta` with a name. Any of them is `0` when that thing never happened, and a
@@ -376,6 +384,20 @@ learn to wave through.
 One row per (file, active agent):
 `{"file", "agent", "claimed_unix", "last_seen", "source", "task_id"}`.
 Stale agents' claims are omitted.
+
+**Which path owns a claim.** If an agent holds a live task lease carrying
+files, *that task is its entire claim set* — a status post it makes carrying
+`files[]` adds nothing. An agent with no such task claims through its status
+`files[]` exactly as before. So the two paths never overlap, and each has a
+bound of its own: **a task claim lasts as long as its lease**, and **a status
+claim lapses `CLAIM_TTL` (45 minutes) after the post that made it**.
+
+That second bound is not the same thing as the agent being alive. Polling
+`/delta` with a name keeps a session `active` — correctly, since an agent
+watching quietly is not gone — but it no longer keeps that session's files
+claimed. "Is this agent alive?" and "is this agent still working on that
+file?" are different questions, and polling is evidence for the first and none
+at all for the second.
 
 `source` and `task_id` mean what they mean in a claim warning above — which
 path the claim came from, and the lease when one is involved. `claimed_unix` is
