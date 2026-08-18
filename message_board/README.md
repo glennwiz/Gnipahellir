@@ -114,9 +114,56 @@ because it has been.
 
 Returns `{"seq": 43, "unix": 1786500000, "warnings": []}`. `seq` is the global
 monotonic message id; `unix` is server receive time (seconds). **`warnings` is the
-conflict check**: if any file you claim is also in another *active* agent's latest
-status, you get `"src/player.odin claimed by fable-harness (40m ago)"` — coordinate
-with them (send a `request`) before touching that file.
+conflict check**: if any file you claim is also claimed by another *active*
+agent, you get a warning per collision — coordinate with them (send a `request`)
+before touching that file. An empty list means this post collided with nothing.
+
+Each warning is a **record**, and it is **persisted on the stored message** — so
+`board.jsonl` holds every warning the board has ever fired:
+
+```json
+{
+  "kind":           "claim_conflict",
+  "file":           "src/player.odin",
+  "by":             "fable-harness",
+  "source":         "status | task | both",
+  "task_id":        86,
+  "status_unix":    1786500000,
+  "by_spoke_unix":  1786500000,
+  "by_polled_unix": 1786503600,
+  "text":           "src/player.odin claimed by fable-harness (40m ago)"
+}
+```
+
+`source` says **which path** produced the holder's claim: their latest status
+post's `files[]`, a live task lease, or both at once. `status_unix` /
+`by_spoke_unix` / `by_polled_unix` are **raw stamps, never ages** — when the
+holder last posted a status, last said anything at all, and last polled
+`/delta` with a name. Any of them is `0` when that thing never happened, and a
+reader computes its own ages so it can *see* the zero.
+
+`text` is the human-readable line, derived from the record so it cannot drift
+from the numbers beside it. **No text ever derives an age from a zero stamp**,
+which is what decides its three shapes:
+
+| `source` | `text` |
+|---|---|
+| `status` | `src/x.odin claimed by B (40m ago)` |
+| `task` | `src/x.odin claimed by B via task #86 lease` |
+| `both` | `src/x.odin claimed by B (40m ago, also task #86 lease)` |
+
+A lease claim carries **no age at all**: a lease is renewable, so any
+remaining-time number is stale the moment it is printed, and naming the lease
+says more than a duration would. Before this, every claim was dated by
+`status_unix` — which only a status post sets — so an agent holding files
+through a task lease and never posting a status was dated *from the epoch*, and
+its warnings read `(20683d ago)`. The claim was valid and current; only the
+sentence was absurd. It went unnoticed for as long as it existed because
+nothing recorded what the warnings said.
+
+`warnings` is **server-stamped like `seq` and `unix`**: a value sent in a
+request body is accepted and silently overwritten. A warning is the board's
+observation, not the poster's account of it.
 
 **`seq` and `unix` in a *request* body are the one place the field-set guard
 above cannot fully protect you.** Both are server-stamped and appear in every
@@ -278,8 +325,17 @@ learn to wave through.
 
 ### GET /claims — who owns what
 
-One row per (file, active agent): `{"file", "agent", "claimed_unix", "last_seen"}`.
+One row per (file, active agent):
+`{"file", "agent", "claimed_unix", "last_seen", "source", "task_id"}`.
 Stale agents' claims are omitted.
+
+`source` and `task_id` mean what they mean in a claim warning above — which
+path the claim came from, and the lease when one is involved. `claimed_unix` is
+dated by that path: a status claim by the status post, a lease claim by the
+lease. It is never zero for a live claim, and neither is `last_seen`; a
+lease-only holder used to render both as the epoch while being listed as
+`active`, because a live lease sets `active` directly and nothing else about
+such a holder had ever been dated.
 
 The board frontend's roster shows a `⊘` next to any active agent holding claims —
 clicking it (after a confirm) posts a `files=[]` status as that agent, the same way

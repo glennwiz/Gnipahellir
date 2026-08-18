@@ -1577,7 +1577,215 @@ def a_task_claimed_file_still_warns_another_agent(b):
     task("ready", "planner", id=tid)
     task("claim", "holder", id=tid)
     _, resp = post("intruder", kind="status", text="editing", files=["src/hot.odin"])
-    assert any("src/hot.odin" in w and "holder" in w for w in resp["warnings"]), resp
+    # Shape-only: warnings are records, so this reads the fields rather than
+    # searching a sentence. WHICH collisions warn is unchanged - that is the
+    # invariant the structured record was allowed to be built under.
+    assert any(w["file"] == "src/hot.odin" and w["by"] == "holder"
+               for w in resp["warnings"]), resp
+
+
+def one_warning(resp, path):
+    """The single warning about `path`, asserted to be a RECORD.
+
+    Against the pre-fix binary warnings are plain strings, so this fails on
+    the isinstance line with the actual payload in the message - which is the
+    red these legs exist to show."""
+    ws = resp["warnings"]
+    assert ws, f"expected a warning about {path}, got none: {resp}"
+    assert all(isinstance(w, dict) for w in ws), \
+        f"warnings must be structured records, not sentences: {ws!r}"
+    hit = [w for w in ws if w["file"] == path]
+    assert len(hit) == 1, ws
+    return hit[0]
+
+
+def stored_line(b, seq):
+    """The message as it was WRITTEN to board.jsonl.
+
+    Deliberately not read back through /delta: the defect this lane exists to
+    fix was the response and the log DISAGREEING - warnings went out on the
+    wire and were never persisted - and a check reading the API could not have
+    seen it."""
+    with open(os.path.join(b.workdir, "board.jsonl"), encoding="utf-8") as f:
+        for ln in f:
+            m = json.loads(ln)
+            if m.get("seq") == seq:
+                return m
+    raise AssertionError(f"seq {seq} is not in board.jsonl")
+
+
+@check
+def a_lease_only_holder_never_reads_as_a_57_year_old_status_claim(b):
+    # THE REPRO. Pre-fix this warning read:
+    #   'contested.odin claimed by leaseholder (20683d ago)'
+    # because the age was age_string(now, info.status_unix), and status_unix is
+    # set ONLY by a status/release post. A holder that claimed its files
+    # through a task lease and never posted a status carried status_unix == 0,
+    # so the age was measured from the epoch. The claim was correct, current
+    # and perfectly valid; only the sentence describing it was absurd.
+    _, r = task("draft", "planner", text="lease-only holder",
+                files=["src/lease_only.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "leaseholder", id=tid)   # deliberately never posts a status
+
+    _, resp = post("intruder", kind="status", text="editing",
+                   files=["src/lease_only.odin"])
+    w = one_warning(resp, "src/lease_only.odin")
+    assert w["source"] == "task" and w["task_id"] == tid, w
+    assert w["status_unix"] == 0, \
+        "the holder never spoke - the stamp is honestly zero, and stays zero"
+    assert f"task #{tid}" in w["text"], w
+    assert "ago" not in w["text"], \
+        f"no age may be derived from a zero stamp: {w['text']!r}"
+
+    # THE CONTROL, and it is what makes everything above evidence rather than
+    # decoration: a file nobody holds must produce no warning at all. Without
+    # it, a change that silenced the warning path entirely would satisfy every
+    # "no bad age" assertion here by saying nothing whatsoever.
+    _, quiet = post("intruder", kind="status", text="untouched",
+                    files=["src/nobody_wants_this.odin"])
+    assert quiet["warnings"] == [], quiet
+
+
+@check
+def claims_dates_a_lease_claim_by_its_lease_not_by_the_epoch(b):
+    # Same root, second rendering. /claims built Claim{..., info.status_unix,
+    # info.last_seen} while a live lease set active directly, so the endpoint
+    # could report an agent as ACTIVE and last seen at the epoch in one row.
+    _, r = task("draft", "planner", text="lease-only", files=["src/c.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "leaseholder", id=tid)
+
+    rows = [c for c in call("/claims")[1] if c["agent"] == "leaseholder"]
+    assert len(rows) == 1, rows
+    c = rows[0]
+    assert c["source"] == "task" and c["task_id"] == tid, c
+    assert c["claimed_unix"] > 0, f"a lease claim is dated by its lease: {c}"
+    assert c["last_seen"] > 0, f"active and last seen at the epoch is nonsense: {c}"
+
+
+@check
+def a_status_claim_records_source_status_and_keeps_its_wording(b):
+    # The other half of the falsifier: for a status-derived claim the text is
+    # BYTE-IDENTICAL to what the board has always said. The fix changes the
+    # sentence exactly when a lease is involved and nowhere else.
+    post("speaker", kind="status", text="I have this", files=["src/spoken.odin"])
+    _, resp = post("other", kind="status", text="me too", files=["src/spoken.odin"])
+    w = one_warning(resp, "src/spoken.odin")
+    assert w["source"] == "status" and w["task_id"] == 0, w
+    assert w["status_unix"] > 0, w
+    assert re.fullmatch(r"src/spoken\.odin claimed by speaker \(\d+[smhd] ago\)",
+                        w["text"]), w["text"]
+
+
+@check
+def claiming_the_same_file_down_both_paths_records_both(b):
+    # An agent holding a file through a lease AND announcing it in a status is
+    # claiming twice down two paths with different bounds. Whether that
+    # duplicate should exist is someone else's question; this record is what
+    # makes it answerable, so `both` has to be a value rather than a coin flip
+    # between the two sources.
+    _, r = task("draft", "planner", text="doubly held", files=["src/dbl.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+    post("holder", kind="status", text="also saying it out loud",
+         files=["src/dbl.odin"])
+
+    _, resp = post("intruder", kind="status", text="editing", files=["src/dbl.odin"])
+    w = one_warning(resp, "src/dbl.odin")
+    assert w["source"] == "both" and w["task_id"] == tid, w
+    assert w["status_unix"] > 0, w
+    assert "ago" in w["text"] and f"task #{tid}" in w["text"], w["text"]
+
+
+@check
+def a_holder_kept_alive_only_by_polling_is_visible_in_the_record(b):
+    # THE SIGNATURE, observed instead of inferred. A /delta poll carrying a
+    # name refreshes last_seen, so an agent running the mandated board monitor
+    # never goes inactive and its status-derived claims never stop warning.
+    # That is a real question about claim expiry, and until now the data could
+    # not even express it: `active` was one bool fed by speech, polls and
+    # leases alike. Two separate stamps make polled-newer-than-spoke something
+    # a query can COUNT.
+    post("watcher", kind="status", text="holding", files=["src/watched.odin"])
+    time.sleep(1.1)
+    call("/delta?since=0&limit=0&as=watcher")   # what the monitor does, and only that
+
+    _, resp = post("intruder", kind="status", text="editing",
+                   files=["src/watched.odin"])
+    w = one_warning(resp, "src/watched.odin")
+    assert w["by_polled_unix"] > w["by_spoke_unix"], \
+        f"the poll is what is keeping this claim alive, and it must show: {w}"
+    assert w["status_unix"] == w["by_spoke_unix"], w
+
+
+@check
+def the_log_carries_the_warnings_the_response_returned(b):
+    # THE POINT OF THE WHOLE LANE. Warnings were computed per request, sent,
+    # and dropped - so nobody could say whether one had ever fired, and every
+    # argument about file claims was inferred from overlap rather than read
+    # off an observation.
+    _, r = task("draft", "planner", text="held", files=["src/persist.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+
+    _, resp = post("intruder", kind="status", text="editing",
+                   files=["src/persist.odin"])
+    assert resp["warnings"], resp
+    line = stored_line(b, resp["seq"])
+    assert line["warnings"] == resp["warnings"], (
+        "the log must carry what the wire carried\n"
+        f" wire: {resp['warnings']}\n log:  {line.get('warnings')}")
+
+    # ...and an uncontested post records an EMPTY list, which is a reading in
+    # its own right: "this post collided with nothing", not "nobody looked".
+    _, clean = post("loner", kind="status", text="mine alone", files=["src/mine.odin"])
+    assert clean["warnings"] == []
+    assert stored_line(b, clean["seq"])["warnings"] in ([], None)
+
+
+@check
+def a_caller_cannot_write_its_own_warnings_into_the_log(b):
+    # Server-stamped, exactly like seq and unix: a warning is the BOARD's
+    # observation, and a log that accepted an agent's own account of who
+    # warned it would be worthless as the evidence it is being built to be.
+    _, resp = post("liar", kind="status", text="nothing to see",
+                   files=["src/quiet.odin"],
+                   warnings=[{"kind": "claim_conflict", "file": "src/quiet.odin",
+                              "by": "somebody-else", "source": "status",
+                              "text": "invented"}])
+    assert resp["warnings"] == [], resp
+    assert stored_line(b, resp["seq"])["warnings"] in ([], None)
+
+
+@check
+def warnings_survive_a_restart_and_reach_brief_readers_too(b):
+    # board.jsonl is replayed verbatim, so this is really a check that the
+    # field round-trips through marshal/unmarshal - and that brief responses
+    # did not quietly lose it, which is the standing drift between Message and
+    # Brief_Message that the two structs are spelled out separately to keep loud.
+    _, r = task("draft", "planner", text="held", files=["src/replay.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+    _, resp = post("intruder", kind="status", text="editing",
+                   files=["src/replay.odin"])
+    seq = resp["seq"]
+    assert resp["warnings"]
+
+    b.restart()
+    _, d = call(f"/delta?since={seq - 1}")
+    full = [m for m in d["messages"] if m["seq"] == seq][0]
+    assert full["warnings"] == resp["warnings"], full
+
+    _, db = call(f"/delta?since={seq - 1}&brief=40")
+    brief = [m for m in db["messages"] if m["seq"] == seq][0]
+    assert brief["warnings"] == resp["warnings"], \
+        "a brief reader must not silently lose the field"
 
 
 @check
@@ -2981,12 +3189,24 @@ def main():
     if "-k" in sys.argv:
         pattern = sys.argv[sys.argv.index("-k") + 1]
 
-    exe = os.path.join(tempfile.mkdtemp(prefix="boardchk_"), "board_check.exe")
-    build = subprocess.run(["odin", "build", "message_board", "-out:" + exe],
-                           cwd=ROOT, capture_output=True, text=True)
-    if build.returncode != 0:
-        print(build.stdout + build.stderr)
-        raise SystemExit("build failed")
+    # --exe runs the suite against a binary that ALREADY EXISTS instead of
+    # building the working tree. It is here so "this leg goes red against the
+    # pre-fix binary" is a claim anyone can re-run rather than one they have
+    # to take on trust: build the old commit somewhere, point the suite at
+    # it, watch the leg fail. A leg that has never been seen to fail has not
+    # been shown to catch anything, and without this flag the only way to see
+    # it fail was to un-write the fix.
+    exe = None
+    if "--exe" in sys.argv:
+        exe = sys.argv[sys.argv.index("--exe") + 1]
+        print(f"(running against prebuilt {exe} - working tree NOT compiled)")
+    if exe is None:
+        exe = os.path.join(tempfile.mkdtemp(prefix="boardchk_"), "board_check.exe")
+        build = subprocess.run(["odin", "build", "message_board", "-out:" + exe],
+                               cwd=ROOT, capture_output=True, text=True)
+        if build.returncode != 0:
+            print(build.stdout + build.stderr)
+            raise SystemExit("build failed")
 
     selected = [c for c in checks if not pattern or pattern in c.__name__]
     failed = []

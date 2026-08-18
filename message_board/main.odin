@@ -87,10 +87,65 @@ Message :: struct {
 	task_id: int    `json:"task_id"`, // optional: binds this post to a work item
 	accepts: int    `json:"accepts"`, // seq of an `anyone` request this post takes up
 
+	// Every claim warning this post fired, PERSISTED. Server-stamped like
+	// seq/unix above: handle_post overwrites it unconditionally, so a
+	// caller-sent value cannot survive into the log.
+	//
+	// These used to be computed at request time, returned in the HTTP
+	// response, and dropped. Nothing recorded them — so for three days
+	// nobody could say whether a warning had ever fired, let alone whether
+	// one ever stopped anyone, and every conclusion about file claims in
+	// either direction was inferred from claim OVERLAP rather than observed
+	// OBSTRUCTION. An empty array is therefore a real reading ("this post
+	// collided with nothing"), not a missing one.
+	warnings: []Claim_Warning `json:"warnings" board:"server"`,
+
 	// ADDING A FIELD HERE? Add it to Brief_Message and brief_of too. The two
 	// structs are spelled out separately on purpose (see Brief_Message), so
 	// nothing makes them drift loudly — a field added only here just goes
 	// missing from every GET /delta?brief= response.
+}
+
+// One warning, as a RECORD rather than a sentence.
+//
+// The sentence survives as `text` — humans and every CLAUDE.md reader lose
+// nothing — but each number a query needs sits beside it as a RAW STAMP,
+// because the analysis this record exists to serve must never be a parser.
+// Two downstream questions decide the shape, and a bare string answered
+// neither: "did a status claim outlive its TTL while its holder stayed alive
+// by POLLING" needs the holder's speech and polling separated, and "which
+// path produced this claim" needs an origin that collect_agents used to
+// flatten away three hundred lines before the warning ever fired.
+//
+// NO FIELD HERE IS AN AGE. Ages are derived by the reader, from stamps it
+// can see the zeroes in — see claim_warning_text for why a zero stamp must
+// never be turned into a duration.
+Claim_Warning :: struct {
+	// "claim_conflict" today. The field exists so a second kind of warning
+	// lands in this record without reshaping it.
+	kind: string `json:"kind"`,
+	file: string `json:"file"`,
+	by:   string `json:"by"`,   // the holder we collided with
+
+	// WHICH PATH the holder's claim came from: a status post's files[], a
+	// live task lease, or both at once. `both` has to be representable —
+	// an agent claiming the same file down both paths is not a corner case,
+	// it is the subject of the task that asks whether the duplicate path
+	// should exist at all.
+	source:  string `json:"source"`,  // status | task | both
+	task_id: int    `json:"task_id"`, // the lease, when one is involved
+
+	// RAW STAMPS, NEVER AGES, and honestly zero when the thing never
+	// happened: status_unix is 0 for a holder that never posted a status,
+	// by_spoke_unix is 0 for one that never posted at all, by_polled_unix
+	// is 0 for one that never polled. A reader computes its own ages and
+	// can SEE the zero for what it is, which is precisely what a
+	// pre-computed age string took away.
+	status_unix:    i64 `json:"status_unix"`,
+	by_spoke_unix:  i64 `json:"by_spoke_unix"`,
+	by_polled_unix: i64 `json:"by_polled_unix"`,
+
+	text: string `json:"text"`,
 }
 
 // Old clients never send `route`; derive it from `to` exactly as the board has
@@ -116,6 +171,36 @@ Agent_Info :: struct {
 	role:         string   `json:"role"`,
 	model:        string   `json:"model"`,
 	capabilities: []string `json:"capabilities"`,
+
+	// ── liveness, SPLIT INTO ITS SOURCES ────────────────────────────────
+	// `active` above is one bool fed by three different things: a message
+	// (spoke), a /delta poll carrying a name (polled), and holding a live
+	// lease. It answers "is this agent alive?" — and the moment anything
+	// asked it "is this agent still working on that file?" instead, the
+	// three sources were indistinguishable and the answer was worthless.
+	// Polling is real evidence for the first question and NO evidence at
+	// all for the second.
+	//
+	// These do not replace `active`; nothing about who warns changes. They
+	// let a warning RECORD what `active` was standing on.
+	spoke_unix:  i64 `json:"spoke_unix"`,
+	polled_unix: i64 `json:"polled_unix"`,
+	// When a live lease this agent holds was last touched (claim or renew).
+	// The date a LEASE claim carries, since such a claim has no status post
+	// to be dated by — and dating it by the status post it does not have is
+	// exactly how a claim came to be reported as 57 years old.
+	lease_unix: i64 `json:"lease_unix"`,
+
+	// PER-FILE ORIGIN, parallel to `files`: same length, same order.
+	// files[i] was claimed via file_source[i] ("status" | "task" | "both"),
+	// under lease file_task_id[i] when a task is involved.
+	//
+	// Parallel arrays rather than a slice of structs because `files` is
+	// read by the UI, by /claims and by every existing caller — reshaping
+	// it to carry provenance would have been a wire break in service of an
+	// internal need.
+	file_source:  []string `json:"file_source"`,
+	file_task_id: []int    `json:"file_task_id"`,
 }
 
 // Shared task list (glenn seq 175). State is a replay of an append-only event
@@ -772,9 +857,17 @@ task_post :: proc(ev: Task_Event) {
 }
 
 board_post :: proc(m: Message) -> Message {
+	return board_post_at(m, time.time_to_unix(time.now()))
+}
+
+// The same append, with the receive time supplied rather than read here.
+// A caller that must derive something FROM the stamp — claim warnings carry
+// ages measured against it — needs the identical number the log records, and
+// the only way to guarantee that is to hand it in.
+board_post_at :: proc(m: Message, now: i64) -> Message {
 	stored := m
 	stored.seq = board.next_seq
-	stored.unix = time.time_to_unix(time.now())
+	stored.unix = now
 	board.next_seq += 1
 	append(&board.messages, stored)
 
@@ -843,6 +936,10 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			append(&infos, Agent_Info{agent = m.agent})
 		}
 		infos[i].last_seen = m.unix
+		// SPEECH, kept separately from last_seen because last_seen is about
+		// to be overwritten by polling below and the difference between the
+		// two is the whole signature of a claim held open by a watcher.
+		infos[i].spoke_unix = m.unix
 		// `release` carries the claim set too — it is the explicit way to drop
 		// files, and it always clears them. Without it here, a release would
 		// post cleanly and change nothing, which is the exact trap it exists
@@ -851,6 +948,8 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			infos[i].status = m.text
 			infos[i].status_unix = m.unix
 			infos[i].files = m.files
+			infos[i].file_source, infos[i].file_task_id = claim_origin_all(
+				len(m.files), "status", 0)
 		}
 	}
 	// A registered agent is listed even when it has never spoken: identity is
@@ -891,8 +990,15 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 		}
 		// A recent /delta?for= poll counts as being seen: liveness comes
 		// from watching, not just talking.
-		if p, polled := board.last_poll[info.agent]; polled && p > info.last_seen {
-			info.last_seen = p
+		//
+		// This is CORRECT and stays. An agent watching quietly for an hour
+		// is alive, and calling it dead was the bug this behaviour was added
+		// to fix. What was missing is only that the poll, having overwritten
+		// last_seen, left no trace of itself — so nothing downstream could
+		// tell "alive because it spoke" from "alive because it is watching".
+		if p, polled := board.last_poll[info.agent]; polled {
+			info.polled_unix = p
+			if p > info.last_seen do info.last_seen = p
 		}
 		info.active = now - info.last_seen <= STALE_SECS
 
@@ -910,6 +1016,7 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 		// far rarer than the case this protects.
 		if c, cleared := board.claims_cleared[info.agent]; cleared && c >= info.status_unix {
 			info.files = nil
+			info.file_source, info.file_task_id = nil, nil
 		}
 
 		// THE CONTRACT IS THE CLAIM. A task's files[] register as its owner's
@@ -933,17 +1040,105 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 			if task_lease_expired(&t, now) do continue
 
 			info.active = true   // holding a live lease is liveness
+			info.lease_unix = max(info.lease_unix, t.updated)
+			// ...and if that is the ONLY liveness this agent has, it is also
+			// the last time the board saw it do anything. Leaving last_seen
+			// at zero here is what let /claims report an agent as active and
+			// last seen at the epoch in the same row. `active` is already
+			// computed above, so this cannot change who counts as live.
+			info.last_seen = max(info.last_seen, t.updated)
+
+			// THE MERGE THAT USED TO ERASE THE ANSWER. This loop flattened
+			// lease files into info.files and kept nothing about where each
+			// one came from, so by the time a warning fired the two claim
+			// paths were one undifferentiated slice — and "which path
+			// actually obstructs anyone" could not be asked of the data at
+			// all. Same merge, same resulting file set; the origin now
+			// rides alongside instead of being dropped.
 			merged := make([dynamic]string, context.temp_allocator)
+			srcs   := make([dynamic]string, context.temp_allocator)
+			tids   := make([dynamic]int, context.temp_allocator)
 			append(&merged, ..info.files)
+			append(&srcs, ..info.file_source)
+			append(&tids, ..info.file_task_id)
 			for f in t.files {
-				already := false
-				for m in merged do if m == f { already = true; break }
-				if !already do append(&merged, f)
+				already := -1
+				for m, mi in merged do if m == f { already = mi; break }
+				if already >= 0 {
+					// Claimed down BOTH paths at once. This is the case the
+					// duplicate-path question turns on, so it gets its own
+					// value rather than one path silently winning.
+					srcs[already] = "both"
+					tids[already] = t.id
+					continue
+				}
+				append(&merged, f)
+				append(&srcs, "task")
+				append(&tids, t.id)
 			}
 			info.files = merged[:]
+			info.file_source, info.file_task_id = srcs[:], tids[:]
 		}
 	}
 	return infos[:]
+}
+
+// Parallel origin arrays for a claim set that came from ONE path — the shape
+// collect_agents starts from before any lease merges into it.
+claim_origin_all :: proc(n: int, source: string, task_id: int) -> ([]string, []int) {
+	if n == 0 do return nil, nil
+	srcs := make([]string, n, context.temp_allocator)
+	tids := make([]int, n, context.temp_allocator)
+	for i in 0 ..< n {
+		srcs[i], tids[i] = source, task_id
+	}
+	return srcs, tids
+}
+
+// Origin of one file in an agent's claim set. Falls back to "status" when the
+// parallel arrays are absent, which is what every claim looked like before
+// they existed.
+claim_origin :: proc(info: Agent_Info, idx: int) -> (source: string, task_id: int) {
+	source, task_id = "status", 0
+	if idx < len(info.file_source) do source = info.file_source[idx]
+	if idx < len(info.file_task_id) do task_id = info.file_task_id[idx]
+	return
+}
+
+// THE DATE A CLAIM CARRIES, chosen by where the claim came from.
+//
+// This is the whole of the 57-year bug in one procedure. Every claim used to
+// be dated by status_unix, which only a status post ever sets — so an agent
+// holding files through a task lease and never posting a status was dated
+// from the epoch, and both renderings of a claim (the warning sentence and
+// GET /claims) reported it as such. Live, shipped, and invisible for as long
+// as it existed, because nothing recorded what the warnings said.
+claim_unix :: proc(info: Agent_Info, source: string) -> i64 {
+	if source == "task" do return info.lease_unix
+	return info.status_unix   // "status" and "both" are both dated by the status
+}
+
+// The human-readable half, DERIVED FROM THE RECORD so it cannot drift from
+// the numbers beside it.
+//
+// THE RULE, and it is the only one: no text ever derives an age from a zero
+// stamp. A number we know to be a lie does not get re-printed for
+// continuity's sake — continuity with a 57-year age is continuity with
+// nothing, since nothing ever recorded it in the first place.
+claim_warning_text :: proc(now: i64, w: Claim_Warning) -> string {
+	switch w.source {
+	case "task":
+		// NO AGE AT ALL. Not the lease age either: a lease is renewable, so
+		// any remaining-time number is stale the moment it is printed. The
+		// lease is the bound and naming it says more than a duration would.
+		return fmt.tprintf("%s claimed by %s via task #%d lease", w.file, w.by, w.task_id)
+	case "both":
+		return fmt.tprintf("%s claimed by %s (%s ago, also task #%d lease)",
+			w.file, w.by, age_string(now, w.status_unix), w.task_id)
+	}
+	// "status" — today's phrasing, byte for byte. The age is real here:
+	// status_unix is exactly what a status post sets.
+	return fmt.tprintf("%s claimed by %s (%s ago)", w.file, w.by, age_string(now, w.status_unix))
 }
 
 age_string :: proc(now, then: i64) -> string {
@@ -1425,33 +1620,67 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 		}
 	}
 
-	stored := board_post(incoming)
+	// BEFORE THE APPEND, NOT AFTER, and the ordering is load-bearing now that
+	// the result is persisted: one event is one os.write of one line, and
+	// patching a line already on disk would tear exactly the crash-safety
+	// that rule buys. Moving the computation up is behaviour-identical — the
+	// check skips the posting agent's own claims, and a post cannot change
+	// any OTHER agent's claims, so nothing it observes depends on itself
+	// being in the log yet.
+	//
+	// ONE TIMESTAMP, hoisted and handed to board_post, because the ages in
+	// these warnings must match the `unix` of the message carrying them. Two
+	// calls to time.now() straddling a second boundary would have made a
+	// warning fractionally older than the post that fired it — small, but the
+	// kind of small that a query over months of records reads as real.
+	now := time.time_to_unix(time.now())
+	incoming.warnings = claim_warnings(incoming.agent, incoming.files, now)
 
-	// Conflict check at the moment it matters: does another ACTIVE agent's
-	// latest status claim any of the files this post claims?
-	warnings := make([dynamic]string, context.temp_allocator)
-	if len(stored.files) > 0 {
-		infos := collect_agents()
-		for file in stored.files {
-			for info in infos {
-				if info.agent == stored.agent || !info.active do continue
-				for theirs in info.files {
-					if theirs == file {
-						append(&warnings, fmt.tprintf("%s claimed by %s (%s ago)",
-							file, info.agent, age_string(stored.unix, info.status_unix)))
-					}
+	stored := board_post_at(incoming, now)
+
+	Post_Result :: struct {
+		seq:      int             `json:"seq"`,
+		unix:     i64             `json:"unix"`,
+		warnings: []Claim_Warning `json:"warnings"`,
+	}
+	out, _ := json.marshal(Post_Result{stored.seq, stored.unix, stored.warnings}, {}, context.temp_allocator)
+	send_response(client, "200 OK", "application/json", string(out))
+}
+
+// Conflict check at the moment it matters: does another ACTIVE agent's claim
+// cover any of the files this post claims?
+//
+// WHICH COLLISIONS WARN IS UNCHANGED by everything above — same agents, same
+// skip rules, same file comparison, in the same order. Only what gets
+// RECORDED about each one is new. That invariant is the falsifier the whole
+// change rests on, and it is worth stating where the loop is rather than only
+// in a task description nobody will read again.
+claim_warnings :: proc(agent: string, files: []string, now: i64) -> []Claim_Warning {
+	if len(files) == 0 do return nil
+	out := make([dynamic]Claim_Warning, context.temp_allocator)
+	infos := collect_agents()
+	for file in files {
+		for info in infos {
+			if info.agent == agent || !info.active do continue
+			for theirs, ti in info.files {
+				if theirs != file do continue
+				source, task_id := claim_origin(info, ti)
+				w := Claim_Warning{
+					kind           = "claim_conflict",
+					file           = file,
+					by             = info.agent,
+					source         = source,
+					task_id        = task_id,
+					status_unix    = info.status_unix,
+					by_spoke_unix  = info.spoke_unix,
+					by_polled_unix = info.polled_unix,
 				}
+				w.text = claim_warning_text(now, w)
+				append(&out, w)
 			}
 		}
 	}
-
-	Post_Result :: struct {
-		seq:      int      `json:"seq"`,
-		unix:     i64      `json:"unix"`,
-		warnings: []string `json:"warnings"`,
-	}
-	out, _ := json.marshal(Post_Result{stored.seq, stored.unix, warnings[:]}, {}, context.temp_allocator)
-	send_response(client, "200 OK", "application/json", string(out))
+	return out[:]
 }
 
 // A session describing itself on check-in. Re-registering is normal — the
@@ -2115,12 +2344,26 @@ handle_claims :: proc(client: net.TCP_Socket) {
 		agent:     string `json:"agent"`,
 		claimed:   i64    `json:"claimed_unix"`,
 		last_seen: i64    `json:"last_seen"`,
+		// Additive, and the same two facts the warning record carries: a
+		// reader of this endpoint was in exactly the position of a reader of
+		// the warnings — it could see THAT a file was claimed and never by
+		// which path.
+		source:  string `json:"source"`,  // status | task | both
+		task_id: int    `json:"task_id"`, // the lease, when one is involved
 	}
 	claims := make([dynamic]Claim, context.temp_allocator)
 	for info in collect_agents() {
 		if !info.active do continue
-		for file in info.files {
-			append(&claims, Claim{file, info.agent, info.status_unix, info.last_seen})
+		for file, fi in info.files {
+			source, task_id := claim_origin(info, fi)
+			// claimed_unix used to be info.status_unix unconditionally, so a
+			// lease-only holder — which never posts a status — was reported
+			// as having claimed the file at the epoch, while being listed as
+			// ACTIVE because a live lease sets active directly. Both halves
+			// of that row were true statements about different things and
+			// the pair was nonsense.
+			append(&claims, Claim{file, info.agent, claim_unix(info, source),
+				info.last_seen, source, task_id})
 		}
 	}
 	out, err := json.marshal(claims[:], {}, context.temp_allocator)
@@ -2188,6 +2431,7 @@ Brief_Message :: struct {
 	route:    string   `json:"route"`,
 	task_id:  int      `json:"task_id"`,
 	accepts:  int      `json:"accepts"`,
+	warnings: []Claim_Warning `json:"warnings"`,
 	text_len: int      `json:"text_len"`,
 }
 
@@ -2197,6 +2441,7 @@ brief_of :: proc(m: Message, max_chars: int) -> Brief_Message {
 		seq = m.seq, unix = m.unix, agent = m.agent, kind = m.kind,
 		text = cut, files = m.files, to = m.to, reply_to = m.reply_to,
 		route = m.route, task_id = m.task_id, accepts = m.accepts,
+		warnings = m.warnings,
 		text_len = strings.rune_count(m.text),
 	}
 }
