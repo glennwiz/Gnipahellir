@@ -66,6 +66,44 @@ TRIM_TO :: #config(TRIM_TO, 1000)
 // their claims for two hours.
 STALE_SECS :: #config(STALE_SECS, 1200)
 
+// How long a STATUS-DERIVED file claim keeps conflicting, measured from the
+// status post that made it — not from anything its holder does afterwards.
+//
+// STALE_SECS above and this are deliberately different numbers because they
+// answer different questions, and collapsing them is the defect this exists
+// to undo. "Is this agent alive?" is answered by watching: a session polling
+// /delta every 30s is alive, and saying otherwise was an older bug. "Is this
+// agent still working on that file?" is answered by NOTHING the agent does —
+// polling is real evidence for the first and none at all for the second, and
+// for as long as one bool served both, an agent that ran the mandated board
+// monitor held its files forever. Not for 20 minutes. Forever.
+//
+// 45 MINUTES, AND THE REASON IS A GAP IN THE DATA, not the round number.
+// Measured over 84 refresh gaps in board.jsonl (a status carrying files, to
+// that agent's next status or release): median 7.7m, p95 37.4m — and then
+// NOTHING AT ALL until 60.8m. No claim in the whole log sits between those
+// two. So every TTL from ~38 to ~60 minutes expires the identical four
+// claims, and 45 is not a knife-edge to defend but a value in the middle of
+// an empty band, insensitive to ±10 minutes either way. It also happens to
+// match TASK_LEASE_DEFAULT, which is a tidiness worth having: the two CLAIM
+// paths end up comparably bounded, and a status claimer needs the more
+// generous of the two because it has no renew verb — re-posting the status is
+// its only refresh.
+//
+// WHY NOT STALE_SECS, concretely: 20 minutes would have lapsed 1 in 7 claims
+// whose holder demonstrably came back to them. That is an agent losing a file
+// claim while visibly working, which is the complaint that made polling count
+// as liveness in the first place — so reusing that number here would re-merge
+// the two questions one layer further down.
+//
+// FOR WHOEVER RETUNES THIS: the distribution above was measured under a
+// regime where claims never expired, so nobody had any reason to refresh one.
+// It bounds the DISRUPTION of introducing a TTL, not the steady state after
+// it. The right instrument for the retune is the warning record itself, which
+// now persists status_unix per warning — measure what actually expires rather
+// than re-deriving this from gaps.
+CLAIM_TTL :: #config(CLAIM_TTL, 45 * 60)
+
 Message :: struct {
 	// `board:"server"` marks a field the SERVER writes, so it is excluded from
 	// the `settable` list a refusal advertises. board_post overwrites both of
@@ -1015,6 +1053,33 @@ collect_agents :: proc(allocator := context.temp_allocator) -> []Agent_Info {
 		// the same second as a submit) loses its claim for one second and is
 		// far rarer than the case this protects.
 		if c, cleared := board.claims_cleared[info.agent]; cleared && c >= info.status_unix {
+			info.files = nil
+			info.file_source, info.file_task_id = nil, nil
+		}
+
+		// ...and a status claim also expires ON ITS OWN AGE, independently of
+		// whether its holder is still around.
+		//
+		// THE BUG THIS CLOSES: status claims had no bound except liveness,
+		// and `active` is refreshed by polling — so a session running the
+		// board monitor CLAUDE.md mandates never went inactive, and its
+		// claims never stopped conflicting. The 20-minute stale window was
+		// inoperative for exactly the sessions that followed the protocol,
+		// and the release rate says what agents did instead: 16 releases
+		// against 136 claim posts. Every claim ever freed on this board was
+		// freed by hand.
+		//
+		// WHAT THIS IS NOT: it does not stop polls counting as liveness.
+		// `active` is untouched, the agent stays listed and stays alive; only
+		// its CLAIM ages out. Making the monitor stop refreshing liveness
+		// would restore the older bug where a quietly-watching session was
+		// declared dead, and the task's own notes say so twice.
+		//
+		// BEFORE the lease merge below, which is what makes "a live task
+		// lease is unaffected" fall out rather than need a special case: a
+		// task re-adds its files immediately after, bounded by the lease as
+		// it always was.
+		if info.status_unix > 0 && now - info.status_unix > CLAIM_TTL {
 			info.files = nil
 			info.file_source, info.file_task_id = nil, nil
 		}

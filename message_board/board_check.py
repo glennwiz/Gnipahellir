@@ -1788,6 +1788,134 @@ def warnings_survive_a_restart_and_reach_brief_readers_too(b):
         "a brief reader must not silently lose the field"
 
 
+def seed_old_status(b, agent, files, age_secs, seq=9500):
+    """Give `agent` a status claim that is `age_secs` old, by writing it.
+
+    A leg cannot sleep out CLAIM_TTL and a compile-time constant cannot vary
+    per leg - board_check builds ONE binary for the whole suite, so -define is
+    no use either. Writing the log and restarting is the suite's existing
+    idiom for "a message that predates now" and it costs no wall time."""
+    b.stop()
+    with open(os.path.join(b.workdir, "board.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"seq": seq, "unix": int(time.time()) - age_secs,
+                            "agent": agent, "kind": "status",
+                            "text": "holding these", "files": files}) + "\n")
+    b.start()
+
+
+def assert_active(agent):
+    """The load-bearing half of every TTL leg below.
+
+    Without this the legs pass for the WRONG REASON: an agent whose only
+    timestamp is an ancient status post is also STALE, and a stale agent's
+    claims were already skipped long before this task existed. Proving the
+    claim expired means proving the HOLDER did not."""
+    a = [x for x in call("/agents")[1] if x["agent"] == agent]
+    assert a and a[0]["active"], f"{agent} must still be ALIVE for this to test TTL: {a}"
+    return a[0]
+
+
+@check
+def a_status_claim_expires_on_its_own_age_though_its_holder_still_polls(b):
+    # THE WHOLE TASK. A session running the board monitor CLAUDE.md mandates
+    # polls /delta?as= every 30s, which refreshes last_seen, which keeps it
+    # active - so its status-derived claims never stopped conflicting. Not
+    # after 20 minutes; never. The protocol's own liveness advice was what
+    # pinned the claims open.
+    seed_old_status(b, "immortal", ["src/pinned.odin"], 46 * 60)
+
+    # ...and here is the monitor doing exactly what the skill tells it to.
+    call("/delta?since=0&limit=0&as=immortal")
+    info = assert_active("immortal")
+    assert info["polled_unix"] > info["spoke_unix"], \
+        f"the poll must be what is keeping this agent alive: {info}"
+
+    _, resp = post("newcomer", kind="status", text="taking it over",
+                   files=["src/pinned.odin"])
+    assert resp["warnings"] == [], \
+        f"a 46-minute-old status claim must stop conflicting: {resp['warnings']}"
+    assert "src/pinned.odin" not in claims_of("immortal")
+
+
+@check
+def a_status_claim_inside_the_ttl_still_conflicts(b):
+    # The other side of the boundary, and the reason the leg above is not just
+    # "claims never warn": a claim well within CLAIM_TTL is untouched.
+    seed_old_status(b, "recent", ["src/fresh.odin"], 60)
+    call("/delta?since=0&limit=0&as=recent")
+    assert_active("recent")
+
+    _, resp = post("newcomer", kind="status", text="editing", files=["src/fresh.odin"])
+    w = one_warning(resp, "src/fresh.odin")
+    assert w["by"] == "recent" and w["source"] == "status", w
+
+
+@check
+def a_live_lease_keeps_claiming_however_old_the_claim_is(b):
+    # "A live task lease is unaffected (its files keep claiming regardless of
+    # claim age)". This falls out of ORDERING rather than a special case - the
+    # age check runs before the lease merge, so a task re-adds its files
+    # immediately after and stays bounded by the lease exactly as before.
+    #
+    # One holder, both paths, so the two rules are compared under identical
+    # liveness rather than across two agents.
+    seed_old_status(b, "veteran", ["src/by_status.odin"], 46 * 60)
+    call("/delta?since=0&limit=0&as=veteran")
+    assert_active("veteran")
+
+    _, r = task("draft", "planner", text="still working", files=["src/by_lease.odin"])
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "veteran", id=tid)
+
+    _, resp = post("newcomer", kind="status", text="both please",
+                   files=["src/by_status.odin", "src/by_lease.odin"])
+    files_warned = {w["file"] for w in resp["warnings"]}
+    assert files_warned == {"src/by_lease.odin"}, \
+        f"the lease survives the TTL and the status claim does not: {resp['warnings']}"
+    w = one_warning(resp, "src/by_lease.odin")
+    assert w["source"] == "task" and w["task_id"] == tid, w
+
+    # ...and the same holds for a lease holder that has never made a SOUND -
+    # no status, no poll, nothing. The accept names claim age and silence as
+    # two separate ways a lease must survive, and they are: age is handled
+    # above, and this one has no timestamps of its own at all. Its liveness is
+    # the lease and nothing else.
+    _, r2 = task("draft", "planner", text="mute holder", files=["src/mute.odin"])
+    tid2 = r2["id"]
+    task("ready", "planner", id=tid2)
+    task("claim", "mute", id=tid2)
+    _, resp2 = post("newcomer", kind="status", text="editing", files=["src/mute.odin"])
+    w2 = one_warning(resp2, "src/mute.odin")
+    assert w2["by"] == "mute" and w2["source"] == "task", w2
+    assert w2["by_spoke_unix"] == 0 and w2["by_polled_unix"] == 0, \
+        f"this holder has never spoken or polled, and the record should say so: {w2}"
+
+
+@check
+def an_expired_status_claim_revives_when_the_agent_says_so_again(b):
+    # Expiry is not a tombstone. Re-posting the status is the only refresh a
+    # status claimer has - there is no renew verb on this path - so it had
+    # better work, or the TTL would silently become a one-way door for every
+    # agent doing ad-hoc work outside a task.
+    seed_old_status(b, "returner", ["src/again.odin"], 46 * 60)
+    call("/delta?since=0&limit=0&as=returner")
+    assert_active("returner")
+    _, quiet = post("probe", kind="status", text="checking", files=["src/again.odin"])
+    assert quiet["warnings"] == [], quiet
+    # ...and the probe must now DROP what it just took. Checking for a warning
+    # means claiming the file, so the prober becomes a holder itself - leave it
+    # standing and the next assertion sees two legitimate claimants and cannot
+    # tell which rule it is measuring.
+    post("probe", kind="release", text="not mine")
+
+    post("returner", kind="status", text="still on it", files=["src/again.odin"])
+    _, resp = post("probe2", kind="status", text="checking again",
+                   files=["src/again.odin"])
+    w = one_warning(resp, "src/again.odin")
+    assert w["by"] == "returner", w
+
+
 @check
 def status_claims_still_work_for_work_outside_any_task(b):
     post("adhoc", kind="status", text="poking at something", files=["src/adhoc.odin"])
