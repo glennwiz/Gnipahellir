@@ -1916,6 +1916,135 @@ def an_expired_status_claim_revives_when_the_agent_says_so_again(b):
     assert w["by"] == "returner", w
 
 
+def breadth_of(resp):
+    """The breadth warning in a response, or None. Never matched by position:
+    breadth is appended after any conflicts, and a leg that indexed [0] would
+    silently start testing a claim_conflict the day a collision coincided."""
+    hits = [w for w in resp["warnings"] if w.get("kind") == "breadth"]
+    assert len(hits) <= 1, f"one post, at most one breadth warning: {resp['warnings']}"
+    return hits[0] if hits else None
+
+
+@check
+def a_status_over_the_breadth_threshold_warns_and_still_succeeds(b):
+    # ADVISORY, not a refusal. A wide claim is sometimes exactly right, and a
+    # board that refused one would be overruling an agent about its own work.
+    files = [f"src/wide{i}.odin" for i in range(6)]
+    st, resp = post("sweeper", kind="status", text="reviewing everything", files=files)
+    assert st == 200, (st, resp)
+    w = breadth_of(resp)
+    assert w, resp
+    assert "6" in w["text"] and "5" in w["text"], \
+        f"the text must carry the count and the threshold: {w['text']}"
+    # ...and the claim itself is untouched: warning, not blocking.
+    assert claims_of("sweeper") == set(files)
+
+
+@check
+def a_status_at_the_breadth_threshold_stays_silent(b):
+    # The boundary is 5 silent / 6 warns, and both sides need a leg or the
+    # threshold is only half-tested - a check that fires on 6 would also pass
+    # if it fired on 1.
+    _, resp = post("tidy", kind="status", text="a normal lane",
+                   files=[f"src/ok{i}.odin" for i in range(5)])
+    assert breadth_of(resp) is None, resp["warnings"]
+
+
+@check
+def a_21_file_reply_draws_no_breadth_warning(b):
+    # THE seq 350 SHAPE, and the case that decides whether the warning means
+    # what it says. The largest files[] in this board's history is a REPLY -
+    # and only status can carry a claim into the log, so that reply claimed
+    # nothing and closed no lane. Warn on it and the first thing this warning
+    # teaches agents is to ignore it.
+    files = [f"src/mentioned{i}.odin" for i in range(21)]
+    for kind in ("reply", "msg", "request"):
+        _, resp = post("talker", kind=kind, text="listing what I read", files=files)
+        assert breadth_of(resp) is None, f"{kind} claims nothing: {resp['warnings']}"
+        assert claims_of("talker") == set(), \
+            f"{kind} must not create a claim either: {claims_of('talker')}"
+
+
+@check
+def a_repeated_over_threshold_status_warns_every_time(b):
+    # PER-POST AND STATELESS, deliberately. The board keeps no "already told
+    # you" memory, so a restatement warns again. Analysis can dedupe whenever
+    # it likes - the record rides a message carrying the whole files[] - but
+    # suppression here would destroy information no reader could recover.
+    files = [f"src/again{i}.odin" for i in range(7)]
+    _, first = post("repeater", kind="status", text="claiming", files=files)
+    assert breadth_of(first), first
+    _, second = post("repeater", kind="status", text="claiming the same again",
+                     files=files)
+    assert breadth_of(second), \
+        f"a restatement must warn again, not be suppressed: {second['warnings']}"
+
+
+@check
+def a_breadth_record_is_persisted_with_kind_breadth_and_an_empty_source(b):
+    # `kind` is the CONTRACTUAL discriminator: source/path queries filter
+    # kind == 'claim_conflict' first, so a breadth row must be excluded by
+    # that filter and must not smuggle a fourth value into the source column
+    # to dodge a GROUP BY. Empty is honestly absent - a breadth warning has no
+    # claim provenance because it is not about anyone else's claim.
+    files = [f"src/rec{i}.odin" for i in range(8)]
+    _, resp = post("sweeper", kind="status", text="wide", files=files)
+    w = breadth_of(resp)
+    assert w["source"] == "", f"source must be empty, not a sentinel: {w}"
+    assert w["file"] == "" and w["by"] == "" and w["task_id"] == 0, w
+    assert w["status_unix"] == 0 and w["by_spoke_unix"] == 0 and w["by_polled_unix"] == 0, w
+
+    line = stored_line(b, resp["seq"])
+    assert line["warnings"] == resp["warnings"], \
+        f"born recorded\n wire: {resp['warnings']}\n log:  {line.get('warnings')}"
+
+
+@check
+def breadth_and_conflict_warnings_coexist_without_disturbing_each_other(b):
+    # "claim_conflict warnings are unchanged in set and shape by this task."
+    # The case that would break it is the one where both fire at once, so it
+    # gets a leg rather than an assurance.
+    post("holder", kind="status", text="mine", files=["src/contested.odin"])
+    files = ["src/contested.odin"] + [f"src/other{i}.odin" for i in range(6)]
+    _, resp = post("sweeper", kind="status", text="wide and colliding", files=files)
+
+    conflicts = [w for w in resp["warnings"] if w["kind"] == "claim_conflict"]
+    assert len(conflicts) == 1, resp["warnings"]
+    assert conflicts[0]["file"] == "src/contested.odin"
+    assert conflicts[0]["by"] == "holder"
+    assert conflicts[0]["source"] == "status"
+    assert breadth_of(resp), "and the breadth warning still fires alongside it"
+
+
+@check
+def the_frontend_renders_warning_objects_by_their_text(b):
+    # Verified against a REAL structured warning rather than eyeballed. The
+    # old line was `(r.warnings || []).join(" | ")`, which renders
+    # "[object Object]" now - unreachable today only because this page's posts
+    # carry no files, which is precisely why nobody would have noticed.
+    files = [f"src/ui{i}.odin" for i in range(6)]
+    _, resp = post("sweeper", kind="status", text="wide", files=files)
+    warnings = resp["warnings"]
+    assert warnings and all(isinstance(w, dict) for w in warnings)
+
+    page = open(os.path.join(b.workdir, "index.html"), encoding="utf-8").read()
+    # The line that RENDERS the warnings, not every line that writes text -
+    # the page has nine of those, and matching them all made this assertion
+    # fail on a correct tree as loudly as on a broken one.
+    line = [l for l in page.splitlines()
+            if "textContent" in l and "r.warnings" in l]
+    assert len(line) == 1, f"expected exactly one warnings-rendering line: {line}"
+    assert ".map(" in line[0] and ".text" in line[0], \
+        f"the frontend must map warnings to their text: {line[0].strip()}"
+    assert not re.search(r"warnings \|\| \[\]\)\.join", line[0]), \
+        f"a bare join of objects renders [object Object]: {line[0].strip()}"
+
+    # And the rendering the page performs, performed here on the real payload:
+    rendered = " | ".join((w.get("text") or str(w)) for w in warnings)
+    assert "[object Object]" not in rendered and "files claimed in one post" in rendered, \
+        rendered
+
+
 @check
 def status_claims_still_work_for_work_outside_any_task(b):
     post("adhoc", kind="status", text="poking at something", files=["src/adhoc.odin"])

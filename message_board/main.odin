@@ -104,6 +104,21 @@ STALE_SECS :: #config(STALE_SECS, 1200)
 // than re-deriving this from gaps.
 CLAIM_TTL :: #config(CLAIM_TTL, 45 * 60)
 
+// Claim more files than this in one status and the board says so. ADVISORY:
+// the post still succeeds, because a wide claim is sometimes exactly right
+// and a refusal would be the board overruling an agent about its own work.
+//
+// A BLANKET CLAIM IS A LANE CLOSURE. One post claimed 14 files at once and
+// collided on every one of them; a single afternoon hour holds 30 of the 56
+// overlaps in a 52-hour window, nearly all of that shape.
+//
+// 5, MEASURED: of 91 claim-carrying posts in board history, 74 sit at 1-3
+// files and 9 at 4-5 — while the 8 at 6+ ARE the collision pattern. Every
+// v3 lane to date fits inside 5 (the tasks in this very plan family claimed
+// 3, 4 and 5). A threshold that fired on ordinary work is one nobody would
+// keep, and one that spared the 14-file sweep would not be worth having.
+CLAIM_BREADTH_MAX :: #config(CLAIM_BREADTH_MAX, 5)
+
 Message :: struct {
 	// `board:"server"` marks a field the SERVER writes, so it is excluded from
 	// the `settable` list a refusal advertises. board_post overwrites both of
@@ -1699,7 +1714,7 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 	// warning fractionally older than the post that fired it — small, but the
 	// kind of small that a query over months of records reads as real.
 	now := time.time_to_unix(time.now())
-	incoming.warnings = claim_warnings(incoming.agent, incoming.files, now)
+	incoming.warnings = claim_warnings(incoming.agent, incoming.kind, incoming.files, now)
 
 	stored := board_post_at(incoming, now)
 
@@ -1720,7 +1735,7 @@ handle_post :: proc(client: net.TCP_Socket, body: []u8) {
 // RECORDED about each one is new. That invariant is the falsifier the whole
 // change rests on, and it is worth stating where the loop is rather than only
 // in a task description nobody will read again.
-claim_warnings :: proc(agent: string, files: []string, now: i64) -> []Claim_Warning {
+claim_warnings :: proc(agent, kind: string, files: []string, now: i64) -> []Claim_Warning {
 	if len(files) == 0 do return nil
 	out := make([dynamic]Claim_Warning, context.temp_allocator)
 	infos := collect_agents()
@@ -1744,6 +1759,40 @@ claim_warnings :: proc(agent: string, files: []string, now: i64) -> []Claim_Warn
 				append(&out, w)
 			}
 		}
+	}
+
+	// BREADTH, appended last so nothing reading a conflict by position moves.
+	//
+	// GATED ON `status` ALONE, and the reason is what makes the warning mean
+	// what it says: status is the only kind that can carry a claim into the
+	// log. msg/reply/request never reach info.files, and a release is
+	// force-emptied by the handler before anything downstream sees it. The
+	// largest files[] in this board's history is a 21-FILE REPLY — and it
+	// claimed nothing and closed no lane, so warning on it would teach agents
+	// that the warning is noise on its first firing.
+	//
+	// PER-POST AND STATELESS: a status re-asserting the same six files warns
+	// again. That is deliberate rather than overlooked. The board keeps no
+	// "already warned about this set" memory, and analysis can dedupe
+	// losslessly whenever it wants to, because the record rides the message
+	// carrying the whole files[]. The reverse — suppressing here — would
+	// destroy information the reader cannot get back.
+	if kind == "status" && len(files) > CLAIM_BREADTH_MAX {
+		w := Claim_Warning{
+			kind = "breadth",
+			// file/by/task_id and every stamp stay zero-valued, and `source`
+			// stays the EMPTY STRING rather than a "breadth" sentinel. This
+			// warning is not about anyone else's claim, so it has no claim
+			// provenance to report — and inventing a fourth value for a
+			// column whose domain is {status,task,both} would read as a
+			// fourth claim path to anyone who did not know better, which is
+			// worse than an honest absence. `kind` is the discriminator;
+			// this is the same honesty as a status_unix of 0 for a holder
+			// that never spoke.
+			text = fmt.tprintf("%d files claimed in one post (advisory: more than %d) - a blanket claim is a lane closure, and reading a file is not claiming it",
+				len(files), CLAIM_BREADTH_MAX),
+		}
+		append(&out, w)
 	}
 	return out[:]
 }

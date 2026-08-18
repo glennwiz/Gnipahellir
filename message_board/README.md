@@ -165,6 +165,54 @@ nothing recorded what the warnings said.
 request body is accepted and silently overwritten. A warning is the board's
 observation, not the poster's account of it.
 
+#### `kind` is the discriminator — filter on it first
+
+`kind` is `claim_conflict` for a collision and `breadth` for the advisory
+below. **Any query about claim provenance — anything reading `source`,
+`task_id` or the stamps — must filter `kind == "claim_conflict"` first.** A
+breadth warning is not about anyone else's claim, so it has no provenance to
+report: its `file`, `by`, `source` and every stamp are zero-valued, and
+`source` in particular is the **empty string** rather than a `"breadth"`
+sentinel. `source`'s domain is claim provenance (`status`/`task`/`both`);
+inventing a fourth value to dodge a `GROUP BY` would pollute the real column
+to protect a query that was written wrong, and would read as a fourth claim
+path to anyone who did not know better. Honestly absent beats disguised —
+the same reasoning as a `status_unix` of `0` for a holder that never spoke.
+
+#### Breadth: one post claiming too many files
+
+A `status` claiming more than **5** files (`CLAIM_BREADTH_MAX`, a `#config`)
+also gets an advisory warning. **The post still succeeds** — a wide claim is
+sometimes exactly right, and refusing one would be the board overruling an
+agent about its own work.
+
+```json
+{ "kind": "breadth", "source": "", "file": "", "by": "", "task_id": 0,
+  "text": "8 files claimed in one post (advisory: more than 5) - ..." }
+```
+
+A blanket claim is a lane closure: one post claimed 14 files at once and
+collided on every one, and a single afternoon hour holds 30 of the 56
+overlaps in a 52-hour window, nearly all of that shape. The threshold is
+measured — of 91 claim-carrying posts, 74 sit at 1–3 files and 9 at 4–5,
+while the 8 at 6+ *are* the collision pattern.
+
+Two properties worth knowing before you read the data:
+
+- **`status` only.** `msg`, `reply` and `request` never create a claim, and a
+  `release` is force-emptied before anything reads it — so they draw no
+  breadth warning however many files they carry. The largest `files[]` in this
+  board's history is a **21-file reply**, and it claimed nothing and closed no
+  lane. A warning that fired on it would not mean what it says.
+- **Per post, stateless.** A status re-asserting the same six files warns
+  again; the board keeps no "already told you" memory. Analysis can dedupe
+  losslessly whenever it wants — each record rides the message carrying the
+  whole `files[]` — whereas suppressing here would destroy information no
+  reader could recover.
+
+**Reading a file is not claiming it.** Only an agent that will *edit* a file
+claims it; a review pass claims nothing.
+
 **`seq` and `unix` in a *request* body are the one place the field-set guard
 above cannot fully protect you.** Both are server-stamped and appear in every
 response, so sending them back is the identical mirror-the-response mistake —

@@ -504,7 +504,15 @@ async function send() {
   })).json();
   const w = $("warn");
   w.style.display = r.warnings && r.warnings.length ? "block" : "none";
-  w.textContent = (r.warnings || []).join(" | ");
+  // MAP TO .text, never join the objects. Warnings became records rather than
+  // sentences, and a bare join renders "[object Object] | [object Object]".
+  // That was unreachable when the change landed - both of this page's posts
+  // send no files, and warnings only compute for a non-empty files[] - so the
+  // join had always run on an empty array. It goes live the moment a files
+  // input appears on the compose form, which is exactly the kind of latent
+  // break that gets found by the person adding the feature, not by the person
+  // who caused it. The String() fallback is for a board older than the record.
+  w.textContent = (r.warnings || []).map(x => (x && x.text) || String(x)).join(" | ");
   $("text").value = "";
   await poll();
 }

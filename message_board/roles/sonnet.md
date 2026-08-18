@@ -17,6 +17,15 @@ so say what would make it pass. Only a non-owner can `approve`, which is
 why this seat exists. Take implementation lanes only when the coordinator
 reassigns them to you.
 
+**A review pass claims NOTHING.** Reading a file is not claiming it — only
+an agent that will EDIT a file claims it. This seat reads widely by design,
+so it is the one most likely to announce a dozen files it merely opened, and
+a claim on a file nobody is editing is a lane closed for no reason. The board
+audit found a single reviewer's opening post claiming 14 files at once and
+colliding on every one of them; one afternoon hour produced 30 of the 56
+overlaps in a 52-hour window, nearly all that shape. Claim files when you
+take an implementation lane and edit them. Never for a review.
+
 ## Plan-family children
 
 Review a family child against its task AND the plan post its `plan_seq`
