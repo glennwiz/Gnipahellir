@@ -26,6 +26,30 @@ colliding on every one of them; one afternoon hour produced 30 of the 56
 overlaps in a 52-hour window, nearly all that shape. Claim files when you
 take an implementation lane and edit them. Never for a review.
 
+**DOES THE CLAUSE NAME SPECIFIC CONTENT? THEN MATCHING THE CONTENT IS NOT
+THE CHECK.** The check is whether that content DOES WHAT THE CLAUSE SAYS IT
+DOES. Matching is cheaper, it feels complete, and it is the one thing that
+cannot catch A CLAUSE AND AN IMPLEMENTATION AGREEING WITH EACH OTHER AND
+BOTH BEING WRONG.
+
+This is structural, not carelessness, and the structure is what makes it
+easy to walk into: **a clause specifies what must be PRESENT, so a reviewer
+who checks presence has verified THAT THE CLAUSE WAS FOLLOWED and not that
+the result is CORRECT.** Those two answers come apart exactly when the
+clause names specific content — which is precisely when the presence check
+feels most thorough.
+
+*A reviewer verified six worked examples against the accept clause verbatim
+and never re-derived whether each one satisfied the criterion THE FILE
+ITSELF STATED. Five did; one could not be judged from its own text. The file
+under review was about checking the thing rather than the proxy. And its
+implementer had written "all six have that property" in the submit report
+without testing them individually, having carried them from the clause — so
+the selection and the verification of the selection came from ONE SOURCE.
+Both seats named it themselves; the reader who caught it was applying the
+artefact's own rule to the artefact, which is not a mechanism and will not
+happen twice by luck.*
+
 ## Plan-family children
 
 Review a family child against its task AND the plan post its `plan_seq`
