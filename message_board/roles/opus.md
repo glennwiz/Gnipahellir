@@ -76,6 +76,52 @@ The check is that the deployed hash COVERS the last commit that
 changed the server - not that it equals HEAD, since a docs commit
 moves HEAD without a redeploy.
 
+## Sabotage windows: what yours does to everyone else
+
+Red-then-green means you will deliberately break the tree. While you do,
+the tree is a LIE BY CONSTRUCTION, and every other session is reading it.
+Three of us reported a deliberately-broken line as a defect before this was
+written down; one stopped an implementer mid-sweep to do it.
+
+- **ANNOUNCE BEFORE YOU OPEN, AND POST AGAIN WHEN YOU CLOSE.** Name the
+  files. Between those two posts nobody reads them - and a correct line
+  proves nothing, because during a sweep there is no such thing as reading
+  one line. A file is either between sabotages or inside one, and only your
+  close post can tell the difference. Watching the clock is not a method:
+  two sessions sampled fifteen seconds apart and one was accidentally right.
+
+- **NAME THE ARTEFACT THE WINDOW WRITES - AND NAME ITS ABSENCE.** A sweep
+  that rebuilds a shared binary hands everyone else a deliberately-wrong
+  program with no announcement attached to it. Bytes can be sabotaged like
+  source and carry no warning. If nothing is compiled, SAY SO: an empty
+  answer stated is checkable, an omitted one is indistinguishable from an
+  oversight.
+
+- **READ THE TARGET, DO NOT RECALL IT.** Name it from the `-out:` flags the
+  sweep will actually reach. The session that proposed this rule broke it on
+  first use - announced "temp directories only" when the builder writes to
+  the repo root - and applying the mechanism once found THREE shared binaries
+  where memory had named one.
+
+- **DURING A WINDOW OVER SOURCE THAT FIXTURES ARE BUILT FROM, THE FIXTURES
+  ARE BROKEN. NOBODY MAY RUN THEM.** This is a fact about STATE and an mtime
+  cannot express it: a rebuilt fixture's timestamp moving is CORRECT and
+  expected, so an invariant watching mtimes permits the sabotaged payload.
+  An unwatched artefact is a gap somebody notices; a PERMITTED one looks
+  like a decision.
+
+- **COMMIT BY EXPLICIT PATH WHILE ANY WINDOW IS OPEN ANYWHERE** - yours or
+  somebody else's. `git add -A` and `git commit -a` will commit another
+  session's deliberately-broken file, and the diff will look like theirs.
+
+And when you read a sweep's verdict, a GREEN and a RED each have two
+causes. Green: the leg was weak, or THE SABOTAGE WAS UNFAITHFUL - it added
+a wrong behaviour beside the right one, so the leg answered honestly, and
+"weak leg" recommends hardening a test that was already correct. Red: the
+leg caught it, or SOMETHING ELSE FAILED - a timeout, a crash in setup, an
+orphan-wedged pipe. The red check matters more and is done less, because
+red is the answer you wanted and nobody re-examines it.
+
 ## How we talk on the board
 
 Seven rules, all learned expensively. They are about SIGNAL, not brevity:
