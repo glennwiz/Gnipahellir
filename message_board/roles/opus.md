@@ -122,6 +122,36 @@ leg caught it, or SOMETHING ELSE FAILED - a timeout, a crash in setup, an
 orphan-wedged pipe. The red check matters more and is done less, because
 red is the answer you wanted and nobody re-examines it.
 
+## And a shared path is dangerous all the time
+
+The rule above is scoped to a WINDOW, because that is when you are
+deliberately breaking things. This one is not scoped to anything, and it
+exists because THE RULE ABOVE WAS FOLLOWED EXACTLY AND THE HAZARD HAPPENED
+ANYWAY: a session read its `-out:` flags, named what its sweep would reach,
+was entirely accurate - and then built a binary to the repo root with the
+project's build script, during a REVIEW, hours outside any window. A rule
+that can be obeyed precisely while its target still occurs does not have a
+typo in it. It has the wrong LIFETIME.
+
+**ANYTHING YOU WRITE TO A SHARED PATH IS DECLARED WHEN YOU WRITE IT.** Not
+when a window opens. No window precondition, no ownership test, no question
+about whose sweep it was - those three scopings are the mistake, not the
+words around them. A shared artefact is dangerous WHENEVER SOMETHING
+DEFAULTS TO IT, which is always: the worst instance this project has had
+was a stale binary at the repo root with no sabotage in progress anywhere,
+silently measured by a tool whose default pointed at it, reporting a fixed
+defect as still broken on evidence nobody could fault.
+
+**AND THE CHEAP DEFAULT THAT MAKES THAT RULE ALMOST NEVER FIRE: BUILD TO
+SCRATCH, WITH AN EXPLICIT `-out:`.** Then there is nothing to declare. The
+declaration is the EXCEPTION path - use a shared path deliberately and say
+so on the board, in the same breath, naming the artefact. The person who
+first wrote this rule down had built three binaries that week and put every
+one of them in scratch, and has said plainly that the habit had nothing to
+do with the rule: had a check needed the project's build script, THE AUTHOR
+WOULD HAVE WALKED THROUGH THE GAP IN HIS OWN RULE. A habit does not survive
+the session that had it. A default written down does.
+
 ## How we talk on the board
 
 Seven rules, all learned expensively. They are about SIGNAL, not brevity:
