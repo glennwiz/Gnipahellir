@@ -135,3 +135,65 @@ contact: write what would FALSIFY the work, not what it should feel like.
 Prefer wording that stays true - name the verb and the contract rather than
 restating the parameters it currently takes, because the parameters are
 what changes underneath you.
+
+## Six questions to ask a leg before you write it down
+
+A leg that cannot fail is worse than no leg: it is a green somebody will
+cite. Each question below carries the instance that produced it, and the
+instances are chosen on one rule - **THE PERSON HAD ALREADY WRITTEN OR CITED
+THE RULE AND FAILED IT ANYWAY.** Not the biggest failure; the one that shows
+knowing is not the cure. A question without its failure is indistinguishable
+from good advice, and all six look obvious in hindsight.
+
+- **CAN THE TWO SIDES EVER DISAGREE?** A comparison whose expected and
+  observed come from one source proves nothing.
+  *A leg asserted `stored.timestamp == rig.server.now` and both zeros came
+  from the same cause - the rig had no clock. The leg existed to detect the
+  absence of a clock.*
+
+- **DOES THE INPUT EVER REACH THE FAILING STATE?** A handler for a condition
+  the code path cannot produce is dead, and reads as coverage.
+  *An `except UnicodeDecodeError` sat behind an encoder that emits U+FFFD
+  rather than raising - a correct handler for a condition the author's own
+  transport could not deliver.*
+
+- **DOES THE PREDICATE NAME THE PROPERTY?** Asserting that a field EXISTS is
+  not asserting that it is right.
+  *`well_formed_reply` accepted a NORMALIZED ERROR, so a live turn that
+  produced nothing readable passed. Loosening it from verbatim-match was
+  right and went one notch past right - which is what makes it instructive
+  rather than sloppy.*
+
+- **WILL IT STILL DISCRIMINATE AFTER THE REPAIR?** Evidence the fix makes
+  ambiguous is evidence with an expiry date.
+  *`Subsystem_Failed` was unambiguous only because the defect under repair
+  was the sole occupant of that error value, and ambiguous the moment the
+  repair landed.*
+
+- **HAS THE BASELINE MOVED UNDER IT?** A sharp predicate decays when the
+  state it calls failure becomes normal.
+  *An invariant held five times, went red once correctly, and then fired on
+  every CORRECT state afterwards. A trigger that fires when nothing should
+  change does not discriminate.*
+
+- **AND THE GUARD THAT IS NOT A QUESTION: AN ASSERTION THAT SOMETHING DID
+  NOT HAPPEN MUST FIRST PROVE IT COULD HAVE.**
+  *A fixture produced 0 agent turns throughout and returned three passes
+  about what does not advance a fleet. The only informative line in that run
+  said FAIL, and it was about the fixture.*
+
+## Before you file a behaviour as a rule
+
+**ASK WHAT ALREADY FIRES WHEN SOMEBODY OMITS IT - AND WHETHER THAT THING
+OUTLIVES THE PERSON WHO RUNS IT.** If something fires, the behaviour is a
+convenience and the check is the contract; filing it again buys a third copy
+of a guarantee two mechanisms already make. If nothing fires, it is
+load-bearing and unwritten, which is the only case worth a rule.
+
+The second half is what makes the test bite. A check committed to the repo
+survives its author; a practice somebody performs by hand at a boundary does
+not, and when that session ends it stops answering **silently**. From inside
+the session running it, those two look identical.
+
+Applied honestly the question comes back NO sometimes - and one that always
+answers "file it" is a preference wearing a test's clothes.
