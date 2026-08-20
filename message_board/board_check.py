@@ -37,6 +37,90 @@ def check(fn):
     return fn
 
 
+# WHICH index.html A LEG ACTUALLY GOT, decided once per run and named where
+# anyone can read it. Set by resolve_page() in main().
+PAGE_PATH = None
+PAGE_LABEL = None
+PAGE_REFUSAL = None
+
+
+def frontend(fn):
+    """Marks a leg that asserts on index.html.
+
+    A MARKER ON THE LEG RATHER THAN A LIST OF NAMES IN THE RUNNER. #87
+    exists because --exe silently served the WORKING TREE's page to a leg
+    testing an old binary, and the cure must not itself depend on somebody
+    remembering to add the next frontend leg to a list kept somewhere else.
+    A leg that reads the page says so on itself; the runner asks.
+    """
+    fn.needs_page = True
+    return fn
+
+
+def build_stamp_of(exe):
+    """Ask the BINARY which commit it is, by starting it and reading the
+    X-Board-Build header it puts on every response.
+
+    ASKED, NEVER DERIVED. A binary's identity is a property of the binary;
+    a path or an mtime is a guess that is right until the day it matters.
+    """
+    work = tempfile.mkdtemp(prefix="boardstamp_")
+    probe = Board(exe, work)
+    try:
+        probe.start()
+        req = urllib.request.Request("http://127.0.0.1:%d/agents" % probe.port)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            stamp = r.headers.get("X-Board-Build", "")
+    except Exception as e:
+        return "", "the binary would not answer for its build stamp: %s" % e
+    finally:
+        probe.stop()
+        shutil.rmtree(work, ignore_errors=True)
+    # "<hash> built <when>" - the hash is the first word.
+    return (stamp.split() or [""])[0], None
+
+
+def resolve_page(exe, using_exe):
+    """Decide WHICH index.html the frontend legs get, and say so.
+
+    #87: this used to be an unconditional copy of the working tree's page,
+    so under --exe a frontend leg exercised the CURRENT page against an OLD
+    binary and could never go red. --exe's whole value is "this is what the
+    old code did", and for exactly one file it silently was not - the
+    false-confidence shape found during #82.
+
+    Returns (path, label, refusal); exactly one of path/refusal is None.
+    THERE IS NO THIRD OPTION WHERE A LEG RUNS AGAINST A SUBSTITUTE: green
+    against a page the binary never served is worse than no leg, because it
+    reads as coverage.
+    """
+    if not using_exe:
+        # The working tree built the binary, so the working tree's page IS
+        # the page it serves.
+        return os.path.join(HERE, "index.html"), "the working tree's index.html", None
+
+    stamp, why = build_stamp_of(exe)
+    if why:
+        return None, None, why
+    if not stamp or stamp == "unstamped":
+        return None, None, (
+            "the binary reports its build as %r, so the commit it came from is "
+            "unknown and the page it shipped cannot be recovered" % (stamp or "(empty)"))
+
+    shown = subprocess.run(["git", "show", "%s:message_board/index.html" % stamp],
+                           cwd=ROOT, capture_output=True)
+    if shown.returncode != 0:
+        return None, None, (
+            "git show %s:message_board/index.html failed, so the page that commit "
+            "shipped is not available here: %s"
+            % (stamp, shown.stderr.decode("utf-8", "replace").strip()[:160]))
+
+    out = os.path.join(tempfile.mkdtemp(prefix="boardpage_"), "index.html")
+    with open(out, "wb") as fh:
+        fh.write(shown.stdout)
+    return out, "index.html as of the binary's own commit %s" % stamp, None
+
+
 # ── plumbing ────────────────────────────────────────────────────────────────
 
 def call(path, body=None, method=None):
@@ -2024,6 +2108,7 @@ def breadth_and_conflict_warnings_coexist_without_disturbing_each_other(b):
 
 
 @check
+@frontend
 def the_frontend_renders_warning_objects_by_their_text(b):
     # Verified against a REAL structured warning rather than eyeballed. The
     # old line was `(r.warnings || []).join(" | ")`, which renders
@@ -2034,6 +2119,9 @@ def the_frontend_renders_warning_objects_by_their_text(b):
     warnings = resp["warnings"]
     assert warnings and all(isinstance(w, dict) for w in warnings)
 
+    # WHICH PAGE THIS ASSERTION IS ABOUT, STATED (#87). A frontend leg that
+    # does not say which index.html it read is a green nobody can place.
+    print("       page under test: %s" % PAGE_LABEL)
     page = open(os.path.join(b.workdir, "index.html"), encoding="utf-8").read()
     # The line that RENDERS the warnings, not every line that writes text -
     # the page has nine of those, and matching them all made this assertion
@@ -3548,6 +3636,7 @@ def main():
     # it, watch the leg fail. A leg that has never been seen to fail has not
     # been shown to catch anything, and without this flag the only way to see
     # it fail was to un-write the fix.
+    global PAGE_PATH, PAGE_LABEL, PAGE_REFUSAL
     exe = None
     if "--exe" in sys.argv:
         exe = sys.argv[sys.argv.index("--exe") + 1]
@@ -3560,11 +3649,22 @@ def main():
             print(build.stdout + build.stderr)
             raise SystemExit("build failed")
 
+    PAGE_PATH, PAGE_LABEL, PAGE_REFUSAL = resolve_page(exe, "--exe" in sys.argv)
+    print(("(frontend legs exercise %s)" % PAGE_LABEL) if PAGE_PATH
+          else ("(frontend legs will SKIP: %s)" % PAGE_REFUSAL))
+
     selected = [c for c in checks if not pattern or pattern in c.__name__]
     failed = []
+    skipped = []
     for c in selected:
+        # A FRONTEND LEG WITHOUT ITS OWN PAGE IS SKIPPED WITH THE CAUSE,
+        # NEVER RUN AGAINST A SUBSTITUTE (#87).
+        if getattr(c, "needs_page", False) and PAGE_PATH is None:
+            skipped.append(c.__name__)
+            print("  SKIP %s: %s" % (c.__name__, PAGE_REFUSAL))
+            continue
         work = tempfile.mkdtemp(prefix="board_")
-        shutil.copy(os.path.join(HERE, "index.html"), work)
+        shutil.copy(PAGE_PATH, work)
         b = Board(exe, work)
         b.start()
         try:
@@ -3577,7 +3677,11 @@ def main():
             b.stop()
             shutil.rmtree(work, ignore_errors=True)
 
-    print(f"\n{len(selected) - len(failed)}/{len(selected)} checks passed")
+    # SKIPPED IS ITS OWN NUMBER AND IS NOT PASSED. Folding a skip into
+    # the pass count is the same lie in a different place.
+    ran = len(selected) - len(skipped)
+    print("\n%d/%d checks passed" % (ran - len(failed), ran)
+          + (" (%d skipped: %s)" % (len(skipped), ", ".join(skipped)) if skipped else ""))
     if failed:
         print("failed: " + ", ".join(failed))
     return 1 if failed else 0

@@ -917,6 +917,33 @@ infrastructure. An instrument that reports failures the code did not cause is
 worse than one that is merely broken: a broken instrument is obvious, and that
 one looked like evidence.
 
+`--exe <path>` runs the suite against a binary that already exists instead of
+building the working tree, so "this leg goes red against the pre-fix binary" is
+a claim anyone can re-run rather than take on trust.
+
+**Under `--exe`, a frontend leg gets the page the binary's own commit shipped —
+or it does not run.** The suite used to copy the working tree's `index.html`
+unconditionally, so a leg asserting on the page tested *today's* markup against
+*yesterday's* binary and could never go red: `--exe`'s whole value is "this is
+what the old code did", and for exactly one file it silently was not. The page
+is now resolved from the build stamp the binary reports in `X-Board-Build` —
+asked of the binary, never inferred from a path — via `git show
+<commit>:message_board/index.html`.
+
+Three outcomes, and none of them is a quiet pass:
+
+| the binary says | the suite does |
+|---|---|
+| a commit this repo has | serves that commit's page, and each frontend leg prints which one it used |
+| `unstamped` | **skips** frontend legs, naming the cause |
+| a commit `git show` cannot resolve | **skips** frontend legs, naming the cause |
+
+Skipped legs are counted and listed separately from passes, because folding a
+skip into the pass count is the same lie one place further on. A leg opts in by
+being decorated `@frontend` — a marker on the leg rather than a list of names in
+the runner, so the next frontend leg is covered by writing it rather than by
+somebody remembering to register it.
+
 ### GET /herdr + POST /herdr_state — live fleet state
 
 `herdr_sync.py` (run it alongside the service: `start /b python herdr_sync.py`
