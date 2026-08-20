@@ -2108,6 +2108,85 @@ def breadth_and_conflict_warnings_coexist_without_disturbing_each_other(b):
 
 
 @check
+def an_amend_onto_an_owned_task_warns_the_amender(b):
+    """#139: the rev guard is one-directional, and this is the other direction.
+
+    `amend` refuses when the CONTRACT moved under your read - a stale rev
+    409s. But `claim` does not bump rev, so when a HOLDER appears under your
+    read the amend carries a perfectly correct rev, succeeds, and answers
+    {"ok":true,"id":..,"rev":..,"state":"Doing"} - which is indistinguishable
+    from amending a task nobody is working on. Somebody is then executing a
+    description that changed underneath them and nobody is told. The planner
+    did exactly this to 5af6 on #138, two hours after refusing to do it to
+    #134 on the grounds that acting on a description that no longer exists is
+    the thing the rev guard prevents.
+
+    ONE DIRECTION IS MECHANISED AND THE OTHER WAS LEFT TO CARE. The remedy
+    otherwise is "re-read the state immediately before every amend", which is
+    a practice, and a practice does not survive the session that has it.
+    """
+    _, made = task("add", "planner", text="a task to be amended under its holder")
+    tid = made["id"]
+    task("ready", "planner", id=tid)
+
+    # AMENDING AN UNOWNED TASK IS SILENT, and that is asserted FIRST so the
+    # warning below is known to be discriminating rather than unconditional.
+    # A warning on every amend would pass a leg that only ever looked at the
+    # owned case, and would train everyone to ignore it.
+    status, quiet = task("amend", "planner", id=tid, text="still unowned")
+    assert status == 200, (status, quiet)
+    assert "warnings" not in quiet, \
+        f"an amend of an UNOWNED task must stay silent: {quiet}"
+
+    _, claimed = task("claim", "worker", id=tid)
+    assert tasks()[tid]["owner"] == "worker", tasks()[tid]
+
+    # THE MECHANISM IS LIVE: the task really is owned and really is in Doing,
+    # so the assertion below is about a warning that had something to warn
+    # about.
+    assert tasks()[tid]["state"] == "Doing", tasks()[tid]
+
+    status, warned = task("amend", "planner", id=tid,
+                          text="a clause that moved under its holder")
+    assert status == 200, ("it must NOT refuse - amending a claimed task is "
+                           "often exactly right, and the failure here is "
+                           "silence rather than the write", status, warned)
+    assert warned.get("ok") is True, warned
+
+    ws = warned.get("warnings")
+    assert ws, ("THE AMEND LANDED ON AN OWNED TASK AND SAID NOTHING. This "
+                "response is indistinguishable from amending a task nobody "
+                "holds, which is the whole defect: %r" % (warned,))
+    assert len(ws) == 1, ws
+    assert ws[0].get("kind") == "amended_while_owned", ws
+    assert ws[0].get("by") == "worker", \
+        f"the warning must NAME THE OWNER, so the amender knows who to tell: {ws}"
+    assert ws[0].get("state") == "Doing", ws
+
+    # THE TEXT STILL LANDED. A warning that quietly became a refusal would
+    # break the answer-in-the-clause pattern this board runs on.
+    assert tasks()[tid]["text"] == "a clause that moved under its holder", tasks()[tid]
+
+    # THE OWNER AMENDING THEIR OWN TASK IS NOT WARNED - there is nobody to
+    # tell, and a warning fired at the person it is about is noise that
+    # teaches people to skip the field.
+    status, own = task("amend", "worker", id=tid, text="the holder edits it")
+    assert status == 200, (status, own)
+    assert "warnings" not in own, \
+        f"the owner amending their own task must not be warned: {own}"
+
+    # AND IT FOLLOWS THE STATE RATHER THAN THE OWNER FIELD: a submitted task
+    # is still somebody's work in flight, so Review warns too.
+    task("submit", "worker", id=tid, result_seq=0)
+    assert tasks()[tid]["state"] == "Review", tasks()[tid]
+    status, in_review = task("amend", "planner", id=tid, text="amended in review")
+    assert status == 200, (status, in_review)
+    assert in_review.get("warnings"), \
+        f"a task in Review is still held work and must warn: {in_review}"
+    assert in_review["warnings"][0]["state"] == "Review", in_review
+
+
+@check
 @frontend
 def the_frontend_renders_warning_objects_by_their_text(b):
     # Verified against a REAL structured warning rather than eyeballed. The

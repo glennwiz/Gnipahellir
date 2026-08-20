@@ -589,13 +589,55 @@ Verbs, all `POST /task` with `{"action", "id", "agent", "rev"}`:
 |---|---|---|
 | `draft` | anyone | mints a task in `Draft`, carrying `files[]` + `accept` |
 | `ready` | anyone | `Draft → Ready` |
-| `amend` | anyone | bumps `rev`; the task body **becomes** the amendment |
+| `amend` | anyone | bumps `rev`; the task body **becomes** the amendment. Landing on a task somebody holds (`Doing`/`Review`) answers with a `warnings` entry naming the owner — it never refuses |
 | `claim` | anyone | `Ready → Doing`, takes a lease, `attempts++` |
 | `renew` | owner | pushes the lease out |
 | `release` | owner | `Doing → Ready`, drops it, and drops your file claims |
 | `submit` | owner | `Doing → Review`, records `result_seq`, drops your file claims |
 | `approve` | **not** the owner | `Review → Done`, records the reviewer |
 | `rework` | anyone | `Review → Ready` |
+
+#### Amending a task somebody is holding
+
+The rev guard is **one-directional**, and that asymmetry is why `amend` carries
+a warning. `amend` is rev-conditional, so a description that moved under your
+read is refused with a 409 — but **`claim` does not bump `rev`**. A task can go
+`Ready → Doing → Review` and stay at the same revision, so when a *holder*
+appears under your read your amend carries a perfectly correct rev, succeeds,
+and answers:
+
+```json
+{"ok":true,"id":138,"rev":2,"state":"Doing"}
+```
+
+which is indistinguishable from amending a task nobody is working on. Somebody
+is then executing a description that changed underneath them and nobody is
+told. One direction was mechanised and the other was left to care.
+
+An amend onto a held task now answers:
+
+```json
+{"ok":true,"id":138,"rev":3,"state":"Doing",
+ "warnings":[{"kind":"amended_while_owned","by":"worker","state":"Doing"}]}
+```
+
+Three things about that, each of them a decision:
+
+- **It does not refuse.** Amending a claimed task is often exactly right — a
+  holder asks a question and the planner answers it *in the clause*. The
+  failure being fixed is silence, not the write. Refusing would push planners
+  into posting corrections *beside* tasks instead of into them, which is the
+  thing `amend` exists to prevent.
+- **The warning is for the amender, not the holder.** Notifying the holder is a
+  different feature with a delivery problem attached; there is no channel to a
+  session that is mid-task. The amender is the one who can act immediately, and
+  the holder's protection is that the amender now knows to go and tell them.
+- **It follows the state, not just the owner field.** `Review` warns too — a
+  submitted task is still work in flight.
+
+Amending a `Draft` or `Ready` task is silent, and the owner amending their own
+task is silent: a warning that fires on every amend teaches everyone to skip
+the field.
 | `block` / `unblock` | anyone | `↔ Blocked`, remembering the prior state; `block` may carry `blocked_on`, the task it waits on |
 | `supersede` | anyone | terminal, records `by_id` — which must name a real, other task |
 | `assign` | anyone | sets `assignee` in `Draft`/`Ready`/`Blocked` — who *should* claim it; empty value clears. 409 elsewhere ([why](#assignment-is-not-ownership)) |

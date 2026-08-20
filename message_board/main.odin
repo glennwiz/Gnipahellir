@@ -1976,6 +1976,11 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 		}
 	}
 
+	// #139's advisory, declared HERE because the task lookup below lives in
+	// a case block that closes before the response is written.
+	amend_owner := ""
+	amend_state := ""
+
 	switch ev.action {
 	case "add", "draft":
 		if ev.text == "" {
@@ -2002,6 +2007,27 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 			return
 		}
 		eff := task_effective_state(t, now)
+
+		// #139: AN AMEND THAT LANDS ON AN OWNED TASK HAS TO SAY SO.
+		//
+		// The rev guard is ONE-DIRECTIONAL and that asymmetry is the whole
+		// task. `amend` compares the rev you read against the contract, so a
+		// description that moved under your read is REFUSED - but `claim`
+		// does not bump rev, so a HOLDER that appeared under your read is
+		// invisible. The amend carries a perfectly correct rev, succeeds, and
+		// the response - {"ok":true,"id":138,"rev":2,"state":"Doing"} - is
+		// indistinguishable from amending a task nobody is working on.
+		// Somebody is then executing a description that changed underneath
+		// them and NOBODY IS TOLD. That happened to 5af6 on #138.
+		//
+		// Captured BEFORE the switch mutates anything, because the owner and
+		// the effective state are what they were when the amender acted.
+		if ev.action == "amend" && t.owner != "" && t.owner != ev.agent &&
+		   (eff == "Doing" || eff == "Review") {
+			amend_owner = t.owner
+			amend_state = eff
+		}
+
 		switch ev.action {
 		case "assign":
 			// OPEN, NOT AN ACL. Anyone may assign, reassign or clear — the
@@ -2183,6 +2209,28 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 	// log tidy; it costs nothing until something is actually eligible.
 	task_archive_sweep()
 	if t := task_find(ev.id); t != nil {
+		// THE WARNING IS FOR THE AMENDER, NOT THE HOLDER, and that is a
+		// decision rather than a shortcut. Notifying the holder is a
+		// different feature with a delivery problem attached - there is no
+		// channel to a session that is mid-task. The amender is the one who
+		// can act immediately, and the holder's protection is that the
+		// amender now knows to go and tell them.
+		//
+		// IT MUST NOT REFUSE. Amending a claimed task is often exactly right:
+		// a holder asks a question and the planner answers it IN THE CLAUSE,
+		// which is what #138 was. The failure here is silence, not the write.
+		// Refusing would push planners into posting corrections beside tasks
+		// instead of into them - the thing amend exists to prevent.
+		//
+		// `warnings` is the array /post already uses for advisories, so a
+		// client that reads one reads both.
+		if amend_owner != "" {
+			send_response(client, "200 OK", "application/json",
+				fmt.tprintf(
+					`{{"ok":true,"id":%d,"rev":%d,"state":"%s","warnings":[{{"kind":"amended_while_owned","by":"%s","state":"%s"}}]}}`,
+					ev.id, t.rev, task_effective_state(t, now), amend_owner, amend_state))
+			return
+		}
 		send_response(client, "200 OK", "application/json",
 			fmt.tprintf(`{{"ok":true,"id":%d,"rev":%d,"state":"%s"}}`,
 				ev.id, t.rev, task_effective_state(t, now)))
