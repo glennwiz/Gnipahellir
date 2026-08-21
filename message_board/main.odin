@@ -2042,29 +2042,37 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 			// state Ready with the owner still set and the lease at +899s,
 			// stranger claims -> 200 Doing.
 			//
-			// WHY Draft AND NOT "ANYTHING BUT Doing": every other road into
-			// Ready is already owned by a verb that knows what it is undoing.
-			// `rework` owns Review -> Ready and clears owner and lease because
-			// the work is going back. `unblock` owns Blocked -> its previous
-			// state. `reopen` owns the terminal states. THIS VERB'S ONE JOB IS
-			// THE Draft -> Ready PROMOTION - the moment a task becomes
-			// claimable at all - and every other transition it could perform
-			// is a transition something else performs correctly.
+			// TWO STATES, NAMED, AND THE SECOND ONE CORRECTS MY FIRST
+			// ANSWER. I shipped this as Draft-only and board_check's full run
+			// refused it: every_verb_that_leaves_superseded_clears_the_
+			// replacement_marker and a_marker_on_a_live_task_is_the_case_that_
+			// misroutes_work both went red, because `ready` IS THE DEPARTURE
+			// FROM Superseded - "the departure #51 actually took", in that
+			// leg's own words - and resurrection is a real road into Ready
+			// that no other verb owns. `reopen` exists but the suite requires
+			// ALL of ready/reopen/done to leave Superseded identically, on the
+			// principle that the clear belongs to the STATE and not to any one
+			// verb.
 			//
-			// A RE-READY OF AN ALREADY-Ready TASK IS REFUSED TOO, and that is
-			// deliberate rather than an oversight: it is a no-op today, but
-			// "this verb accepts exactly one state" is a rule a reader can
-			// hold, and "one state plus a harmless one" is a rule that grows
-			// a second harmless one later. The 409 says which state it found.
+			// WHAT IS REFUSED IS THE STATE WHERE SOMEBODY MIGHT BE HOLDING IT.
+			// Doing and Review are the states with a live owner, and they are
+			// the ones this defect stripped. The other roads into Ready are
+			// already owned by verbs that know what they are undoing: `rework`
+			// owns Review -> Ready and clears owner and lease because the work
+			// is going back, and `unblock` owns Blocked -> whatever it was.
+			//
+			// A RE-READY OF AN ALREADY-Ready TASK IS REFUSED TOO, deliberately:
+			// it is a no-op today, and a verb that accepts a harmless state
+			// grows a second harmless one later. The 409 says which state it
+			// found, so the caller learns rather than guesses.
 			//
 			// EFFECTIVE state, matching `assign` and `claim` above. A Doing
 			// task whose lease has lapsed is SERVED as Ready and is claimable
-			// by anyone; gating on the raw state instead would answer 200 for
-			// a task the board is already presenting as free, which is a
-			// different way of saying the same wrong thing.
-			if eff != "Draft" {
+			// by anyone; gating on the raw state would answer 200 for a task
+			// the board already presents as free.
+			if eff != "Draft" && eff != "Superseded" {
 				send_response(client, "409 Conflict", "application/json",
-					fmt.tprintf(`{{"error":"ready promotes a Draft, and this task is past that","state":"%s","owner":"%s","rev":%d}}`,
+					fmt.tprintf(`{{"error":"ready promotes a Draft or resurrects a Superseded task, and this task is neither","state":"%s","owner":"%s","rev":%d}}`,
 						eff, t.owner, t.rev))
 				return
 			}
