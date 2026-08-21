@@ -812,6 +812,36 @@ task_apply :: proc(ev: Task_Event) {
 	case "approve":
 		t.state, t.reviewer, t.lease_until = "Done", ev.agent, 0
 	case "rework":
+		// A REWORK HANDS BACK; IT DOES NOT ORPHAN. (#146)
+		//
+		// This cleared owner and lease and said nothing about who had been
+		// working, so a bounced task became indistinguishable from an
+		// abandoned one BY READING THE BOARD - the only way to know it was
+		// coming back to somebody was to read the thread. That is not a
+		// theoretical shape: a reviewer bounced #142 while its implementer
+		// was alive, holding context and still typing, and the work sat in a
+		// shared tree owned by nobody for forty minutes until a THIRD seat
+		// found it by auditing the tree.
+		//
+		// AND CLEARING IS STILL RIGHT, WHICH IS WHY THIS IS NOT A HOLD. The
+		// other half of the same day: #119, #125 and #126 were bounced while
+		// their implementer was DEAD, and releasing the claim was exactly
+		// what let anyone pick the rework up. A verb that kept the lease
+		// would re-create the dead-holder lock #130 closed.
+		//
+		// SO THE OWNER BECOMES THE ASSIGNEE, which is the field that already
+		// means precisely this: "assignment says who should CLAIM this".
+		// The task is genuinely Ready and genuinely claimable - no lease, no
+		// lock - but the board now SAYS who it is going back to. A stranger's
+		// claim is refused and TOLD THE CURE (assign to yourself, then
+		// claim), so the live implementer gets first refusal without anyone
+		// being stranded, and a dead one costs exactly one recorded call to
+		// clear. That openness is the existing assignee contract, not a new
+		// rule invented here.
+		//
+		// Set BEFORE owner is blanked, because it is the outgoing owner we
+		// are recording.
+		t.assignee = t.owner
 		t.state, t.owner, t.lease_until = "Ready", "", 0
 	case "block":
 		if t.state != "Blocked" do t.blocked_from = t.state

@@ -305,6 +305,82 @@ def a_second_claim_409s_and_names_the_holder(b):
 
 
 @check
+def a_rework_hands_the_task_back_rather_than_orphaning_it(b):
+    # A bounce cleared owner and lease and said nothing about who had been
+    # working, so a task coming BACK to a live implementer looked exactly
+    # like one nobody wanted. The only way to tell was to read the thread.
+    _, r = task("draft", "planner", text="bounced while its author is alive")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "implementer", id=tid)
+    _, ev = post("implementer", text="done, please review", task_id=tid)
+    task("submit", "implementer", id=tid, result_seq=ev["seq"])
+
+    before = tasks()[tid]
+    assert before["state"] == "Review" and before["owner"] == "implementer", before
+
+    st, _ = task("rework", "reviewer", id=tid)
+    assert st == 200
+
+    t = tasks()[tid]
+    # STILL GENUINELY RELEASED - this is a hand-back, not a hold. A lease
+    # that survived a bounce would re-create the dead-holder lock.
+    assert t["state"] == "Ready", t
+    assert t["owner"] == "", t
+    assert t["lease_until"] == 0, t
+    # AND THE BOARD NOW SAYS WHO IT IS GOING BACK TO.
+    assert t["assignee"] == "implementer",         ("a rework must record who it is handing back to", t)
+
+
+@check
+def a_handed_back_task_gives_its_implementer_first_refusal_without_stranding_it(b):
+    # The consequence, not the field. An assignee that merely DECORATED the
+    # task would satisfy the leg above and change nothing about who gets it.
+    _, r = task("draft", "planner", text="first refusal, then anyone")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "implementer", id=tid)
+    _, ev = post("implementer", text="done", task_id=tid)
+    task("submit", "implementer", id=tid, result_seq=ev["seq"])
+    task("rework", "reviewer", id=tid)
+
+    # A stranger is refused AND TOLD THE CURE rather than merely blocked.
+    st, err = task("claim", "stranger", id=tid)
+    assert st == 409, (st, err)
+    assert err["assignee"] == "implementer", err
+    assert "assign" in err["error"], ("the refusal must name the cure", err)
+
+    # THE IMPLEMENTER WALKS STRAIGHT BACK IN.
+    st, _ = task("claim", "implementer", id=tid)
+    assert st == 200, "the seat it was handed back to must not have to negotiate"
+    assert tasks()[tid]["owner"] == "implementer"
+
+
+@check
+def a_hand_back_to_a_dead_implementer_never_strands_the_task(b):
+    # THE OTHER HALF OF THE SAME DAY, and the one a fix for the live case
+    # could easily break: #119/#125/#126 were bounced while their implementer
+    # was GONE, and releasing was exactly what let anyone pick the rework up.
+    # The assignee is OPEN, NOT AN ACL - anyone may clear it, in one recorded
+    # call - so this can never become #130's dead-holder lock.
+    _, r = task("draft", "planner", text="its author is never coming back")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "departed", id=tid)
+    _, ev = post("departed", text="done", task_id=tid)
+    task("submit", "departed", id=tid, result_seq=ev["seq"])
+    task("rework", "reviewer", id=tid)
+    assert tasks()[tid]["assignee"] == "departed"
+
+    # One call, by anybody, and it is recorded rather than silent.
+    st, _ = task("assign", "successor", id=tid, assignee="successor")
+    assert st == 200, "anyone may reassign a hand-back whose implementer is gone"
+    st, _ = task("claim", "successor", id=tid)
+    assert st == 200, ("a hand-back must never outlive the seat it names", tasks()[tid])
+    assert tasks()[tid]["owner"] == "successor"
+
+
+@check
 def ready_refuses_a_task_somebody_is_doing(b):
     # `ready` was one unconditional line and touched neither owner nor
     # lease_until, so a stranger firing it at a held task left the owner
