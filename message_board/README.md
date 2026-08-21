@@ -972,19 +972,47 @@ is now resolved from the build stamp the binary reports in `X-Board-Build` —
 asked of the binary, never inferred from a path — via `git show
 <commit>:message_board/index.html`.
 
-Three outcomes, and none of them is a quiet pass:
+No outcome is a quiet pass, and none is a quiet red either:
 
-| the binary says | the suite does |
-|---|---|
-| a commit this repo has | serves that commit's page, and each frontend leg prints which one it used |
-| `unstamped` | **skips** frontend legs, naming the cause |
-| a commit `git show` cannot resolve | **skips** frontend legs, naming the cause |
+| the binary says | `@frontend` legs | `@unstamped_only` legs |
+|---|---|---|
+| a commit this repo has | run against **that commit's page**, printing which one they used | **skip**, naming the cause |
+| `unstamped` | **skip**, naming the cause | run |
+| a commit `git show` cannot resolve | **skip**, naming the cause | **skip**, naming the cause |
+| nothing (it will not answer) | **skip**, naming the cause | **skip**, naming the cause |
+
+Without `--exe` the suite compiles the working tree itself with no `-define`, so
+both columns run: the page it serves *is* the working tree's page, and the
+binary *is* an unstamped build.
 
 Skipped legs are counted and listed separately from passes, because folding a
 skip into the pass count is the same lie one place further on. A leg opts in by
 being decorated `@frontend` — a marker on the leg rather than a list of names in
 the runner, so the next frontend leg is covered by writing it rather than by
 somebody remembering to register it.
+
+**A leg that does not assert on the page still gets one.** Only `@frontend` legs
+skip; everything else needs `index.html` merely to *exist* in the server's
+workdir and gets the working tree's copy, which is exactly what it got before
+any of this. The first version copied the resolved page unconditionally, so on
+the skip path `shutil.copy(None, …)` raised `TypeError` on the first
+non-frontend leg and **not one of 165 checks ran**. It shipped because that path
+was verified under `-k`, filtered to the single frontend leg, so the crashing
+line was never reached — and the `0/0 checks passed` in that output, a suite
+that ran nothing, was read as confirmation.
+
+**`@unstamped_only` is the same rule one column over, and it fails the other
+way.** `an_unstamped_build_says_so_instead_of_guessing` asserts that a build
+made with no `-define` reports `unstamped` rather than inventing a plausible
+commit. Its comment used to justify itself by saying the suite *always* runs
+against an unstamped binary — true of the default path, false under `--exe`,
+and `run.ps1` always stamps. So the leg asserted a property of the **fixture**
+as if it were a property of the **code**, and pointing `--exe` at any real
+binary turned it **red on correct code**. That costs what a false green costs,
+in the currency this suite trades in: the run that demonstrates the frontend
+leg's red half was `163/165` with *two* failures, and a reader had to already
+know which one meant something. A stamped binary now skips it, naming the
+cause — no substitute, and no assertion either.
 
 ### GET /herdr + POST /herdr_state — live fleet state
 

@@ -57,6 +57,30 @@ def frontend(fn):
     return fn
 
 
+def unstamped_only(fn):
+    """Marks a leg that asserts on the UNSTAMPED build default.
+
+    THE SAME MISTAKE AS #87'S ORIGINAL, ONE COLUMN OVER, AND IT FAILS THE
+    OTHER WAY. `an_unstamped_build_says_so_instead_of_guessing` said in its
+    own comment "board_check builds without -define, so this suite always
+    runs against an unstamped binary". True of the default path; FALSE under
+    --exe, and run.ps1 - the sanctioned build - always stamps. So the leg
+    asserted a property of the FIXTURE as if it were a property of the CODE,
+    and pointing --exe at any real binary turned it RED ON CORRECT CODE.
+
+    A false red costs what a false green costs, in the currency this suite
+    trades in: the run that proves #87's own red half is 163/165 with two
+    failures, and a reader has to know which one means something. It survived
+    because the stamped --exe case had only ever been run under -k.
+
+    So: no substitute, and no assertion either. When the binary is stamped
+    the leg's subject is ABSENT, and it skips naming the cause - the same
+    answer @frontend gives to the same question.
+    """
+    fn.needs_unstamped = True
+    return fn
+
+
 def build_stamp_of(exe):
     """Ask the BINARY which commit it is, by starting it and reading the
     X-Board-Build header it puts on every response.
@@ -80,8 +104,12 @@ def build_stamp_of(exe):
     return (stamp.split() or [""])[0], None
 
 
-def resolve_page(exe, using_exe):
+def resolve_page(stamp, why, using_exe):
     """Decide WHICH index.html the frontend legs get, and say so.
+
+    Takes the stamp rather than asking for it: two legs now turn on what the
+    binary calls itself, and starting a probe server twice to ask the same
+    question twice invites the two answers to differ.
 
     #87: this used to be an unconditional copy of the working tree's page,
     so under --exe a frontend leg exercised the CURRENT page against an OLD
@@ -99,7 +127,6 @@ def resolve_page(exe, using_exe):
         # the page it serves.
         return os.path.join(HERE, "index.html"), "the working tree's index.html", None
 
-    stamp, why = build_stamp_of(exe)
     if why:
         return None, None, why
     if not stamp or stamp == "unstamped":
@@ -2498,11 +2525,17 @@ def every_response_carries_the_build_stamp(b):
 
 
 @check
+@unstamped_only
 def an_unstamped_build_says_so_instead_of_guessing(b):
-    # board_check builds without -define, so this suite always runs against
-    # an unstamped binary - which makes it the natural place to pin the
+    # The DEFAULT path builds without -define, so it runs against an
+    # unstamped binary - which makes it the natural place to pin the
     # honest-default behaviour. A stamp that invented a plausible value would
     # be the original failure wearing the fix's clothes.
+    #
+    # UNDER --exe THE SUBJECT MAY NOT EXIST, which the comment here used to
+    # deny: it said the suite ALWAYS runs unstamped. @unstamped_only is what
+    # makes that sentence true again - a stamped binary skips this leg with
+    # the cause instead of failing it.
     assert headers_of("/agents")["X-Board-Build"].startswith("unstamped"),         headers_of("/agents")["X-Board-Build"]
     _, b_ = call("/build")
     assert b_["commit"] == "unstamped" and b_["built"] == "unstamped", b_
@@ -3728,19 +3761,43 @@ def main():
             print(build.stdout + build.stderr)
             raise SystemExit("build failed")
 
-    PAGE_PATH, PAGE_LABEL, PAGE_REFUSAL = resolve_page(exe, "--exe" in sys.argv)
+    # WHAT THE BINARY CALLS ITSELF, asked once and used by two rules below.
+    # Not --exe means we compiled the working tree ourselves a few lines up,
+    # with no -define, so "unstamped" is a fact rather than a report.
+    using_exe = "--exe" in sys.argv
+    stamp, stamp_why = build_stamp_of(exe) if using_exe else ("unstamped", None)
+
+    PAGE_PATH, PAGE_LABEL, PAGE_REFUSAL = resolve_page(stamp, stamp_why, using_exe)
     print(("(frontend legs exercise %s)" % PAGE_LABEL) if PAGE_PATH
           else ("(frontend legs will SKIP: %s)" % PAGE_REFUSAL))
+
+    # A STAMPED BINARY HAS NO UNSTAMPED DEFAULT TO OBSERVE - see
+    # @unstamped_only. Refusal, not assertion.
+    stamp_refusal = None
+    if stamp_why:
+        stamp_refusal = stamp_why
+    elif stamp and stamp != "unstamped":
+        stamp_refusal = ("the binary reports its build as %r, so it has no "
+                         "unstamped default to observe" % stamp)
+    if stamp_refusal:
+        print("(unstamped-default legs will SKIP: %s)" % stamp_refusal)
 
     selected = [c for c in checks if not pattern or pattern in c.__name__]
     failed = []
     skipped = []
     for c in selected:
-        # A FRONTEND LEG WITHOUT ITS OWN PAGE IS SKIPPED WITH THE CAUSE,
-        # NEVER RUN AGAINST A SUBSTITUTE (#87).
+        # A LEG WHOSE SUBJECT THIS BINARY CANNOT PROVIDE IS SKIPPED WITH
+        # THE CAUSE, NEVER RUN AGAINST A SUBSTITUTE (#87). Two of them now:
+        # a frontend leg without its own page, and an unstamped-default leg
+        # against a binary that carries a stamp.
+        why_skip = None
         if getattr(c, "needs_page", False) and PAGE_PATH is None:
+            why_skip = PAGE_REFUSAL
+        elif getattr(c, "needs_unstamped", False) and stamp_refusal:
+            why_skip = stamp_refusal
+        if why_skip:
             skipped.append(c.__name__)
-            print("  SKIP %s: %s" % (c.__name__, PAGE_REFUSAL))
+            print("  SKIP %s: %s" % (c.__name__, why_skip))
             continue
         work = tempfile.mkdtemp(prefix="board_")
         # A LEG THAT DOES NOT ASSERT ON THE PAGE STILL NEEDS THE SERVER TO
