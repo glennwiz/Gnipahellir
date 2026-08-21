@@ -898,6 +898,31 @@ task_apply :: proc(ev: Task_Event) {
 	// agent the work is done. In a TERMINAL state it is history, not an offer
 	// — a Done task superseded later still has a real write-up, and wiping
 	// that link buys nothing.
+	// owner IS THE FOURTH FIELD UNDER THIS RULE, AND IT IS THE ONE A VERB CAN
+	// USE TO HAND SOMEBODY ELSE'S WORK AWAY. Ready and Draft MEAN CLAIMABLE;
+	// an owner means held. A task carrying both reads free and is not, and
+	// the next claim wins - which is #151's defect in `ready`, #153's in
+	// `unblock`, and the accidental `{"action":"ready","id":144}` that
+	// started this, all landing on the same shape from three directions.
+	//
+	// ENFORCED HERE RATHER THAN IN EACH VERB, for the reason the assignee
+	// rule below already gives: it makes the guarantee structural instead of
+	// remembered, and the next verb somebody adds inherits it without
+	// mentioning it. The per-verb guards above still refuse the CALL - a
+	// refusal teaches, and silently normalising a bad request would not - but
+	// no verb can produce this state even if its guard is forgotten.
+	//
+	// RAW STATE, DELIBERATELY, AND THIS IS THE ONE PLACE THAT MATTERS: a
+	// Doing task whose lease lapsed keeps raw state Doing and KEEPS ITS
+	// OWNER on disk, while the SERVED view already presents it as Ready with
+	// no owner. Using the effective state here would erase the record of who
+	// was working the moment a lease lapsed - and losing exactly that is the
+	// open finding on #146's second leg. The presentation layer may forget;
+	// the store must not.
+	if t.state == "Ready" || t.state == "Draft" {
+		t.owner, t.lease_until = "", 0
+	}
+
 	held := t.blocked_from if t.state == "Blocked" else t.state
 	if held != "Superseded" do t.superseded_by = 0
 	if held != "Review" && held != "Done" && held != "Superseded" {
@@ -2059,6 +2084,54 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 		}
 
 		switch ev.action {
+		case "reopen":
+			// REOPEN RESURRECTS SOMETHING FINISHED. It is not a road back
+			// from work in progress. (#153)
+			//
+			// The apply path is `t.state, t.owner, t.lease_until = "Ready",
+			// "", 0` - identical to what `ready` did before #151 closed it,
+			// and never guarded. Fired at a held Doing task it cleared the
+			// owner and the lease outright: A CLEAN ORPHAN, with no hand-back
+			// and nobody told. Measured, and the stranger's next claim won.
+			//
+			// Draft is deliberately NOT in this list even though it is
+			// unowned: a Draft has not been finished, so there is nothing to
+			// reopen, and `ready` already owns the Draft -> Ready promotion.
+			// Two verbs on one edge is how a rule grows a second answer.
+			if t.state != "Done" && t.state != "Superseded" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"reopen resurrects a finished task, and this one is not finished","state":"%s","owner":"%s","rev":%d}}`,
+						task_effective_state(t, now), t.owner, t.rev))
+				return
+			}
+		case "unblock":
+			// UNBLOCK UNDOES A BLOCK. IT IS NOT A ROAD TO Ready. (#153)
+			//
+			// The apply path is `t.state = t.blocked_from if t.blocked_from
+			// != "" else "Ready"`, and that fallback is correct FOR A BLOCKED
+			// TASK whose origin was never recorded. Fired at a task that was
+			// never blocked there is no blocked_from at all, so it fell
+			// through to Ready - AND CLEARED NOTHING. A held Doing task came
+			// out as Ready with the owner and the lease still set, which is
+			// claimable, and the next claim won.
+			//
+			// MEASURED, NOT READ, AND THAT DISTINCTION IS THE WHOLE FINDING:
+			// a careful source read grouped block and unblock together as
+			// "change displayed state but strip nothing" - and said in the
+			// same post that a read is what the clause distrusts. The
+			// measurement split them. `block` lands in Blocked, which is not
+			// claimable, so ownership survives. `unblock` lands in Ready,
+			// which is. A CAREFUL READ BY A CAREFUL SEAT CLASSIFIED IT AS
+			// HARMLESS AND IT TAKES TASKS.
+			//
+			// Raw state, not effective: Blocked has no lease semantics and a
+			// blocked task is not served as anything else.
+			if t.state != "Blocked" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"unblock undoes a block, and this task is not blocked","state":"%s","owner":"%s","rev":%d}}`,
+						task_effective_state(t, now), t.owner, t.rev))
+				return
+			}
 		case "ready":
 			// DRAFT ONLY, AND THE CLAUSE ASKED THE IMPLEMENTER TO SAY WHY.
 			//
@@ -2272,6 +2345,37 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 			if t.origin == "v3" && ev.agent != "glenn" {
 				send_response(client, "409 Conflict", "application/json",
 					`{"error":"v3 tasks complete via submit + approve (glenn may override)"}`)
+				return
+			}
+			// AND A LEGACY force-Done MUST NOT COMPLETE SOMEBODY ELSE'S WORK.
+			// Its apply line is worse than a strip (#153):
+			//
+			//     t.state, t.owner, t.lease_until = "Done", ev.agent, 0
+			//
+			// It does not merely free the task - IT WRITES THE CALLER IN AS
+			// THE OWNER. A stranger firing this at a held legacy task ends up
+			// RECORDED AS THE SEAT THAT DID THE WORK, and re-claiming cannot
+			// undo it: the credit is in the record. Every other verb in this
+			// family costs the holder their claim; this one costs them the
+			// attribution. The gate above already covers v3; legacy tasks
+			// were covered by nothing, and this board still carries live ones.
+			//
+			// EFFECTIVE state, so a task whose lease has genuinely lapsed is
+			// NOT protected by a holder who stopped working - that is the
+			// takeover path and it stays open.
+			// GLENN IS EXEMPT, WHICH IS THIS FILE'S OWN RULE AND NOT AN
+			// EXCEPTION I INVENTED: "the human outranks the workflow, nobody
+			// else does", stated at the approve guard above and enforced at
+			// the origin gate two lines up. The suite caught me omitting it -
+			// a_v3_task_cannot_be_force_done_but_glenn_may went red - because
+			// a guard that refuses the override refuses the escape hatch the
+			// override exists to be.
+			done_eff := task_effective_state(t, now)
+			if t.owner != "" && t.owner != ev.agent && ev.agent != "glenn" &&
+			   (done_eff == "Doing" || done_eff == "Review") {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"held by %s - done would record you as the seat that did their work","state":"%s","owner":"%s","rev":%d}}`,
+						t.owner, done_eff, t.owner, t.rev))
 				return
 			}
 		}

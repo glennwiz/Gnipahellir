@@ -304,6 +304,151 @@ def a_second_claim_409s_and_names_the_holder(b):
     assert tasks()[tid]["attempts"] == 1, "a refused claim must not count as an attempt"
 
 
+def _held(text, origin="draft"):
+    """A task genuinely held by "holder". SETUP ASSERTED, because every leg
+    below is about what a stranger cannot do TO A HELD TASK, and a refusal
+    against a task nobody holds proves nothing."""
+    _, r = task(origin, "planner", text=text)
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("claim", "holder", id=tid)
+    t = tasks()[tid]
+    assert t["state"] == "Doing" and t["owner"] == "holder", ("SETUP FAILED", t)
+    return tid
+
+
+@check
+def unblock_undoes_a_block_and_is_not_a_road_to_ready(b):
+    # unblock's apply path falls back to "Ready" when there is no
+    # blocked_from - correct for a blocked task whose origin was never
+    # recorded, and a STRIP when fired at a task that was never blocked: the
+    # holder's owner and lease stayed set while the state went claimable.
+    tid = _held("never blocked, unblocked anyway")
+    st, err = task("unblock", "stranger", id=tid)
+    assert st == 409, (st, err)
+    assert err["owner"] == "holder", err
+    t = tasks()[tid]
+    assert t["state"] == "Doing" and t["owner"] == "holder", t
+    # THE CONSEQUENCE, NOT THE VERB.
+    st, _ = task("claim", "stranger", id=tid)
+    assert st == 409, "a refused unblock must leave the task unclaimable"
+    assert tasks()[tid]["owner"] == "holder"
+
+
+@check
+def unblock_still_returns_a_blocked_task_to_its_holder(b):
+    # THE LEGITIMATE PATH, and the one a guard is most likely to break. A
+    # blocked Doing task comes back to Doing WITH ITS OWNER - the hold
+    # survives the round trip, which is what blocked_from is for.
+    tid = _held("blocked while held, then unblocked")
+    task("block", "holder", id=tid)
+    assert tasks()[tid]["state"] == "Blocked"
+    st, _ = task("unblock", "holder", id=tid)
+    assert st == 200
+    t = tasks()[tid]
+    assert t["state"] == "Doing", t
+    assert t["owner"] == "holder", ("unblock must not cost the holder its claim", t)
+
+
+@check
+def reopen_resurrects_a_finished_task_and_nothing_else(b):
+    # reopen carried ready's old apply line - Ready, owner cleared, lease
+    # zeroed - and was guarded by nothing. Fired at a held Doing task it was
+    # a clean orphan with no hand-back and nobody told.
+    tid = _held("reopened while somebody was doing it")
+    st, err = task("reopen", "stranger", id=tid)
+    assert st == 409, (st, err)
+    assert err["owner"] == "holder", err
+    t = tasks()[tid]
+    assert t["state"] == "Doing" and t["owner"] == "holder", t
+    st, _ = task("claim", "stranger", id=tid)
+    assert st == 409, "a refused reopen must leave the task unclaimable"
+
+    # AND THE LEGITIMATE PATH: a genuinely finished task still reopens.
+    tid2 = _held("finished, then reopened", origin="add")
+    task("done", "holder", id=tid2)
+    assert tasks()[tid2]["state"] == "Done"
+    st, _ = task("reopen", "planner", id=tid2)
+    assert st == 200, "reopen must still resurrect something finished"
+    assert tasks()[tid2]["state"] == "Ready"
+
+
+@check
+def a_legacy_force_done_cannot_take_the_credit_for_held_work(b):
+    # done's apply line is `t.state, t.owner, t.lease_until = "Done",
+    # ev.agent, 0` - it does not merely free the task, IT WRITES THE CALLER
+    # IN AS THE OWNER. Every other verb in this family costs the holder its
+    # claim; this one costs the ATTRIBUTION, and re-claiming cannot undo it.
+    tid = _held("a stranger tries to finish it", origin="add")
+    st, err = task("done", "stranger", id=tid)
+    assert st == 409, (st, err)
+    assert err["owner"] == "holder", err
+
+    # THE OWNER FIELD IS THE CONSEQUENCE HERE, not a later claim: the theft
+    # this leg exists for is the RECORD, so the record is what it asserts.
+    t = tasks()[tid]
+    assert t["owner"] == "holder", ("the holder must still be recorded", t)
+    assert t["state"] == "Doing", t
+
+    # THE HOLDER MAY STILL FINISH ITS OWN WORK.
+    st, _ = task("done", "holder", id=tid)
+    assert st == 200
+    assert tasks()[tid]["owner"] == "holder"
+
+
+@check
+def block_is_the_negative_control_and_stays_unguarded(b):
+    # block IS unguarded and IS harmless, and that is deliberate: it lands in
+    # Blocked, which is not claimable, so ownership survives. A fix that made
+    # it refuse would be a change nobody asked for. This leg exists so the
+    # next person tightening this family has to decide about block ON PURPOSE
+    # rather than by sweeping it up with its neighbours.
+    tid = _held("blocked by a stranger, which is allowed")
+    st, _ = task("block", "stranger", id=tid)
+    assert st == 200, "block by a non-owner is deliberately still allowed"
+    t = tasks()[tid]
+    assert t["state"] == "Blocked", t
+    assert t["owner"] == "holder", ("block must not cost the holder its claim", t)
+    st, _ = task("claim", "stranger", id=tid)
+    assert st == 409, "Blocked is not claimable, which is why block is harmless"
+
+
+@check
+def a_task_served_as_ready_never_carries_an_owner(b):
+    # THE INVARIANT UNDER THREE VERBS. ready, unblock and an accidental
+    # rev-less call all produced ONE anomalous shape - state Ready with a
+    # live owner and lease - and each was found separately. Enforced after
+    # the switch, where the state is final, so a verb added later inherits it
+    # without mentioning it.
+    #
+    # *** THIS LEG IS GREEN ON BOTH SIDES OF #153 AND THEREFORE PROVES
+    # NOTHING ABOUT IT. *** Measured, not assumed: run against a pre-#153
+    # binary it passes. The verbs it can reach - rework and reopen - ALREADY
+    # cleared the owner before the invariant existed, and the verbs that
+    # actually produced the bad shape (unblock, pre-#151 ready) are now
+    # REFUSED, so they never reach the apply path where the invariant lives.
+    # THE INVARIANT IS UNREACHABLE THROUGH THE PUBLIC API BY CONSTRUCTION.
+    #
+    # It is kept anyway, and the reason is the only honest one: it is
+    # belt-and-braces for a verb somebody adds later, which is exactly the
+    # case the guards above cannot cover because they are per-verb. A leg
+    # that passes on both sides is normally worthless - this one is a
+    # CHARACTERISATION of a property, not evidence for the change, and it is
+    # labelled so nobody counts it as the latter.
+    for verb in ("rework", "reopen"):
+        tid = _held(f"lands in Ready via {verb}", origin="add")
+        if verb == "reopen":
+            task("done", "holder", id=tid)
+        else:
+            _, ev = post("holder", text="done", task_id=tid)
+            task("submit", "holder", id=tid, result_seq=ev["seq"])
+        task(verb, "reviewer" if verb == "rework" else "planner", id=tid)
+        t = tasks()[tid]
+        assert t["state"] == "Ready", (verb, t)
+        assert t["owner"] == "", (f"{verb} left an owner on a Ready task", t)
+        assert t["lease_until"] == 0, (f"{verb} left a lease on a Ready task", t)
+
+
 @check
 def a_rework_hands_the_task_back_rather_than_orphaning_it(b):
     # A bounce cleared owner and lease and said nothing about who had been
