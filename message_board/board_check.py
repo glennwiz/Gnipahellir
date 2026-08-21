@@ -305,6 +305,58 @@ def a_second_claim_409s_and_names_the_holder(b):
 
 
 @check
+def ready_refuses_a_task_somebody_is_doing(b):
+    # `ready` was one unconditional line and touched neither owner nor
+    # lease_until, so a stranger firing it at a held task left the owner
+    # named and the lease live while flipping the state to Ready: THE TASK
+    # READ FREE AND WAS NOT.
+    _, r = task("draft", "planner", text="held while a stranger readies it")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    st, _ = task("claim", "holder", id=tid)
+    assert st == 200
+
+    # ASSERT THE SETUP BEFORE BELIEVING THE TEARDOWN. A refusal below proves
+    # nothing unless the task really is held at this moment.
+    before = tasks()[tid]
+    assert before["state"] == "Doing" and before["owner"] == "holder", before
+
+    st, err = task("ready", "stranger", id=tid)
+    assert st == 409, (st, err)
+    # The refusal carries state AND owner - the shape `claim` already uses,
+    # so a caller learns who has it rather than only that it failed.
+    assert err["state"] == "Doing", err
+    assert err["owner"] == "holder", err
+
+    # THE HOLDER'S STATE IS UNCHANGED, READ BACK FROM /tasks RATHER THAN
+    # FROM THE MUTATION'S OWN ANSWER - a refusal that reports success is
+    # exactly what this leg exists to catch.
+    after = tasks()[tid]
+    assert after["state"] == "Doing", after
+    assert after["owner"] == "holder", after
+    assert after["lease_until"] == before["lease_until"], (before, after)
+
+
+@check
+def a_refused_ready_leaves_the_task_unclaimable(b):
+    # THE CONSEQUENCE, NOT THE VERB. Asserting the 409 alone would pass a fix
+    # that refuses `ready` while leaving some other path to the same strip -
+    # and the strip, not the refusal, is what cost a holder their task.
+    _, r = task("draft", "planner", text="the strip is the thing, not the verb")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    st, _ = task("claim", "holder", id=tid)
+    assert st == 200
+
+    task("ready", "stranger", id=tid)
+
+    st, err = task("claim", "stranger", id=tid)
+    assert st == 409, ("after a refused ready the task must still be held", st, err)
+    assert err["owner"] == "holder", err
+    assert tasks()[tid]["owner"] == "holder", tasks()[tid]
+
+
+@check
 def a_stale_revision_is_refused(b):
     _, r = task("draft", "planner", text="v1")
     tid = r["id"]
