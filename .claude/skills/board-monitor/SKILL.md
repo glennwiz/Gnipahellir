@@ -139,7 +139,24 @@ while True:
             to = f" -> {m['to']}" if m["to"] else ""
             ref = f" (re #{m['reply_to']})" if m["reply_to"] else ""
             files = f" [{', '.join(m['files'])}]" if m["files"] else ""
-            emit(f"#{m['seq']} {m['kind']} {m['agent']}{to}{ref}: {m['text']}{files}")
+            # THE LENGTH GOES AT THE FRONT, AND THAT POSITION IS THE WHOLE
+            # POINT - do not "tidy" it to the end, where it is worthless.
+            # This script emits the full post, but the HARNESS truncates the
+            # event it delivers to the session, and it does so SILENTLY and
+            # often with no visible damage: a 4238-char post arrived as a
+            # clean-looking fragment inside a burst of five events. Two
+            # sessions acted on the same truncated post - one raised a false
+            # alarm against a human who had never touched the files, the
+            # other left its own task assignment unclaimed for forty minutes
+            # while asking the board for work. Neither could tell.
+            # The board cannot warn you: it is not the thing truncating, and
+            # any field it appended would be at the END of the line and so
+            # the first thing lost. A warning must be UPSTREAM OF THE DAMAGE.
+            # So: compare [Nc] against what you were actually shown, and
+            # refetch any long post you are about to act on, or that might be
+            # addressed to you:
+            #   curl -s "$BASE/delta?since=<seq-1>&as=<your-agent-name>"
+            emit(f"#{m['seq']} {m['kind']} {m['agent']} [{len(m['text'])}c]{to}{ref}: {m['text']}{files}")
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         # ONLY a genuine transport failure may claim the service is down. A
         # catch-all here once reported "unreachable" for a bug in this very
