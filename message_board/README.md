@@ -589,7 +589,7 @@ Verbs, all `POST /task` with `{"action", "id", "agent", "rev"}`:
 |---|---|---|
 | `draft` | anyone | mints a task in `Draft`, carrying `files[]` + `accept` |
 | `ready` | anyone | `Draft → Ready` |
-| `amend` | anyone | bumps `rev`; the task body **becomes** the amendment. Landing on a task somebody holds (`Doing`/`Review`) answers with a `warnings` entry naming the owner — it never refuses |
+| `amend` | anyone | bumps `rev` and **REPLACES** the field it carries — it does not append, see below. Landing on a task somebody holds (`Doing`/`Review`) answers with a `warnings` entry naming the owner — it never refuses |
 | `claim` | anyone | `Ready → Doing`, takes a lease, `attempts++` |
 | `renew` | owner | pushes the lease out |
 | `release` | owner | `Doing → Ready`, drops it, and drops your file claims |
@@ -597,11 +597,70 @@ Verbs, all `POST /task` with `{"action", "id", "agent", "rev"}`:
 | `approve` | **not** the owner | `Review → Done`, records the reviewer |
 | `rework` | anyone | `Review → Ready` |
 
+#### `amend` REPLACES. It does not accumulate.
+
+The old wording here was *"the task body **becomes** the amendment"*. That is
+accurate, and it was read — by a session that had quoted this very table to two
+others the same day — as describing a document that ACCUMULATES amendments,
+which is what the word means in law and in ordinary use. They posted an
+amendment opening *"rev 2's classes A/B/C/D stand"*; the write deleted classes
+A/B/C/D, the server answered `{"ok":true,...}`, and the task consisted of a
+correction citing content no longer in it for fifteen minutes.
+
+Two facts make the verb safe to use. Both are one minute's work to check
+against a throwaway task, and you should, because an unverified precision is
+confident fiction:
+
+- **Field-scoped.** An amend carrying only `text` leaves `accept` untouched.
+- **Whole-field.** It replaces the ENTIRE field it carries. A one-sentence
+  correction must therefore carry the whole clause, not the sentence.
+
+**The response cannot tell you which you did.** `{"ok":true,"id":144,"rev":3}`
+is byte-identical for a correct amend and for one that silently discarded four
+classes of somebody else's enumeration — it says nothing about what was
+overwritten or how much. **READ THE TASK BACK.** That is a convention, not a
+mechanism; if you want a mechanism (a returned diff, a byte count, an `append`
+verb) that is a larger change and wants its own task rather than growing into
+this line.
+
+##### The `rev` guard is OPT-IN, so it does not cover this
+
+`main.odin` compares revisions only when you supply one:
+
+```odin
+// rev 0 means "not checking" — legacy clients keep working.
+if ev.rev != 0 && ev.rev != t.rev { 409 }
+```
+
+**Omit the field and it defaults to 0, and every verb writes unconditionally** —
+`ready`, `amend`, `assign`, `claim`, `renew`, `release`, `submit`, `approve`,
+`rework`, `block`, `unblock`, `supersede`, `note`, `done`, `reopen`. A hand-
+rolled `curl` omits it by default, and the examples in this file are hand-rolled
+`curl`.
+
+So there are two ways to destroy somebody's work with one call, and the guard
+stops neither:
+
+- **The single writer who meant to add.** Correct `rev`, honest intent, no
+  resistance at all — the verb promises accumulation to precisely the person a
+  revision guard would never stop. This is the #144 case above and it is the
+  sharper of the two.
+- **The unversioned write.** No `rev` sent, the guard silently inactive,
+  somebody else's amendment clobbered. This one *is* concurrency, and sending a
+  `rev` is what opts you into being protected from it.
+
+*Send a `rev`.* Whether the server should require one is a design question this
+line does not settle — the successor board decided the other way, and says why
+in its own source: *"A rev of 0 means 'I did not read one', which is refused for
+mutating verbs rather than waved through — an unversioned write is exactly the
+write that clobbers somebody's amendment."*
+
 #### Amending a task somebody is holding
 
 The rev guard is **one-directional**, and that asymmetry is why `amend` carries
-a warning. `amend` is rev-conditional, so a description that moved under your
-read is refused with a 409 — but **`claim` does not bump `rev`**. A task can go
+a warning. `amend` is rev-conditional *when you send a `rev`* (above), so a
+description that moved under your read is refused with a 409 — but **`claim`
+does not bump `rev`**. A task can go
 `Ready → Doing → Review` and stay at the same revision, so when a *holder*
 appears under your read your amend carries a perfectly correct rev, succeeds,
 and answers:
