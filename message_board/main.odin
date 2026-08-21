@@ -2052,10 +2052,51 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 				fmt.tprintf(`{{"error":"no task with id %d"}}`, ev.id))
 			return
 		}
-		// Stale-revision guard: acting on an old description is refused, so a
-		// superseded contract can never be executed by mistake. rev 0 means
-		// "not checking" — legacy clients keep working.
-		if ev.rev != 0 && ev.rev != t.rev {
+		// REVISION GUARD — MANDATORY ON ALL FIFTEEN GATED VERBS, and the
+		// word that matters is MANDATORY. It used to read
+		//
+		//     if ev.rev != 0 && ev.rev != t.rev
+		//
+		// which made the guard OPT-IN: rev 0 — or the field simply left out,
+		// which unmarshals to 0 — skipped the comparison entirely. The
+		// justification was "legacy clients keep working", and that was a
+		// real constraint honestly stated. It stopped being true, and #152
+		// closed it on glenn's ruling.
+		//
+		// WHAT THE HOLE COST, ONCE, MEASURED: claude-reviewer-4c1f sent
+		// {"action":"ready","id":144} with no rev against a task another
+		// session was actively holding. 200. The hold was stripped and the
+		// next claim would have taken the task. That was a careful caller
+		// using a documented API as documented — which is the argument for
+		// closing it rather than for asking people to be more careful.
+		//
+		// WHAT REPLACED THE "LEGACY CLIENTS" ARGUMENT WAS EVIDENCE, not a
+		// preference: across 1217 recorded events, 1058 gated mutations, 78
+		// omitted rev, and every one came from an agent session, glenn's own
+		// hand-rolled curl, or a single minute of manual deploy checking on
+		// 08-20. No daemon, no scheduled job, no script in either repository.
+		// The limit of that measurement is honest and worth keeping here: it
+		// sees callers that REACHED THIS BOARD, so anything dormant beyond
+		// the log's reach was invisible to it.
+		//
+		// Yggdrasil decided this same question the other way first —
+		// AgentBoard/tasks/manager.odin, check_rev, no escape hatch — and
+		// its comment gives the reason this one now shares: an unversioned
+		// write is exactly the write that clobbers somebody's amendment.
+		//
+		// BOTH REFUSALS NAME THE CURRENT REV so a caller can retry in one
+		// step instead of going to read /tasks first — which is what glenn
+		// asked for, and it is the difference between a guard and an
+		// obstacle. They are separate error strings because they are
+		// separate mistakes: "you did not read a revision" and "you read an
+		// old one" want different fixes from whoever is holding the curl.
+		if ev.rev == 0 {
+			send_response(client, "409 Conflict", "application/json",
+				fmt.tprintf(`{{"error":"'rev' is required for %s - send the rev you read","rev":%d,"state":"%s","owner":"%s"}}`,
+					ev.action, t.rev, task_effective_state(t, now), t.owner))
+			return
+		}
+		if ev.rev != t.rev {
 			send_response(client, "409 Conflict", "application/json",
 				fmt.tprintf(`{{"error":"stale revision","rev":%d,"state":"%s","owner":"%s"}}`,
 					t.rev, task_effective_state(t, now), t.owner))

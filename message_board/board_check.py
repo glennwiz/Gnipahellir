@@ -181,9 +181,52 @@ def post(agent, **kw):
     return call("/post", body)
 
 
-def task(action, agent, **kw):
+# The fifteen verbs the server gates behind a revision check. Counted from
+# main.odin's own case list rather than from prose - #152's task text said
+# fifteen and its accept clause said fourteen, and the source settles it.
+GATED_VERBS = frozenset((
+    "ready", "amend", "assign", "claim", "renew", "release", "submit",
+    "approve", "rework", "block", "unblock", "supersede", "note", "done",
+    "reopen",
+))
+
+
+def task_raw(action, agent, **kw):
+    """Sends EXACTLY the body it is given - no rev is supplied for you.
+
+    This is the door for legs whose SUBJECT is the request shape: a verb with
+    no rev at all, or a deliberately wrong one. task() below is helpful, and
+    helpfulness is precisely wrong when the missing field IS the test."""
     body = {"action": action, "agent": agent}
     body.update(kw)
+    return call("/task", body)
+
+
+def task(action, agent, **kw):
+    """A gated verb with no explicit rev gets the CURRENT one, read first.
+
+    WHY THIS IS A HELPER CHANGE AND NOT 223 EDITS. #152 made rev mandatory on
+    the fifteen gated verbs. At that moment 223 of the suite's 236 gated call
+    sites sent no rev - claim 79, ready 41, submit 19, and so on down. The
+    accept clause asserted the opposite ("not one of them sends a verb without
+    a rev"), which is how a hole this size stays invisible: the instrument was
+    the heaviest user of the thing it was supposed to be watching.
+
+    Reading the rev and sending it is WHAT A REAL CLIENT DOES, so the helper
+    is not papering over the guard - it is the two-step every honest caller
+    now performs, written once. An EXPLICIT rev ALWAYS WINS, so every leg
+    that tests staleness keeps testing it, unchanged and unaware.
+
+    THE COST, NAMED BECAUSE IT IS REAL: a leg can no longer go red by
+    forgetting rev. That is deliberate. After #152 a missing rev is a CLIENT
+    error, not a board behaviour, and the legs that assert on it do so through
+    task_raw() on purpose rather than by accident."""
+    body = {"action": action, "agent": agent}
+    body.update(kw)
+    if action in GATED_VERBS and "rev" not in body and "id" in body:
+        current = tasks().get(body["id"])
+        if current is not None:
+            body["rev"] = current["rev"]
     return call("/task", body)
 
 
@@ -591,6 +634,87 @@ def a_stale_revision_is_refused(b):
     assert st == 200
     assert tasks()[tid]["text"] == "v2 - the real contract", \
         "the body must BE the amendment, not the original"
+
+
+@check
+def a_gated_verb_with_no_rev_at_all_is_refused_and_names_the_current_rev(b):
+    """#152: the guard is MANDATORY, and the refusal is a one-step retry.
+
+    THE LEG THE SUITE OWED ITSELF. Before #152 this file had 236 gated task()
+    calls and 223 of them sent no rev - so the one request shape that mattered
+    was the shape the instrument used everywhere and asserted on nowhere. The
+    hole survived 167 passing checks by being their default.
+
+    IT IS `note` RATHER THAN THE VERB FROM THE INCIDENT, DELIBERATELY. The
+    measured strip was a stranger's `ready` on a held task, but #153 already
+    refuses that on STATE - so a `ready` leg would go green against the old
+    binary too and prove nothing about rev. `note` is ungated otherwise (any
+    agent, any state, main.odin:860), so the ONLY thing standing between this
+    request and a 200 is the revision guard. The red is the guard's red.
+
+    Read back through GET /tasks at the end because a refusal that still
+    mutated is the failure worth catching, and the status line cannot show it.
+    """
+    _, r = task("draft", "planner", text="v1 - the original contract")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("amend", "planner", id=tid, rev=1, text="v2 - the real contract")
+    task("claim", "holder", id=tid)
+
+    before = tasks()[tid]
+    assert before["rev"] == 2, ("the subject must not be at rev 0 - a guard "
+                                "that only works above rev 1 would pass a "
+                                "rev-0 leg for the wrong reason", before)
+    assert before["owner"] == "holder" and before["state"] == "Doing", before
+
+    # NO rev KEY IN THE BODY AT ALL - not rev 0, ABSENT. task_raw sends what
+    # it is handed; task() would helpfully supply the very field under test.
+    st, err = task_raw("note", "stranger", id=tid, text="landed without a rev")
+    assert st == 409, ("a gated verb with no rev must be REFUSED, not waved "
+                       "through - this returned 200 before #152", st, err)
+    assert "rev" in err["error"], err
+
+    # GLENN'S ACTUAL REQUIREMENT: the refusal carries the CURRENT rev, so a
+    # hand-rolled curl retries in one step instead of going to read /tasks.
+    assert err["rev"] == 2, ("the refusal must NAME the current rev", err)
+    assert err["owner"] == "holder" and err["state"] == "Doing", err
+
+    # ...and nothing happened. The note must not be in the record, and the
+    # holder must still hold what they held.
+    after = tasks()[tid]
+    assert "landed without a rev" not in after["notes"], (
+        "the refusal must not have mutated the task", after["notes"])
+    assert after["owner"] == "holder", ("the holder keeps the task", after)
+    assert after["state"] == "Doing" and after["rev"] == 2, after
+
+    # The retry the refusal just made possible: same call, rev from the body.
+    st, _ = task_raw("note", "stranger", id=tid, rev=err["rev"], text="ok now")
+    assert st == 200, ("the rev the refusal named must be usable as-is", st)
+    assert "ok now" in tasks()[tid]["notes"], tasks()[tid]
+
+
+@check
+def a_stale_rev_and_a_missing_rev_are_told_apart(b):
+    """Two different mistakes, two different fixes, so two different strings.
+
+    "You did not read a revision" and "you read an old one" want different
+    things from whoever is holding the curl. Collapsing them into one message
+    would still pass the leg above, which is why this one exists."""
+    _, r = task("draft", "planner", text="v1")
+    tid = r["id"]
+    task("ready", "planner", id=tid)
+    task("amend", "planner", id=tid, rev=1, text="v2")
+
+    # Status first, so the red on a re-opened hole reads as a sentence rather
+    # than as a KeyError on the 200's missing "error" field.
+    ms, missing = task_raw("claim", "worker", id=tid)
+    ss, stale = task_raw("claim", "worker", id=tid, rev=1)
+    assert ms == 409, ("a claim with no rev must be refused", ms, missing)
+    assert ss == 409, ("a claim with an old rev must be refused", ss, stale)
+    assert missing["error"] != stale["error"], (missing, stale)
+    assert stale["error"] == "stale revision", stale
+    # BOTH name the current rev - the retry path is the same either way.
+    assert missing["rev"] == 2 and stale["rev"] == 2, (missing, stale)
 
 
 @check

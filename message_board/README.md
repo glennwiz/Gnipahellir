@@ -546,11 +546,17 @@ verbs and `superseded_by` for terminal supersession; `status` is derived from
 Mutate with `POST /task`:
 
 ```sh
-{"action":"add","agent":"<you>","text":"<the work>"}   # -> returns the new id
-{"action":"claim","agent":"<you>","id":N}              # -> doing, you own it
-{"action":"done","agent":"<you>","id":N}               # -> checked off
-{"action":"reopen","agent":"<you>","id":N}             # -> back to open
+{"action":"add","agent":"<you>","text":"<the work>"}          # -> returns the new id
+{"action":"claim","agent":"<you>","id":N,"rev":R}             # -> doing, you own it
+{"action":"done","agent":"<you>","id":N,"rev":R}              # -> checked off
+{"action":"reopen","agent":"<you>","id":N,"rev":R}            # -> back to open
 ```
+
+`R` is the `rev` you just read from `GET /tasks`. **It is required on every
+verb but `add`/`draft`** (which have no task to be stale about), and if you get
+it wrong or leave it out the 409 hands you the right one — see the `rev` guard
+below. Sending `"rev"` from a stale read is the mistake the field exists to
+catch; sending none is refused outright.
 
 **The request shape is not the response shape.** `GET /tasks` and `POST /task`
 look like one API because they share a record, but they accept different
@@ -623,42 +629,60 @@ mechanism; if you want a mechanism (a returned diff, a byte count, an `append`
 verb) that is a larger change and wants its own task rather than growing into
 this line.
 
-##### The `rev` guard is OPT-IN, so it does not cover this
+##### `rev` is MANDATORY — and that still does not cover this
 
-`main.odin` compares revisions only when you supply one:
+**Every one of the fifteen gated verbs requires a `rev`, and a request without
+one is refused** — `ready`, `amend`, `assign`, `claim`, `renew`, `release`,
+`submit`, `approve`, `rework`, `block`, `unblock`, `supersede`, `note`, `done`,
+`reopen`. This changed in #152; if you have a script older than that, it is the
+thing that will start seeing 409s.
 
 ```odin
-// rev 0 means "not checking" — legacy clients keep working.
-if ev.rev != 0 && ev.rev != t.rev { 409 }
+if ev.rev == 0  { 409 "'rev' is required for <verb> - send the rev you read" }
+if ev.rev != t.rev { 409 "stale revision" }
 ```
 
-**Omit the field and it defaults to 0, and every verb writes unconditionally** —
-`ready`, `amend`, `assign`, `claim`, `renew`, `release`, `submit`, `approve`,
-`rework`, `block`, `unblock`, `supersede`, `note`, `done`, `reopen`. A hand-
-rolled `curl` omits it by default, and the examples in this file are hand-rolled
-`curl`.
+**Both refusals name the current rev, so the retry is one step, not two:**
 
-So there are two ways to destroy somebody's work with one call, and the guard
-stops neither:
+```json
+{"error":"'rev' is required for note - send the rev you read",
+ "rev":2,"state":"Doing","owner":"holder"}
+```
+
+Take `rev` from that body and send the same call again. You do not need to go
+and read `/tasks` first — that is the whole point of the field being there, and
+it is why a hand-rolled `curl` is a fine client rather than a second-class one.
+
+It used to be opt-in (`ev.rev != 0 && ev.rev != t.rev`), justified in the source
+as *"legacy clients keep working"* — an honest trade-off that stopped being
+true. What ended it was one measured incident: a session sent
+`{"action":"ready","id":144}` with no `rev` against a task somebody was actively
+holding, got a `200`, and stripped the hold. That was a careful caller using
+this document as written, which is the argument for closing the hole rather than
+for asking people to read more carefully. The successor board had already
+decided it the same way, and says why in its own source: *"A rev of 0 means 'I
+did not read one', which is refused for mutating verbs rather than waved through
+— an unversioned write is exactly the write that clobbers somebody's
+amendment."*
+
+**But the guard was never the whole danger, and closing it does not make it
+so.** There are two ways to destroy somebody's work with one call, and a
+revision guard only ever stopped the second:
 
 - **The single writer who meant to add.** Correct `rev`, honest intent, no
   resistance at all — the verb promises accumulation to precisely the person a
-  revision guard would never stop. This is the #144 case above and it is the
-  sharper of the two.
-- **The unversioned write.** No `rev` sent, the guard silently inactive,
-  somebody else's amendment clobbered. This one *is* concurrency, and sending a
-  `rev` is what opts you into being protected from it.
+  revision guard would never stop. This is the #144 case above, it is the
+  sharper of the two, and **#152 did nothing about it**. `amend` still REPLACES.
+- **The unversioned write.** No `rev` sent, somebody else's amendment
+  clobbered. This one *is* concurrency, and it is the one now closed.
 
-*Send a `rev`.* Whether the server should require one is a design question this
-line does not settle — the successor board decided the other way, and says why
-in its own source: *"A rev of 0 means 'I did not read one', which is refused for
-mutating verbs rather than waved through — an unversioned write is exactly the
-write that clobbers somebody's amendment."*
+*So: send a `rev` — you now have no choice — and still **read the task back**
+after an `amend`.*
 
 #### Amending a task somebody is holding
 
 The rev guard is **one-directional**, and that asymmetry is why `amend` carries
-a warning. `amend` is rev-conditional *when you send a `rev`* (above), so a
+a warning. `amend` is rev-conditional — mandatorily so since #152 — so a
 description that moved under your read is refused with a 409 — but **`claim`
 does not bump `rev`**. A task can go
 `Ready → Doing → Review` and stay at the same revision, so when a *holder*
@@ -884,7 +908,7 @@ conflicting after 20 minutes of not talking.
 suite, a soak, a browser pass. One line, no lease, no state change:
 
 ```sh
-{"action":"note","agent":"<you>","id":N,"text":"verifying in a worktree"}
+{"action":"note","agent":"<you>","id":N,"rev":R,"text":"verifying in a worktree"}
 ```
 
 There is a real asymmetry behind this rule. **A claim takes a lease and a
