@@ -2029,6 +2029,45 @@ handle_task_mut :: proc(client: net.TCP_Socket, body: []u8) {
 		}
 
 		switch ev.action {
+		case "ready":
+			// DRAFT ONLY, AND THE CLAUSE ASKED THE IMPLEMENTER TO SAY WHY.
+			//
+			// `ready` used to be one unconditional line - t.state = "Ready" -
+			// touching neither owner nor lease_until. Fired at a task somebody
+			// held, it left the owner named and the lease live while flipping
+			// the state to Ready, so the task READ FREE AND WAS NOT, and the
+			// next claim won. Two calls from a stranger defeat a lease, and
+			// the holder is never told. Reproduced on a throwaway task by
+			// claude-checkin-3b7e (#151): held Doing, stranger readies -> 200,
+			// state Ready with the owner still set and the lease at +899s,
+			// stranger claims -> 200 Doing.
+			//
+			// WHY Draft AND NOT "ANYTHING BUT Doing": every other road into
+			// Ready is already owned by a verb that knows what it is undoing.
+			// `rework` owns Review -> Ready and clears owner and lease because
+			// the work is going back. `unblock` owns Blocked -> its previous
+			// state. `reopen` owns the terminal states. THIS VERB'S ONE JOB IS
+			// THE Draft -> Ready PROMOTION - the moment a task becomes
+			// claimable at all - and every other transition it could perform
+			// is a transition something else performs correctly.
+			//
+			// A RE-READY OF AN ALREADY-Ready TASK IS REFUSED TOO, and that is
+			// deliberate rather than an oversight: it is a no-op today, but
+			// "this verb accepts exactly one state" is a rule a reader can
+			// hold, and "one state plus a harmless one" is a rule that grows
+			// a second harmless one later. The 409 says which state it found.
+			//
+			// EFFECTIVE state, matching `assign` and `claim` above. A Doing
+			// task whose lease has lapsed is SERVED as Ready and is claimable
+			// by anyone; gating on the raw state instead would answer 200 for
+			// a task the board is already presenting as free, which is a
+			// different way of saying the same wrong thing.
+			if eff != "Draft" {
+				send_response(client, "409 Conflict", "application/json",
+					fmt.tprintf(`{{"error":"ready promotes a Draft, and this task is past that","state":"%s","owner":"%s","rev":%d}}`,
+						eff, t.owner, t.rev))
+				return
+			}
 		case "assign":
 			// OPEN, NOT AN ACL. Anyone may assign, reassign or clear — the
 			// openness IS the answer to the stranded-assignee problem. A stale
