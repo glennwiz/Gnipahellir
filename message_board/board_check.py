@@ -3743,7 +3743,19 @@ def main():
             print("  SKIP %s: %s" % (c.__name__, PAGE_REFUSAL))
             continue
         work = tempfile.mkdtemp(prefix="board_")
-        shutil.copy(PAGE_PATH, work)
+        # A LEG THAT DOES NOT ASSERT ON THE PAGE STILL NEEDS THE SERVER TO
+        # HAVE ONE. Only @frontend legs skip above; everything else just
+        # needs index.html to exist in the workdir, and the working tree's
+        # copy is what they got before #87 and what they get now.
+        #
+        # THE FIRST VERSION PASSED PAGE_PATH HERE UNCONDITIONALLY AND
+        # CRASHED THE WHOLE SUITE: when the page cannot be resolved
+        # PAGE_PATH is None, shutil.copy raises TypeError on the FIRST
+        # non-frontend leg, and NOT ONE OF 165 CHECKS RUNS. I reported that
+        # path as verified; the run I verified it with was -k filtered to
+        # the single frontend leg, so this line was never reached. The
+        # "0/0 checks passed" in that output was the tell.
+        shutil.copy(PAGE_PATH if PAGE_PATH else os.path.join(HERE, "index.html"), work)
         b = Board(exe, work)
         b.start()
         try:
