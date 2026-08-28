@@ -141,6 +141,21 @@ Raid_State :: struct {
     warning_active: bool,
 }
 
+// Which wave the director sends. Ordinal IS the cycle position (wave.odin).
+Wave_Kind :: enum u8 {
+    Air,
+    Ground,
+    Underground,
+}
+
+// The wave director. Transient exactly like Raid_State: the enemies a wave
+// spawns persist in the saved Enemy_Store, while an unconsumed trigger is
+// harmless to drop on a reload. Zero save impact.
+Wave_State :: struct {
+    pending: bool,   // a trigger fired; the next surface frame spends it
+    cycle:   int,    // how many waves have been sent — Air/Ground/Underground
+}
+
 // Garm's combat cage — the stone box he conjures around the player at low hp
 // and then floods.  Transient on purpose, and that IS the mechanism: a zero
 // anchor means "snapshot the player's tile next tick", so a reload, an escape
@@ -651,6 +666,7 @@ Game_State :: struct {
     player:      Player,
     enemies:     Enemy_Store,
     raid:        Raid_State, // transient industry-pressure director (enemy.odin)
+    wave:        Wave_State, // transient wave director (wave.odin)
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,

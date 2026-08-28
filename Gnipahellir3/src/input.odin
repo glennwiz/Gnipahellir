@@ -865,6 +865,10 @@ update_input :: proc(gs: ^Game_State) {
             case 0: debug_raid_warn_now(gs)
             case 1: debug_raid_spawn_now(gs)
             case 2: debug_raid_clear(gs)
+            case 3: debug_wave_spawn(gs, .Air)
+            case 4: debug_wave_spawn(gs, .Ground)
+            case 5: debug_wave_spawn(gs, .Underground)
+            case 6: debug_wave_clear(gs)
             }
         }
     }

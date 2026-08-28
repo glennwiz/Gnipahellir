@@ -179,6 +179,10 @@ process_events :: proc(gs: ^Game_State) {
                 gs.wand_hint_shown = true
                 notify(gs, "Hold the wand (select its slot) to mine at range")
             }
+            // TESTING TRIGGER for enemy waves: every Fire Wand craft arms the
+            // next wave in the cycle. Deliberately one line — swapping the
+            // trigger later means moving this line, not rewriting wave.odin.
+            if crafted == .Fire_Wand do gs.wave.pending = true
             if crafted == .Command_Wand {
                 notify(gs, "Hold the Command Wand; right-click crafted golems to bind them")
             }

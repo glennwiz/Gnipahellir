@@ -1420,7 +1420,9 @@ draw_altar_menu :: proc(gs: ^Game_State) {
 RAID_MENU_X :: ALT_MENU_X + ALT_MENU_W + 36
 RAID_MENU_Y :: DBG_MENU_Y
 RAID_MENU_W :: 200
-RAID_MENU_ROWS :: 3 // 0: warn now; 1: spawn tunnellers now; 2: clear + reset
+// 0: warn now; 1: spawn tunnellers now; 2: clear + reset;
+// 3-5: force one wave per kind; 6: clear wave enemies
+RAID_MENU_ROWS :: 7
 
 // Menu row under the cursor, or -1.
 raid_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -1453,6 +1455,19 @@ draw_raid_menu :: proc(gs: ^Game_State) {
 		RAID_MENU_Y + 2 * DBG_MENU_ROW_H + 7,
 		10,
 		rl.YELLOW,
+	)
+
+	// Waves: one forced row per kind, plus a clear that spares industry raiders.
+	for kind, i in Wave_Kind {
+		label := fmt.ctprintf("Spawn %s wave >", wave_name[kind])
+		rl.DrawText(label, RAID_MENU_X, RAID_MENU_Y + i32(3+i) * DBG_MENU_ROW_H + 7, 10, rl.SKYBLUE)
+	}
+	rl.DrawText(
+		"Clear wave enemies >",
+		RAID_MENU_X,
+		RAID_MENU_Y + 6 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.SKYBLUE,
 	)
 
 	if r := raid_menu_row_at_cursor(gs); r >= 0 {

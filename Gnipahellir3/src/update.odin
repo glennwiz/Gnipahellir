@@ -55,6 +55,11 @@ game_update :: proc(gs: ^Game_State) {
     //      arming a warned tunneller raid. Spawns enemies/events only.
     update_raids(gs)
 
+    // 5b1a. Wave director — spends an armed wave trigger on the surface.
+    //       Spawns enemies and pushes notify/sound, so it must precede
+    //       process_events too.
+    update_waves(gs)
+
     // 5b2. Auto-Miner — the dimension snake advances (dimension level only);
     //      notifies/sounds, so it must also precede process_events
     update_miner(gs)

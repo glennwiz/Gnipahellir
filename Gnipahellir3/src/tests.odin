@@ -9622,3 +9622,78 @@ air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
     testing.expect(t, gs.enemies.data[last].pos.y < f32(SURFACE_Y), "an air wave enters from above the surface")
     testing.expect_value(t, gs.enemies.data[last].builder.goal, Builder_Goal.Wave_Hunt)
 }
+
+wave_count_kind :: proc(gs: ^Game_State, k: Enemy_Kind) -> (n: int) {
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == k do n += 1
+    return
+}
+
+@(test)
+crafting_fire_wands_cycles_air_ground_underground_waves :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+
+    // Crafting the wand IS the whole trigger — one line in events.odin.
+    testing.expect(t, !gs.wave.pending, "no wave is armed at boot")
+    eq_push(&gs.events, Event{type = .Craft_Complete, payload = {int_val = i32(Item.Fire_Wand)}})
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect(t, gs.wave.pending, "crafting a fire wand arms a wave")
+
+    // An armed trigger HOLDS off the surface rather than firing into a cave.
+    gs.level_index = LEVEL_SURFACE + 1
+    update_waves(gs)
+    eq_clear(&gs.events)
+    testing.expect(t, gs.wave.pending, "a wave must wait until the player is on the surface")
+    testing.expect_value(t, gs.wave.cycle, 0)
+    gs.level_index = LEVEL_SURFACE
+
+    // Four waves walk Air -> Ground -> Underground -> Air, each one the table's
+    // own enemy and count.
+    for step in 0 ..< 4 {
+        kind := Wave_Kind(step %% len(Wave_Kind))
+        spec := wave_table[kind]
+        before := wave_count_kind(gs, spec.enemy)
+        gs.wave.pending = true
+        update_waves(gs)
+        eq_clear(&gs.events)
+        testing.expectf(t, wave_count_kind(gs, spec.enemy) - before == spec.count,
+            "wave %d (%v) should land %d %v", step, kind, spec.count, spec.enemy)
+        testing.expect_value(t, gs.wave.cycle, step + 1)
+        testing.expect(t, !gs.wave.pending, "a spent trigger must not re-fire")
+    }
+}
+
+@(test)
+the_f4_wave_menu_forces_and_clears_waves :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    // Two bystanders the clear must NOT touch: an ordinary cave builder and a
+    // real industry raider (an industry raid is a different threat).
+    spawn_builder(gs, 40)
+    testing.expect(t, spawn_raider(gs, player_tile(&gs.player), GRID_W/2), "the industry raider should spawn")
+    builders := wave_count_kind(gs, .Builder)
+    industry := wave_count_kind(gs, .Raider)
+    testing.expect(t, builders > 0 && industry > 0, "both bystanders should be standing")
+
+    for kind in Wave_Kind {
+        debug_wave_spawn(gs, kind)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, wave_count_kind(gs, .Fire_Sprite), wave_table[.Air].count)
+    testing.expect_value(t, wave_count_kind(gs, .Vargr), wave_table[.Ground].count)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), industry + wave_table[.Underground].count)
+
+    // Clear takes the wave and nothing else — the industry raider is holding
+    // .Hunt, not .Wave_Hunt, and that is the whole distinction.
+    gs.wave.cycle = 2
+    debug_wave_clear(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, wave_count_kind(gs, .Fire_Sprite), 0)
+    testing.expect_value(t, wave_count_kind(gs, .Vargr), 0)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), industry)
+    testing.expect_value(t, wave_count_kind(gs, .Builder), builders)
+    testing.expect_value(t, gs.wave, Wave_State{})
+}
