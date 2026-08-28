@@ -98,6 +98,7 @@ enemy_blood := [Enemy_Kind]rl.Color{
     .Fire_Sprite = {255, 150, 40, 255},
     .Builder     = {200, 40, 35, 255},
     .Raider      = {185, 55, 28, 255},
+    .Vargr       = {150, 40, 40, 255},
 }
 
 // A landed blow sprays the victim's blood away from the hit — the fan gives

@@ -9477,3 +9477,148 @@ the_rainbow_laser_is_a_bench_craft_and_a_structure :: proc(t: ^testing.T) {
     testing.expect(t, is_structure_tile[.Rainbow_Laser], "a laser must be reclaimable structure, not scenery")
     testing.expect(t, tile_on_tick[.Rainbow_Laser] != nil, "a placed laser must tick")
 }
+
+// A wave test needs a base it fully controls: the generated world may already
+// carry sealed scroll chests, and those are structures too.
+wave_clear_structures :: proc(gs: ^Game_State) {
+    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+        if is_structure_tile[gs.world.terrain[grid_idx(x, y)]] do set_tile(&gs.world, x, y, .Air)
+    }
+}
+
+wave_seed_hunter :: proc(gs: ^Game_State, kind: Enemy_Kind, tx, ty: int) -> int {
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return -1
+    hp := VARGR_HP if kind == .Vargr else FIRE_SPRITE_HP
+    gs.enemies.data[id] = Enemy{
+        kind = kind, hp = hp, hp_max = hp,
+        pos = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1},
+    }
+    gs.enemies.data[id].builder.goal = .Wave_Hunt
+    T := builder_tile(&gs.enemies.data[id])
+    entity_map_move(&gs.world, enemy_entity_id(id), T, T)
+    return id
+}
+
+@(test)
+wave_hunters_smash_structures_not_plain_blocks :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // A quiet stretch of surface: a bench, and a plain placed stone block two
+    // tiles along. The player is nowhere near, so nothing draws the blow.
+    BX :: 70
+    BY :: SURFACE_Y - 1
+    for x in BX - 5 ..= BX + 5 {
+        for y in BY - 4 ..= BY do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, BY + 1, .Stone)
+    }
+    set_tile(&gs.world, BX, BY, .Crafting_Bench)
+    set_tile(&gs.world, BX + 2, BY, .Stone)   // a placed Stone Block IS .Stone
+    gs.player.pos = {8, 8}
+
+    // Targeting offers the structure and never the placed block.
+    T, ok := find_wave_structure_target(gs, {BX + 1, BY})
+    testing.expect(t, ok, "the bench should be a wave target")
+    testing.expect_value(t, T, [2]i32{BX, BY})
+
+    // A wolf standing beside it takes it down; the plain block is not its
+    // business, and neither is the block it is standing on.
+    wi := wave_seed_hunter(gs, .Vargr, BX + 1, BY)
+    testing.expect(t, wi >= 0, "the wolf should have a slot")
+    for _ in 0 ..< 240 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, BX, BY) != .Crafting_Bench do break
+    }
+    testing.expect(t, get_tile(&gs.world, BX, BY) != .Crafting_Bench, "a wave hunter must smash a structure")
+    testing.expect_value(t, get_tile(&gs.world, BX + 2, BY), Tile_Type.Stone)
+
+    // And the demolition conserves: the bench is on the ground, not voided.
+    bench := 0
+    for dy in -3 ..= 3 do for dx in -3 ..= 3 {
+        x, y := BX + dx, BY + dy
+        if !in_bounds(x, y) do continue
+        if gs.world.items[grid_idx(x, y)] == .Crafting_Bench do bench += int(gs.world.item_counts[grid_idx(x, y)])
+    }
+    testing.expect(t, bench > 0, "the smashed bench must spill, not vanish")
+}
+
+@(test)
+a_loaded_silo_never_traps_a_wave_hunter :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    SX :: 60
+    SY :: SURFACE_Y - 1
+    for x in SX - 2 ..= SX + 14 {
+        for y in SY - 4 ..= SY do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, SY + 1, .Stone)
+    }
+    // A LOADED silo right next door, and a bench ten tiles further off.
+    set_tile(&gs.world, SX, SY, .Silo)
+    silo_on_placed(gs, {SX, SY})
+    s := silo_at(gs, gs.level_index, {SX, SY})
+    testing.expect(t, s != nil, "the silo should have a record")
+    silo_add(s, .Iron_Bar, 40)
+    set_tile(&gs.world, SX + 12, SY, .Crafting_Bench)
+
+    // handle_tile_mined would refuse the silo, so targeting must never offer
+    // it: a hunter that picks it arrives, swings forever, and the wave stalls.
+    testing.expect(t, wave_target_refused(gs, {SX, SY}), "a loaded silo refuses the smash")
+    T, ok := find_wave_structure_target(gs, {SX + 1, SY})
+    testing.expect(t, ok, "something must still be targetable")
+    testing.expect_value(t, T, [2]i32{SX + 12, SY})
+
+    // Emptied, it is fair game again — the rule is the load, not the tile.
+    s.slots = {}
+    testing.expect(t, !wave_target_refused(gs, {SX, SY}), "an empty silo is an ordinary structure")
+    T2, _ := find_wave_structure_target(gs, {SX + 1, SY})
+    testing.expect_value(t, T2, [2]i32{SX, SY})
+}
+
+@(test)
+air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // A high open corridor with a bench at the far end. A gravity-bound body
+    // dropped here would fall dozens of tiles before the run is out.
+    Y :: 20
+    for x in 15 ..= 85 do for y in Y - 3 ..= Y + 3 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, 80, Y, .Crafting_Bench)
+    gs.player.pos = {8, 8}
+
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 20, Y)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+    start := gs.enemies.data[fi].pos
+
+    for _ in 0 ..< 120 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    e := &gs.enemies.data[fi]
+    testing.expect(t, abs(e.pos.y - start.y) < 1.5, "a flyer must hold its altitude, not fall")
+    testing.expect(t, e.pos.x - start.x > 5, "a flyer must close on the structure it is hunting")
+
+    // And it does arrive and burn it down.
+    for _ in 0 ..< 600 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, 80, Y) != .Crafting_Bench do break
+    }
+    testing.expect(t, get_tile(&gs.world, 80, Y) != .Crafting_Bench, "the flyer must reach and smash its prey")
+
+    // Spawns put a flyer in the sky over the surface, not underground.
+    testing.expect(t, spawn_wave_flyer(gs, 0), "an air wave must find sky")
+    last := -1
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == .Fire_Sprite do last = i
+    testing.expect(t, gs.enemies.data[last].pos.y < f32(SURFACE_Y), "an air wave enters from above the surface")
+    testing.expect_value(t, gs.enemies.data[last].builder.goal, Builder_Goal.Wave_Hunt)
+}

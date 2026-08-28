@@ -2352,11 +2352,40 @@ draw_enemy :: proc(e: ^Enemy, t: f32) {
 	case .Undead:
 		draw_draugr(e)
 	case .Raider:
-		draw_builder(e, true)
+		draw_builder(e, .Raider)
+	case .Vargr:
+		draw_builder(e, .Vargr)
 	case .Fire_Sprite:
-		px := i32(e.pos.x * CELL_SIZE)
-		py := i32(e.pos.y * CELL_SIZE)
-		rl.DrawRectangle(px, py, i32(BUILDER_W * CELL_SIZE), i32(BUILDER_H * CELL_SIZE), rl.RED)
+		draw_fire_sprite(e, t)
+	}
+}
+
+// A small hard-stepped flame: an ember body whose two inner layers blink
+// between states off `t` (the boot-ember/orb-core language — discrete states,
+// no alpha fades), desynced per sprite by its own x so a wave of four does
+// not pulse in lockstep.
+draw_fire_sprite :: proc(e: ^Enemy, t: f32) {
+	px := e.pos.x * CELL_SIZE
+	py := e.pos.y * CELL_SIZE
+	pw := BUILDER_W * CELL_SIZE
+	ph := BUILDER_H * CELL_SIZE
+	phase := int(t*9 + e.pos.x*0.7)
+
+	rl.DrawRectangleRec({px, py + 1, pw, ph - 1}, rl.Color{150, 34, 12, 255})
+	rl.DrawRectangleRec({px + 1, py + 2, pw - 2, ph - 3}, rl.Color{235, 110, 26, 255})
+	// The core flickers a pixel taller every other step; the white-hot spark
+	// leads whichever way it is flying.
+	lift := f32(phase %% 2)
+	rl.DrawRectangleRec({px + 2, py + 3 - lift, pw - 4, ph - 5 + lift}, rl.Color{255, 196, 60, 255})
+	if phase %% 3 != 0 {
+		sx := px + (pw - 2) if e.facing >= 0 else px
+		rl.DrawRectangleRec({sx, py + 3, 2, 2}, rl.Color{255, 246, 210, 255})
+	}
+
+	if e.hp < e.hp_max {
+		w := i32(pw * f32(e.hp) / f32(e.hp_max))
+		rl.DrawRectangle(i32(px), i32(py) - 5, i32(pw), 3, rl.Color{45, 12, 12, 255})
+		rl.DrawRectangle(i32(px), i32(py) - 5, w, 3, rl.Color{235, 120, 30, 255})
 	}
 }
 
@@ -2627,8 +2656,32 @@ builder_frames := [2][BUILDER_FRAME_H]string {
 	},
 }
 
-builder_pixel_color :: proc(ch: u8, hunting: bool, raider := false) -> rl.Color {
-	if raider {
+// Which palette the shared builder frame wears.  The silhouette is one body;
+// only the colors say what you are looking at — the raider recolor, now with
+// a third arm for the wolf.
+Body_Tint :: enum u8 {
+	Builder,
+	Raider,
+	Vargr,
+}
+
+builder_pixel_color :: proc(ch: u8, hunting: bool, tint := Body_Tint.Builder) -> rl.Color {
+	if tint == .Vargr {
+		switch ch {
+		case 'O': return rl.Color{20, 20, 24, 255}       // wolf-dark outline
+		case 'I': return rl.Color{78, 80, 88, 255}       // winter pelt
+		case 'i': return rl.Color{146, 150, 160, 255}    // lit guard hairs
+		case 'L': return rl.Color{58, 58, 66, 255}       // flank shadow
+		case 'l': return rl.Color{38, 38, 44, 255}
+		case 'B': return rl.Color{104, 106, 116, 255}    // ruff
+		case 'b': return rl.Color{62, 64, 72, 255}
+		case 'R': return rl.Color{170, 172, 182, 255}    // ruff highlight
+		case 'K': return rl.Color{120, 122, 132, 255}    // muzzle
+		case 'E': return rl.Color{240, 210, 70, 255}     // wolf-yellow eyes
+		}
+		return {}
+	}
+	if tint == .Raider {
 		switch ch {
 		case 'O': return rl.Color{18, 14, 17, 255}       // soot-black outline
 		case 'I': return rl.Color{54, 48, 52, 255}       // blackened iron
@@ -2721,11 +2774,11 @@ draw_builder_carry :: proc(e: ^Enemy, ox, oy: f32) {
 	draw_builder_rect(ox, oy, e.facing, 9, 2, 1, 1, rl.Color{132, 136, 146, 255})
 }
 
-draw_builder :: proc(e: ^Enemy, raider := false) {
+draw_builder :: proc(e: ^Enemy, tint := Body_Tint.Builder) {
 	moving := abs(e.vel.x) > 0.2
 	frame_i := 0
 	if moving do frame_i = int(abs(e.pos.x) * 4) % 2
-	hunting := e.builder.goal == .Hunt
+	hunting := e.builder.goal == .Hunt || e.builder.goal == .Wave_Hunt
 	raised := hunting || e.builder.escaping || e.nav.mine_timer > 0
 
 	px := e.pos.x * CELL_SIZE
@@ -2745,7 +2798,7 @@ draw_builder :: proc(e: ^Enemy, raider := false) {
 			if e.facing < 0 do draw_col = BUILDER_FRAME_W - 1 - col
 			rl.DrawRectangleRec(
 				{ox + f32(draw_col), oy + f32(row), 1, 1},
-				builder_pixel_color(ch, hunting, raider),
+				builder_pixel_color(ch, hunting, tint),
 			)
 		}
 	}
@@ -2758,11 +2811,11 @@ draw_builder :: proc(e: ^Enemy, raider := false) {
 
 	// The hunt face opens into a tiny black shout under ember-bright eyes.
 	if hunting do draw_builder_rect(ox, oy, e.facing, 5, 5, 2, 1,
-		rl.Color{12, 8, 11, 255} if raider else rl.Color{24, 20, 24, 255})
+		rl.Color{12, 8, 11, 255} if tint != .Builder else rl.Color{24, 20, 24, 255})
 
-	// A wounded raider carries a soot-red health bar; ordinary builders keep
+	// A wounded raider or wolf carries a health bar; ordinary builders keep
 	// their quieter established silhouette.
-	if raider && e.hp < e.hp_max {
+	if tint != .Builder && e.hp < e.hp_max {
 		w := i32(pw * f32(e.hp) / f32(e.hp_max))
 		rl.DrawRectangle(i32(px), i32(py) - 5, i32(pw), 3, rl.Color{45, 12, 12, 255})
 		rl.DrawRectangle(i32(px), i32(py) - 5, w, 3, rl.Color{210, 58, 25, 255})

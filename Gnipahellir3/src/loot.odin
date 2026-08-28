@@ -29,6 +29,9 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     .Fire_Sprite = {},
     // Raiders arrive provisioned for digging and spill that material when stopped.
     .Raider      = {{.Stone_Block, 2, 4, 1.0}, {.Iron_Ore, 1, 2, 0.45}, {}},
+    // A wolf carries no tools and no trade-goods: waves are pressure, not a
+    // payout. Same empty row as the sprite until Glenn asks otherwise.
+    .Vargr       = {},
 }
 
 // xorshift64 step.  Zero-guards so a zeroed test state still rolls.

@@ -72,6 +72,17 @@ RAIDER_SPEED       :: f32(6.0)
 RAIDER_ATTACK_TIME :: f32(0.9)
 RAIDER_DAMAGE      :: 2
 
+// Wave enemies. AIR is the Fire_Sprite (a dead stub until now — no spawn proc
+// ever existed, so no save can contain one), GROUND is the Vargr, UNDERGROUND
+// is an ordinary Raider carrying .Wave_Hunt. The wave numbers are separate
+// knobs from the raid's on purpose: the two threats are tuned against
+// different things. All first guesses, playtest-tuned.
+FIRE_SPRITE_HP    :: 4
+FIRE_SPRITE_SPEED :: f32(5.0)
+VARGR_HP          :: 8
+WAVE_ATTACK_TIME  :: f32(0.9)
+WAVE_DAMAGE       :: 2
+
 // Den shell.  Tuned 3 -> 2 after playtest round 1: with 3 layers a dome
 // took ~an hour of builder time, so the floor stockpile (the raid payout)
 // never appeared in a real session.
@@ -279,9 +290,12 @@ enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
 // Ground speed by kind — the boss must outpace a walking builder.
 enemy_speed :: proc(kind: Enemy_Kind) -> f32 {
     #partial switch kind {
-    case .Garm:   return GARM_SPEED
-    case .Undead: return DRAUGR_SPEED
-    case .Raider: return RAIDER_SPEED
+    case .Garm:        return GARM_SPEED
+    case .Undead:      return DRAUGR_SPEED
+    case .Raider:      return RAIDER_SPEED
+    // A wolf runs the surface at a tunneller's pace; a sprite flies its own.
+    case .Vargr:       return RAIDER_SPEED
+    case .Fire_Sprite: return FIRE_SPRITE_SPEED
     }
     return BUILDER_SPEED
 }
@@ -862,7 +876,10 @@ raid_heat_target :: proc(gs: ^Game_State) -> (best: [2]i32, ok: bool) {
     return
 }
 
-spawn_raider :: proc(gs: ^Game_State, target: [2]i32, hint_x: int) -> bool {
+// `goal` is what separates the two threats that share this body: .Hunt is the
+// industry raider (one hot machine, then the player), .Wave_Hunt is the
+// UNDERGROUND wave (every structure in the base).
+spawn_raider :: proc(gs: ^Game_State, target: [2]i32, hint_x: int, goal := Builder_Goal.Hunt) -> bool {
     id, ok := enemy_alloc(&gs.enemies)
     if !ok do return false
 
@@ -878,7 +895,7 @@ spawn_raider :: proc(gs: ^Game_State, target: [2]i32, hint_x: int) -> bool {
     e.hp_max = RAIDER_HP
     e.facing = 1 if target.x >= i32(tx) else -1
     e.pos    = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1}
-    e.builder.goal        = .Hunt
+    e.builder.goal        = goal
     e.builder.target_tile = target
     e.builder.has_target  = true
     e.builder.plan_target = target
@@ -976,6 +993,130 @@ update_raids :: proc(gs: ^Game_State) {
     notify(gs, "The ground growls beneath the hot machine - kill its fire!")
     eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
     log_action(gs, "Industry raid warning at (%d,%d)", target.x, target.y)
+}
+
+// ─── Wave hunting (shared by every wave enemy) ──────────────────────────────
+
+// Would handle_tile_mined turn this tile away?  It refuses a loaded silo, a
+// loaded barrel/coffer, and a scroll chest still holding its scroll.  A wave
+// hunter must know that BEFORE it picks a target: discovering it by failing
+// at the tile is a livelock — the hunter arrives, swings forever, the tile
+// never falls, and the wave never resolves.  So refused containers are
+// excluded from targeting rather than found the hard way.
+wave_target_refused :: proc(gs: ^Game_State, T: [2]i32) -> bool {
+    x, y := int(T.x), int(T.y)
+    if !in_bounds(x, y) do return true
+    tile := get_tile(&gs.world, x, y)
+    if tile == .Silo {
+        if s := silo_at(gs, gs.level_index, T); s != nil do return silo_total(s) > 0
+        return false
+    }
+    if tile == .Barrel || tile == .Rune_Coffer || is_rune_scroll_chest(tile) {
+        if is_rune_scroll_chest(tile) && rune_scroll_chest_holds_scroll(gs, T) do return true
+        if b := barrel_at(gs, gs.level_index, T); b != nil do return barrel_total(b) > 0
+        return false
+    }
+    return false
+}
+
+// Nearest structure worth smashing.  Full-grid scan, the raid_heat_target
+// idiom — a wave hunter re-scans only after a kill, not every frame.
+find_wave_structure_target :: proc(gs: ^Game_State, from: [2]i32) -> (best: [2]i32, ok: bool) {
+    best_d := max(i64)
+    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+        if !is_structure_tile[gs.world.terrain[grid_idx(x, y)]] do continue
+        T := [2]i32{i32(x), i32(y)}
+        if wave_target_refused(gs, T) do continue
+        dx, dy := i64(T.x - from.x), i64(T.y - from.y)
+        if d := dx*dx + dy*dy; d < best_d {
+            best, best_d, ok = T, d, true
+        }
+    }
+    return
+}
+
+// Is the held target still worth attacking?  Goal-dependent so one brain
+// serves both threats: an industry raider keeps EXACTLY its old predicate,
+// a wave hunter takes any live structure the mined-tile handler will break.
+wave_target_valid :: proc(gs: ^Game_State, goal: Builder_Goal, T: [2]i32) -> bool {
+    t := get_tile(&gs.world, int(T.x), int(T.y))
+    if goal != .Wave_Hunt do return is_raid_machine(t)
+    return is_structure_tile[t] && !wave_target_refused(gs, T)
+}
+
+// Standable surface ground near hint_x — the sky-side mirror of
+// find_cave_floor: it scans the open air ABOVE the stone cap, so a wave
+// walker lands on the world's roof rather than in a cave pocket.
+find_surface_floor :: proc(w: ^World_Grid, hint_x: int) -> (tx, ty: int, ok: bool) {
+    for r in 0 ..= 40 {
+        for s in 0 ..= 1 {
+            sign := 1 - 2*s
+            cx := clamp(hint_x + r*sign, CAVE_LEFT, CAVE_RIGHT - 1)
+            for y in 1 ..< CAVE_TOP {
+                if !is_solid(w, cx, y) && is_solid(w, cx, y+1) do return cx, y, true
+            }
+        }
+    }
+    return 0, 0, false
+}
+
+// The x a wave enters from: alternating map edges, so a wave arrives as a
+// pincer rather than a queue down one lane.
+wave_edge_x :: proc(n: int) -> int {
+    return CAVE_LEFT + 6 if n % 2 == 0 else CAVE_RIGHT - 7
+}
+
+// AIR: a fire sprite drops in from the sky over the surface.  It flies, so it
+// needs no floor — only open air to hang in.
+spawn_wave_flyer :: proc(gs: ^Game_State, n: int) -> bool {
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return false
+
+    x := wave_edge_x(n)
+    y := max(2, SURFACE_Y - 8 - (n / 2))
+    e := &gs.enemies.data[id]
+    e^ = Enemy{
+        kind = .Fire_Sprite, hp = FIRE_SPRITE_HP, hp_max = FIRE_SPRITE_HP,
+        facing = 1 if x < GRID_W/2 else -1,
+        pos = {f32(x) + (1 - BUILDER_W)*0.5, f32(y)},
+    }
+    e.builder.goal = .Wave_Hunt
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    log_action(gs, "Fire sprite#%d drops out of the sky at (%d,%d)", id, x, y)
+    return true
+}
+
+// GROUND: a vargr walks in over the surface.
+spawn_wave_walker :: proc(gs: ^Game_State, n: int) -> bool {
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return false
+
+    tx, ty, found := find_surface_floor(&gs.world, wave_edge_x(n))
+    if !found {
+        enemy_free(&gs.enemies, id)
+        return false
+    }
+    e := &gs.enemies.data[id]
+    e^ = Enemy{
+        kind = .Vargr, hp = VARGR_HP, hp_max = VARGR_HP,
+        facing = 1 if tx < GRID_W/2 else -1,
+        pos = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1},
+    }
+    e.builder.goal = .Wave_Hunt
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    log_action(gs, "Vargr#%d comes over the ridge at (%d,%d)", id, tx, ty)
+    return true
+}
+
+// UNDERGROUND: the proven tunneller, re-aimed.  spawn_raider does the cave
+// pocket and the dig-aware approach; .Wave_Hunt is what makes it hunt the
+// whole base instead of one hot machine.  Bracket columns like a raid.
+spawn_wave_tunneller :: proc(gs: ^Game_State, n: int) -> bool {
+    pt := player_tile(&gs.player)
+    target, found := find_wave_structure_target(gs, pt)
+    if !found do target = pt
+    hint := clamp(int(target.x) + (18 if n % 2 == 0 else -18), CAVE_LEFT + 4, CAVE_RIGHT - 5)
+    return spawn_raider(gs, target, hint, .Wave_Hunt)
 }
 
 // ─── Raid Debug Actions (F4 menu, input.odin drives these) ──────────────────
@@ -1845,7 +1986,11 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         builder_fetch(e, id, gs, dt)
     case .Encase_Den:
         builder_encase(e, id, gs, dt)
-    case .Hunt:
+    case .Hunt, .Wave_Hunt:
+        // .Wave_Hunt is not a builder goal — only wave kinds carry it, and
+        // they run update_raider/update_fire_sprite instead.  Listed here
+        // rather than hidden behind a #partial so this switch keeps failing
+        // the build if a real goal is ever left out.
         builder_hunt(e, id, gs, dt)
     case .Cooldown:
         e.vel.x     = 0
@@ -1879,17 +2024,19 @@ update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     defender_alive := !gs.player.dead || golem_id >= 0
 
     strike_defender :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, golem_id: int) {
+        wave := e.builder.goal == .Wave_Hunt
         e.facing = 1 if T.x >= builder_tile(e).x else -1
-        e.builder.attack_timer = RAIDER_ATTACK_TIME
+        e.builder.attack_timer = WAVE_ATTACK_TIME if wave else RAIDER_ATTACK_TIME
+        dmg := WAVE_DAMAGE if wave else RAIDER_DAMAGE
         if golem_id >= 0 {
-            eq_push(&gs.events, Event{type = .Golem_Damaged, tile = {i32(golem_id), 0}, payload = {int_val = RAIDER_DAMAGE}})
+            eq_push(&gs.events, Event{type = .Golem_Damaged, tile = {i32(golem_id), 0}, payload = {int_val = i32(dmg)}})
             log_action(gs, "Tunneller#%d strikes golem#%d", id, golem_id)
         } else {
             eq_push(&gs.events, Event{
                 type    = .Damage_Dealt,
                 source  = enemy_entity_id(id),
                 target  = PLAYER_ID,
-                payload = {int_val = RAIDER_DAMAGE},
+                payload = {int_val = i32(dmg)},
             })
             log_action(gs, "Tunneller#%d strikes the player", id)
         }
@@ -1902,7 +2049,8 @@ update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         return
     }
 
-    if b.has_target && is_raid_machine(get_tile(&gs.world, int(b.target_tile.x), int(b.target_tile.y))) {
+    wave := b.goal == .Wave_Hunt
+    if b.has_target && wave_target_valid(gs, b.goal, b.target_tile) {
         if chebyshev(b.plan_target, b.target_tile) > 0 {
             b.plan_target = b.target_tile
             e.nav.path = {}
@@ -1910,14 +2058,14 @@ update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         if builder_travel(e, id, gs, dt, b.target_tile, 1) && b.attack_timer <= 0 {
             T := b.target_tile
             e.facing = 1 if T.x >= bt.x else -1
-            b.attack_timer = RAIDER_ATTACK_TIME
+            b.attack_timer = WAVE_ATTACK_TIME if wave else RAIDER_ATTACK_TIME
             // The normal mined-tile path drops the machine and every buffered
             // input/fuel/output item. The raid threatens the base, never the
             // conservation law.
             handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(id), tile = T})
             spawn_tile_fx(gs, .Raid_Rumble, T, 0.5, {235, 75, 28, 255})
-            notify(gs, "A tunneller smashes the hot machine!")
-            log_action(gs, "Tunneller#%d demolishes industry at (%d,%d)", id, T.x, T.y)
+            notify(gs, "A wave breaker tears your structure down!" if wave else "A tunneller smashes the hot machine!")
+            log_action(gs, "Enemy#%d demolishes a structure at (%d,%d)", id, T.x, T.y)
             b.has_target  = false
             b.plan_target = {-99, -99}
             e.nav.path    = {}
@@ -1925,6 +2073,18 @@ update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         return
     }
     b.has_target = false
+
+    // A wave hunter works the base down one structure at a time and only
+    // turns on the player when nothing built is left standing.
+    if wave {
+        if T, found := find_wave_structure_target(gs, bt); found {
+            b.target_tile = T
+            b.has_target  = true
+            b.plan_target = T
+            e.nav.path    = {}
+            return
+        }
+    }
 
     if !defender_alive {
         e.vel.x = 0
@@ -1937,6 +2097,94 @@ update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     if builder_travel(e, id, gs, dt, pt, 1) && b.attack_timer <= 0 {
         strike_defender(e, id, gs, pt, golem_id)
     }
+}
+
+// The first flying enemy.  It STEERS rather than paths: the surface is open
+// sky, and the shared A* is dig-aware — a flyer running it would tunnel
+// through the roof it is supposed to sail over.  Gravity is handed to the
+// SHARED mover as zero (update_enemies), so collision, grounding and the
+// entity-map bookkeeping stay identical to every other body's.
+update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
+    // Aim at a point: full speed toward it, and a wall dead ahead means rise.
+    // Naive on purpose — fine over open surface, noted for the real-trigger pass.
+    fly_to :: proc(e: ^Enemy, gs: ^Game_State, goal: [2]f32) {
+        center := [2]f32{e.pos.x + BUILDER_W*0.5, e.pos.y + BUILDER_H*0.5}
+        d      := goal - center
+        l      := math.sqrt(d.x*d.x + d.y*d.y)
+        if l < 0.001 {
+            e.vel = {}
+            return
+        }
+        e.vel    = d / l * FIRE_SPRITE_SPEED
+        e.facing = 1 if d.x >= 0 else -1
+        if is_solid(&gs.world, int(e.pos.x + f32(e.facing)*(BUILDER_W + 0.1)), int(e.pos.y + BUILDER_H - 0.5)) {
+            e.vel.y = -FIRE_SPRITE_SPEED
+        }
+    }
+
+    b := &e.builder
+    b.attack_timer -= dt
+    bt := builder_tile(e)
+
+    // Re-aim on spawn and whenever what it was burning is gone.
+    if !b.has_target || !wave_target_valid(gs, b.goal, b.target_tile) {
+        T, found := find_wave_structure_target(gs, bt)
+        b.target_tile, b.has_target = T, found
+    }
+
+    if b.has_target {
+        T := b.target_tile
+        if chebyshev(bt, T) <= 1 {
+            e.vel = {}
+            if b.attack_timer <= 0 {
+                b.attack_timer = WAVE_ATTACK_TIME
+                e.facing = 1 if T.x >= bt.x else -1
+                handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(id), tile = T})
+                spawn_tile_fx(gs, .Raid_Rumble, T, 0.5, {235, 75, 28, 255})
+                notify(gs, "A fire sprite burns your structure down!")
+                log_action(gs, "Fire sprite#%d burns the structure at (%d,%d)", id, T.x, T.y)
+                b.has_target = false
+            }
+            return
+        }
+        fly_to(e, gs, {f32(T.x) + 0.5, f32(T.y) + 0.5})
+        return
+    }
+
+    // Nothing built left standing: the sprite turns on whoever is defending.
+    pt := player_tile(&gs.player)
+    golem_id := -1
+    if gt, gid, gok := nearest_deployed_golem(gs, bt); gok &&
+       (gs.player.dead || chebyshev(bt, gt) < chebyshev(bt, pt)) {
+        pt = gt
+        golem_id = gid
+    }
+    if gs.player.dead && golem_id < 0 {
+        e.vel = {}
+        return
+    }
+
+    if chebyshev(bt, pt) <= 1 {
+        e.vel = {}
+        if b.attack_timer <= 0 {
+            b.attack_timer = WAVE_ATTACK_TIME
+            e.facing = 1 if pt.x >= bt.x else -1
+            if golem_id >= 0 {
+                eq_push(&gs.events, Event{type = .Golem_Damaged, tile = {i32(golem_id), 0}, payload = {int_val = i32(WAVE_DAMAGE)}})
+                log_action(gs, "Fire sprite#%d burns golem#%d", id, golem_id)
+            } else {
+                eq_push(&gs.events, Event{
+                    type    = .Damage_Dealt,
+                    source  = enemy_entity_id(id),
+                    target  = PLAYER_ID,
+                    payload = {int_val = i32(WAVE_DAMAGE)},
+                })
+                log_action(gs, "Fire sprite#%d burns the player", id)
+            }
+        }
+        return
+    }
+    fly_to(e, gs, {f32(pt.x) + 0.5, f32(pt.y) + 0.5})
 }
 
 // ─── Update All Enemies ───────────────────────────────────────────────────────
@@ -1964,7 +2212,18 @@ update_enemies :: proc(gs: ^Game_State) {
             move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_raider(e, i, gs, dt)
+        case .Vargr:
+            // The wolf IS the raider brain: same body, same travel, and
+            // .Wave_Hunt is what makes it hunt the whole base.
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
+            update_raider(e, i, gs, dt)
         case .Fire_Sprite:
+            // Zero gravity, zero max-fall: it flies through the shared mover,
+            // so collision and the entity map stay everyone else's code.
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+                0, 0, &e.grounded)
+            update_fire_sprite(e, i, gs, dt)
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }

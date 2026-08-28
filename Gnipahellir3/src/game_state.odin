@@ -37,6 +37,9 @@ Enemy_Kind :: enum u8 {
     Fire_Sprite,
     Builder,
     Raider, // industry-drawn tunneller; appended for save compatibility
+    // The GROUND wave: an outlaw-wolf that runs the surface and takes the
+    // base apart structure by structure. Appended for save compatibility.
+    Vargr,
 }
 
 Enemy_Nav :: struct {
@@ -57,6 +60,10 @@ Builder_Goal :: enum u8 {
     Encase_Den,     // carry the block home and place it on the den shell
     Hunt,           // chase and bite the player
     Cooldown,
+    // Wave-spawned: hunt EVERY structure (is_structure_tile), smash them one
+    // at a time, and only turn on the player once nothing built is standing.
+    // Appended: saved as u8 inside Builder_State.
+    Wave_Hunt,
 }
 
 Builder_State :: struct {
