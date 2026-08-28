@@ -9394,3 +9394,21 @@ garms_hound_stays_inside_his_frame :: proc(t: ^testing.T) {
     for d in garm_body         do check(t, d, "a body row escapes the 16x18 frame")
     for d in garm_details      do check(t, d, "a face row escapes the 16x18 frame")
 }
+
+@(test)
+the_fire_wand_testing_recipe_is_open_from_the_start :: proc(t: ^testing.T) {
+    // While waves are being tuned the wand IS the trigger, so it must be one
+    // bench click from a log and a stone, with no gem gate on the card.
+    testing.expect_value(t, recipe_unlock[.Fire_Wand], Item.None)
+
+    idx := -1
+    for r, i in recipe_table do if r.result == .Fire_Wand { idx = i; break }
+    testing.expect(t, idx >= 0, "a Fire Wand recipe exists")
+
+    r := recipe_table[idx]
+    testing.expect_value(t, r.station, Station.Bench)
+    testing.expect_value(t, r.result_count, 1)
+    testing.expect_value(t, r.ingredients[0], Ingredient{.Wood_Log, 1})
+    testing.expect_value(t, r.ingredients[1], Ingredient{.Stone_Block, 1})
+    testing.expect_value(t, r.ingredients[2], Ingredient{})
+}
