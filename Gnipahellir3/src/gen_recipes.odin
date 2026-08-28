@@ -112,6 +112,10 @@ recipe_table := [?]Recipe{
 	// Plank 2 + Iron Ore 2 + Emerald 1 — the gem-economy sink — when the real
 	// wave trigger lands.
 	{ .Fire_Wand, 1, .Bench, {{.Wood_Log, 1}, {.Stone_Block, 1}, {}} },
+	// Base defense, rung one: the same log-and-stone price as the wand that
+	// calls the waves in, and no unlock row - a turret you cannot build yet is
+	// a turret that arrives after the base is already gone.
+	{ .Rainbow_Laser, 1, .Bench, {{.Wood_Log, 1}, {.Stone_Block, 1}, {}} },
 }
 
 // Recipe unlock tree: a recipe stays hidden until the player first holds its

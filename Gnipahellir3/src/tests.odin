@@ -9412,3 +9412,68 @@ the_fire_wand_testing_recipe_is_open_from_the_start :: proc(t: ^testing.T) {
     testing.expect_value(t, r.ingredients[1], Ingredient{.Stone_Block, 1})
     testing.expect_value(t, r.ingredients[2], Ingredient{})
 }
+
+@(test)
+the_rainbow_laser_zaps_the_nearest_enemy_in_range :: proc(t: ^testing.T) {
+    seed :: proc(gs: ^Game_State, x, y: f32) -> int {
+        id, ok := enemy_alloc(&gs.enemies)
+        if !ok do return -1
+        gs.enemies.data[id] = Enemy{pos = {x, y}, kind = .Raider, hp = 50, hp_max = 50}
+        return id
+    }
+    fire :: proc(gs: ^Game_State) {
+        update_sim(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = LASER_COOLDOWN   // one tick = one full charge
+
+    LX :: 60
+    LY :: SURFACE_Y - 1
+    set_tile(&gs.world, LX, LY, .Rainbow_Laser)
+
+    // Twelve tiles out is beyond LASER_RANGE: the turret holds its fire no
+    // matter how long it charges.
+    far := seed(gs, LX + 12, LY)
+    testing.expect(t, far >= 0, "the far enemy should have a slot")
+    for _ in 0 ..< 4 do fire(gs)
+    testing.expect_value(t, gs.enemies.data[far].hp, 50)
+
+    // Three tiles out is inside it, and it is now the NEAREST — one charged
+    // tick spends itself on that one, and the far enemy is still untouched.
+    near := seed(gs, LX + 3, LY)
+    testing.expect(t, near >= 0, "the near enemy should have a slot")
+    fire(gs)
+    testing.expect_value(t, gs.enemies.data[near].hp, 50 - LASER_DAMAGE)
+    testing.expect_value(t, gs.enemies.data[far].hp, 50)
+
+    // The beam render reads the same pure aim the tick fired with.
+    ei, ok := laser_target(gs, LX, LY)
+    testing.expect(t, ok, "a target in range must be visible to the beam pass")
+    testing.expect_value(t, ei, near)
+}
+
+@(test)
+the_rainbow_laser_is_a_bench_craft_and_a_structure :: proc(t: ^testing.T) {
+    // Known from the start: a turret you cannot build until some gate opens
+    // arrives after the base it was meant to defend is gone.
+    testing.expect_value(t, recipe_unlock[.Rainbow_Laser], Item.None)
+
+    idx := -1
+    for r, i in recipe_table do if r.result == .Rainbow_Laser { idx = i; break }
+    testing.expect(t, idx >= 0, "a Rainbow Laser recipe exists")
+    r := recipe_table[idx]
+    testing.expect_value(t, r.station, Station.Bench)
+    testing.expect_value(t, r.ingredients[0], Ingredient{.Wood_Log, 1})
+    testing.expect_value(t, r.ingredients[1], Ingredient{.Stone_Block, 1})
+
+    // The item places the tile, the tile drops the item back, and it counts as
+    // a structure — so the pick reclaims it and wave hunters will hunt it.
+    testing.expect_value(t, item_table[.Rainbow_Laser].place_tile, Tile_Type.Rainbow_Laser)
+    testing.expect_value(t, terrain_table[.Rainbow_Laser].drop_item, Item.Rainbow_Laser)
+    testing.expect(t, is_structure_tile[.Rainbow_Laser], "a laser must be reclaimable structure, not scenery")
+    testing.expect(t, tile_on_tick[.Rainbow_Laser] != nil, "a placed laser must tick")
+}

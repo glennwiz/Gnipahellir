@@ -182,6 +182,10 @@ Tile_Type :: enum u8 {
     // (E, Hell Key in the bag) wins the run; the future Hell fight will
     // guard it.  (appended: terrain ordinals are serialized)
     Final_Seal,
+    // The first defense structure: once placed it beams the nearest enemy
+    // inside LASER_RANGE on its own cooldown, no fuel and no aiming.
+    // (appended: terrain ordinals are serialized)
+    Rainbow_Laser,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -322,6 +326,10 @@ Item :: enum u8 {
     // the cursor for mana — combat's answer to the mine wand. (appended: item
     // ordinals are serialized)
     Fire_Wand,
+    // The first defense structure: place it and it beams the nearest enemy in
+    // range by itself — base defense the player does not have to aim.
+    // (appended: item ordinals are serialized)
+    Rainbow_Laser,
     // <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

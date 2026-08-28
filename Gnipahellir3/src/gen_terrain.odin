@@ -103,6 +103,7 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Mana_Mist = { "Mana Mist", {.Walkable}, {225, 200, 245, 110}, 1, 0, .None, 0 },
 	.Hell_Gate = { "Hell Gate", {.Walkable}, {200, 40, 30, 255}, 1, 0, .None, 0 },
 	.Final_Seal = { "Final Seal", {.Solid}, {120, 20, 30, 255}, 0, 0, .None, 0 },
+	.Rainbow_Laser = { "Rainbow Laser", {.Solid, .Mineable, .Placeable}, {170, 150, 210, 255}, 0, 0, .Rainbow_Laser, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -184,6 +185,9 @@ is_structure_tile := #partial [Tile_Type]bool{
 	.Gem_Replicator = true,
 	.Magic_Kettle = true,
 	.Mana_Wheel = true,
+	// A turret is equipment, not scenery: the pick reclaims it, and the wave
+	// hunters count it among the structures worth smashing.
+	.Rainbow_Laser = true,
 }
 
 // Stations read as magical in-world: a dark base, a breathing glow in the
@@ -228,4 +232,6 @@ station_glow := #partial [Tile_Type]rl.Color{
 	.Mana_Wheel = {225, 190, 255, 255},
 	.Hell_Gate = {255, 70, 45, 255},
 	.Final_Seal = {200, 40, 80, 255},
+	// prismatic rose - the lens between shots
+	.Rainbow_Laser = {255, 150, 220, 255},
 }

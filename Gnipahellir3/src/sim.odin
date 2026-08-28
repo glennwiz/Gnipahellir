@@ -19,6 +19,12 @@ FLOWER_BED_GROW_TIME :: f32(120.0)  // seconds for a bed to bloom (~2 min)
 MUSHROOM_GROW_TIME :: f32(120.0)  // seconds for mossy stone to regrow its mushroom (~2 min)
 TREE_MAX_H     :: 5          // tallest grown trunk; clearance is checked to here
 
+// The Rainbow Laser, base defense rung one.  First guesses, tuned in playtest:
+// eight tiles of reach, two damage a shot, one shot every half second.
+LASER_RANGE    :: f32(8)
+LASER_DAMAGE   :: 2
+LASER_COOLDOWN :: f32(0.5)
+
 // The Gem Replicator only works as deep as gems actually form: caves 2/3 roll
 // gems at depth > 60 below CAVE_LVL_TOP (levels.odin), so this is that exact
 // row.  Checked at placement — the condition is static per cell, so a refusal
@@ -136,6 +142,51 @@ tick_engine :: proc(gs: ^Game_State, x, y: int) {
     }
 }
 
+// The turret's aim: the nearest live enemy whose body center lies inside
+// LASER_RANGE of this tile's center, or ok=false.  PURE — render re-runs it
+// every frame to draw the beam, so it must never touch Game_State.  Squared
+// distances only, so sim.odin still needs no math import.
+laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
+    cx, cy := f32(x) + 0.5, f32(y) + 0.5
+    best_d := LASER_RANGE * LASER_RANGE
+    best = -1
+    for ei in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[ei] do continue
+        e    := &gs.enemies.data[ei]
+        size := enemy_body_size(e.kind)
+        dx   := e.pos.x + size.x*0.5 - cx
+        dy   := e.pos.y + size.y*0.5 - cy
+        if d := dx*dx + dy*dy; d <= best_d {
+            best, best_d, ok = ei, d, true
+        }
+    }
+    return
+}
+
+// A placed laser charges to LASER_COOLDOWN and fires the moment something
+// walks into range — the charge CAPS rather than growing, so an idle turret
+// is instantly ready and its timer never drifts.  Charge rides growth_timer,
+// which is safe scratch here: raid_machine_hot reads that field only on the
+// three heat machines (is_raid_machine), never on a turret.
+// The hit is a plain Damage_Dealt event, so hp, sound, damage number and
+// blood all come free from the handler in events.odin.
+tick_rainbow_laser :: proc(gs: ^Game_State, x, y: int) {
+    sd := &gs.world.sim_data[grid_idx(x, y)]
+    sd.growth_timer = min(sd.growth_timer + gs.delta_time, LASER_COOLDOWN)
+    if sd.growth_timer < LASER_COOLDOWN do return
+
+    ei, ok := laser_target(gs, x, y)
+    if !ok do return
+
+    sd.growth_timer = 0
+    eq_push(&gs.events, Event{
+        type    = .Damage_Dealt,
+        source  = PLAYER_ID,
+        target  = enemy_entity_id(ei),
+        payload = {int_val = i32(LASER_DAMAGE)},
+    })
+}
+
 @(rodata)
 tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Smelter     = tick_smelter,
@@ -149,6 +200,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Mossy_Stone = tick_mossy_stone,
     .Magic_Kettle = tick_boiler,
     .Mana_Wheel   = tick_engine,
+    .Rainbow_Laser = tick_rainbow_laser,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is

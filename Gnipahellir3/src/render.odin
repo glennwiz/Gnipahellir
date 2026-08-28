@@ -29,6 +29,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	draw_golem_orders(gs)
 	draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
 	draw_enemies(&gs.enemies, gs.elapsed_time)
+	draw_lasers(gs)
 	draw_golems(gs)
 	draw_projectiles(&gs.projectiles)
 	draw_tile_fx(gs)
@@ -2286,6 +2287,51 @@ draw_reclaim_target :: proc(gs: ^Game_State) {
 	rl.DrawRectangleLinesEx({bx + 0.5, by + 0.5, CELL_SIZE - 1, CELL_SIZE - 1}, 1, edge)
 	rl.DrawRectangle(i32(bx), i32(by) + CELL_SIZE - 2, CELL_SIZE, 2, rl.Color{35, 15, 10, 220})
 	rl.DrawRectangle(i32(bx), i32(by) + CELL_SIZE - 2, i32(progress * CELL_SIZE), 2, edge)
+}
+
+// ─── Rainbow Laser beams ──────────────────────────────────────────────────────
+
+// The band the beam steps through. Hard steps, no blending — the pixel-style
+// language the orb birth and the boot embers already speak.
+@(rodata)
+laser_band := [7]rl.Color{
+	{255, 60, 60, 255},
+	{255, 150, 40, 255},
+	{255, 235, 70, 255},
+	{80, 240, 110, 255},
+	{70, 180, 255, 255},
+	{130, 110, 255, 255},
+	{225, 100, 255, 255},
+}
+
+LASER_STRIPS :: 4   // parallel 1px strips that make up one beam
+
+// Read-only: every beam is recomputed from laser_target — the same pure proc
+// the tick aims with — so what you see IS what the turret is shooting. The
+// beam is continuous while the target holds range; the damage stays on the
+// LASER_COOLDOWN clock in sim.odin.
+draw_lasers :: proc(gs: ^Game_State) {
+	step := int(gs.elapsed_time * 8)
+	for y in 0 ..< GRID_H {
+		for x in 0 ..< GRID_W {
+			if gs.world.terrain[grid_idx(x, y)] != .Rainbow_Laser {continue}
+			ei, ok := laser_target(gs, x, y)
+			if !ok {continue}
+			e    := &gs.enemies.data[ei]
+			size := enemy_body_size(e.kind)
+			a := rl.Vector2{(f32(x) + 0.5) * CELL_SIZE, (f32(y) + 0.5) * CELL_SIZE}
+			b := rl.Vector2{(e.pos.x + size.x*0.5) * CELL_SIZE, (e.pos.y + size.y*0.5) * CELL_SIZE}
+			d := b - a
+			l := math.sqrt(d.x*d.x + d.y*d.y)
+			if l < 0.001 {continue}
+			n := rl.Vector2{-d.y / l, d.x / l}   // unit normal: strips run parallel
+			for s in 0 ..< LASER_STRIPS {
+				col := laser_band[(step + s) %% len(laser_band)]
+				o   := f32(s) - f32(LASER_STRIPS-1)*0.5
+				rl.DrawLineEx(a + n*o, b + n*o, 1, col)
+			}
+		}
+	}
 }
 
 // ─── Enemies ──────────────────────────────────────────────────────────────────

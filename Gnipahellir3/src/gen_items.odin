@@ -111,6 +111,7 @@ item_table := [Item]Item_Info{
 	.Mana_Pipe = { "Mana Pipe", {160, 130, 190, 255}, .Air, "A conduit fitting: place it on an open cell to dress your plumbing. Fluid moves exactly as it always did - the pipe just lets you see it, lit by whatever's flowing through." },
 	.Mossy_Stone = { "Mossy Stone", {96, 138, 90, 255}, .Mossy_Stone, "Cave stone furred green with moss. Set it down under open air and cave mushrooms take root on it." },
 	.Fire_Wand = { "Fire Wand", {235, 110, 30, 255}, .Air, "Hurls fire orbs at the cursor - hold to stream them. Each orb costs mana; the orb flies straight and bursts on whatever it strikes." },
+	.Rainbow_Laser = { "Rainbow Laser", {170, 150, 210, 255}, .Rainbow_Laser, "Set it down and it defends the ground it stands on: a prismatic beam finds the nearest enemy within eight tiles and burns it, no fuel and no aiming. Reclaim it with a pick when the fight moves." },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.
