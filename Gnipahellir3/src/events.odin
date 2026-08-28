@@ -30,10 +30,32 @@ eq_clear :: proc(eq: ^Event_Queue) {
 
 // ─── Event Processing ─────────────────────────────────────────────────────────
 
+// The event trace's exclusion list — the ONLY events kept out of the log, and
+// only because they are pure audio/visual noise with no bearing on what
+// happened in the world.  Everything else is traced, including the types with
+// no handler and no bespoke line: the point is that a run reconstructs from
+// the log, and a type nobody thought worth announcing is exactly the one
+// missing when a mystery turns up.
+//
+// Direct handler calls (a raider calling handle_tile_mined itself) bypass this
+// trace entirely and are covered at handler level instead.
+@(rodata)
+event_log_skip := #partial [Event_Type]bool{
+    .Play_Sound        = true,  // audio cue, nothing else
+    .Projectile_Impact = true,  // spawns an impact burst, nothing else
+}
+
 process_events :: proc(gs: ^Game_State) {
     for {
         e, ok := eq_pop(&gs.events)
         if !ok do break
+
+        when GAME_DEBUG {
+            if !event_log_skip[e.type] {
+                log_action(gs, "evt %v src=%d tgt=%d tile=(%d,%d) val=%d",
+                    e.type, e.source, e.target, e.tile.x, e.tile.y, e.payload.int_val)
+            }
+        }
 
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).

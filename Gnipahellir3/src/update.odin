@@ -128,8 +128,12 @@ game_update :: proc(gs: ^Game_State) {
             gs.events.dropped = 0
         }
 
-        // Flush action log to disk every 5 seconds (300 frames) for crash safety
+        // Flush action log to disk every 5 seconds (300 frames) for crash
+        // safety, and stamp where everyone is on the same beat — the log then
+        // carries a position for every body at 5 s resolution whether or not
+        // anything happened to them.
         if gs.frame % 300 == 0 && gs.frame > 0 {
+            log_breadcrumbs(gs)
             flush_action_log(gs)
         }
     }

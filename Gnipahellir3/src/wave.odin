@@ -60,7 +60,13 @@ wave_force :: proc(gs: ^Game_State, kind: Wave_Kind) -> int {
 update_waves :: proc(gs: ^Game_State) {
     if !gs.wave.pending || gs.level_index != LEVEL_SURFACE do return
     gs.wave.pending = false
-    wave_force(gs, Wave_Kind(gs.wave.cycle %% len(Wave_Kind)))
+    kind := Wave_Kind(gs.wave.cycle %% len(Wave_Kind))
+    next := Wave_Kind((gs.wave.cycle + 1) %% len(Wave_Kind))
+    // The cycle position is invisible in-game, so a log that only names the
+    // wave leaves you counting backwards to work out what the next craft buys.
+    log_action(gs, "wave cycle %d -> spawning %s, next %s",
+        gs.wave.cycle, wave_name[kind], wave_name[next])
+    wave_force(gs, kind)
     gs.wave.cycle += 1
 }
 

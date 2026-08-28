@@ -9767,3 +9767,24 @@ a_smashed_bench_logs_its_killer :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]),
         "Player mines Crafting_Bench"), "the player's own mining should read as mining")
 }
+
+@(test)
+the_event_trace_logs_what_the_queue_processed :: proc(t: ^testing.T) {
+    // The trace is the "all happenings" net: every event the queue processes
+    // gets a line, including the types with no handler and no bespoke message.
+    // Only pure audio/visual noise is excluded, by the rodata skip table.
+    gs := test_state()
+    defer free(gs)
+
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Mine)}})
+    eq_push(&gs.events, Event{type = .Level_Exit, source = PLAYER_ID, tile = {7, 9}})
+    gs.debug_log.pos = 0
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    traced := string(gs.debug_log.buf[:gs.debug_log.pos])
+    testing.expect(t, strings.contains(traced, "evt Level_Exit src=0 tgt=0 tile=(7,9)"),
+        "an event with no bespoke line should still be traced")
+    testing.expect(t, !strings.contains(traced, "evt Play_Sound"),
+        "pure audio noise stays out of the trace")
+}

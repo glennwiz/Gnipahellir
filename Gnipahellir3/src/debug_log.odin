@@ -66,6 +66,24 @@ flush_action_log :: proc(gs: ^Game_State) {
     dl.pos = 0
 }
 
+// Where every live body IS, written on update.odin's 5 s flush beat.  Bespoke
+// lines only fire when something HAPPENS, so a flyer that drifts to the map
+// edge and then does nothing leaves no trace at all — which is precisely how
+// two fire sprites went missing from a playtest for 63 s.  Worst case is
+// 1 + MAX_ENEMIES lines per beat, which is nothing now that the log streams.
+log_breadcrumbs :: proc(gs: ^Game_State) {
+    when !GAME_DEBUG { return }
+    p := &gs.player
+    log_action(gs, "pos Player (%.1f,%.1f) hp=%d mana=%.0f lvl=%d",
+        p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index)
+    for &e, i in gs.enemies.data {
+        if !gs.enemies.active[i] do continue
+        log_action(gs, "pos Enemy#%d %v (%.1f,%.1f) hp=%d goal=%v target=(%d,%d)",
+            i, e.kind, e.pos.x, e.pos.y, e.hp,
+            e.builder.goal, e.builder.target_tile.x, e.builder.target_tile.y)
+    }
+}
+
 // Name an entity for a log line: "Player", "Enemy#3(Fire_Sprite)", or "the
 // world" for the sourceless hurts (lava, a fall).  Formats into the CALLER's
 // buffer, so attributing a line still allocates nothing.  One place, because
