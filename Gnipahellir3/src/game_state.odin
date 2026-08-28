@@ -784,17 +784,21 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     // once in main(); stats and key bindings persist across runs). debug_log,
     // cam_log and mouse_log are NOT preserved here: they're multi-hundred-KB
     // buffers, too large to stack-copy, and losing an unflushed tail on a New
-    // Game is harmless (all three are diagnostic only).
+    // Game is harmless (all three are diagnostic only).  Its target PATH is
+    // the exception: it is what arms the log for disk at all, and a New Game
+    // must keep writing the run's record, not fall silent.
     audio    := gs.audio
     assets   := gs.assets
     stats    := gs.stats
     bindings := gs.bindings
+    log_path := gs.debug_log.path
 
     gs^ = {}  // zero all fields
 
     gs.audio  = audio
     gs.assets = assets
     gs.stats  = stats
+    gs.debug_log.path = log_path
     // First boot arrives zeroed (KEY_NULL) — take the defaults then.
     gs.bindings = bindings[.Move_Left] == .KEY_NULL ? default_bindings : bindings
     gs.ui.settings_capture = -1

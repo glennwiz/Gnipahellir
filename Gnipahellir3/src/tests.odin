@@ -9697,3 +9697,38 @@ the_f4_wave_menu_forces_and_clears_waves :: proc(t: ^testing.T) {
     testing.expect_value(t, wave_count_kind(gs, .Builder), builders)
     testing.expect_value(t, gs.wave, Wave_State{})
 }
+
+// ─── Action log ───────────────────────────────────────────────────────────────
+
+@(test)
+the_action_log_streams_instead_of_dropping :: proc(t: ^testing.T) {
+    // The old log stopped writing once its 256 KB buffer filled, which is how
+    // 63 s of a playtest went missing.  Flushing now APPENDS and empties, so a
+    // run's record grows without bound and no line is ever lost.
+    //
+    // A scratch path, never src/action.log — that file is Glenn's playtest
+    // ground truth.  Every OTHER test is safe without saying so: a Debug_Log
+    // with no path opens no file at all, and only main() arms the real one.
+    path :: "gnipahellir_action_stream_scratch.log"
+    os.remove(path)
+    defer os.remove(path)
+
+    gs := test_state()
+    defer free(gs)
+    gs.debug_log.path = path
+    gs.debug_log.pos  = 0   // drop whatever init logged; count only our lines
+
+    LINES :: 4000  // ~88 bytes each ≈ 350 KB, comfortably past DEBUG_LOG_CAP
+    for i in 0 ..< LINES {
+        log_action(gs, "streaming probe line padded out so the buffer fills quickly %d", i)
+    }
+    flush_action_log(gs)
+    testing.expect_value(t, gs.debug_log.pos, 0)
+
+    data, err := os.read_entire_file_from_path(path, context.allocator)
+    defer delete(data)
+    testing.expect(t, err == nil, "the streamed log should exist on disk")
+    testing.expect_value(t, strings.count(string(data), "\n"), LINES)
+    testing.expectf(t, len(data) > DEBUG_LOG_CAP,
+        "the file must outgrow the buffer, got %d bytes", len(data))
+}

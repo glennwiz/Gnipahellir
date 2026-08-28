@@ -50,6 +50,7 @@ main :: proc() {
     audio_init(&gs.audio)
     assets_init(&gs.assets)
     load_pixel_art(gs) // missing/invalid file leaves every sprite's has_data false (procedural fallback)
+    action_log_begin_run(gs) // truncate action.log + header; arms the log for disk (tests never do)
 
     if !load_game(gs) {
         // Fresh run: spawn player on the surface, a few tiles left of the cave entrance
