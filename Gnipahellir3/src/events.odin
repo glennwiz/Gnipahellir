@@ -64,7 +64,9 @@ process_events :: proc(gs: ^Game_State) {
                         audio_play(&gs.audio, .Hurt)
                         spawn_damage_number(&gs.floating_text,
                             {gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y}, dmg, DAMAGE_COLOR)
-                        log_action(gs, "Player takes %d damage (hp %d)", dmg, gs.player.hp)
+                        src_buf: [32]u8
+                        log_action(gs, "Player takes %d damage from %s (hp %d)",
+                            dmg, entity_name(gs, e.source, src_buf[:]), gs.player.hp)
                         if gs.player.hp <= 0 {
                             gs.player.hp = 0
                             eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
@@ -91,7 +93,9 @@ process_events :: proc(gs: ^Game_State) {
                         if dist > 0.1 do dir = d / dist
                     }
                     spawn_hit_burst(gs, ec, dir, enemy_blood[en.kind])
-                    log_action(gs, "Enemy#%d takes %d damage (hp %d)", i, e.payload.int_val, en.hp)
+                    src_buf: [32]u8
+                    log_action(gs, "Enemy#%d(%v) takes %d damage from %s (hp %d)",
+                        i, en.kind, e.payload.int_val, entity_name(gs, e.source, src_buf[:]), en.hp)
                     if en.hp <= 0 {
                         eq_push(&gs.events, Event{type = .Entity_Died, source = e.target})
                     } else if en.kind == .Builder && e.source == PLAYER_ID {
@@ -457,6 +461,8 @@ process_events :: proc(gs: ^Game_State) {
 
 handle_entity_died :: proc(gs: ^Game_State, e: Event) {
     if e.source == PLAYER_ID {
+        pt := player_tile(&gs.player)
+        log_action(gs, "Player dies at (%d,%d) after %.0f s", pt.x, pt.y, gs.elapsed_time)
         eq_push(&gs.events, Event{type = .Player_Died})
         audio_play(&gs.audio, .Death)
         gs.stats.runs_played += 1
@@ -474,6 +480,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
             T := builder_tile(en)
             audio_play(&gs.audio, .Kill)
             gs.stats.total_kills += 1
+            log_action(gs, "Enemy#%d(%v) dies at (%d,%d)", i, en.kind, T.x, T.y)
             roll_enemy_drops(gs, en.kind, T)   // loot lands where they fell
             if en.kind == .Garm {
                 log_action(gs, "GARM slain - Hell Key drops at (%d,%d)", T.x, T.y)
@@ -499,6 +506,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
             if silo_total(s) > 0 {
                 notify(gs, "The silo is too heavy to break - empty it first ([%v] beside it)",
                     gs.bindings[.Interact])
+                log_action(gs, "mine refused: loaded silo at (%d,%d)", x, y)
                 return
             }
         }
@@ -514,11 +522,13 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         // thing that swallows it.
         if is_rune_scroll_chest(old_tile) && rune_scroll_chest_holds_scroll(gs, e.tile) {
             notify(gs, "Take the rune scroll first")
+            log_action(gs, "mine refused: %v still holds its rune scroll at (%d,%d)", old_tile, x, y)
             return
         }
         if b := barrel_at(gs, gs.level_index, e.tile); b != nil {
             if barrel_total(b) > 0 {
                 notify(gs, "The chest is full - empty it before you break it")
+                log_action(gs, "mine refused: loaded %v at (%d,%d)", old_tile, x, y)
                 return
             }
         }
@@ -568,6 +578,16 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     if gs.level_index == LEVEL_SKY || (gs.level_index == LEVEL_SURFACE && y < SURFACE_Y) {
         fill = .Air
     }
+    // Ground truth for the whole demolition story: one line naming WHO took
+    // this tile.  Every mine funnels through here - the player's pick and wand,
+    // a reclaim, and the raiders and sprites that call this handler directly
+    // instead of queueing an event - so the bespoke flavor lines elsewhere add
+    // intent on top of this rather than being the only record.
+    actor_buf: [32]u8
+    log_action(gs, "%s %s %v at (%d,%d)",
+        entity_name(gs, e.source, actor_buf[:]),
+        e.source == PLAYER_ID ? "mines" : "smashes", old_tile, x, y)
+
     set_tile(&gs.world, x, y, fill)
     golem_remove_block_mark(gs,e.tile)
     gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed} // the placed block is gone

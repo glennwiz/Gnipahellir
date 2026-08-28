@@ -182,6 +182,7 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         gs.world.tile_flags[grid_idx(x, y-1)] += {.Placed}
     }
     eq_push(&gs.events, Event{type = .Tile_Placed, source = PLAYER_ID, tile = e.tile})
+    log_action(gs, "Player places %v at (%d,%d)", place_tile, x, y)
 
     // A placed spawner is a door waiting to be opened.
     if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold || place_tile == .Dimension_Spawner_Runic {

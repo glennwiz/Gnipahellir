@@ -2,6 +2,7 @@ package game
 
 import "core:testing"
 import "core:strings"
+import "core:fmt"
 import "core:log"
 import "core:os"
 
@@ -9731,4 +9732,38 @@ the_action_log_streams_instead_of_dropping :: proc(t: ^testing.T) {
     testing.expect_value(t, strings.count(string(data), "\n"), LINES)
     testing.expectf(t, len(data) > DEBUG_LOG_CAP,
         "the file must outgrow the buffer, got %d bytes", len(data))
+}
+
+@(test)
+a_smashed_bench_logs_its_killer :: proc(t: ^testing.T) {
+    // Demolition lines used to say what happened but never who did it, so an
+    // enemy razing the base read exactly like the player tidying up.  Every
+    // mine funnels through handle_tile_mined, which is why one line there
+    // covers the pick, the wand, a reclaim and the raiders that call the
+    // handler directly.
+    gs := test_state()
+    defer free(gs)
+
+    spawn_builder(gs, 40)
+    i := -1
+    for active, k in gs.enemies.active do if active { i = k; break }
+    testing.expect(t, i >= 0, "a builder should be standing")
+
+    T := [2]i32{60, i32(SURFACE_Y - 1)}
+    set_tile(&gs.world, int(T.x), int(T.y), .Crafting_Bench)
+
+    gs.debug_log.pos = 0
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(i), tile = T})
+
+    want_buf: [80]u8
+    want := fmt.bprintf(want_buf[:], "Enemy#%d(Builder) smashes Crafting_Bench at (%d,%d)", i, T.x, T.y)
+    testing.expectf(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]), want),
+        "the log should name the killer - wanted %q", want)
+
+    // The player's own pick reads as mining, not as a raid.
+    set_tile(&gs.world, int(T.x), int(T.y), .Crafting_Bench)
+    gs.debug_log.pos = 0
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = PLAYER_ID, tile = T})
+    testing.expect(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]),
+        "Player mines Crafting_Bench"), "the player's own mining should read as mining")
 }

@@ -105,6 +105,11 @@ roll_enemy_drops :: proc(gs: ^Game_State, kind: Enemy_Kind, tile: [2]i32) {
     for d in enemy_drop_table[kind] {
         if d.item == .None do continue
         if rand_f32(gs) >= d.chance do continue
-        spawn_ground_item(&gs.world, tile, d.item, rand_range(gs, int(d.min), int(d.max)))
+        n := rand_range(gs, int(d.min), int(d.max))
+        // What ACTUALLY dropped, not what the table might have paid: the roll
+        // is the only place that knows, and the death line right above it is
+        // where the reader is looking.
+        log_action(gs, "%v drops %v x%d at (%d,%d)", kind, d.item, n, tile.x, tile.y)
+        spawn_ground_item(&gs.world, tile, d.item, n)
     }
 }

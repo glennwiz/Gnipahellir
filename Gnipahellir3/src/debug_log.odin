@@ -66,6 +66,20 @@ flush_action_log :: proc(gs: ^Game_State) {
     dl.pos = 0
 }
 
+// Name an entity for a log line: "Player", "Enemy#3(Fire_Sprite)", or "the
+// world" for the sourceless hurts (lava, a fall).  Formats into the CALLER's
+// buffer, so attributing a line still allocates nothing.  One place, because
+// "who did that" is the question every damage and demolition line has to
+// answer and the answer must read the same everywhere.
+entity_name :: proc(gs: ^Game_State, id: Entity_ID, buf: []u8) -> string {
+    if id == PLAYER_ID do return "Player"
+    i := entity_id_to_enemy_index(id)
+    if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
+        return fmt.bprintf(buf, "Enemy#%d(%v)", i, gs.enemies.data[i].kind)
+    }
+    return "the world"
+}
+
 // Open the run's record: truncate the file, arm the path, write the header.
 // Called once from main before the loop — a run owns the log it writes, and
 // the previous run's log is the one the player has already read.  Loading a

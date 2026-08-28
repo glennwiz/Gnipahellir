@@ -179,6 +179,9 @@ tick_rainbow_laser :: proc(gs: ^Game_State, x, y: int) {
     if !ok do return
 
     sd.growth_timer = 0
+    // A laser fires as the PLAYER, so its hits and the wand's are the same
+    // source once the damage event lands - this line is what tells them apart.
+    log_action(gs, "Laser at (%d,%d) zaps Enemy#%d for %d", x, y, ei, LASER_DAMAGE)
     eq_push(&gs.events, Event{
         type    = .Damage_Dealt,
         source  = PLAYER_ID,

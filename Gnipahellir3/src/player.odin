@@ -355,6 +355,7 @@ player_pickup :: proc(gs: ^Game_State) {
                     }
                 }
                 if got > 0 {
+                    log_action(gs, "Player forages %d Flower at (%d,%d)", got, tx, ty)
                     set_tile(&gs.world, tx, ty, .Air)
                     gs.world.sim_data[idx] = {}   // clear the bed's growth timer
                     spawn_collect_mote(gs, {i32(tx), i32(ty)}, .Flower)
@@ -388,6 +389,9 @@ player_pickup :: proc(gs: ^Game_State) {
                 tile    = {i32(tx), i32(ty)},
                 payload = {int_val = i32(it)},
             })
+            // The event carries the item but not how much of the pile fit, and
+            // a partial fit is exactly the case worth reading back later.
+            log_action(gs, "Player picks up %v x%d at (%d,%d)", it, banked, tx, ty)
         }
     }
 }
