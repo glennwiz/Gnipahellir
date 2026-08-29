@@ -9661,41 +9661,167 @@ wave_count_kind :: proc(gs: ^Game_State, k: Enemy_Kind) -> (n: int) {
     return
 }
 
+// Step the director a whole second at a time, draining what it pushes.
+wave_step :: proc(gs: ^Game_State, seconds: int) {
+    gs.delta_time = 1
+    for _ in 0 ..< seconds {
+        update_waves(gs)
+        eq_clear(&gs.events)
+    }
+}
+
 @(test)
-crafting_fire_wands_cycles_air_ground_underground_waves :: proc(t: ^testing.T) {
+a_bare_start_draws_no_waves :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
     testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+    wave_clear_structures(gs)
 
-    // Crafting the wand IS the whole trigger — one line in events.odin.
-    testing.expect(t, !gs.wave.pending, "no wave is armed at boot")
+    // Nothing built, nothing owed: the grace period IS the score.
+    wave_step(gs, 600)
+    testing.expect_value(t, gs.wave.threat, f32(0))
+    testing.expect_value(t, gs.wave.pressure, f32(0))
+    testing.expect(t, !gs.wave.warning_active, "an empty surface must arm nothing")
+    testing.expect_value(t, wave_count_kind(gs, .Vargr), 0)
+    testing.expect_value(t, wave_count_kind(gs, .Fire_Sprite), 0)
+
+    // The craft trigger is gone — a Fire Wand is a tool again, not a summons.
     eq_push(&gs.events, Event{type = .Craft_Complete, payload = {int_val = i32(Item.Fire_Wand)}})
     process_events(gs)
     eq_clear(&gs.events)
-    testing.expect(t, gs.wave.pending, "crafting a fire wand arms a wave")
+    testing.expect(t, !gs.wave.pending, "crafting a fire wand must no longer arm a wave")
+}
 
-    // An armed trigger HOLDS off the surface rather than firing into a cave.
+@(test)
+the_base_you_build_draws_the_wave :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    BX :: 70
+    BY :: SURFACE_Y - 1
+    set_tile(&gs.world, BX, BY, .Crafting_Bench)      // 1
+    set_tile(&gs.world, BX + 2, BY, .Smelter)         // 3
+
+    // Off the surface the whole director holds frozen: a cave DELAYS the wave,
+    // it never dodges it.
     gs.level_index = LEVEL_SURFACE + 1
-    update_waves(gs)
-    eq_clear(&gs.events)
-    testing.expect(t, gs.wave.pending, "a wave must wait until the player is on the surface")
-    testing.expect_value(t, gs.wave.cycle, 0)
+    wave_step(gs, 50)
+    testing.expect_value(t, gs.wave.pressure, f32(0))
+    testing.expect_value(t, gs.wave.threat, f32(0))
     gs.level_index = LEVEL_SURFACE
 
-    // Four waves walk Air -> Ground -> Underground -> Air, each one the table's
-    // own enemy and count.
-    for step in 0 ..< 4 {
-        kind := Wave_Kind(step %% len(Wave_Kind))
-        spec := wave_table[kind]
-        before := wave_count_kind(gs, spec.enemy)
-        gs.wave.pending = true
-        update_waves(gs)
-        eq_clear(&gs.events)
-        testing.expectf(t, wave_count_kind(gs, spec.enemy) - before == spec.count,
-            "wave %d (%v) should land %d %v", step, kind, spec.count, spec.enemy)
-        testing.expect_value(t, gs.wave.cycle, step + 1)
-        testing.expect(t, !gs.wave.pending, "a spent trigger must not re-fire")
+    update_waves(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.wave.threat, f32(4))
+
+    // Threat-seconds accumulate to the target, and only then does it arm.
+    armed := 0
+    for s in 1 ..< 400 {
+        wave_step(gs, 1)
+        if gs.wave.warning_active {
+            armed = s
+            break
+        }
     }
+    testing.expect(t, armed > 0, "a built base should arm a wave warning")
+    testing.expect_value(t, gs.wave.warning_kind, Wave_Kind.Ground)
+    testing.expect_value(t, wave_count_kind(gs, .Vargr), 0)
+
+    // The warning is a telegraph, not a spawn: the wave lands at its end.
+    wave_step(gs, int(WAVE_WARNING_TIME) - 1)
+    testing.expect_value(t, wave_count_kind(gs, .Vargr), 0)
+    wave_step(gs, 1)
+    testing.expect(t, wave_count_kind(gs, .Vargr) > 0, "the wave should land when the howl runs out")
+    testing.expect(t, !gs.wave.warning_active, "the warning is spent with the wave")
+    testing.expect_value(t, gs.wave.cycle, 1)
+    testing.expect_value(t, gs.wave.pressure, f32(0))
+    testing.expect_value(t, gs.wave.cooldown, WAVE_COOLDOWN)
+}
+
+@(test)
+threat_tiers_gate_the_wave_kinds :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // A young base meets Ground after Ground — the cycle walks the UNLOCKED
+    // kinds, so it never stalls on a wave that cannot come yet.
+    testing.expect(t, wave_kind_unlocked(gs, .Ground, 3), "ground is always open")
+    testing.expect(t, !wave_kind_unlocked(gs, .Air, 3), "air waits for its tier")
+    for c in 0 ..< 4 {
+        gs.wave.cycle = c
+        testing.expect_value(t, wave_pick_kind(gs, 3), Wave_Kind.Ground)
+    }
+
+    // Stack machines past the air tier and the sky joins in.
+    testing.expect(t, wave_kind_unlocked(gs, .Air, WAVE_TIER_AIR), "air joins at its tier")
+    saw_air, saw_ground := false, false
+    for c in 0 ..< 4 {
+        gs.wave.cycle = c
+        k := wave_pick_kind(gs, WAVE_TIER_AIR)
+        if k == .Air do saw_air = true
+        if k == .Ground do saw_ground = true
+        testing.expect(t, k != .Underground, "the underground is still locked")
+    }
+    testing.expect(t, saw_air && saw_ground, "the cycle should walk both unlocked kinds")
+
+    // Underground refuses past its own tier until the first scroll — raid parity.
+    testing.expect(t, !wave_kind_unlocked(gs, .Underground, WAVE_TIER_UNDER),
+        "the underground waits for the first scroll, not just the tier")
+    gs.progression.rune_scroll_found[0] = true
+    testing.expect(t, wave_kind_unlocked(gs, .Underground, WAVE_TIER_UNDER),
+        "the first scroll opens the underground")
+}
+
+@(test)
+wave_size_grows_from_the_threat :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // One formula both directions, and it never lands an empty wave.
+    ground := wave_table[.Ground].count
+    testing.expect_value(t, wave_scaled_count(ground, 0), 1)
+    testing.expect_value(t, wave_scaled_count(ground, 3), 1)
+    testing.expect_value(t, wave_scaled_count(ground, WAVE_SIZE_PIVOT/2), ground)
+    testing.expect_value(t, wave_scaled_count(ground, 60), ground*2)
+    testing.expect_value(t, wave_scaled_count(ground, 400), ground*2)
+
+    // End to end: a machine empire (20 smelters = threat 60) doubles the table.
+    BY :: SURFACE_Y - 1
+    for x in 60 ..< 80 do set_tile(&gs.world, x, BY, .Smelter)
+    update_waves(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.wave.threat, f32(60))
+
+    for _ in 0 ..< 400 {
+        wave_step(gs, 1)
+        if gs.wave.cycle > 0 do break
+    }
+    testing.expect_value(t, gs.wave.cycle, 1)
+    testing.expect_value(t, wave_count_kind(gs, .Fire_Sprite), wave_table[.Air].count*2)
+}
+
+@(test)
+survivors_hold_the_next_wave :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    set_tile(&gs.world, 70, SURFACE_Y - 1, .Smelter)
+    wi := wave_seed_hunter(gs, .Vargr, 70, SURFACE_Y - 3)
+    testing.expect(t, wi >= 0, "the survivor should have a slot")
+
+    // A wave still on the field holds the next one — never stack.
+    wave_step(gs, 100)
+    testing.expect_value(t, gs.wave.pressure, f32(0))
+    testing.expect(t, !gs.wave.warning_active, "a live wave enemy must hold the next wave")
+
+    // Clear the field and the base starts drawing again.
+    despawn_enemy(gs, wi)
+    wave_step(gs, 1)
+    testing.expect(t, gs.wave.pressure > 0, "with the field clear, pressure resumes")
 }
 
 @(test)

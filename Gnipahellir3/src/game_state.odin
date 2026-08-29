@@ -152,8 +152,16 @@ Wave_Kind :: enum u8 {
 // spawns persist in the saved Enemy_Store, while an unconsumed trigger is
 // harmless to drop on a reload. Zero save impact.
 Wave_State :: struct {
-    pending: bool,   // a trigger fired; the next surface frame spends it
-    cycle:   int,    // how many waves have been sent — Air/Ground/Underground
+    pending:        bool,      // a scripted trigger fired; the next surface frame arms it
+    pending_kind:   Wave_Kind, // which wave the script asked for
+    cycle:          int,       // how many waves have been sent
+    threat:         f32,       // cached base score, rescanned on a slow beat
+    threat_timer:   f32,
+    pressure:       f32,       // threat-seconds accumulated toward the next wave
+    warning_timer:  f32,
+    warning_active: bool,
+    warning_kind:   Wave_Kind, // decided when the warning arms, not at spawn
+    cooldown:       f32,
 }
 
 // Garm's combat cage — the stone box he conjures around the player at low hp
