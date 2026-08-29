@@ -1440,6 +1440,20 @@ draw_raid_menu :: proc(gs: ^Game_State) {
 	rl.DrawRectangleLines(RAID_MENU_X - 6, RAID_MENU_Y - 26, RAID_MENU_W + 12, h + 34, panel_border)
 	rl.DrawText("RAIDS (F4)", RAID_MENU_X, RAID_MENU_Y - 20, 10, rl.YELLOW)
 
+	// The wave director's live numbers — this is what makes tuning observation
+	// rather than archaeology: without it every session starts with "why now?".
+	// A copy, not a pointer: draw code reads state, it never writes it.
+	w := gs.wave
+	wave_col := w.warning_active ? rl.GREEN : rl.GRAY
+	rl.DrawText(
+		fmt.ctprintf("threat %.0f  pressure %.0f%%  cd %.0fs",
+			w.threat, w.pressure / WAVE_PRESSURE_TARGET * 100, w.cooldown),
+		RAID_MENU_X,
+		RAID_MENU_Y - 9,
+		10,
+		wave_col,
+	)
+
 	warn_col := gs.raid.warning_active ? rl.GREEN : rl.YELLOW
 	rl.DrawText("Warn now (skip 20s heat) >", RAID_MENU_X, RAID_MENU_Y + 7, 10, warn_col)
 	rl.DrawText(
