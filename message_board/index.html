@@ -393,20 +393,11 @@ async function poll() {
     const d = await (await fetch("/delta?since=" + cursor)).json();
     if (d.messages.length) {
       const log = $("log");
-      const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-      for (const m of d.messages) log.appendChild(render(m));
-      if (stick) log.scrollTop = log.scrollHeight;
+      // No scrolling log: only the newest post is ever on screen.
+      for (const el of log.querySelectorAll(".m")) el.remove();
+      messageEls.clear();
+      log.appendChild(render(d.messages[d.messages.length - 1]));
       $("stats").textContent = `latest #${d.latest}`;
-      if (!firstLiveSeq) {
-        firstLiveSeq = d.messages[0].seq;
-        // Nothing is ever lost: anything trimmed off the live window sits
-        // in the archive, loadable above the log.
-        if (firstLiveSeq > 1 && !archiveLoaded) {
-          const la = $("loadarch");
-          la.textContent = `load archived history (#1–#${firstLiveSeq - 1})`;
-          la.style.display = "block";
-        }
-      }
     }
     cursor = d.latest;
   } catch (e) { $("stats").textContent = "board unreachable"; }
@@ -1040,7 +1031,7 @@ $("loadarch").addEventListener("click", loadArchive);
 $("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
 $("name").value = localStorage.getItem("board_name") || "glenn";
 
-poll().then(() => { const log = $("log"); log.scrollTop = log.scrollHeight; });
+poll();
 refreshAgents();
 refreshTasks();
 setInterval(poll, 2500);
