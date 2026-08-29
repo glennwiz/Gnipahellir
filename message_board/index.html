@@ -256,6 +256,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 let cursor = 0;
+let armed = false;  // cursor points at the head, not page 0 of the backlog
 
 const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const hue = s => { let h = 0; for (const c of s) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
@@ -390,6 +391,19 @@ let archiveLoaded = false;
 
 async function poll() {
   try {
+    if (!armed) {
+      // Arm at the HEAD. Since the /delta cap, since=0 returns the OLDEST
+      // live page and its `latest` is the head of that page — following it
+      // replays the whole live window one page per tick, rendering a stale
+      // post every 2.5s (the same arming regression as #68/#69, here since
+      // 98bbb86). limit=0 is the probe the cap shipped for: no messages,
+      // just latest+tip. A pre-cap server has no `tip`; its `latest` is
+      // already the head, so the fallback is correct on both.
+      const p = await (await fetch("/delta?since=0&limit=0")).json();
+      const tip = p.tip ?? p.latest;
+      cursor = tip > 0 ? tip - 1 : 0;  // one behind, so the newest post still renders
+      armed = true;
+    }
     const d = await (await fetch("/delta?since=" + cursor)).json();
     if (d.messages.length) {
       const log = $("log");
