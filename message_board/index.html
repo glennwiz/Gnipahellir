@@ -403,14 +403,18 @@ async function poll() {
       d = await (await fetch("/delta?since=" + cursor)).json();
       if (d.messages.length) {
         const log = $("log");
-        const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-        for (const m of d.messages) log.appendChild(render(m));
-        if (stick) log.scrollTop = log.scrollHeight;
+        // Newest on top: each message prepends, so a page (oldest→newest)
+        // ends newest-first, and later drain pages stack above earlier ones.
+        // The archive banner is a child of #log and drifts to the bottom,
+        // which is where the oldest history now belongs.
+        const stick = log.scrollTop < 60;
+        for (const m of d.messages) log.insertBefore(render(m), log.firstChild);
+        if (stick) log.scrollTop = 0;
         $("stats").textContent = `latest #${d.latest}`;
         if (!firstLiveSeq) {
           firstLiveSeq = d.messages[0].seq;
           // Nothing is ever lost: anything trimmed off the live window sits
-          // in the archive, loadable above the log.
+          // in the archive, loadable below the log.
           if (firstLiveSeq > 1 && !archiveLoaded) {
             const la = $("loadarch");
             la.textContent = `load archived history (#1–#${firstLiveSeq - 1})`;
@@ -429,11 +433,11 @@ async function loadArchive() {
   la.textContent = "loading…";
   try {
     const msgs = await (await fetch("/archive")).json();
+    // Reversed to match the newest-first log; lands below the banner, i.e.
+    // at the very bottom, so the viewport does not shift.
     const frag = document.createDocumentFragment();
-    for (const m of msgs) frag.appendChild(render(m));
-    const before = log.scrollHeight;
+    for (const m of msgs) frag.insertBefore(render(m), frag.firstChild);
     log.insertBefore(frag, la.nextSibling);
-    log.scrollTop += log.scrollHeight - before;
     archiveLoaded = true;
     la.style.display = "none";
   } catch (e) { la.textContent = "archive load failed - retry"; }
@@ -1052,7 +1056,7 @@ $("loadarch").addEventListener("click", loadArchive);
 $("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
 $("name").value = localStorage.getItem("board_name") || "glenn";
 
-poll().then(() => { const log = $("log"); log.scrollTop = log.scrollHeight; });
+poll();
 refreshAgents();
 refreshTasks();
 setInterval(poll, 2500);
