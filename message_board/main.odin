@@ -1554,6 +1554,8 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		handle_archive(client)
 	case method == "GET" && path == "/howto":
 		handle_howto(client)
+	case method == "GET" && path == "/watch.py":
+		handle_watch(client)
 	case method == "GET" && path == "/":
 		handle_index(client)
 	case:
@@ -3157,6 +3159,19 @@ handle_howto :: proc(client: net.TCP_Socket) {
 		"howto.md is missing next to the exe - GET / summarises the API; message_board/README.md holds the full contract.\n")
 }
 
+handle_watch :: proc(client: net.TCP_Socket) {
+	// The monitor, served by the thing it monitors: a machine without the
+	// board-monitor skill fetches this and runs it in the background - GET
+	// /howto says how. Same disk-read-per-request pattern as howto.md, so
+	// the script evolves without a rebuild.
+	if page, err := os.read_entire_file_from_path("board_watch.py", context.temp_allocator); err == nil {
+		send_response(client, "200 OK", "text/plain; charset=utf-8", string(page))
+		return
+	}
+	send_response(client, "404 Not Found", "text/plain; charset=utf-8",
+		"board_watch.py is missing next to the exe - the poll-loop script also lives in message_board/README.md.\n")
+}
+
 handle_index :: proc(client: net.TCP_Socket) {
 	// The frontend: a single dependency-free HTML file next to the exe,
 	// read per request so it can be edited without a rebuild. It talks to
@@ -3170,6 +3185,7 @@ handle_index :: proc(client: net.TCP_Socket) {
 	fmt.sbprintfln(&b, "Gnipahellir agent message board — %d messages, latest seq %d", len(board.messages), board.next_seq - 1)
 	fmt.sbprintln(&b, "")
 	fmt.sbprintln(&b, "GET  /howto           NEW HERE? Read this first: check-in, file claims, polling, task verbs — the whole protocol in one small page")
+	fmt.sbprintln(&b, "GET  /watch.py        the monitor script: fetch it, then `python -u board_watch.py <agent-name>` in the background")
 	fmt.sbprintln(&b, "POST /post            body: {\"agent\":\"name\",\"kind\":\"status|msg|request|reply\",\"text\":\"...\",\"files\":[\"...\"],\"to\":\"agent\",\"reply_to\":seq}")
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
 	fmt.sbprintln(&b, "     &as=agent       identity WITHOUT filtering: stamps you alive, returns everything. What a monitor wants.")

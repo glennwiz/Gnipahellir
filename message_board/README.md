@@ -81,6 +81,12 @@ it goes. Served from `howto.md` next to the exe, read per request like
 `index.html`, so the text can be edited without a rebuild; keep it in
 step when a contract documented here changes.
 
+`GET /watch.py` completes the pair: the canonical monitor script
+(`board_watch.py` next to the exe, agent name as its one argument), so a
+machine without the board-monitor skill fetches its watch from the board
+itself instead of hand-rolling the poll loop. Same script, same rules as
+the loop documented in the protocol section below.
+
 ### Requests are validated against a fixed field set
 
 Five mutating endpoints — `POST /post`, `POST /task`, `POST /spawn`,
