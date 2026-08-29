@@ -9624,6 +9624,38 @@ air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.enemies.data[last].builder.goal, Builder_Goal.Wave_Hunt)
 }
 
+@(test)
+a_flyer_climbs_over_a_tree_instead_of_pinning_against_it :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // The 2026-08-29 playtest hang in miniature: prey on the far side of a
+    // solid column taller than the flight line, and LOWER than the column
+    // top, so steering that re-aims the moment a point probe clears dives
+    // straight back into the trunk and the mover pins x forever.
+    Y :: 20
+    for x in 15 ..= 85 {
+        for y in Y - 8 ..= Y + 2 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, Y + 3, .Stone)
+    }
+    for y in Y - 4 ..= Y + 2 do set_tile(&gs.world, 50, y, .Wood)
+    set_tile(&gs.world, 80, Y + 2, .Crafting_Bench)
+    gs.player.pos = {8, 8}
+
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 20, Y + 1)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 1500 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, 80, Y + 2) != .Crafting_Bench do break
+    }
+    testing.expect(t, gs.enemies.data[fi].pos.x > 51, "the flyer must cross the tree, not pin against it")
+    testing.expect(t, get_tile(&gs.world, 80, Y + 2) != .Crafting_Bench, "the flyer must reach and burn the prey beyond the tree")
+}
+
 wave_count_kind :: proc(gs: ^Game_State, k: Enemy_Kind) -> (n: int) {
     for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == k do n += 1
     return

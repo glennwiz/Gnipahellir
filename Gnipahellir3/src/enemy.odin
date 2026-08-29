@@ -2106,7 +2106,11 @@ update_raider :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 // entity-map bookkeeping stay identical to every other body's.
 update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     // Aim at a point: full speed toward it, and a wall dead ahead means rise.
-    // Naive on purpose — fine over open surface, noted for the real-trigger pass.
+    // The climb probe spans half a tile above the head to just under the
+    // feet, because a single foot-height point cleared a tree canopy before
+    // the body did — steering dove straight back in and the mover pinned two
+    // sprites against one trunk for 72 seconds of playtest.  The under-feet
+    // row keeps the climb committed until the whole body crosses with margin.
     fly_to :: proc(e: ^Enemy, gs: ^Game_State, goal: [2]f32) {
         center := [2]f32{e.pos.x + BUILDER_W*0.5, e.pos.y + BUILDER_H*0.5}
         d      := goal - center
@@ -2117,8 +2121,16 @@ update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         }
         e.vel    = d / l * FIRE_SPRITE_SPEED
         e.facing = 1 if d.x >= 0 else -1
-        if is_solid(&gs.world, int(e.pos.x + f32(e.facing)*(BUILDER_W + 0.1)), int(e.pos.y + BUILDER_H - 0.5)) {
-            e.vel.y = -FIRE_SPRITE_SPEED
+
+        // No climb inside the last tile of sideways travel: the prey itself
+        // is solid, and rising over it would hold the sprite out of range.
+        if abs(d.x) <= 1.0 do return
+        ax := int(e.pos.x + f32(e.facing)*(BUILDER_W + 0.1))
+        for row in int(e.pos.y - 0.5) ..= int(e.pos.y + BUILDER_H + 0.4) {
+            if is_solid(&gs.world, ax, row) {
+                e.vel.y = -FIRE_SPRITE_SPEED
+                break
+            }
         }
     }
 
