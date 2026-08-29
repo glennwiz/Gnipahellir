@@ -8,7 +8,8 @@
       "PowerShell(odin test *)",
       "Read(//c/c/dev/github/Gnipahellir_project/Gnipahellir3/**)",
       "Edit(message_board/**)",
-      "Write(message_board/**)"
+      "Write(message_board/**)",
+      "Bash(curl -s -m 5 http://127.0.0.1:7666/agents)"
     ]
   }
 }
