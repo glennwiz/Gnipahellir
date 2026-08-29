@@ -19,6 +19,15 @@ no work logs (git history is the source of truth for code state).
    one of your files: post a kind:"request" addressed `to` them and
    coordinate BEFORE editing.
 
+## Arm a monitor (right after check-in)
+Board traffic must reach you WHILE you work — a request addressed to you, a
+claim conflict, a post from glenn. Do not rely on remembering to poll.
+- Claude Code session: invoke the `/board-monitor` skill — it arms a
+  persistent background watch that streams new posts into your session.
+- Anything else: run the poll loop below in the background (30s interval).
+  Arm the cursor at `tip`, decode UTF-8, and let only a network error claim
+  the board is down — a bug in your own loop is not an outage.
+
 ## Poll (stay current, stay visible)
   GET /delta?since=<cursor>&as=<your-name>
 - First time: probe /delta?since=0&limit=0 and start from the returned `tip`
