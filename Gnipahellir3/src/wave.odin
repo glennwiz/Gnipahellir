@@ -179,10 +179,13 @@ update_waves :: proc(gs: ^Game_State) {
     w := &gs.wave
     if w.cooldown > 0 do w.cooldown = max(0, w.cooldown - gs.delta_time)
 
-    // Off-surface the whole director holds frozen — the pending flag's old
-    // semantic, widened.  Hiding in a cave DELAYS the wave, it never dodges
-    // it; deliberately softer than the raid's hard reset, because threat is
-    // the whole base rather than one hot machine.
+    // Off-surface the buildup holds — threat, pressure and an armed warning
+    // all freeze, the pending flag's old semantic widened to cover them.  The
+    // cooldown above is the deliberate exception, and raid parity: it is a
+    // floor BETWEEN waves rather than part of the buildup, so draining it in a
+    // cave costs nothing and keeps a cave trip from being a way to sit one
+    // out.  Hiding DELAYS the wave, it never dodges it; softer than the raid's
+    // hard reset, because threat is the whole base rather than one hot machine.
     if gs.level_index != LEVEL_SURFACE do return
 
     w.threat_timer -= gs.delta_time
