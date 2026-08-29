@@ -9825,6 +9825,56 @@ survivors_hold_the_next_wave :: proc(t: ^testing.T) {
 }
 
 @(test)
+a_scripted_trigger_ignores_pressure_and_gates :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // One bench for the tunnellers to make for, and nothing else: threat 1, no
+    // scroll found, so the pressure path could never send an underground wave
+    // here. The script sends one anyway.
+    set_tile(&gs.world, 70, SURFACE_Y - 1, .Crafting_Bench)
+    testing.expect(t, !wave_kind_unlocked(gs, .Underground, 1),
+        "the tier and scroll gates should both refuse this wave")
+
+    wave_trigger(gs, .Underground)
+    testing.expect(t, gs.wave.pending, "the trigger arms on the next surface frame")
+
+    wave_step(gs, 1)
+    testing.expect(t, gs.wave.warning_active, "a scripted trigger arms its warning at once")
+    testing.expect_value(t, gs.wave.warning_kind, Wave_Kind.Underground)
+    testing.expect(t, !gs.wave.pending, "a spent trigger must not re-fire")
+
+    // It rides the ordinary warning: announced the same, landing the same.
+    before := wave_count_kind(gs, .Raider)
+    wave_step(gs, int(WAVE_WARNING_TIME) - 1)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), before)
+    wave_step(gs, 1)
+    testing.expect(t, wave_count_kind(gs, .Raider) > before, "the scripted wave lands with its howl")
+    testing.expect(t, gs.wave.pressure < WAVE_PRESSURE_TARGET,
+        "the meter never filled - the script is what sent this one")
+}
+
+@(test)
+placing_a_portal_summons_the_underground :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}
+    set_tile(&gs.world, 32, SURFACE_Y - 1, .Air)  // clear any gen decoration
+    inventory_insert(&gs.player.inventory, .Dimension_Spawner, 1)
+    gs.player.inventory.selected = 0
+    testing.expect(t, !gs.wave.pending, "nothing is armed before the portal lands")
+
+    // The real event, through the real handler — the tile landing IS the trigger.
+    handle_place_request(gs, Event{tile = {32, i32(SURFACE_Y) - 1}})
+    eq_clear(&gs.events)
+    testing.expect_value(t, get_tile(&gs.world, 32, SURFACE_Y - 1), Tile_Type.Dimension_Spawner)
+    testing.expect(t, gs.wave.pending, "finishing a portal should summon the underground")
+    testing.expect_value(t, gs.wave.pending_kind, Wave_Kind.Underground)
+}
+
+@(test)
 the_f4_wave_menu_forces_and_clears_waves :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

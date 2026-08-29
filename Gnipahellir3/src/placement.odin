@@ -187,6 +187,10 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
     // A placed spawner is a door waiting to be opened.
     if place_tile == .Dimension_Spawner || place_tile == .Dimension_Spawner_Gold || place_tile == .Dimension_Spawner_Runic {
         notify(gs, "The spawner hums - press [%v] beside it to cross over", gs.bindings[.Interact])
+        // Finishing a portal is loud, and the underground answers — a scripted
+        // wave, so it comes whatever the threat meter says.
+        notify(gs, "The ground shudders as the portal takes hold...")
+        wave_trigger(gs, .Underground)
     }
 
     // A placed Auto-Miner wakes the snake and anchors this dimension.

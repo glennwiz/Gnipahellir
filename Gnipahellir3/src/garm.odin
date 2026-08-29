@@ -184,6 +184,9 @@ garm_open_hell_gate :: proc(gs: ^Game_State, en: ^Enemy) {
     set_tile(&gs.world, gx + 1, gy, .Hell_Gate)
     log_action(gs, "A gate to Hell tears open at (%d,%d)", gx, gy)
     notify(gs, "Garm's fall tears a gate to Hell open at his lair - the key turns it")
+    // Hell opens and its embers scatter: the gate is a scripted moment, so the
+    // sky answers whatever the threat meter says.
+    wave_trigger(gs, .Air)
 }
 
 // The boss gate: called on Level_Enter (cave 3) and on Cave_Unlocked (tier 2).

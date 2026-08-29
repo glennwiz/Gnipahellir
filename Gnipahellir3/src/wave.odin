@@ -165,6 +165,15 @@ wave_arm_warning :: proc(gs: ^Game_State, kind: Wave_Kind) {
         wave_name[kind], WAVE_WARNING_TIME, w.threat, w.pressure)
 }
 
+// THE hook for a scripted moment: a milestone asks for a wave, and the next
+// surface frame arms it.  It rides the same warning machinery as a pressure
+// wave — announced the same, landing the same — it just does not wait for the
+// meter.  Wiring a new milestone is this one call.
+wave_trigger :: proc(gs: ^Game_State, kind: Wave_Kind) {
+    gs.wave.pending      = true
+    gs.wave.pending_kind = kind
+}
+
 // Step 5b1a.  The director: threat -> pressure -> warning -> wave -> cooldown.
 update_waves :: proc(gs: ^Game_State) {
     w := &gs.wave
