@@ -1552,6 +1552,8 @@ handle_connection :: proc(client: net.TCP_Socket) {
 		handle_claims(client)
 	case method == "GET" && path == "/archive":
 		handle_archive(client)
+	case method == "GET" && path == "/howto":
+		handle_howto(client)
 	case method == "GET" && path == "/":
 		handle_index(client)
 	case:
@@ -2709,7 +2711,7 @@ handle_spawn :: proc(client: net.TCP_Socket, body: []u8) {
 
 	work_dir, _ := filepath.join({filepath.dir(wd), "Gnipahellir3"}, context.temp_allocator)
 	instruction := fmt.tprintf(
-		"You are agent %s, spawned from the message board. Your task from Glenn is in the file %s - read it now and carry it out. Follow the full board protocol in CLAUDE.md as %s, including its monitor step.",
+		"You are agent %s, spawned from the message board. Your task from Glenn is in the file %s - read it now and carry it out. Follow the full board protocol in CLAUDE.md as %s, including its monitor step; GET http://127.0.0.1:7666/howto is the same contract compact, for quick reference.",
 		agent, prompt_path, agent)
 	// Model routing (glenn seq 180): cheap models for routine work. Strict
 	// allowlist — the model string goes on the command line. Always explicit:
@@ -3142,6 +3144,19 @@ handle_archive :: proc(client: net.TCP_Socket) {
 	send_response(client, "200 OK", "application/json", strings.to_string(b))
 }
 
+handle_howto :: proc(client: net.TCP_Socket) {
+	// The onboarding brief: the whole protocol in one small read, so a
+	// connecting agent spends a few hundred tokens learning to behave here
+	// instead of the full README. A file next to the exe, read per request
+	// like index.html, so the text evolves without a rebuild.
+	if page, err := os.read_entire_file_from_path("howto.md", context.temp_allocator); err == nil {
+		send_response(client, "200 OK", "text/plain; charset=utf-8", string(page))
+		return
+	}
+	send_response(client, "404 Not Found", "text/plain; charset=utf-8",
+		"howto.md is missing next to the exe - GET / summarises the API; message_board/README.md holds the full contract.\n")
+}
+
 handle_index :: proc(client: net.TCP_Socket) {
 	// The frontend: a single dependency-free HTML file next to the exe,
 	// read per request so it can be edited without a rebuild. It talks to
@@ -3154,6 +3169,7 @@ handle_index :: proc(client: net.TCP_Socket) {
 	b := strings.builder_make(context.temp_allocator)
 	fmt.sbprintfln(&b, "Gnipahellir agent message board — %d messages, latest seq %d", len(board.messages), board.next_seq - 1)
 	fmt.sbprintln(&b, "")
+	fmt.sbprintln(&b, "GET  /howto           NEW HERE? Read this first: check-in, file claims, polling, task verbs — the whole protocol in one small page")
 	fmt.sbprintln(&b, "POST /post            body: {\"agent\":\"name\",\"kind\":\"status|msg|request|reply\",\"text\":\"...\",\"files\":[\"...\"],\"to\":\"agent\",\"reply_to\":seq}")
 	fmt.sbprintln(&b, "GET  /delta?since=N   messages with seq > N  (start with since=0, then use 'latest' as your next cursor)")
 	fmt.sbprintln(&b, "     &as=agent       identity WITHOUT filtering: stamps you alive, returns everything. What a monitor wants.")
