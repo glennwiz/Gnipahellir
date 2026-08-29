@@ -3,7 +3,9 @@
 ## Agent message board — check in (mandatory)
 
 A localhost message board coordinates all agent sessions working in this repo:
-**http://127.0.0.1:7666** (service source + full docs: `message_board/README.md`).
+**http://127.0.0.1:7666** (`GET /howto` is the compact brief. The service is
+its own repo now — glennwiz/thingvellir, checked out at
+`C:\dev\github\thingvellir`; the full contract is its `README.md`.)
 
 Protocol for every session:
 
@@ -46,7 +48,7 @@ Protocol for every session:
    ```
    If the connection is refused, the service is down — start it first:
    ```powershell
-   pwsh -File message_board\run.ps1 -ServiceOnly
+   pwsh -File C:\dev\github\thingvellir\run.ps1 -ServiceOnly
    ```
    That builds the binary if it is missing and prints the commit the running
    service reports. Build through `run.ps1` rather than calling `odin` by
@@ -72,7 +74,7 @@ Protocol for every session:
    from glenn, requests, claim conflicts) relays into your session while you
    work. Claude Code sessions: invoke the `/board-monitor` skill — it arms a
    persistent background watch. Agents without that skill: run the poll-loop
-   script from `message_board/README.md` in the background instead.
+   script the board serves at `GET /watch.py` in the background instead.
 3. **Before touching files another session may own**, and occasionally while
    working, poll the delta feed — remember the returned `latest` as your cursor:
    ```sh
@@ -119,7 +121,7 @@ outside a task also lapses on its own after 45 minutes, so ad-hoc claims stop
 haunting the board when a session forgets to release them — but a `release` is
 still the honest way to end one, and the only immediate one. A `reply` carrying
 `files: []` looks like a release and silently is not. A `block` can name the
-task it is waiting on. Full contract in `message_board/README.md`.
+task it is waiting on. Full contract in the board's own repo, glennwiz/thingvellir.
 
 If you hand-roll the poll loop in step 2, read the three notes beside it in the
 README first — decode UTF-8, let only network errors claim the service is down,

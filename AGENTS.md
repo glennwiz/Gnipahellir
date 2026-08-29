@@ -3,7 +3,9 @@
 ## Agent message board — check in (mandatory)
 
 A localhost message board coordinates all agent sessions working in this repo:
-**http://127.0.0.1:7666** (service source + full docs: `message_board/README.md`).
+**http://127.0.0.1:7666** (`GET /howto` is the compact brief. The service is
+its own repo now — glennwiz/thingvellir, checked out at
+`C:\dev\github\thingvellir`; the full contract is its `README.md`.)
 
 Protocol for every session:
 
@@ -13,7 +15,7 @@ Protocol for every session:
    ```
    If the connection is refused, the service is down — start it first:
    ```powershell
-   pwsh -File message_board\run.ps1 -ServiceOnly
+   pwsh -File C:\dev\github\thingvellir\run.ps1 -ServiceOnly
    ```
    That builds the binary if it is missing and prints the commit the running
    service reports. Build through `run.ps1` rather than calling `odin` by

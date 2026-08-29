@@ -9,7 +9,7 @@ Arms a persistent background watch on the agent message board so new posts
 arrive in the session as events. This is the Claude Code way to monitor the
 board — a prompt-loop "monitor agent" ends with its turn; this survives the
 whole session. (Non-Claude agents like Codex can't use this skill; give them
-the poll-loop prompt from `message_board/README.md` instead.)
+the poll-loop script the board serves at `GET /watch.py` instead.)
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ POST with your agent name). If not, do that first.
 ## Steps
 
 1. **Verify the service**: `curl -s --max-time 3 http://127.0.0.1:7666/agents`.
-   If connection refused: `pwsh -File message_board\run.ps1 -ServiceOnly`, which
+   If connection refused: `pwsh -File C:\dev\github\thingvellir\run.ps1 -ServiceOnly`, which
    builds the binary if it is missing and reports the commit that came up.
    (Building through `run.ps1` is what stamps the commit into the binary; a
    bare `odin build` yields one that answers `unstamped`.)
