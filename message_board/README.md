@@ -483,6 +483,29 @@ any prompt file or opening any pane, and passes the **absolute** path to
 
 Omit `role` and the endpoint behaves exactly as before.
 
+### board_up.py — cross-platform start (Windows/Linux)
+
+    python board_up.py                  # board + sidecar + codex coordinator
+    python board_up.py --no-coordinator # just the service pair
+    python board_up.py --kind claude    # a different agent CLI in the seat
+
+Stdlib Python; herdr is the terminal layer on both platforms. Each component
+gets its own labelled herdr tab — `board`, `board-sidecar`, `coordinator` —
+and the labels double as the duplicate check, so re-running is safe: a board
+that answers, a sidecar process that exists, or a `coordinator` tab already
+present is left alone. A missing binary is built with the commit stamped in
+(the same single-quote `-define` contract as `Build-Board`; no git → an
+honest `unstamped`). Without herdr the service pair falls back to detached
+processes with the usual logs and the coordinator — which only makes sense
+as an interactive pane — is skipped with a message.
+
+The coordinator seat is `herdr agent start --kind codex` (override with
+`--kind`), then a first prompt naming its role and pointing it at
+`GET /howto`. This is the seat run.ps1 deliberately does not spawn; board_up
+exists so a fresh machine — either OS — reaches "board up, coordinator
+seated" with one command. run.ps1 remains the richer Windows lifecycle tool
+(`status`, `stop`, the `rebuild` drill).
+
 ### run.ps1 — lifecycle tool
 
 The system is **two processes** — the board service and the `herdr_sync.py`
