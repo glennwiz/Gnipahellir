@@ -11,7 +11,7 @@ GAME_DEBUG :: #config(GAME_DEBUG, true)
 GRID_W :: 192
 GRID_H :: 108
 CELL_SIZE :: 10
-MAX_ENEMIES :: 512
+MAX_ENEMIES :: 1024
 MAX_PARTICLES :: 256
 MAX_PROJECTILES :: 32
 MAX_FALLING :: 256 // structural blocks in mid-fall at once (gravity.odin)

@@ -21,7 +21,7 @@ SAVE_VERSION :: i32(24)  // v24: recipe_unlocked sized to MAX_ITEM_SLOTS, not [I
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
 // (save_data_size_probe logs the real number, plus len(Item).)
-SAVE_DATA_EXPECTED_SIZE :: 5_217_080   // EXPERIMENT: MAX_ENEMIES 512 (was 3_171_512 at 64)
+SAVE_DATA_EXPECTED_SIZE :: 7_554_872   // EXPERIMENT: MAX_ENEMIES 1024 (3_171_512 at 64, 5_217_080 at 512)
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 // One-version migration keeps the active playtest run intact.
@@ -65,7 +65,7 @@ Save_Data_v23 :: struct {
     elapsed_time: f32,
     frame:        u64,
 }
-#assert(size_of(Save_Data_v23) == 5_217_032)   // EXPERIMENT: 3_171_464 at MAX_ENEMIES 64
+#assert(size_of(Save_Data_v23) == 7_554_824)   // EXPERIMENT: 3_171_464 at MAX_ENEMIES 64
 
 Save_Data :: struct {
     version:      i32,
