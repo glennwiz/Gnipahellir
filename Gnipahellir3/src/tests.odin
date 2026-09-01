@@ -4504,6 +4504,40 @@ garm_bridges_climbs_a_builder_cannot_afford :: proc(t: ^testing.T) {
 }
 
 @(test)
+a_search_that_runs_dry_backs_off_before_replanning :: proc(t: ^testing.T) {
+    // Same platform as above.  A pocket-limited raider cannot complete the
+    // climb, so astar_dig hands back a best-effort route after spending its
+    // whole node budget - the most expensive search there is.  Repeating that
+    // every REPLAN_MIN across hundreds of hunters is what stalled the frame,
+    // so an incomplete route buys the longer REPLAN_BACKOFF; a complete one
+    // keeps the quick REPLAN_MIN.
+    gs := test_state()
+    defer free(gs)
+    for y in 44 ..= 59 {
+        for x in 38 ..= 62 { set_tile(&gs.world, x, y, .Air) }
+    }
+    for x in 38 ..= 62 { set_tile(&gs.world, x, 60, .Stone) }
+    set_tile(&gs.world, 50, 50, .Stone)
+
+    gs.enemies = {}
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind = .Raider
+    e.pos  = {43.2, 59.0}
+    e.grounded = true
+
+    builder_travel(e, id, gs, gs.delta_time, {50, 49}, 0)   // unreachable platform
+    testing.expect_value(t, e.builder.replan_timer, REPLAN_BACKOFF)
+    testing.expect(t, REPLAN_BACKOFF > REPLAN_MIN, "the backoff must be the longer wait")
+
+    e.nav.path = {}
+    e.builder.replan_timer = 0
+    builder_travel(e, id, gs, gs.delta_time, {58, 59}, 0)   // a walk along the floor
+    testing.expect_value(t, e.builder.replan_timer, REPLAN_MIN)
+    testing.expect(t, e.nav.path.len > 0, "the floor walk must plan")
+}
+
+@(test)
 garm_builds_his_lair_before_the_hunt :: proc(t: ^testing.T) {
     // Glenn's call: the boss constructs his den first, then hunts.  Garm
     // walks the builders' den machinery (a stone .Lair near GARM_DEN_X, off

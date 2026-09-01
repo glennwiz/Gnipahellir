@@ -24,6 +24,11 @@ BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
 // and his MAX_NAV_PATH plan budget.  Only Garm gets it (builder_build_den).
 GARM_BUILD_REACH :: i32(9)
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
+REPLAN_BACKOFF  :: f32(3.0)   // wait after a search that found no route, or
+                              // ran its whole node budget without reaching the
+                              // goal: those are the searches that cost the most
+                              // and repeating them every REPLAN_MIN is what
+                              // stalled a 512-enemy frame
 STUCK_TIME      :: f32(3.0)   // no path progress for this long => strike
 MAX_STRIKES     :: 3          // strikes before the current objective is dropped
 AVOID_RADIUS    :: i32(4)     // given-up targets blacklist their whole cluster —
@@ -1564,10 +1569,15 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         // boss bridging is never limited by mined blocks, so the planner may
         // route through any climb a builder could only afford with a full pocket.
         budget := MAX_NAV_PATH if e.kind == .Garm else int(b.pocket)
-        if !astar_dig(gs, from, T, stop, budget, &nav.path, id) {
+        complete: bool
+        if !astar_dig(gs, from, T, stop, budget, &nav.path, id, complete = &complete) {
+            b.replan_timer = REPLAN_BACKOFF
             builder_strike(e, id, gs, "no path")
             return false
         }
+        // A best-effort route means the budget ran dry: walk what it found,
+        // but do not buy another full-budget search half a second from now.
+        if !complete do b.replan_timer = REPLAN_BACKOFF
     }
 
     // Watchdog measures PATH progress (waypoint reached or a mine/place
