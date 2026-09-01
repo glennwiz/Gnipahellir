@@ -1439,6 +1439,16 @@ draw_raid_menu :: proc(gs: ^Game_State) {
 	rl.DrawRectangle(RAID_MENU_X - 6, RAID_MENU_Y - 26, RAID_MENU_W + 12, h + 34, panel_bg)
 	rl.DrawRectangleLines(RAID_MENU_X - 6, RAID_MENU_Y - 26, RAID_MENU_W + 12, h + 34, panel_border)
 	rl.DrawText("RAIDS (F4)", RAID_MENU_X, RAID_MENU_Y - 20, 10, rl.YELLOW)
+	// Live entity count against the cap - the load-test readout.  Red at a
+	// full store, because a spawner that returns false is otherwise silent.
+	count_col := gs.enemies.count >= MAX_ENEMIES ? rl.RED : rl.YELLOW
+	rl.DrawText(
+		fmt.ctprintf("enemies %d / %d", gs.enemies.count, MAX_ENEMIES),
+		RAID_MENU_X + 90,
+		RAID_MENU_Y - 20,
+		10,
+		count_col,
+	)
 
 	// The wave director's live numbers — this is what makes tuning observation
 	// rather than archaeology: without it every session starts with "why now?".
