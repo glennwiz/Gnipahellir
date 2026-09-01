@@ -384,18 +384,46 @@ den_owner_index :: proc(gs: ^Game_State, T: [2]i32) -> int {
 // break-in/repair treadmill that eats all the hauled ore.
 den_protected :: proc(gs: ^Game_State, x, y: int, owner: int = -1) -> bool {
     if !in_bounds(x, y) { return false }
+    if !den_material(gs, x, y) { return false }
+    dens := collect_dens(gs)
+    return den_protected_in(gs, &dens, x, y, owner)
+}
 
-    // Only placed materials (den wood, shell minerals) are protected.  Natural
-    // rock stays diggable even inside the den footprint — protecting it walls
-    // builders out of their own home (e.g. when returning from below).
+// Only placed materials (den wood, shell minerals) are protected.  Natural
+// rock stays diggable even inside the den footprint — protecting it walls
+// builders out of their own home (e.g. when returning from below).
+den_material :: proc(gs: ^Game_State, x, y: int) -> bool {
     t := gs.world.terrain[grid_idx(x, y)]
-    if t != .Wood && !is_mineral(t) { return false }
+    return t == .Wood || is_mineral(t)
+}
 
-    T := [2]i32{i32(x), i32(y)}
+// The builders with a built den, gathered once.  astar_dig asks the den
+// question per wood/ore neighbour per node, and walking every enemy slot each
+// time was a MAX_ENEMIES-sized loop inside the search's inner loop — at 512
+// slots, millions of iterations per full-budget search.
+Den_List :: struct {
+    idx: [MAX_ENEMIES]i16,
+    n:   int,
+}
+
+collect_dens :: proc(gs: ^Game_State) -> (dl: Den_List) {
     for i in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[i] { continue }
         o := &gs.enemies.data[i]
         if o.kind != .Builder || !o.builder.den_built { continue }
+        dl.idx[dl.n] = i16(i)
+        dl.n += 1
+    }
+    return
+}
+
+// den_protected against a pre-collected den list.  Callers must have checked
+// bounds and den_material themselves; the search does both at the call site.
+den_protected_in :: proc(gs: ^Game_State, dl: ^Den_List, x, y: int, owner: int = -1) -> bool {
+    T := [2]i32{i32(x), i32(y)}
+    for k in 0 ..< dl.n {
+        i := int(dl.idx[k])
+        o := &gs.enemies.data[i]
         if !den_structure_slot(&o.builder, T) { continue }
         if i == owner {
             // Same interior box as the trespass check (den + door corridor).
@@ -450,6 +478,13 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     }
 
     reached_goal := false
+    dens := collect_dens(gs)
+
+    // The den question, asked per dig transition: bounds and material first
+    // (cheap, and what almost every tile fails), the den list only after.
+    den_blocks :: proc(gs: ^Game_State, dl: ^Den_List, x, y, owner: int) -> bool {
+        return in_bounds(x, y) && den_material(gs, x, y) && den_protected_in(gs, dl, x, y, owner)
+    }
 
     A_Node :: struct {
         pos:     [2]i32,
@@ -553,7 +588,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
         // Dig through the floor (only when landing one tile down).
         floor_mineable := dig_allowed(w, x, y+1, protect_placed)
-        if allow_mining && floor_mineable && is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_protected(gs, x, y+1, owner) {
+        if allow_mining && floor_mineable && is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_blocks(gs, &dens, x, y+1, owner) {
             push_trans(&trans, &nt, i32(x), i32(y+1), COST_MINE)
         }
 
@@ -615,7 +650,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
             // Tunnel into a mineable wall (needs a floor under the mined tile).
             wall_mineable := dig_allowed(w, nx, y, protect_placed)
-            if allow_mining && wall_mineable && is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_protected(gs, nx, y, owner) {
+            if allow_mining && wall_mineable && is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_blocks(gs, &dens, nx, y, owner) {
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
             }
 
@@ -632,7 +667,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
                     cell_mineable := dig_allowed(w, c.x, c.y, protect_placed)
-                    if cell_mineable && is_builder_mineable(w, c.x, c.y) && !den_protected(gs, c.x, c.y, owner) {
+                    if cell_mineable && is_builder_mineable(w, c.x, c.y) && !den_blocks(gs, &dens, c.x, c.y, owner) {
                         mines += 1
                     } else {
                         climbable = false

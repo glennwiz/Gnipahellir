@@ -5256,6 +5256,18 @@ own_den_is_never_a_cage :: proc(t: ^testing.T) {
 
     e.pos = {60, 87}     // owner off at work: the den is sacred again
     testing.expect(t, den_protected(gs, 30, 85, 0), "an owner outside uses the door like everyone")
+
+    // The search asks the same question through a den list collected once
+    // per search instead of a walk over every enemy slot per neighbour — the
+    // answers must not drift from the slow path.
+    dens := collect_dens(gs)
+    testing.expect_value(t, dens.n, 1)
+    testing.expect_value(t, int(dens.idx[0]), 0)
+    testing.expect(t, den_protected_in(gs, &dens, 30, 85), "list path: protected from the world")
+    testing.expect(t, den_protected_in(gs, &dens, 30, 85, 1), "list path: and from other builders")
+    testing.expect(t, den_protected_in(gs, &dens, 30, 85, 0), "list path: owner outside")
+    e.pos = {30.1, 87}
+    testing.expect(t, !den_protected_in(gs, &dens, 30, 85, 0), "list path: owner inside chews out")
 }
 
 @(test)
