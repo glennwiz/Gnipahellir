@@ -173,12 +173,23 @@ laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
 tick_rainbow_laser :: proc(gs: ^Game_State, x, y: int) {
     sd := &gs.world.sim_data[grid_idx(x, y)]
     sd.growth_timer = min(sd.growth_timer + gs.delta_time, LASER_COOLDOWN)
-    if sd.growth_timer < LASER_COOLDOWN do return
 
     ei, ok := laser_target(gs, x, y)
     if !ok do return
 
+    // The beam is lit the whole time a target holds range: a spectrum mote
+    // stream rides it every frame (particles.odin), aimed at the same body
+    // center the render beam ends on.  Damage stays on the cooldown below.
+    e      := &gs.enemies.data[ei]
+    size   := enemy_body_size(e.kind)
+    muzzle := [2]f32{f32(x) + 0.5, f32(y) + 0.5}
+    hit    := [2]f32{e.pos.x + size.x*0.5, e.pos.y + size.y*0.5}
+    spawn_laser_beam_motes(gs, muzzle, hit)
+
+    if sd.growth_timer < LASER_COOLDOWN do return
+
     sd.growth_timer = 0
+    spawn_laser_impact(gs, hit)
     // A laser fires as the PLAYER, so its hits and the wand's are the same
     // source once the damage event lands - this line is what tells them apart.
     log_action(gs, "Laser at (%d,%d) zaps Enemy#%d for %d", x, y, ei, LASER_DAMAGE)

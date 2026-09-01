@@ -291,6 +291,46 @@ spawn_ritual_rebirth :: proc(gs: ^Game_State, altar: [2]i32) {
     }
 }
 
+// Rainbow Laser beam: while a target holds range, every frame a few spectrum
+// motes are seeded along the beam line and race down it into the enemy,
+// homing so the stream bends with a moving target instead of missing.  Hue
+// rides the clock AND the distance along the beam, so the stream cycles the
+// rainbow lengthwise like light through a prism.  Called from the turret's
+// tick (sim), never from render.
+LASER_BEAM_MOTES :: 2
+spawn_laser_beam_motes :: proc(gs: ^Game_State, from, to: [2]f32) {
+    d    := to - from
+    dist := math.sqrt(d.x*d.x + d.y*d.y)
+    if dist < 0.05 do return
+    dir  := d / dist
+    side := [2]f32{-dir.y, dir.x}
+    for i in 0 ..< LASER_BEAM_MOTES {
+        seed  := u32(gs.frame)*53 + u32(i)*907
+        along := f32(whash(seed + 2) % 1024) / 1024.0 * dist   // seeded anywhere on the beam: reads continuous, not pulsed
+        pos   := from + dir*along + side*jitter(seed, 0.3)
+        vel   := dir*(dist*3 + 6) + side*jitter(seed + 1, 1.2)
+        hue   := math.mod(gs.elapsed_time*300 + along*45 + f32(i)*180, f32(360))
+        spawn_particle(&gs.particles, pos, vel, rl.ColorFromHSV(hue, 0.85, 1.0),
+            0.45, homing = true, target = to)
+    }
+}
+
+// The zap lands: a full spectrum ring bursts off the enemy, one hue per mote,
+// so every hit is a small rainbow explosion on top of the blood the damage
+// handler already throws.
+spawn_laser_impact :: proc(gs: ^Game_State, at: [2]f32) {
+    RING :: 12
+    for i in 0 ..< RING {
+        ang   := f32(i) * (2 * math.PI / RING)
+        seed  := u32(gs.frame)*19 + u32(i)*463
+        speed := 5 + jitter(seed, 2)
+        vel   := [2]f32{math.cos(ang) * speed, math.sin(ang) * speed}
+        hue   := f32(i) * (360.0 / RING)
+        spawn_particle(&gs.particles, at, vel, rl.ColorFromHSV(hue, 0.85, 1.0),
+            0.3 + jitter(seed + 1, 0.1))
+    }
+}
+
 // A worker's temporary Quick Clay foothold dissolving after use: a few damp
 // motes sag downward and fade, reading as melting away rather than breaking.
 spawn_clay_drip :: proc(gs: ^Game_State, T: [2]i32) {

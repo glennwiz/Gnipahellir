@@ -9458,6 +9458,40 @@ the_rainbow_laser_zaps_the_nearest_enemy_in_range :: proc(t: ^testing.T) {
 }
 
 @(test)
+the_rainbow_laser_beam_is_made_of_motes :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = LASER_COOLDOWN / 4   // four ticks to a zap
+
+    LX :: 60
+    LY :: SURFACE_Y - 1
+    set_tile(&gs.world, LX, LY, .Rainbow_Laser)
+
+    // Nothing in range: a dark turret throws no sparks at all.
+    update_sim(gs)
+    testing.expect_value(t, gs.particles.count, 0)
+
+    // A target in range lights the beam: motes stream every tick, zap or not.
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "the enemy should have a slot")
+    gs.enemies.data[id] = Enemy{pos = {LX + 3, LY}, kind = .Raider, hp = 50, hp_max = 50}
+    update_sim(gs)
+    testing.expect_value(t, gs.particles.count, LASER_BEAM_MOTES)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50)   // still charging
+    update_sim(gs)
+    testing.expect_value(t, gs.particles.count, 2 * LASER_BEAM_MOTES)
+
+    // The zap itself adds the spectrum ring on top of that tick's stream.
+    before := gs.particles.count
+    gs.world.sim_data[grid_idx(LX, LY)].growth_timer = LASER_COOLDOWN
+    update_sim(gs)
+    testing.expect(t, gs.particles.count > before + LASER_BEAM_MOTES,
+        "a landed zap must burst more than the stream alone")
+    process_events(gs)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50 - LASER_DAMAGE)
+}
+
+@(test)
 the_rainbow_laser_is_a_bench_craft_and_a_structure :: proc(t: ^testing.T) {
     // Known from the start: a turret you cannot build until some gate opens
     // arrives after the base it was meant to defend is gone.
