@@ -9178,9 +9178,9 @@ legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
 	// A boiler puffing every two seconds must not ping the whole map: a
 	// tile-stamped Play_Sound attenuates through audio_machine_gain, which
-	// reaches genuine SILENCE past MACHINE_HEAR_RANGE.  Builder sounds keep
-	// their faint far floor — a distant enemy digging toward you is a warning
-	// worth hearing; a working machine is not.
+	// reaches genuine SILENCE past MACHINE_HEAR_RANGE.  Builder sounds reach
+	// the same silence past their own (longer) range — the old faint far
+	// floor turned hundreds of tunnellers into a map-wide clatter.
 	gs := test_state()
 	defer free(gs)
 	gs.player.pos = {96, 54}
@@ -9192,7 +9192,8 @@ machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
 
 	testing.expect(t, audio_machine_gain(gs, near) > 0.9, "at the machine the puff is full volume")
 	testing.expect_value(t, audio_machine_gain(gs, far), 0)
-	testing.expect_value(t, audio_tile_gain(gs, far), f32(BUILDER_MIN_GAIN))
+	testing.expect_value(t, audio_tile_gain(gs, far), 0)
+	testing.expect(t, audio_tile_gain(gs, near) > 0.9, "beside the builder the dig is full volume")
 }
 
 // ─── Gem Replicator (sim.odin) ────────────────────────────────────────────────

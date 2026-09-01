@@ -72,9 +72,12 @@ sound_base_volume := [Sound_ID]f32 {
 	.Blast          = 0.9,
 }
 
-// Builder sounds fade with distance but stay faintly audible far away.
+// World sounds (builders digging and placing, raiders, growth, fireballs)
+// fade linearly with distance and are SILENT past hear range.  There used to
+// be a faint far floor as a "something is digging toward you" warning; with
+// hundreds of enemies tunnelling at once it became a map-wide clatter
+// (Glenn, 2026-09-02), so nothing carries past this radius now.
 BUILDER_HEAR_RANGE :: 48.0 // tiles
-BUILDER_MIN_GAIN :: 0.1
 
 // ─── Procedural cave ambience (tuning knobs) ────────────────────────────────────
 //  A deep rumble (double-lowpassed brown noise) + a faint wind hiss, both
@@ -139,13 +142,12 @@ audio_tile_gain :: proc(gs: ^Game_State, tile: [2]i32) -> f32 {
 	dx := f32(tile.x) + 0.5 - (gs.player.pos.x + PLAYER_W * 0.5)
 	dy := f32(tile.y) + 0.5 - (gs.player.pos.y + PLAYER_H * 0.5)
 	dist := math.sqrt(dx * dx + dy * dy)
-	return clamp(1 - dist / BUILDER_HEAR_RANGE, BUILDER_MIN_GAIN, 1)
+	return clamp(1 - dist / BUILDER_HEAR_RANGE, 0, 1)
 }
 
-// Machine sounds are strictly local: full at the machine, SILENT past hear
-// range — no faint floor, because a boiler puffing every two seconds would
-// ping the whole map forever.  (Builders keep their floor above: a distant
-// enemy digging toward you is worth a faint warning; a working machine is not.)
+// Machine sounds are strictly local: same shape as above but a much shorter
+// radius, because a boiler puffing every two seconds is not worth hearing
+// from across the base.
 MACHINE_HEAR_RANGE :: 16.0 // tiles
 
 audio_machine_gain :: proc(gs: ^Game_State, tile: [2]i32) -> f32 {
