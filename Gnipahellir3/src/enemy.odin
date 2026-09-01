@@ -1662,6 +1662,12 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
 // the leader on the same road is the common case.  Only the wave hunters
 // borrow (Raider, Vargr): they carry no pocket, so a borrowed route never
 // asks for a bridge block the borrower does not have.
+//
+// A route that ENDS on my tile lends nothing: a MAX_NAV_PATH prefix stops
+// mid-road, and the first save with this feature had a whole wave parked on
+// that tile, each wolf copying a one-tile route from the next, consuming it
+// on the spot, and never searching (all 303 at (70,53), 2026-09-01).  The
+// last waypoint is excluded, so a borrow always moves me at least one tile.
 nav_borrow_path :: proc(gs: ^Game_State, e: ^Enemy, id: int, from, T: [2]i32) -> bool {
     if e.kind != .Raider && e.kind != .Vargr do return false
     for i in 0 ..< MAX_ENEMIES {
@@ -1669,8 +1675,7 @@ nav_borrow_path :: proc(gs: ^Game_State, e: ^Enemy, id: int, from, T: [2]i32) ->
         o := &gs.enemies.data[i]
         if o.kind != e.kind || o.builder.plan_target != T do continue
         p := &o.nav.path
-        if p.len == 0 do continue
-        for k in 0 ..< p.len {
+        for k in 0 ..< p.len - 1 {
             if p.tiles[k] != from do continue
             n := p.len - k
             for j in 0 ..< n do e.nav.path.tiles[j] = p.tiles[k + j]

@@ -4511,7 +4511,7 @@ a_pack_borrows_one_plan_and_the_rest_wait_their_turn :: proc(t: ^testing.T) {
     // spent the rest stand still until the next frame hands out a budget.
     gs := test_state()
     defer free(gs)
-    for x in 30 ..= 90 {
+    for x in 5 ..= 90 {
         for y in 50 ..= 59 do set_tile(&gs.world, x, y, .Air)
         set_tile(&gs.world, x, 60, .Stone)
     }
@@ -4563,6 +4563,26 @@ a_pack_borrows_one_plan_and_the_rest_wait_their_turn :: proc(t: ^testing.T) {
     builder_travel(&gs.enemies.data[ledge_b], ledge_b, gs, gs.delta_time, {36, 59}, 0)
     testing.expect_value(t, gs.nav_searches, 1)
     testing.expect(t, gs.enemies.data[ledge_b].nav.path.len > 0, "the waiting wolf plans next frame")
+
+    // A route that ends on my tile is a dead end, not a loan.  A far wolf's
+    // plan is cut to the MAX_NAV_PATH prefix and stops mid-road; the wolf
+    // standing on that last waypoint must search, not copy a one-tile route
+    // and park there forever (the (70,53) pile-up in the first 512 save).
+    GOAL2 :: [2]i32{85, 59}
+    gs.nav_searches = 0
+    far := seed(gs, 10.2, 59.0, GOAL2)
+    builder_travel(&gs.enemies.data[far], far, gs, gs.delta_time, GOAL2, 0)
+    farp := &gs.enemies.data[far].nav.path
+    testing.expect_value(t, gs.nav_searches, 1)
+    testing.expect_value(t, farp.len, MAX_NAV_PATH)   // truncated: ends mid-road
+    end := farp.tiles[farp.len - 1]
+    testing.expect(t, end.x < GOAL2.x - 1, "the prefix must stop short of the goal")
+    parked := seed(gs, f32(end.x) + 0.2, 59.0, GOAL2)
+    builder_travel(&gs.enemies.data[parked], parked, gs, gs.delta_time, GOAL2, 0)
+    testing.expect_value(t, gs.nav_searches, 2)
+    pp := &gs.enemies.data[parked].nav.path
+    testing.expect(t, pp.len > 1, "the wolf on the dead end plans its own road on")
+    testing.expect(t, pp.tiles[pp.len - 1].x > end.x, "and that road goes somewhere")
 }
 
 @(test)
