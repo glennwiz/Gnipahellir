@@ -686,6 +686,8 @@ Game_State :: struct {
     enemies:     Enemy_Store,
     raid:        Raid_State, // transient industry-pressure director (enemy.odin)
     wave:        Wave_State, // transient wave director (wave.odin)
+    nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
+                             // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,

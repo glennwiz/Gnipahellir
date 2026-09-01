@@ -4504,6 +4504,68 @@ garm_bridges_climbs_a_builder_cannot_afford :: proc(t: ^testing.T) {
 }
 
 @(test)
+a_pack_borrows_one_plan_and_the_rest_wait_their_turn :: proc(t: ^testing.T) {
+    // Flat floor, wolves bound for the same tile at the far end.  The first
+    // plans; a wolf standing on that route copies it without a search; one
+    // with its own target searches; and once MAX_NAV_SEARCHES_PER_FRAME is
+    // spent the rest stand still until the next frame hands out a budget.
+    gs := test_state()
+    defer free(gs)
+    for x in 30 ..= 90 {
+        for y in 50 ..= 59 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, 60, .Stone)
+    }
+    gs.enemies = {}
+    seed :: proc(gs: ^Game_State, x, y: f32, T: [2]i32) -> int {
+        id, _ := enemy_alloc(&gs.enemies)
+        e := &gs.enemies.data[id]
+        e.kind = .Vargr
+        e.pos  = {x, y}
+        e.grounded = true
+        e.builder.plan_target = T
+        return id
+    }
+    GOAL :: [2]i32{80, 59}
+    lead := seed(gs, 40.2, 59.0, GOAL)
+    gs.nav_searches = 0
+    builder_travel(&gs.enemies.data[lead], lead, gs, gs.delta_time, GOAL, 0)
+    testing.expect_value(t, gs.nav_searches, 1)
+    lp := &gs.enemies.data[lead].nav.path
+    testing.expect(t, lp.len > 1, "the leader plans the road")
+
+    // Standing ON the leader's road, four tiles along: a copy, not a search.
+    follower := seed(gs, 44.2, 59.0, GOAL)
+    builder_travel(&gs.enemies.data[follower], follower, gs, gs.delta_time, GOAL, 0)
+    testing.expect_value(t, gs.nav_searches, 1)
+    fp := &gs.enemies.data[follower].nav.path
+    testing.expect(t, fp.len > 0 && fp.tiles[0] == [2]i32{44, 59}, "the copy starts on the follower's own tile")
+    testing.expect_value(t, fp.tiles[fp.len - 1], lp.tiles[lp.len - 1])
+
+    // A different target cannot borrow: it searches (budget 2 of 3).
+    loner := seed(gs, 44.2, 59.0, {35, 59})
+    builder_travel(&gs.enemies.data[loner], loner, gs, gs.delta_time, {35, 59}, 0)
+    testing.expect_value(t, gs.nav_searches, 2)
+
+    // Up on a ledge the road never crosses, sharing the goal: must search,
+    // and that spends the frame's budget.
+    for x in 60 ..= 61 do set_tile(&gs.world, x, 57, .Stone)
+    ledge_a := seed(gs, 60.2, 56.0, GOAL)
+    builder_travel(&gs.enemies.data[ledge_a], ledge_a, gs, gs.delta_time, GOAL, 0)
+    testing.expect_value(t, gs.nav_searches, MAX_NAV_SEARCHES_PER_FRAME)
+
+    // Over budget: no path, no penalty, and the next frame serves it.
+    ledge_b := seed(gs, 61.2, 56.0, {36, 59})
+    builder_travel(&gs.enemies.data[ledge_b], ledge_b, gs, gs.delta_time, {36, 59}, 0)
+    testing.expect_value(t, gs.nav_searches, MAX_NAV_SEARCHES_PER_FRAME)
+    testing.expect_value(t, gs.enemies.data[ledge_b].nav.path.len, 0)
+    testing.expect_value(t, gs.enemies.data[ledge_b].builder.replan_timer, f32(0))
+    gs.nav_searches = 0
+    builder_travel(&gs.enemies.data[ledge_b], ledge_b, gs, gs.delta_time, {36, 59}, 0)
+    testing.expect_value(t, gs.nav_searches, 1)
+    testing.expect(t, gs.enemies.data[ledge_b].nav.path.len > 0, "the waiting wolf plans next frame")
+}
+
+@(test)
 a_search_that_runs_dry_backs_off_before_replanning :: proc(t: ^testing.T) {
     // Same platform as above.  A pocket-limited raider cannot complete the
     // climb, so astar_dig hands back a best-effort route after spending its

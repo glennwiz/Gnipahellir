@@ -24,6 +24,11 @@ BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
 // and his MAX_NAV_PATH plan budget.  Only Garm gets it (builder_build_den).
 GARM_BUILD_REACH :: i32(9)
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
+MAX_NAV_SEARCHES_PER_FRAME :: 3   // ~1.2-1.4 ms per long or exhausted search
+                                  // (release build), so this bounds pathing
+                                  // at ~4 ms a frame whatever the enemy count;
+                                  // a hunter over budget simply asks again
+                                  // next frame
 REPLAN_BACKOFF  :: f32(3.0)   // wait after a search that found no route, or
                               // ran its whole node budget without reaching the
                               // goal: those are the searches that cost the most
@@ -1601,9 +1606,19 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
             e.vel.x = 0
             return false
         }
-        b.replan_timer = REPLAN_MIN
         size := enemy_body_size(e.kind)
         from := [2]i32{i32(e.pos.x + size.x*0.5), i32(e.pos.y + size.y - 0.01)}
+        // A pack shares one plan: a same-kind hunter bound for the same tile
+        // whose route crosses my tile lends me its remainder, no search at all.
+        if nav_borrow_path(gs, e, id, from, T) {
+            b.replan_timer = REPLAN_MIN
+        } else {
+            if gs.nav_searches >= MAX_NAV_SEARCHES_PER_FRAME {
+                e.vel.x = 0   // the frame's budget is spent - ask again next frame
+                return false
+            }
+            gs.nav_searches += 1
+            b.replan_timer = REPLAN_MIN
         // Garm conjures his masonry (update_garm keeps his pocket topped up):
         // boss bridging is never limited by mined blocks, so the planner may
         // route through any climb a builder could only afford with a full pocket.
@@ -1617,6 +1632,7 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         // A best-effort route means the budget ran dry: walk what it found,
         // but do not buy another full-budget search half a second from now.
         if !complete do b.replan_timer = REPLAN_BACKOFF
+        }
     }
 
     // Watchdog measures PATH progress (waypoint reached or a mine/place
@@ -1632,6 +1648,35 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         b.stuck_timer += dt
         if b.stuck_timer >= STUCK_TIME {
             builder_strike(e, id, gs, "no progress")
+        }
+    }
+    return false
+}
+
+// Glenn's idea for the 512-enemy stall: hunters bunched on one target walk
+// the same road, so let one plan and the rest copy.  A lender is another
+// active enemy of my kind whose plan_target is my travel target and whose
+// route passes through the tile I stand on; I take the route from that
+// waypoint on, cursor at zero, exactly as a fresh plan would start on my own
+// tile.  Waypoints the lender already walked still count - a follower behind
+// the leader on the same road is the common case.  Only the wave hunters
+// borrow (Raider, Vargr): they carry no pocket, so a borrowed route never
+// asks for a bridge block the borrower does not have.
+nav_borrow_path :: proc(gs: ^Game_State, e: ^Enemy, id: int, from, T: [2]i32) -> bool {
+    if e.kind != .Raider && e.kind != .Vargr do return false
+    for i in 0 ..< MAX_ENEMIES {
+        if i == id || !gs.enemies.active[i] do continue
+        o := &gs.enemies.data[i]
+        if o.kind != e.kind || o.builder.plan_target != T do continue
+        p := &o.nav.path
+        if p.len == 0 do continue
+        for k in 0 ..< p.len {
+            if p.tiles[k] != from do continue
+            n := p.len - k
+            for j in 0 ..< n do e.nav.path.tiles[j] = p.tiles[k + j]
+            e.nav.path.len    = n
+            e.nav.path.cursor = 0
+            return true
         }
     }
     return false
@@ -2252,6 +2297,7 @@ update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
 update_enemies :: proc(gs: ^Game_State) {
     dt := gs.delta_time
+    gs.nav_searches = 0
     for i in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[i] { continue }
         e := &gs.enemies.data[i]
