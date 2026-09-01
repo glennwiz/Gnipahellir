@@ -93,6 +93,22 @@ wave_threat :: proc(gs: ^Game_State) -> (score: f32) {
     return
 }
 
+// The hunters' structure index — same grid walk as wave_threat, on the same
+// beat (a second scan every 2 s, never per frame), plus lazily the first time
+// a hunter asks before the beat has run.  Row-major order, so a base past
+// MAX_WAVE_STRUCTURES entries is only ever hunted from the top rows down.
+wave_index_structures :: proc(gs: ^Game_State) {
+    w := &gs.wave
+    w.structures_n = 0
+    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+        if !is_structure_tile[gs.world.terrain[grid_idx(x, y)]] do continue
+        if w.structures_n >= MAX_WAVE_STRUCTURES do break
+        w.structures[w.structures_n] = {i32(x), i32(y)}
+        w.structures_n += 1
+    }
+    w.structures_indexed = true
+}
+
 // A wave enemy is one the director sent — shared by the no-stack guard and the
 // F4 clear so the two can never drift apart.  An INDUSTRY raider holds .Hunt,
 // not .Wave_Hunt, and that is the whole distinction.
@@ -192,6 +208,7 @@ update_waves :: proc(gs: ^Game_State) {
     if w.threat_timer <= 0 {
         w.threat       = wave_threat(gs)
         w.threat_timer = WAVE_THREAT_RESCAN
+        wave_index_structures(gs)
     }
 
     // Never stack a fresh wave on survivors (the raid's raiders_present idiom).

@@ -1024,13 +1024,17 @@ wave_target_refused :: proc(gs: ^Game_State, T: [2]i32) -> bool {
     return false
 }
 
-// Nearest structure worth smashing.  Full-grid scan, the raid_heat_target
-// idiom — a wave hunter re-scans only after a kill, not every frame.
+// Nearest structure worth smashing, read off the director's structure index
+// (wave.odin) — this runs every frame for every hunter that lacks a target,
+// so it must never walk the grid.  Each entry is checked live: a structure
+// smashed since the beat is skipped, a refusal is decided now.
 find_wave_structure_target :: proc(gs: ^Game_State, from: [2]i32) -> (best: [2]i32, ok: bool) {
+    w := &gs.wave
+    if !w.structures_indexed do wave_index_structures(gs)
     best_d := max(i64)
-    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
-        if !is_structure_tile[gs.world.terrain[grid_idx(x, y)]] do continue
-        T := [2]i32{i32(x), i32(y)}
+    for i in 0 ..< w.structures_n {
+        T := w.structures[i]
+        if !is_structure_tile[gs.world.terrain[grid_idx(int(T.x), int(T.y))]] do continue
         if wave_target_refused(gs, T) do continue
         dx, dy := i64(T.x - from.x), i64(T.y - from.y)
         if d := dx*dx + dy*dy; d < best_d {

@@ -9650,6 +9650,39 @@ a_loaded_silo_never_traps_a_wave_hunter :: proc(t: ^testing.T) {
 }
 
 @(test)
+hunters_pick_targets_off_the_structure_index_not_the_grid :: proc(t: ^testing.T) {
+    // The index is rebuilt on the director's 2 s beat and read live: a smashed
+    // structure drops out at once (the tile check), a new one waits for the
+    // beat.  That contract is what makes a target pick cost a few dozen
+    // entries instead of 20k tiles per hunter per frame.
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    BX :: 70
+    BY :: SURFACE_Y - 1
+    set_tile(&gs.world, BX, BY, .Crafting_Bench)
+
+    T, ok := find_wave_structure_target(gs, {BX + 1, BY})   // lazy first index
+    testing.expect(t, ok, "the bench should be indexed on first use")
+    testing.expect_value(t, T, [2]i32{BX, BY})
+    testing.expect_value(t, gs.wave.structures_n, 1)
+
+    // Smashed since the beat: the stale entry is skipped, not returned.
+    set_tile(&gs.world, BX, BY, .Air)
+    _, ok = find_wave_structure_target(gs, {BX + 1, BY})
+    testing.expect(t, !ok, "a smashed structure must not be offered")
+
+    // Placed since the beat: invisible until the beat re-indexes.
+    set_tile(&gs.world, BX + 4, BY, .Crafting_Bench)
+    _, ok = find_wave_structure_target(gs, {BX + 1, BY})
+    testing.expect(t, !ok, "a fresh structure waits for the beat")
+    wave_index_structures(gs)
+    T, ok = find_wave_structure_target(gs, {BX + 1, BY})
+    testing.expect(t, ok, "the beat must pick up the new bench")
+    testing.expect_value(t, T, [2]i32{BX + 4, BY})
+}
+
+@(test)
 air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

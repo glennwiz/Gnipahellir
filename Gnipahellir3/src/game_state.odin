@@ -162,7 +162,18 @@ Wave_State :: struct {
     warning_active: bool,
     warning_kind:   Wave_Kind, // decided when the warning arms, not at spawn
     cooldown:       f32,
+    // Structure index for the hunters: rebuilt on the WAVE_THREAT_RESCAN beat
+    // (lazily on first use), so picking a target walks a few dozen entries
+    // instead of the 20k-tile grid — which every hunter without a target used
+    // to do EVERY FRAME, ~10M reads a frame at 512 enemies once the base was
+    // gone.  Entries are verified live at pick time, so a structure smashed
+    // since the beat costs one skipped step; one placed since it waits ≤ 2 s.
+    structures:         [MAX_WAVE_STRUCTURES][2]i32,
+    structures_n:       int,
+    structures_indexed: bool,
 }
+
+MAX_WAVE_STRUCTURES :: 256   // stations and machines only, never placed blocks
 
 // Garm's combat cage — the stone box he conjures around the player at low hp
 // and then floods.  Transient on purpose, and that IS the mechanism: a zero
