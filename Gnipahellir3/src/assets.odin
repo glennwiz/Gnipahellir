@@ -68,13 +68,20 @@ assets_shutdown :: proc(a: ^Assets) {
 }
 
 // Source rect of a sprite cell, derived from its ordinal (row-major, 8 cols).
+// Inset half a texel on every side: at fractional zoom the interpolated UV at
+// a tile's edge can land a hair outside the cell, and point sampling then
+// pulls the neighbouring cell's edge column — a dark 1-px seam on stone
+// wherever Slate/Basalt sit next to it in the atlas. The cells have no
+// gutters, so the inset is what keeps the sample inside.
+ATLAS_BLEED_INSET :: f32(0.5)
+
 tile_atlas_rect :: proc(s: Tile_Sprite) -> rl.Rectangle {
 	i := int(s)
 	return {
-		f32((i % ATLAS_COLS) * ATLAS_CELL),
-		f32((i / ATLAS_COLS) * ATLAS_CELL),
-		ATLAS_CELL,
-		ATLAS_CELL,
+		f32((i % ATLAS_COLS) * ATLAS_CELL) + ATLAS_BLEED_INSET,
+		f32((i / ATLAS_COLS) * ATLAS_CELL) + ATLAS_BLEED_INSET,
+		ATLAS_CELL - 2 * ATLAS_BLEED_INSET,
+		ATLAS_CELL - 2 * ATLAS_BLEED_INSET,
 	}
 }
 
