@@ -10070,6 +10070,31 @@ placing_a_portal_summons_the_underground :: proc(t: ^testing.T) {
 }
 
 @(test)
+the_f4_sky_swarm_scatters_ten_sprites_across_the_sky :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    debug_sky_swarm(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, wave_count_kind(gs, .Fire_Sprite), SKY_SWARM_COUNT)
+
+    // Spread across the width, every one hanging in the sky band, hunting.
+    min_x, max_x := f32(GRID_W), f32(0)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == .Fire_Sprite {
+        e := &gs.enemies.data[i]
+        min_x = min(min_x, e.pos.x)
+        max_x = max(max_x, e.pos.x)
+        testing.expect(t, e.pos.y >= 2 && e.pos.y < SURFACE_Y - 8, "a swarm sprite hangs in the sky band")
+        testing.expect_value(t, e.builder.goal, Builder_Goal.Wave_Hunt)
+    }
+    testing.expect(t, max_x - min_x > GRID_W / 2, "the swarm spans more than half the map")
+
+    // The clear row takes them like any wave.
+    debug_wave_clear(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, wave_count_kind(gs, .Fire_Sprite), 0)
+}
+
+@(test)
 the_f4_wave_menu_forces_and_clears_waves :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

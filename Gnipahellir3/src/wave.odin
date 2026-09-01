@@ -256,6 +256,23 @@ debug_wave_spawn :: proc(gs: ^Game_State, kind: Wave_Kind) {
     wave_force(gs, kind, wave_table[kind].count)
 }
 
+// Load testing: ten fire sprites scattered across the whole sky at once,
+// evenly spaced in x and hashed in altitude, so a press fills the air over
+// the base instead of queueing two at the map edges like a wave does.  They
+// hunt like any AIR wave, and the clear row takes them with the rest.
+SKY_SWARM_COUNT :: 10
+debug_sky_swarm :: proc(gs: ^Game_State) {
+    lo, hi := CAVE_LEFT + 6, CAVE_RIGHT - 7
+    spawned := 0
+    for i in 0 ..< SKY_SWARM_COUNT {
+        x := lo + i * (hi - lo) / (SKY_SWARM_COUNT - 1)
+        y := 3 + int(whash(u32(gs.frame)*31 + u32(i)*613) % u32(SURFACE_Y - 12))
+        if spawn_flyer_at(gs, x, y) do spawned += 1
+    }
+    notify(gs, "Debug: %d fire sprites scattered across the sky", spawned)
+    log_action(gs, "Debug sky swarm: %d fire sprites", spawned)
+}
+
 // Repeatable testing: despawn every wave enemy and reset the director.  An
 // INDUSTRY raider is not a wave enemy and survives — only .Wave_Hunt ones go.
 debug_wave_clear :: proc(gs: ^Game_State) {

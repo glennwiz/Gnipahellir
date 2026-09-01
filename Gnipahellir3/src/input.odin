@@ -869,6 +869,7 @@ update_input :: proc(gs: ^Game_State) {
             case 4: debug_wave_spawn(gs, .Ground)
             case 5: debug_wave_spawn(gs, .Underground)
             case 6: debug_wave_clear(gs)
+            case 7: debug_sky_swarm(gs)
             }
         }
     }

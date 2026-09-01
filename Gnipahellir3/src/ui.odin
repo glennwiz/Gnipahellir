@@ -1421,8 +1421,8 @@ RAID_MENU_X :: ALT_MENU_X + ALT_MENU_W + 36
 RAID_MENU_Y :: DBG_MENU_Y
 RAID_MENU_W :: 200
 // 0: warn now; 1: spawn tunnellers now; 2: clear + reset;
-// 3-5: force one wave per kind; 6: clear wave enemies
-RAID_MENU_ROWS :: 7
+// 3-5: force one wave per kind; 6: clear wave enemies; 7: sky swarm of 10
+RAID_MENU_ROWS :: 8
 
 // Menu row under the cursor, or -1.
 raid_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -1480,6 +1480,13 @@ draw_raid_menu :: proc(gs: ^Game_State) {
 		"Clear wave enemies >",
 		RAID_MENU_X,
 		RAID_MENU_Y + 6 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.SKYBLUE,
+	)
+	rl.DrawText(
+		"Sky swarm: 10 sprites >",
+		RAID_MENU_X,
+		RAID_MENU_Y + 7 * DBG_MENU_ROW_H + 7,
 		10,
 		rl.SKYBLUE,
 	)

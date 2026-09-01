@@ -1118,11 +1118,15 @@ wave_edge_x :: proc(n: int) -> int {
 // AIR: a fire sprite drops in from the sky over the surface.  It flies, so it
 // needs no floor — only open air to hang in.
 spawn_wave_flyer :: proc(gs: ^Game_State, n: int) -> bool {
+    return spawn_flyer_at(gs, wave_edge_x(n), max(2, SURFACE_Y - 8 - (n / 2)))
+}
+
+// One hunting fire sprite at a sky tile - the wave's flyer and the F4 sky
+// swarm share it.
+spawn_flyer_at :: proc(gs: ^Game_State, x, y: int) -> bool {
     id, ok := enemy_alloc(&gs.enemies)
     if !ok do return false
 
-    x := wave_edge_x(n)
-    y := max(2, SURFACE_Y - 8 - (n / 2))
     e := &gs.enemies.data[id]
     e^ = Enemy{
         kind = .Fire_Sprite, hp = FIRE_SPRITE_HP, hp_max = FIRE_SPRITE_HP,
