@@ -62,10 +62,16 @@ request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: boo
     camera_begin_zoom_glide(gs, from_target)
 }
 
+// The wheel stays with whoever is watching an agent play, the one input not
+// locked out.  Runs per render frame, not per tick, because the game mostly
+// waits; it reads the wheel for the frame, so update_input must not.
+agent_watcher_input :: proc(gs: ^Game_State, tick: bool) {
+    if wheel := rl.GetMouseWheelMove(); wheel != 0 do request_zoom(gs, wheel, {}, false)
+    if !tick do update_camera(gs)  // a glide finishes while the sim waits; visual only
+}
+
 update_input :: proc(gs: ^Game_State) {
     if gs.agent.driving {
-        // The wheel stays with whoever is watching, as the one input not locked out.
-        if wheel := rl.GetMouseWheelMove(); wheel != 0 do request_zoom(gs, wheel, {}, false)
         agent_input(gs)
         return
     }

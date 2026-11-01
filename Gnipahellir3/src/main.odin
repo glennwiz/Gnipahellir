@@ -74,6 +74,7 @@ main :: proc() {
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
         tick := agent_pump(agent, gs)
+        if gs.agent.driving do agent_watcher_input(gs, tick)
         if tick do game_update(gs)
         if tick do agent_after_tick(agent, gs)
 

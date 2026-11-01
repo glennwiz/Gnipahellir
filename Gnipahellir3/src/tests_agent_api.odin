@@ -367,6 +367,26 @@ agent_frames_the_view_for_a_watcher_again_after_a_new_game :: proc(t: ^testing.T
 }
 
 @(test)
+agent_view_glide_finishes_while_the_game_waits :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_handle_line(link, gs, `{"cmd":"act"}`)
+    agent_drive(link, gs)
+    agent_input(gs)
+    link.frames_left = 0
+    frame := gs.frame
+
+    for _ in 0 ..< 60 {
+        testing.expect(t, !agent_drive(link, gs))
+        agent_watcher_input(gs, false)
+    }
+    testing.expect_value(t, gs.zoom, AGENT_VIEW_ZOOM)
+    testing.expect_value(t, gs.frame, frame)  // the sim did not move
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
