@@ -4,6 +4,7 @@ import rl "vendor:raylib"
 import "core:fmt"
 import "core:mem"
 import "core:os"
+import "core:strconv"
 
 // ─── Save / Load ──────────────────────────────────────────────────────────────
 //
@@ -14,23 +15,25 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(26)  // v26: the risen hero's kit, appended at the end of Save_Data
+SAVE_VERSION :: i32(27)  // v27: world_seed, so a reload generates the same later levels
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
 // (save_data_size_probe logs the real number, plus len(Item).)
-SAVE_DATA_EXPECTED_SIZE :: 7_555_544   // EXPERIMENT: MAX_ENEMIES 1024
+SAVE_DATA_EXPECTED_SIZE :: 7_555_552   // EXPERIMENT: MAX_ENEMIES 1024
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
-// v24 and v25 are v26 cut short before grave and before risen, so they are
-// read straight into the front of Save_Data and the rest stays zero: no stone,
-// no kit in that world.
+// v24, v25 and v26 are v27 cut short before grave, risen and world_seed, so
+// they read straight into the front of Save_Data and the rest stays zero: no
+// stone, no kit, and seed 0, which is what an old run's reload always used.
 SAVE_V24_SIZE :: 7_554_872
 SAVE_V25_SIZE :: 7_554_968
+SAVE_V26_SIZE :: 7_555_544
 #assert(offset_of(Save_Data, grave) == SAVE_V24_SIZE)
 #assert(offset_of(Save_Data, risen) == SAVE_V25_SIZE)
+#assert(offset_of(Save_Data, world_seed) == SAVE_V26_SIZE)
 
 // One-version migration keeps the active playtest run intact.
 //
@@ -89,15 +92,17 @@ Save_Data :: struct {
     elapsed_time: f32,
     frame:        u64,
     grave:        Grave_Record,  // see SAVE_V24_SIZE
-    risen:        Risen_Hero,    // keep last: see SAVE_V25_SIZE
+    risen:        Risen_Hero,    // see SAVE_V25_SIZE
+    world_seed:   u32,           // keep last: see SAVE_V26_SIZE
 }
 
-// The bytes as a Save_Data if they are a run that can resume, else nil.  v24
-// and v25 files are shorter; the caller frees the result.
+// The bytes as a Save_Data if they are a run that can resume, else nil.  Older
+// files are shorter; the caller frees the result.
 save_data_read :: proc(data: []u8) -> ^Save_Data {
     version: i32
     switch len(data) {
     case size_of(Save_Data): version = SAVE_VERSION
+    case SAVE_V26_SIZE:      version = 26
     case SAVE_V25_SIZE:      version = 25
     case SAVE_V24_SIZE:      version = 24
     case:                    return nil
@@ -134,6 +139,7 @@ save_game_to :: proc(gs: ^Game_State, path: string) -> bool {
     sd.frame        = gs.frame
     sd.grave        = gs.grave
     sd.risen        = gs.risen
+    sd.world_seed   = gs.world_seed
 
     return os.write_entire_file(path, mem.ptr_to_bytes(sd)) == nil
 }
@@ -201,6 +207,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
     gs.frame        = sd.frame
     gs.grave        = sd.grave
     gs.risen        = sd.risen
+    gs.world_seed   = sd.world_seed
 
     // The raid director is transient by design — reloading during a buildup
     // cancels it — and the pre-load session's rumble telegraph must not
@@ -348,11 +355,29 @@ save_remove :: proc(gs: ^Game_State) {
 // "New Game" from the menu: wipes any existing save and drops the player
 // straight into a fresh run (mirrors main()'s no-save-found spawn).
 start_new_game :: proc(gs: ^Game_State) {
+    start_new_game_with(gs, agent_new_game_seed(gs))   // random per run, GNIPA_SEED override, chained under an agent
+}
+
+// The title's way in: the typed seed if there is one, else a fresh world.
+start_title_game :: proc(gs: ^Game_State) {
+    if !gs.ui.title_fresh do return
+    seed := agent_new_game_seed(gs)
+    if gs.ui.title_seed_len > 0 {
+        n, _ := strconv.parse_u64(string(gs.ui.title_seed[:gs.ui.title_seed_len]))
+        seed = u32(n)   // wraps as GNIPA_SEED does, so the two agree
+    }
+    start_new_game_with(gs, seed)
+}
+
+start_new_game_with :: proc(gs: ^Game_State, seed: u32) {
     flush_action_log(gs)  // game_state_init doesn't preserve the log buffer
     save_remove(gs)
-    seed := agent_new_game_seed(gs)   // random per run, GNIPA_SEED override, chained under an agent
     game_state_init(gs, seed)
+    load_pixel_art(gs)    // init zeroed the sprite bank, same as boot
     log_action(gs, "New game - world seed %d", seed)
+    gs.stats.last_seed     = seed
+    gs.stats.has_last_seed = true
+    _ = save_stats(gs)
     gs.player.pos            = SURFACE_HOME_POS
     gs.player.clothing_color = rl.BLUE
     gs.player.hair_color     = rl.ORANGE
@@ -423,13 +448,13 @@ load_settings :: proc(gs: ^Game_State) -> bool {
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
 //  STATS_VERSION is in the file since v2; v1 was the bare four counters, and
-//  v2 is v3 cut short before the kit.  A
+//  v2 and v3 are v4 cut short before the kit and the last seed.  A
 //  file this build cannot read is moved aside, never overwritten.  The state
 //  main never armed has no file, which keeps `odin test src` off real stats.
 
-STATS_VERSION :: i32(3)
+STATS_VERSION :: i32(4)
 STATS_V2_SIZE :: int(offset_of(Persistent_Stats, kit))
-#assert(STATS_V2_SIZE % 8 == 0)
+STATS_V3_SIZE :: int(offset_of(Persistent_Stats, last_seed))
 
 Persistent_Stats_v1 :: struct {
     runs_played:  int,
@@ -467,10 +492,13 @@ load_stats :: proc(stats: ^Persistent_Stats, path: string) -> bool {
             total_kills  = old.total_kills,
         }
         return true
-    case STATS_V2_SIZE, size_of(Persistent_Stats):
+    case STATS_V2_SIZE, STATS_V3_SIZE, size_of(Persistent_Stats):
+        version := STATS_VERSION
+        if len(data) == STATS_V2_SIZE do version = 2
+        if len(data) == STATS_V3_SIZE do version = 3
         read: Persistent_Stats
         mem.copy(&read, raw_data(data), len(data))
-        if read.version == (len(data) == STATS_V2_SIZE ? 2 : STATS_VERSION) {
+        if read.version == version {
             read.version = STATS_VERSION
             stats^ = read
             return true

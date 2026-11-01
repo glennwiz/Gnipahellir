@@ -70,7 +70,12 @@ main :: proc() {
     }
     camera_snap_y(gs)  // start the view centered on the player, wherever they spawned/loaded
     load_stats(&gs.stats, gs.stats_path)
-    if !resumed do grave_raise(gs)  // needs the stats: the last hero's grave is in them
+    // The boot world is only the title's backdrop.  A run starts when the title
+    // closes, with the world it chose; under an agent the boot world is the run.
+    if !resumed {
+        gs.ui.title_fresh = !agent.listening
+        if agent.listening do grave_raise(gs)  // needs the stats: the last hero's grave is in them
+    }
     load_settings(gs)  // after audio_init: overrides its default volumes
 
     for !rl.WindowShouldClose() && !gs.quit_requested {

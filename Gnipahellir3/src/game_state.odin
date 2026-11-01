@@ -578,6 +578,9 @@ UI_State :: struct {
     drag_slot:       int,     // bag slot the drag started from (smelter feed takes from it)
     drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
     drag_input:      bool,    // the drag holds the smelter's loaded ore (pulling it back out)
+    title_fresh:     bool,   // no run to resume: the title offers a seed and starts a world
+    title_seed:      [TITLE_SEED_DIGITS]u8, // digits typed on the title
+    title_seed_len:  int,
     tithe_slot:      int,     // bag slot chosen on the death screen (-1 = none)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     drag_void:       bool,    // drag source is Player.void_slot, not the bag
@@ -735,6 +738,8 @@ Persistent_Stats :: struct {
     total_kills:  int,
     grave:        Grave_Record,  // the last hero, until a new world raises the stone (grave.odin)
     kit:          [RISEN_KIT]Inventory_Slot,  // what they carried, until then too
+    last_seed:    u32,           // the most recent world's seed: "Yesterday's world" on the title
+    has_last_seed: bool,
 }
 
 // ─── Game State (fat struct) ──────────────────────────────────────────────────
@@ -793,7 +798,7 @@ Game_State :: struct {
     elapsed_time: f32,
     frame:        u64,
     delta_time:   f32,
-    world_seed:   u32,    // seed mixed into level generation; set per run, not saved
+    world_seed:   u32,    // seed mixed into level generation; set per run, saved since v27
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     death_by:     string, // what landed the killing blow, from a static table — not saved; read by the death screen
     game_won:     bool,   // run complete — not saved; a won run ends like a death

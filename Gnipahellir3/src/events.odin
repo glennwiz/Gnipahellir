@@ -397,6 +397,9 @@ process_events :: proc(gs: ^Game_State) {
         case .New_Game_Request:
             start_new_game(gs)
 
+        case .Title_Start:
+            start_title_game(gs)
+
         case .Tithe_Choose:
             grave_choose_tithe(gs, int(e.payload.int_val))
 

@@ -2,6 +2,7 @@ package game
 
 import "core:testing"
 import "core:mem"
+import rl "vendor:raylib"
 import "core:strings"
 import "core:fmt"
 import "core:log"
@@ -10963,7 +10964,15 @@ a_saved_run_keeps_its_stone_and_a_v24_save_still_loads :: proc(t: ^testing.T) {
     bytes, err := os.read_entire_file_from_path(PATH, context.allocator)
     testing.expect(t, err == nil, "read")
     defer delete(bytes)
-    v := i32(25)
+    v := i32(26)
+    mem.copy(raw_data(bytes), &v, size_of(v))
+    testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V26_SIZE]) == nil, "wrote v26")
+    v26 := test_state()
+    defer free(v26)
+    testing.expect(t, load_game_from(v26, PATH), "v26 loads")
+    testing.expect(t, v26.grave.active, "a v26 world keeps its stone")
+
+    v = 25
     mem.copy(raw_data(bytes), &v, size_of(v))
     testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V25_SIZE]) == nil, "wrote v25")
     was := test_state()
@@ -11234,5 +11243,104 @@ an_enemy_cannot_dig_the_tithe_away :: proc(t: ^testing.T) {
 
 @(test)
 tithe_choose_is_appended_to_the_event_enum :: proc(t: ^testing.T) {
-    testing.expect_value(t, int(max(Event_Type)), int(Event_Type.Tithe_Choose))
+    testing.expect(t, int(Event_Type.Tithe_Choose) > int(Event_Type.Void_Take), "after every older value")
+    testing.expect(t, int(Event_Type.Title_Start) > int(Event_Type.Tithe_Choose), "and so on down the enum")
+}
+
+// ─── Seed field and Yesterday's world (board card 43) ─────────────────────────
+
+@(private="file")
+seed_type :: proc(gs: ^Game_State, keys: ..rl.KeyboardKey) -> bool {
+    for k in keys do if title_key(gs, k) do return true
+    return false
+}
+
+@(test)
+the_same_typed_seed_gives_the_same_world :: proc(t: ^testing.T) {
+    a := test_state()
+    defer free(a)
+    b := test_state()
+    defer free(b)
+    for gs in ([2]^Game_State{a, b}) {
+        gs.ui.title_fresh = true
+        testing.expect(t, !seed_type(gs, .ONE, .TWO, .THREE, .FOUR, .NINE, .BACKSPACE, .FIVE), "digits do not start")
+        testing.expect(t, title_key(gs, .ENTER), "any other key does")
+        eq_push(&gs.events, Event{type = .Title_Start})
+        process_events(gs)
+    }
+    testing.expect_value(t, a.world_seed, u32(12345))
+    testing.expect(t, !a.ui.show_title, "in the world")
+    same := true
+    for i in 0 ..< GRID_W * GRID_H do if a.world.terrain[i] != b.world.terrain[i] do same = false
+    testing.expect(t, same, "the same seed, the same world")
+    testing.expect_value(t, a.stats.last_seed, u32(12345))
+    testing.expect(t, a.stats.has_last_seed, "remembered")
+}
+
+@(test)
+no_seed_means_a_new_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.title_fresh = true
+    eq_push(&gs.events, Event{type = .Title_Start})
+    process_events(gs)
+    testing.expect(t, gs.world_seed != DEFAULT_WORLD_SEED, "not the boot world")
+}
+
+@(test)
+y_brings_back_yesterdays_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.title_fresh = true
+    testing.expect(t, title_key(gs, .Y), "with no yesterday Y is any other key")
+    gs.stats.last_seed = 4000000000
+    gs.stats.has_last_seed = true
+    testing.expect(t, !title_key(gs, .Y), "Y fills the field")
+    start_title_game(gs)
+    testing.expect_value(t, gs.world_seed, u32(4000000000))
+}
+
+@(test)
+a_resumable_run_offers_no_seed :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    testing.expect(t, title_key(gs, .ONE), "any key resumes")
+    start_title_game(gs)
+    testing.expect_value(t, gs.world_seed, DEFAULT_WORLD_SEED)  // no new world over the saved run
+}
+
+@(test)
+a_saved_run_keeps_its_seed_for_the_levels_to_come :: proc(t: ^testing.T) {
+    PATH := "test_seed_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.world_seed = 777
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "loads")
+    testing.expect_value(t, back.world_seed, u32(777))
+}
+
+@(test)
+the_agent_harness_plays_the_typed_seed :: proc(t: ^testing.T) {
+    // GNIPA_SEED is how tools/agent_play.sh passes its seed.
+    os.set_env("GNIPA_SEED", "12345")
+    defer os.unset_env("GNIPA_SEED")
+    testing.expect_value(t, new_game_world_seed(), u32(12345))
+}
+
+@(test)
+a_v3_stats_file_migrates :: proc(t: ^testing.T) {
+    PATH := "test_stats_v3.dat"
+    defer os.remove(PATH)
+    old := Persistent_Stats{version = 3, total_kills = 12}
+    old.kit[0] = {item = .Sword, count = 1}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)[:STATS_V3_SIZE]) == nil, "wrote")
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, PATH), "v3 loads")
+    testing.expect_value(t, stats.version, STATS_VERSION)
+    testing.expect_value(t, stats.kit[0].item, Item.Sword)
+    testing.expect(t, !stats.has_last_seed, "v3 knew no seed")
 }

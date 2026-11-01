@@ -566,6 +566,7 @@ Event_Type :: enum u8 {
 	Mushroom_Grew, // tile = the sprouted mushroom; sound + spore glow burst
 	// The death screen (appended so existing event values stay stable)
 	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
+	Title_Start, // the title closed on no saved run: start the world it chose
 }
 
 Event_Payload :: struct #raw_union {

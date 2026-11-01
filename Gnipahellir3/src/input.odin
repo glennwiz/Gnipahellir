@@ -129,9 +129,16 @@ update_input :: proc(gs: ^Game_State) {
 
     // Title screen: any key or click drops into the world.
     if gs.ui.show_title {
-        if rl.GetKeyPressed() != .KEY_NULL ||
-           rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT) {
-            gs.ui.show_title = false
+        start := rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT)
+        for k := rl.GetKeyPressed(); k != .KEY_NULL; k = rl.GetKeyPressed() {
+            if title_key(gs, k) do start = true
+        }
+        if start {
+            if gs.ui.title_fresh {
+                eq_push(&gs.events, Event{type = .Title_Start})
+            } else {
+                gs.ui.show_title = false
+            }
         }
         return
     }

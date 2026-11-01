@@ -797,6 +797,45 @@ draw_title :: proc(gs: ^Game_State) {
 	draw_stepped_panel_shape(PROMPT_X + 6, PROMPT_Y + 6, PROMPT_W - 12, PROMPT_H - 12, rl.Color{19, 15, 17, 255})
 	prompt_col := (tick / 5) % 4 == 0 ? rl.Color{165, 118, 54, 255} : rl.Color{255, 218, 132, 255}
 	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
+
+	if !gs.ui.title_fresh do return
+	seed_line: [64]u8
+	if gs.ui.title_seed_len > 0 {
+		fmt.bprintf(seed_line[:63], "World seed: %s", string(gs.ui.title_seed[:gs.ui.title_seed_len]))
+	} else {
+		fmt.bprintf(seed_line[:63], "Type a world seed, or leave it for a new world")
+	}
+	center_text(cstring(raw_data(seed_line[:])), PROMPT_Y + PROMPT_H + 18, 18, rl.Color{215, 164, 79, 255})
+	if gs.stats.has_last_seed {
+		last_line: [64]u8
+		fmt.bprintf(last_line[:63], "[Y] Yesterday's world: %d", gs.stats.last_seed)
+		center_text(cstring(raw_data(last_line[:])), PROMPT_Y + PROMPT_H + 44, 18, rl.Color{157, 144, 134, 255})
+	}
+}
+
+// One key on the title; true when it closes the screen.  With a world to choose,
+// digits and Backspace edit the seed and Y recalls the last world's.
+TITLE_SEED_DIGITS :: 10 // every u32 fits
+title_key :: proc(gs: ^Game_State, key: rl.KeyboardKey) -> bool {
+	if !gs.ui.title_fresh do return true
+	ui := &gs.ui
+	#partial switch key {
+	case .ZERO ..= .NINE:
+		if ui.title_seed_len < TITLE_SEED_DIGITS {
+			ui.title_seed[ui.title_seed_len] = '0' + u8(key - .ZERO)
+			ui.title_seed_len += 1
+		}
+		return false
+	case .BACKSPACE:
+		if ui.title_seed_len > 0 do ui.title_seed_len -= 1
+		return false
+	case .Y:
+		if !gs.stats.has_last_seed do return true
+		digits := fmt.bprintf(ui.title_seed[:], "%d", gs.stats.last_seed)
+		ui.title_seed_len = len(digits)
+		return false
+	}
+	return true
 }
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
@@ -895,6 +934,9 @@ draw_menu :: proc(gs: ^Game_State) {
 		18,
 		rl.Color{150, 130, 110, 255},
 	)
+	seed_buf: [40]u8
+	fmt.bprintf(seed_buf[:39], "World seed %d", gs.world_seed)
+	center_text(cstring(raw_data(seed_buf[:])), MENU_Y + MENU_ROWS * MENU_ROW_H + 66, 16, rl.Color{120, 104, 90, 255})
 }
 
 // ─── Settings Screen (volumes + key binds) ────────────────────────────────────
