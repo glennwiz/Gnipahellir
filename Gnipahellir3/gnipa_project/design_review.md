@@ -297,5 +297,9 @@ than 64, and 1024 has only ever had a load test, not a frame-time one.
 - **Q3 ending:** Seal ceremony now, Hel boss later.
 - **Q4 quench:** yes, the placed stone option. The exact rule is settled before card 22 starts.
 - **Q5 enemy cap:** 256 with a frame-time test.
+- **2026-11-02, quench (card 22):** any lava quenches; the rule limits the stone, a weak stone useful as footing.
+- **2026-11-02, risen hero (card 27):** carries everything but the tithe; the tithe stays at the grave; scrolls and keys excluded.
+- **2026-11-02, floating drops (card 32):** drops fall until they land on something solid.
+- **2026-11-02, Scroll A chest (card 38):** enemies cannot dig it.
 - **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
 - **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
