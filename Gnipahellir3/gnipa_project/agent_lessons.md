@@ -17,6 +17,8 @@ long think, end the script with `g.plan({...},{...})` sized to the think, and
 pick safe moves: a plan is blind, and only your next act overrides it. State has
 `plan_left`, and `plan_stopped` if a step could not start. Keep the watcher told
 with `g.goal("kill Garm", "perch at the east wall")`.
+`B` now sends a default plan when a script exits (mine beside the body, else stand);
+call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 
 ## How the bot plays
 - Hold one connection for the whole run through `bridge.py`. A disconnect lets the
@@ -34,8 +36,20 @@ with `g.goal("kill Garm", "perch at the east wall")`.
   Builder bites round the corner.
 - `feed` takes the whole stack and cannot be undone: 20 iron jammed a smelter for gold.
 - `enemies` lists only what is inside the requested view, so ask for a wide view.
+- Warp does nothing on level 0, chamber included ("Already on the surface"). Check it
+  moved you before relying on it: life 1 of run 4 walked into the shaft and fell 21 tiles.
+- `walkj` along the surface walks into the shaft at x 96-97. Bridge it first.
+- Falling off the sky lands you in the chamber at no cost, but a `goto` left running then
+  paths on L0 for sky coordinates. Check `level` after each leg.
+- Stations need a neighbour tile: a smelter in open air fails with no note. Windows close
+  after an act, so `use` again before `collect`.
 - Print map columns before flying to a tile. A misread cost 20 tiles of fall, hp 10 to 2.
-- `harvest` on stone nets zero when it bridges gaps: use `quarry`.
+- `harvest` on stone nets zero when it bridges gaps: use `quarry`. Solid stone is the
+  rows from 104 down on L0, and rows 55-59 on the surface; the chamber is thin islands.
+- Keep 20 blocks in reserve. At zero, `goto` and `harvest` loop on Pillar and burn minutes.
+- `quarry` digs your own altar base logs: start it away from the base.
+- `sel` returns False if the item is missing; a place after it uses whatever is held
+  (a log landed where the altar should be). Check the craft worked.
 - Read `notes` after a place or craft that did nothing: it is the only reason given.
 
 ## How the game goes
@@ -50,6 +64,15 @@ with `g.goal("kill Garm", "perch at the east wall")`.
   the run many times. Home to chamber is 20 s.
 - Fuel is 2 logs per bar: bring 32 or more. Trees need clear Air above and grow only
   on the active level, in 40 s. Flower beds likewise, in 120 s.
+- Cloud drops float in the cell, so stand in them. Stone bridge on row 80, wand on the roof
+  above, jump under each drop: `skyfarm` took 3 columns for 5 Cloud Stone.
+- Tree farm: Tree_Grower is 2 planks + 4 leaves, known once you hold planks. Needs Air
+  above, so surface or sky, never a Void cave. Set in the grass the walk stays flat.
+  Untested for yield: run 4 ended before a harvest, and a Vargr wave smashed 5 growers.
+- An odd ore count jams a smelter on one ore, and the API has no withdraw. Bring even
+  stacks, or a second smelter. Mine frames of `Wood` in cave 2 are spare logs.
+- Waves on L0 demolish the bench, altar and Scroll A chest while you are away. Altar and
+  bench drop at their tile, and the altar must be set back on its base.
 - Potions: bed = 1 Dirt + 1 Plank + 5 seeds, placed on solid; gives 5-6 flowers, then
   it is gone. 3 flowers make a potion. Dirt comes only from rows 54-59 by the shaft.
   Brew before waking Garm.
@@ -64,6 +87,11 @@ with `g.goal("kill Garm", "perch at the east wall")`.
   rect abandons it. Air at distance 13+ was safe: 44 to 35 in 4.5 s. Warp before
   flight ends, and never land there. 12 more hits would have won run 3.
 - Untested: standing in the nearest wall slot may stall the cage 6 s.
+- Untested, best idea so far: Rainbow Laser, 1 log + 1 stone at a bench, 2 damage every
+  0.5 s to the nearest enemy within 8 tiles, no fuel, no aim, and the code has no line of
+  sight check. The arena is empty until ritual C. Garm spawns at (168,102): fill cells
+  round him before the ritual, then enter. 16 lasers in range is about 4.4 s (src reading).
+  Each entry starts at (95,26), so you are far off when he wakes. 0 zaps in run 4.
 
 ## Game bugs seen, unfixed
 - Garm can get stuck smashing a cage wall that re-conjures, and stops fighting
@@ -73,8 +101,7 @@ with `g.goal("kill Garm", "perch at the east wall")`.
 - Player stood grounded on Void at (88-96,54) on the surface.
 - Drops float where the tile was; a hanging one cannot be reached.
 - Bed and other `place` failures can give no note.
-- Smelter window closed by itself during an idle hover.
+- Vargr digging a Rune_Scroll_Chest_A leaves a `Rune_Coffer` drop (run 4 f27348).
 - Fire Sprites parked 90 s above the altar in Wave_Hunt.
-- A `Rune_Coffer` item appeared in the bag near a permanent chest being dug round.
 - A sky tree cut at the base leaves its trunk floating.
 - A surface trunk sat on rock and its base could not be cut, world seed unknown.

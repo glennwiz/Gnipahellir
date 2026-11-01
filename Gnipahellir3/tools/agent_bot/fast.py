@@ -1,17 +1,33 @@
 from b import *
 from start import newgame,p1
 import sys
+def plant(b,xs,row=54):
+    """Tree farm: growers set into the grass, so the walk stays flat. 2 planks + 4 leaves
+    each, and a tree only needs clear Air above, so the surface works; caves are Void."""
+    for x in xs:
+        b.walkj(x-1,limit=30); b.waitland()
+        b.sel('Pickaxe'); b.dig(x,row,tries=20); b.a(3)
+        b.sel('Tree_Grower'); b.a(3,place=[x,row]); log('grower',x,b.t(x,row),b.r['notes'][-1:])
+def farm(b,xs,row=54):
+    """cut every grown trunk at its base and walk through the drops"""
+    for x in xs:
+        if b.t(x,row-1)!='Wood': continue
+        b.walkj(x-1,limit=30); b.waitland(); b.sel('Pickaxe'); b.dig(x,row-1,tries=30)
+    b.a(60)
+    for x in xs: b.walkj(x,limit=30); b.a(2)
+    log('logs',b.count('Wood_Log'))
 ph=sys.argv[1:] or ['1','2','3','4','5']
 def p2(b):
-    if b.count('Stone_Block')<14: b.quarry(16,d=1 if not b.solid(b.pos()[0]+1,b.pos()[1]) or b.pos()[0]<150 else -1); b.st()
-    for _ in range(6):
-        if b.pos()[1]<=53: break
-        b.a(1,jump=True,move='right'); b.a(26,move='right'); b.waitland()
+    if b.count('Stone_Block')<20: b.quarry(22,d=-1); b.st()
+    if b.pos()[1]>53: b.goto(100,53,maxrepl=12)  # from under ground: a jump loop only works beside the shaft lip
     assert b.pos()[1]<=53
     trees=[x for x in range(W) if (b.m[53][x]=='Wood' or b.m[52][x]=='Wood') and 99<x<170]; fl=[x for x in range(W) if b.m[53][x]=='Flower' and 99<x<170]
-    for x in trees:
+    xs=[x for x in range(102,150,6) if all(abs(x-t)>2 for t in trees) and all(b.t(x,y)=='Air' for y in range(47,54))][:6]
+    log('farm at',xs)
+    for x in sorted(trees+xs):
         for f in [q for q in fl if b.pos()[0]<q<x]: b.walkj(f,limit=40)
-        b.chop(x,x-2)
+        if x in xs: plant(b,[x])
+        else: b.chop(x,x-2)
     b.st()
     assert b.goto(147,92,maxrepl=30,near=3); b.st()
     b.harvest({'Iron_Ore':10,'Silver_Ore':14},(100,70,175,104),maxsec=200); b.st()
@@ -25,7 +41,7 @@ def p2(b):
     b.a(2)
     for i in range(3): b.a(2,craft='Plank')
     b.craft('Potion_Health')
-    b.craft('Sky_Altar',2); b.craft('Smelter'); b.craft('Mine_Wand'); b.craft('Tree_Grower',3); b.craft('Crafting_Bench'); b.st()
+    b.craft('Sky_Altar',2); b.craft('Smelter',2); b.craft('Mine_Wand'); b.craft('Tree_Grower',3); b.craft('Crafting_Bench'); b.st()
     for x in(146,147,148): b.sel('Wood_Log'); b.a(3,place=[x,94])
     b.sel('Sky_Altar'); b.a(3,place=[147,93]); assert b.t(147,93)=='Sky_Altar'; b.a(2)
     b.walkx(142,limit=30); b.a(3,use=[141,94]); b.a(3,take=5); b.a(2); assert b.count('Rune_Scroll_A')==1
@@ -39,17 +55,20 @@ def p3(b):
     b.sel('Sky_Altar'); b.a(3,place=[91,77]); assert b.t(91,77)=='Sky_Altar'
     b.walkx(96); b.sel('Tree_Grower'); b.a(3,place=[94,79]); b.a(2,move='left')
     b.sel('Smelter'); b.a(3,place=[97,79]); assert b.t(97,79)=='Smelter'
-    if b.slot('Crafting_Bench') is not None: b.sel('Crafting_Bench'); b.a(3,place=[98,78])
+    b.sel('Smelter'); b.a(3,place=[98,79]); log('second smelter',b.t(98,79))
     b.walkj(100,limit=20); b.sel('Tree_Grower')
     for c in((102,79),(104,79)): b.a(3,place=list(c)); log(c,b.t(*c))
     b.walkj(96,limit=20)
     b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.st()
     b.a(3,use=[97,79]); b.a(3,feed=b.slot('Silver_Ore')); b.a(3,feed=b.slot('Wood_Log')); b.a(2); b.st()
-    b.maxfall=2
-    for t in ((92,81),(101,81),(96,81),(101,81),(93,81)):
-        if b.count('Cloud_Stone')>=8: break
-        b.goto(t[0],t[1],maxrepl=6,blocks=False); b.st()
-    b.maxfall=5
+    # cloud drops float, so stand in them: a stone bridge along row 80 and the roof above it
+    b.walkj(98,limit=20); b.waitland(); assert b.pos()[1]==81,b.pos()
+    b.sel('Stone_Block')
+    for nx in range(b.pos()[0]+1,106):
+        if not b.solid(nx,82): b.a(2,place=[nx,82])
+        b.step((nx-1,81),'walk',(nx,81)); assert b.pos()==(nx,81),b.pos()
+    assert b.pillar(1) and b.pillar(1) and b.pos()==(105,79),b.pos()
+    b.skyfarm(9,105,122); b.st()
     assert b.count('Cloud_Stone')>=8
     assert b.goto(93,78,maxrepl=8); b.st()
     b.a(3,interact=True); b.a(130); b.a(3); b.st(); b.flightf=b.r['frame']
@@ -72,8 +91,9 @@ def p4(b):
         if not b.flyhome(): break
         b.st()
     skychop2(b); b.rebless()
-    b.flyto(96,77,tmax=18); b.a(3,use=[97,79]); b.a(3,collect=True); b.a(3,feed=b.slot('Iron_Ore')) if b.slot('Iron_Ore') is not None else None
-    if b.slot('Wood_Log') is not None and False: b.a(3,feed=b.slot('Wood_Log'))
+    b.flyto(96,77,tmax=18); b.a(3,use=[97,79]); b.a(3,collect=True); b.a(2)
+    b.a(3,use=[98,79]); b.a(3,feed=b.slot('Iron_Ore'))
+    if b.slot('Wood_Log') is not None: b.a(3,use=[98,79]); b.a(3,feed=b.slot('Wood_Log'))
     b.a(2); b.st(); b.rebless()
     log('PHASE clouds',b.r['frame'],b.ftime())
 def p5(b):
