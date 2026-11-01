@@ -41,6 +41,7 @@ AGENT_VIEW_W       :: 41   // default tile view, centered on the player
 AGENT_VIEW_H       :: 25
 AGENT_LINE_MAX     :: 4096
 AGENT_REPLY_MAX    :: 512 * 1024
+AGENT_ITEMS_MAX    :: 2000 // ground piles in one reply; caps it well inside AGENT_REPLY_MAX
 AGENT_SEND_TIMEOUT :: 2 * time.Second // a client that stops reading is dropped
 
 // Printable, JSON-safe, one per distinct tile type seen in a view.
@@ -412,6 +413,16 @@ agent_input :: proc(gs: ^Game_State) {
         return
     }
 
+    // A window follows its machine, as in update_input: mined out, it closes.
+    if gs.ui.show_smelter &&
+       get_tile(&gs.world, int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y)) != .Smelter {
+        gs.ui.show_smelter = false
+    }
+    if gs.ui.show_barrel {
+        t := get_tile(&gs.world, int(gs.ui.barrel_tile.x), int(gs.ui.barrel_tile.y))
+        if t != .Barrel && t != .Rune_Coffer && !is_rune_scroll_chest(t) do gs.ui.show_barrel = false
+    }
+
     tile := player_tile(&gs.player)
     if c.has_mine  do tile = c.mine
     if c.has_place do tile = c.place
@@ -528,8 +539,9 @@ json_write_string :: proc(b: ^strings.Builder, text: string) {
     strings.write_quoted_string(b, text)
 }
 
-// The whole reply fits link.out: the view is clamped to the map, and the lists
-// are bounded by the view and the bag.
+// The whole reply fits link.out: the view is clamped to the map, enemies are
+// bounded by MAX_ENEMIES and piles by AGENT_ITEMS_MAX.  "items" lists the first
+// piles in row order, so a whole-map view of a littered world can come up short.
 agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View) {
     v := view^ if view != nil else agent_default_view(gs)
     v.x = clamp(v.x, 0, GRID_W - 1)
@@ -568,9 +580,11 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
 
     strings.write_string(&b, `,"items":[`)
     comma = false
+    piles := 0
     for y in v.y ..< v.y + v.h do for x in v.x ..< v.x + v.w {
         idx := grid_idx(x, y)
-        if gs.world.items[idx] == .None || gs.world.item_counts[idx] == 0 do continue
+        if gs.world.items[idx] == .None || gs.world.item_counts[idx] == 0 || piles == AGENT_ITEMS_MAX do continue
+        piles += 1
         if comma do strings.write_byte(&b, ',')
         comma = true
         fmt.sbprintf(&b, `{{"x":%d,"y":%d,"item":"%v","count":%d}}`, x, y, gs.world.items[idx], gs.world.item_counts[idx])

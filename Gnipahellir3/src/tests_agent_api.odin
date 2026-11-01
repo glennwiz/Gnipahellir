@@ -287,6 +287,40 @@ agent_client_gone_mid_act_leaves_nothing_to_replay :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_reply_stays_valid_json_in_a_littered_world :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    for &it, i in gs.world.items {
+        it = .Stone_Block
+        gs.world.item_counts[i] = 99
+    }
+    agent_handle_line(link, gs, `{"cmd":"state","x":0,"y":0,"w":192,"h":108}`)
+    testing.expect_value(t, link.out[link.out_len - 1], '\n')
+    _, err := json.parse_string(agent_test_reply(link), allocator = context.temp_allocator)
+    testing.expect_value(t, err, json.Error.None)
+}
+
+@(test)
+agent_a_window_closes_with_its_machine :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    set_tile(&gs.world, 20, 40, .Air)
+    gs.ui.show_barrel = true
+    gs.ui.barrel_tile = {20, 40}
+    gs.ui.show_smelter = true
+    gs.ui.smelter_tile = {20, 40}
+    agent_handle_line(link, gs, `{"cmd":"act"}`)
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect(t, !gs.ui.show_barrel)
+    testing.expect(t, !gs.ui.show_smelter)
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
