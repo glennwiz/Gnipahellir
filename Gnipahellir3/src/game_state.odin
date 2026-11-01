@@ -577,6 +577,7 @@ UI_State :: struct {
     drag_slot:       int,     // bag slot the drag started from (smelter feed takes from it)
     drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
     drag_input:      bool,    // the drag holds the smelter's loaded ore (pulling it back out)
+    tithe_slot:      int,     // bag slot chosen on the death screen (-1 = none)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     drag_void:       bool,    // drag source is Player.void_slot, not the bag
     win_pos:         [UI_Window][2]i32, // top-left of each floating window (draggable)
@@ -725,10 +726,12 @@ Reclaim_State :: struct {
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
 Persistent_Stats :: struct {
+    version:      i32,
     runs_played:  int,
     runs_won:     int,
     deepest_cave: int,
     total_kills:  int,
+    grave:        Grave_Record,  // the last hero, until a new world raises the stone (grave.odin)
 }
 
 // ─── Game State (fat struct) ──────────────────────────────────────────────────
@@ -781,6 +784,7 @@ Game_State :: struct {
     progression: Progression_State,
     dimension:   Dimension_State,
     stats:       Persistent_Stats,
+    grave:       Grave_Record,   // the stone in this world, if one stands; saved with the run
 
     elapsed_time: f32,
     frame:        u64,
@@ -814,6 +818,7 @@ Game_State :: struct {
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // sprite look; one form today, always zero; cosmetic, not saved
     save_path:    string, // the run's autosave file; empty until main arms it, so tests never touch one
+    stats_path:   string, // the stats file, armed the same way
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
@@ -874,6 +879,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     bindings := gs.bindings
     log_path := gs.debug_log.path
     save_path := gs.save_path
+    stats_path := gs.stats_path
 
     gs^ = {}  // zero all fields
 
@@ -882,12 +888,14 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.stats  = stats
     gs.debug_log.path = log_path
     gs.save_path = save_path
+    gs.stats_path = stats_path
     // First boot arrives zeroed (KEY_NULL) — take the defaults then.
     gs.bindings = bindings[.Move_Left] == .KEY_NULL ? default_bindings : bindings
     gs.ui.settings_capture = -1
     gs.ui.settings_drag    = -1
     gs.ui.win_drag         = -1
     gs.ui.drag_barrel      = -1
+    gs.ui.tithe_slot       = -1
     gs.ui.win_pos          = default_window_pos
 
     gs.player.hp          = 10

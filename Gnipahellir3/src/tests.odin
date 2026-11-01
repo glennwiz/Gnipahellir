@@ -1,6 +1,7 @@
 package game
 
 import "core:testing"
+import "core:mem"
 import "core:strings"
 import "core:fmt"
 import "core:log"
@@ -10545,4 +10546,222 @@ the_event_trace_logs_what_the_queue_processed :: proc(t: ^testing.T) {
         "an event with no bespoke line should still be traced")
     testing.expect(t, !strings.contains(traced, "evt Play_Sound"),
         "pure audio noise stays out of the trace")
+}
+
+// ─── Grave stone (board card 42) ──────────────────────────────────────────────
+
+@(private="file")
+grave_die :: proc(gs: ^Game_State, cause: string, seconds: f32) {
+    gs.death_by = cause
+    gs.elapsed_time = seconds
+    eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+    process_events(gs)
+    process_events(gs)
+}
+
+@(private="file")
+grave_count_item :: proc(gs: ^Game_State, it: Item) -> (n: int) {
+    for b in gs.sim.barrels do if b.active do for s in b.slots do if s.item == it do n += s.count
+    n += inventory_count(&gs.player.inventory, it)
+    return
+}
+
+@(test)
+a_tithe_crosses_to_the_next_world_exactly_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE2
+    inventory_insert(&gs.player.inventory, .Potion_Health, 5)
+    slot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Potion_Health do slot = i
+    gs.stats.runs_played = 6
+    grave_die(gs, "lava", 100)
+    testing.expect(t, gs.player.dead, "the hero fell")
+
+    eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = i32(slot)}})
+    process_events(gs)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Potion_Health)
+
+    start_new_game(gs)
+    testing.expect_value(t, grave_count_item(gs, .Potion_Health), 1)
+    testing.expect(t, !gs.stats.grave.active, "the stats file let go of the grave")
+    testing.expect(t, gs.grave.active, "the run took it")
+
+    tile := gs.grave.tile
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Rune_Stone)
+    testing.expect(t, abs(int(tile.x) - GRID_W/2) < GRAVE_SHAFT_OFFSET + GRAVE_SEARCH, "the stone stands by the shaft")
+    coffer := [2]i32{tile.x + 1, tile.y}
+    testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
+
+    buf: [128]u8
+    testing.expect_value(t, grave_inscription(&gs.grave, buf[:]),
+        "Here fell the 7th hero, to lava, in Deep Cave, after 1:40.")
+
+    // E beside the stone opens the coffer, and the tithe comes out once.
+    gs.player.pos = {f32(tile.x) - 2, f32(tile.y) - PLAYER_H + 1}
+    player_interact(gs)
+    process_events(gs)
+    testing.expect(t, gs.ui.show_barrel, "E opens the coffer")
+    testing.expect_value(t, gs.ui.barrel_tile, coffer)
+    barrel_take(gs, barrel_at(gs, LEVEL_SURFACE, coffer), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Potion_Health), 1)
+    testing.expect_value(t, grave_count_item(gs, .Potion_Health), 1)
+
+    // A second new game raises nothing: the grave was this world's.
+    start_new_game(gs)
+    testing.expect(t, !gs.grave.active, "one death, one stone")
+}
+
+@(test)
+a_tithe_refuses_scrolls_and_keys :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    refused := [?]Item{.Rune_Scroll_A, .Rune_Scroll_B, .Rune_Scroll_C, .Sky_Rune_Scroll, .Scroll_Of_Waters, .Hell_Key}
+    gs.player.inventory = {}
+    for it, i in refused do gs.player.inventory.slots[i] = {item = it, count = 1}
+    grave_die(gs, "lava", 10)
+    testing.expect(t, !any_tithe_offerable(&gs.player.inventory), "nothing here may go")
+    for _, i in refused {
+        eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = i32(i)}})
+        process_events(gs)
+        testing.expect_value(t, gs.stats.grave.tithe, Item.None)
+        x, y := tithe_cell_rect(i)
+        testing.expect_value(t, tithe_cell_at(gs, {f32(x + 1), f32(y + 1)}), -1)
+    }
+    // No tithe still leaves the stone, and no coffer stands with it.
+    start_new_game(gs)
+    tile := gs.grave.tile
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Rune_Stone)
+    testing.expect(t, get_tile(&gs.world, int(tile.x) + 1, int(tile.y)) != .Rune_Coffer, "nothing to hold")
+}
+
+@(test)
+a_tithe_can_be_changed_and_taken_back :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.inventory = {}
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.player.inventory.slots[13] = {item = .Plank, count = 40}
+    grave_die(gs, "lava", 10)
+    x, y := tithe_cell_rect(13)
+    testing.expect_value(t, tithe_cell_at(gs, {f32(x + 1), f32(y + 1)}), 13)
+
+    grave_choose_tithe(gs, 0)
+    grave_choose_tithe(gs, 13)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Plank)
+    grave_choose_tithe(gs, 13)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.None)
+    grave_choose_tithe(gs, 13)
+    start_new_game(gs)
+    testing.expect_value(t, grave_count_item(gs, .Plank), 1)  // one item, not the stack
+}
+
+@(test)
+every_world_has_room_for_the_stone :: proc(t: ^testing.T) {
+    // Every seed must find room, and on nothing the world put there.
+    for seed in 1 ..= 40 {
+        gs := test_state()
+        defer free(gs)
+        game_state_init(gs, u32(seed) * 2654435761)
+        items_before := 0
+        for it in gs.world.items do if it != .None do items_before += 1
+        gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+        grave_raise(gs)
+        testing.expect(t, gs.grave.active, "the stone found a place")
+        testing.expect_value(t, get_tile(&gs.world, GRID_W/2 - 12, SURFACE_Y - 1), Tile_Type.Sky_Rune_Scroll_Chest)
+        items_after := 0
+        for it in gs.world.items do if it != .None do items_after += 1
+        testing.expect_value(t, items_after, items_before)
+    }
+}
+
+@(test)
+a_full_world_leaves_the_grave_waiting :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    for x in 0 ..< GRID_W do set_tile(&gs.world, x, SURFACE_Y - 1, .Stone)
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    testing.expect(t, gs.stats.grave.active, "the item stays in the stats file")
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Sword)
+}
+
+@(test)
+a_saved_run_keeps_its_stone_and_a_v24_save_still_loads :: proc(t: ^testing.T) {
+    PATH := "test_grave_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 3, seconds = 61, tithe = .Sword}
+    fmt.bprintf(gs.stats.grave.cause[:GRAVE_TEXT - 1], "a Vargr")
+    fmt.bprintf(gs.stats.grave.place[:GRAVE_TEXT - 1], "Hell")
+    grave_raise(gs)
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "v25 loads")
+    buf: [128]u8
+    testing.expect_value(t, grave_inscription(&back.grave, buf[:]),
+        "Here fell the 3rd hero, to a Vargr, in Hell, after 1:01.")
+    testing.expect_value(t, grave_count_item(back, .Sword), 1)
+
+    // A v24 file is this one cut short, with the old number.
+    bytes, err := os.read_entire_file_from_path(PATH, context.allocator)
+    testing.expect(t, err == nil, "read")
+    defer delete(bytes)
+    v := i32(24)
+    mem.copy(raw_data(bytes), &v, size_of(v))
+    testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V24_SIZE]) == nil, "wrote v24")
+    old := test_state()
+    defer free(old)
+    testing.expect(t, load_game_from(old, PATH), "v24 loads")
+    testing.expect(t, !old.grave.active, "a v24 world has no grave record")
+    testing.expect_value(t, old.player.hp, gs.player.hp)
+    testing.expect(t, snapshot_restore_from(old, PATH), "a v24 snapshot restores")
+}
+
+@(test)
+a_v1_stats_file_migrates_with_every_count :: proc(t: ^testing.T) {
+    PATH := "test_stats_v1.dat"
+    defer os.remove(PATH)
+    old := Persistent_Stats_v1{runs_played = 9, runs_won = 2, deepest_cave = 3, total_kills = 411}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)) == nil, "wrote")
+
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, PATH), "v1 loads")
+    testing.expect_value(t, stats.runs_played, 9)
+    testing.expect_value(t, stats.runs_won, 2)
+    testing.expect_value(t, stats.deepest_cave, 3)
+    testing.expect_value(t, stats.total_kills, 411)
+    testing.expect(t, !stats.grave.active, "v1 knew no grave")
+
+    // Back out in the new format, with the version on it.
+    stats.grave = {active = true, tithe = .Sword}
+    testing.expect(t, save_stats_to(&stats, PATH), "wrote v2")
+    again: Persistent_Stats
+    testing.expect(t, load_stats(&again, PATH), "v2 loads")
+    testing.expect_value(t, again.version, STATS_VERSION)
+    testing.expect_value(t, again.total_kills, 411)
+    testing.expect_value(t, again.grave.tithe, Item.Sword)
+}
+
+@(test)
+an_unreadable_stats_file_is_moved_aside_not_lost :: proc(t: ^testing.T) {
+    PATH := "test_stats_bad.dat"
+    ASIDE := "test_stats_bad.dat.unread"
+    defer os.remove(PATH)
+    defer os.remove(ASIDE)
+    junk := [5]u8{1, 2, 3, 4, 5}
+    testing.expect(t, os.write_entire_file(PATH, junk[:]) == nil, "wrote")
+    stats: Persistent_Stats
+    testing.expect(t, !load_stats(&stats, PATH), "refused")
+    testing.expect(t, os.exists(ASIDE), "kept")
+}
+
+@(test)
+tests_write_no_stats_file :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    testing.expect(t, !save_stats(gs), "an unarmed state has no stats file")
 }

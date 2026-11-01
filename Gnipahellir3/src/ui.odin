@@ -2208,6 +2208,49 @@ death_cause_line :: proc(gs: ^Game_State, buf: []u8) -> string {
 
 DEATH_INPUT_DELAY :: f32(1.2) // seconds before restart input is accepted
 
+TITHE_COLS :: 12
+TITHE_CELL :: i32(44)
+TITHE_GAP  :: i32(6)
+TITHE_TOP  :: i32(555)
+
+// One grid for the draw and the click, so they can never disagree.
+tithe_cell_rect :: proc(slot: int) -> (x, y: i32) {
+	row_w := TITHE_COLS * (TITHE_CELL + TITHE_GAP) - TITHE_GAP
+	x = (UI_W - row_w) / 2 + i32(slot % TITHE_COLS) * (TITHE_CELL + TITHE_GAP)
+	y = TITHE_TOP + i32(slot / TITHE_COLS) * (TITHE_CELL + TITHE_GAP)
+	return
+}
+
+// The offerable bag slot under the mouse, in UI pixels, or -1.
+tithe_cell_at :: proc(gs: ^Game_State, mouse: [2]f32) -> int {
+	mx, my := i32(mouse.x), i32(mouse.y)
+	for slot in 0 ..< MAX_INVENTORY {
+		if !tithe_offerable(gs.player.inventory.slots[slot]) do continue
+		x, y := tithe_cell_rect(slot)
+		if mx >= x && mx < x + TITHE_CELL && my >= y && my < y + TITHE_CELL do return slot
+	}
+	return -1
+}
+
+// The bag laid out for the choice; a scroll or key is shown dim and takes no click.
+draw_tithe_choice :: proc(gs: ^Game_State, fade: f32) {
+	_, top := tithe_cell_rect(0)
+	line := cstring("Choose one thing to send on to the next hero")
+	rl.DrawText(line, (UI_W - rl.MeasureText(line, 20)) / 2, top - 30, 20, rl.Color{255, 220, 140, u8(255 * fade)})
+	for slot in 0 ..< MAX_INVENTORY {
+		s := gs.player.inventory.slots[slot]
+		x, y := tithe_cell_rect(slot)
+		chosen := gs.ui.tithe_slot == slot
+		offerable := tithe_offerable(s)
+		border := chosen ? rl.Color{255, 220, 140, 255} : rl.Color{120, 70, 60, u8(255 * fade)}
+		rl.DrawRectangle(x, y, TITHE_CELL, TITHE_CELL, rl.Color{20, 8, 8, u8(220 * fade)})
+		rl.DrawRectangleLines(x, y, TITHE_CELL, TITHE_CELL, border)
+		if s.item == .None || s.count <= 0 do continue
+		draw_item_icon(s.item, x + 8, y + 8, TITHE_CELL - 16)
+		if !offerable do rl.DrawRectangle(x, y, TITHE_CELL, TITHE_CELL, rl.Color{20, 0, 0, 170})
+	}
+}
+
 draw_death_screen :: proc(gs: ^Game_State) {
 	t := f32(rl.GetTime())
 	fade := clamp(gs.player.death_timer, 0, 1)
@@ -2267,11 +2310,15 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		rl.Color{160, 130, 120, u8(255 * fade)},
 	)
 
+	if any_tithe_offerable(&gs.player.inventory) {
+		draw_tithe_choice(gs, fade)
+	}
+
 	if gs.player.death_timer > DEATH_INPUT_DELAY {
 		pulse := u8(120 + 135 * (0.5 + 0.5 * math.sin(t * 2.5)))
 		center_text(
 			"PRESS [ENTER] - CARVE A NEW HERO",
-			UI_H - 150,
+			UI_H - 54,
 			26,
 			rl.Color{255, 220, 140, pulse},
 		)

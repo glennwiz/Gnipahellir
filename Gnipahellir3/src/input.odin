@@ -185,9 +185,16 @@ update_input :: proc(gs: ^Game_State) {
         }
         if rl.IsKeyPressed(.ESCAPE) {
             gs.ui.show_menu = true
-        } else if gs.player.death_timer > DEATH_INPUT_DELAY &&
-           (rl.IsKeyPressed(.ENTER) || rl.IsMouseButtonPressed(.LEFT)) {
-            eq_push(&gs.events, Event{type = .New_Game_Request})
+        } else if gs.player.death_timer > DEATH_INPUT_DELAY {
+            // With something to offer a click chooses the tithe, so a stray one
+            // cannot end the choice; only ENTER moves on.
+            clicked := rl.IsMouseButtonPressed(.LEFT)
+            offering := any_tithe_offerable(&gs.player.inventory)
+            if slot := tithe_cell_at(gs, gs.input.mouse_screen); clicked && slot >= 0 {
+                eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = i32(slot)}})
+            } else if rl.IsKeyPressed(.ENTER) || (clicked && !offering) {
+                eq_push(&gs.events, Event{type = .New_Game_Request})
+            }
         }
         return
     }

@@ -178,6 +178,8 @@ player_interact :: proc(gs: ^Game_State) {
     // permanent progression finds, not mineable storage furniture.
     if open_nearby_rune_scroll_chest(gs, cx, cy) do return
 
+    if grave_interact(gs, cx, cy) do return
+
     // Standing in a dimension's return gate: step back home.
     if gs.level_index == LEVEL_DIMENSION && get_tile(&gs.world, cx, cy) == .Dimension_Gate {
         dimension_exit(gs)

@@ -216,6 +216,10 @@ Tile_Type :: enum u8 {
 	// inside LASER_RANGE on its own cooldown, no fuel and no aiming.
 	// (appended: terrain ordinals are serialized)
 	Rainbow_Laser,
+	// A fallen hero's grave by the shaft: E reads it and opens the coffer
+	// beside it (grave.odin).  Never mined, never placed.  (appended: terrain
+	// ordinals are serialized)
+	Rune_Stone,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -538,6 +542,7 @@ Event_Type :: enum u8 {
 	Structure_Interact, // tile = exact player-built equipment clicked
 	Structure_Reclaim, // tile = equipment whose deliberate hold completed
 	Void_Store, // int_val = bag slot; replaces (deletes) the prior void stack
+	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
 	Void_Take, // tile.x = target bag slot; recovers the current void stack
 	// Clay-golem commands (appended so existing event values stay stable)
 	Golem_Load, // int_val = bag slot containing a crafted Clay_Golem

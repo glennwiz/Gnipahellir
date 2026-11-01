@@ -14,15 +14,20 @@ import "core:os"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(24)  // v24: recipe_unlocked sized to MAX_ITEM_SLOTS, not [Item]
+SAVE_VERSION :: i32(25)  // v25: the grave stone's record, appended at the end of Save_Data
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
 // (save_data_size_probe logs the real number, plus len(Item).)
-SAVE_DATA_EXPECTED_SIZE :: 7_554_872   // EXPERIMENT: MAX_ENEMIES 1024 (3_171_512 at 64, 5_217_080 at 512)
+SAVE_DATA_EXPECTED_SIZE :: 7_554_968   // EXPERIMENT: MAX_ENEMIES 1024
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
+
+// v24 is v25 without the trailing grave, so a v24 file is read straight into
+// the front of Save_Data and the grave stays zero: no stone in that world.
+SAVE_V24_SIZE :: 7_554_872
+#assert(offset_of(Save_Data, grave) == SAVE_V24_SIZE)
 
 // One-version migration keeps the active playtest run intact.
 //
@@ -80,6 +85,25 @@ Save_Data :: struct {
     dimension:    Dimension_State,
     elapsed_time: f32,
     frame:        u64,
+    grave:        Grave_Record,  // keep last: see SAVE_V24_SIZE
+}
+
+// The bytes as a Save_Data if they are a run that can resume, else nil.  v24
+// files are shorter; the caller frees the result.
+save_data_read :: proc(data: []u8) -> ^Save_Data {
+    version: i32
+    switch len(data) {
+    case size_of(Save_Data): version = SAVE_VERSION
+    case SAVE_V24_SIZE:      version = 24
+    case:                    return nil
+    }
+    sd := new(Save_Data)
+    mem.copy(sd, raw_data(data), len(data))
+    if sd.version != version || sd.player.dead {  // dead runs don't resume
+        free(sd)
+        return nil
+    }
+    return sd
 }
 
 save_game :: proc(gs: ^Game_State) -> bool {
@@ -103,6 +127,7 @@ save_game_to :: proc(gs: ^Game_State, path: string) -> bool {
     sd.dimension    = gs.dimension
     sd.elapsed_time = gs.elapsed_time
     sd.frame        = gs.frame
+    sd.grave        = gs.grave
 
     return os.write_entire_file(path, mem.ptr_to_bytes(sd)) == nil
 }
@@ -152,14 +177,10 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
         gs.save_dirty = true
         return true
     }
-    if len(data) != size_of(Save_Data) do return false
 
-    sd := new(Save_Data)
+    sd := save_data_read(data)
+    if sd == nil do return false
     defer free(sd)
-    mem.copy(sd, raw_data(data), size_of(Save_Data))
-
-    if sd.version != SAVE_VERSION do return false
-    if sd.player.dead do return false  // dead runs don't resume
 
     gs.level_index  = sd.level_index
     gs.world        = sd.world
@@ -172,6 +193,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
     gs.dimension    = sd.dimension
     gs.elapsed_time = sd.elapsed_time
     gs.frame        = sd.frame
+    gs.grave        = sd.grave
 
     // The raid director is transient by design — reloading during a buildup
     // cancels it — and the pre-load session's rumble telegraph must not
@@ -269,18 +291,15 @@ snapshot_load :: proc(gs: ^Game_State, slot: int) -> bool {
 snapshot_restore_from :: proc(gs: ^Game_State, path: string) -> bool {
     data, err := os.read_entire_file_from_path(path, context.allocator)
     if err != nil do return false
-    ok := len(data) == size_of(Save_Data)
-    if ok {
-        sd := new(Save_Data)
-        mem.copy(sd, raw_data(data), size_of(Save_Data))
-        ok = sd.version == SAVE_VERSION && !sd.player.dead
-        free(sd)
-    }
+    sd := save_data_read(data)
+    ok := sd != nil
+    free(sd)
     delete(data)
     if !ok do return false
 
     flush_action_log(gs)  // game_state_init doesn't preserve the log buffer
     game_state_init(gs, gs.world_seed)
+    gs.stats.grave = {}   // a rewound hero did not die, so no grave and no tithe
     load_pixel_art(gs)    // init zeroed the sprite bank, same as boot
     if !load_game_from(gs, path) do return false  // unreachable: just validated
     golem_sweep_orphan_quick_clay(gs)
@@ -332,6 +351,7 @@ start_new_game :: proc(gs: ^Game_State) {
     camera_snap_y(gs)
     gs.ui.show_menu          = false
     gs.ui.show_title         = false  // game_state_init re-arms the boot title screen
+    grave_raise(gs)
 }
 
 // Called once at shutdown: live runs persist; dead and won runs clear the
@@ -342,7 +362,7 @@ save_on_quit :: proc(gs: ^Game_State) {
     } else {
         _ = save_game(gs)
     }
-    _ = save_stats(&gs.stats)
+    _ = save_stats(gs)
     _ = save_settings(gs)
 }
 
@@ -394,16 +414,56 @@ load_settings :: proc(gs: ^Game_State) -> bool {
 
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
-save_stats :: proc(stats: ^Persistent_Stats) -> bool {
-    return os.write_entire_file(STATS_FILE, mem.ptr_to_bytes(stats)) == nil
+//  STATS_VERSION is in the file since v2; v1 was the bare four counters.  A
+//  file this build cannot read is moved aside, never overwritten.  The state
+//  main never armed has no file, which keeps `odin test src` off real stats.
+
+STATS_VERSION :: i32(2)
+
+Persistent_Stats_v1 :: struct {
+    runs_played:  int,
+    runs_won:     int,
+    deepest_cave: int,
+    total_kills:  int,
+}
+#assert(size_of(Persistent_Stats_v1) == 32)
+#assert(size_of(Persistent_Stats) != size_of(Persistent_Stats_v1))
+
+save_stats :: proc(gs: ^Game_State) -> bool {
+    if len(gs.stats_path) == 0 do return false
+    return save_stats_to(&gs.stats, gs.stats_path)
 }
 
-load_stats :: proc(stats: ^Persistent_Stats) -> bool {
-    data, err := os.read_entire_file_from_path(STATS_FILE, context.allocator)
+save_stats_to :: proc(stats: ^Persistent_Stats, path: string) -> bool {
+    stats.version = STATS_VERSION
+    return os.write_entire_file(path, mem.ptr_to_bytes(stats)) == nil
+}
+
+load_stats :: proc(stats: ^Persistent_Stats, path: string) -> bool {
+    data, err := os.read_entire_file_from_path(path, context.allocator)
     if err != nil do return false
     defer delete(data)
-    if len(data) != size_of(Persistent_Stats) do return false
 
-    mem.copy(stats, raw_data(data), size_of(Persistent_Stats))
-    return true
+    switch len(data) {
+    case size_of(Persistent_Stats_v1):
+        old: Persistent_Stats_v1
+        mem.copy(&old, raw_data(data), size_of(old))
+        stats^ = {
+            version      = STATS_VERSION,
+            runs_played  = old.runs_played,
+            runs_won     = old.runs_won,
+            deepest_cave = old.deepest_cave,
+            total_kills  = old.total_kills,
+        }
+        return true
+    case size_of(Persistent_Stats):
+        read: Persistent_Stats
+        mem.copy(&read, raw_data(data), size_of(read))
+        if read.version == STATS_VERSION {
+            stats^ = read
+            return true
+        }
+    }
+    _ = os.rename(path, fmt.tprintf("%s.unread", path))
+    return false
 }

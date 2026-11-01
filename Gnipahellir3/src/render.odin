@@ -1120,8 +1120,10 @@ draw_rune_scroll_chests :: proc(gs: ^Game_State) {
 	for y in 0 ..< GRID_H {
 		for x in 0 ..< GRID_W {
 			t := get_tile(&gs.world, x, y)
-			if is_rune_scroll_chest(t) || t == .Rune_Coffer {
-				bx, by := i32(x * CELL_SIZE), i32(y * CELL_SIZE)
+			bx, by := i32(x * CELL_SIZE), i32(y * CELL_SIZE)
+			if t == .Rune_Stone {
+				draw_rune_stone(bx, by)
+			} else if is_rune_scroll_chest(t) || t == .Rune_Coffer {
 				if gs.pixel_art.sprites[.Rune_Scroll_Chest].has_data {
 					draw_pixel_grid_sprite(gs, .Rune_Scroll_Chest, bx, by)
 				} else {
@@ -1130,6 +1132,16 @@ draw_rune_scroll_chests :: proc(gs: ^Game_State) {
 			}
 		}
 	}
+}
+
+// A slab a little taller than its cell; collision stays one cell.
+draw_rune_stone :: proc(bx, by: i32) {
+	rl.DrawRectangle(bx + 1, by - 6, CELL_SIZE - 2, CELL_SIZE + 6, rl.Color{112, 116, 130, 255})
+	rl.DrawRectangleLines(bx + 1, by - 6, CELL_SIZE - 2, CELL_SIZE + 6, rl.Color{62, 64, 76, 255})
+	rune := rl.Color{190, 210, 255, 255}
+	rl.DrawLine(bx + 5, by - 3, bx + 5, by + 7, rune)
+	rl.DrawLine(bx + 3, by - 1, bx + 5, by + 2, rune)
+	rl.DrawLine(bx + 7, by - 1, bx + 5, by + 2, rune)
 }
 
 draw_pixel_rune_scroll_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x, y: int) {
