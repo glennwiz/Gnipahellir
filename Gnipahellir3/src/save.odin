@@ -311,11 +311,18 @@ snapshot_menu_open :: proc(gs: ^Game_State) {
     gs.ui.show_snapshots = true
 }
 
+// The run's autosave goes.  Death, a new game and a finished run all end up
+// here, and a state main never armed has no file to lose: that is what keeps
+// `odin test src` off a real save, the same way an unarmed action log is.
+save_remove :: proc(gs: ^Game_State) {
+    if len(gs.save_path) > 0 do os.remove(gs.save_path)
+}
+
 // "New Game" from the menu: wipes any existing save and drops the player
 // straight into a fresh run (mirrors main()'s no-save-found spawn).
 start_new_game :: proc(gs: ^Game_State) {
     flush_action_log(gs)  // game_state_init doesn't preserve the log buffer
-    os.remove(SAVE_FILE)
+    save_remove(gs)
     seed := agent_new_game_seed(gs)   // random per run, GNIPA_SEED override, chained under an agent
     game_state_init(gs, seed)
     log_action(gs, "New game - world seed %d", seed)
@@ -331,7 +338,7 @@ start_new_game :: proc(gs: ^Game_State) {
 // save (roguelike semantics — the run is over either way).
 save_on_quit :: proc(gs: ^Game_State) {
     if gs.player.dead || gs.game_won {
-        os.remove(SAVE_FILE)
+        save_remove(gs)
     } else {
         _ = save_game(gs)
     }

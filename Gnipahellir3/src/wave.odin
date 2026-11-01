@@ -18,7 +18,7 @@ package game
 //  `wave_trigger`, ignoring pressure and gates alike.
 //
 //  Every number here is a first guess for playtest tuning (F4 shows the live
-//  threat/pressure).  Retune from observation, not from taste.
+//  threat, the HUD gauge the pressure).  Retune from observation, not from taste.
 
 WAVE_PRESSURE_TARGET :: f32(1200)  // threat-seconds accumulated before a wave
 WAVE_WARNING_TIME    :: f32(25)    // the telegraph IS the engagement: run home,
@@ -176,7 +176,7 @@ wave_arm_warning :: proc(gs: ^Game_State, kind: Wave_Kind) {
     w.warning_timer  = WAVE_WARNING_TIME
     w.warning_active = true
     notify(gs, "A howl rises beyond the treeline - something comes for your works!")
-    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wave_Horn)}})
     log_action(gs, "Wave warning: %s in %.0fs (threat %.1f, pressure %.0f)",
         wave_name[kind], WAVE_WARNING_TIME, w.threat, w.pressure)
 }
@@ -188,6 +188,15 @@ wave_arm_warning :: proc(gs: ^Game_State, kind: Wave_Kind) {
 wave_trigger :: proc(gs: ^Game_State, kind: Wave_Kind) {
     gs.wave.pending      = true
     gs.wave.pending_kind = kind
+}
+
+// What the HUD gauge reads: pressure as a 0..1 share of the target, and whether
+// to show it at all.  A base with nothing built has no meter to explain.
+// Pressure runs past the target while a cooldown holds the warning, so the
+// share clamps.  A scripted warning shows at whatever the meter had.
+wave_gauge :: proc(gs: ^Game_State) -> (value: f32, show: bool) {
+    w := &gs.wave
+    return clamp(w.pressure / WAVE_PRESSURE_TARGET, 0, 1), w.pressure > 0 || w.warning_active
 }
 
 // Step 5b1a.  The director: threat -> pressure -> warning -> wave -> cooldown.

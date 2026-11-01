@@ -9358,6 +9358,37 @@ legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 }
 
 @(test)
+death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
+	save :: "gnipahellir_save_death_test.dat"
+	snap :: "gnipahellir_snap_death_test.dat"
+	defer os.remove(save)
+	defer os.remove(snap)
+
+	gs := test_state()
+	defer free(gs)
+	testing.expect(t, len(gs.save_path) == 0, "an unarmed state can never touch a real save")
+
+	gs.save_path = save
+	testing.expect(t, save_game_to(gs, save), "autosave written")
+	testing.expect(t, save_game_to(gs, snap), "snapshot written")
+	runs := gs.stats.runs_played
+
+	eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+	process_events(gs)
+
+	testing.expect(t, gs.player.dead, "the player is dead")
+	testing.expect(t, !os.exists(save), "the autosave goes the moment the player dies")
+	testing.expect_value(t, gs.stats.runs_played, runs + 1)
+
+	// A snapshot from before the death still loads, and the state that comes
+	// back is still armed: a New Game must keep removing the same file.
+	testing.expect(t, os.exists(snap), "a snapshot is not the autosave")
+	testing.expect(t, snapshot_restore_from(gs, snap), "the snapshot still restores")
+	testing.expect(t, !gs.player.dead, "the restored run is alive")
+	testing.expect_value(t, gs.save_path, save)
+}
+
+@(test)
 machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
 	// A boiler puffing every two seconds must not ping the whole map: a
 	// tile-stamped Play_Sound attenuates through audio_machine_gain, which
@@ -9377,6 +9408,88 @@ machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
 	testing.expect_value(t, audio_machine_gain(gs, far), 0)
 	testing.expect_value(t, audio_tile_gain(gs, far), 0)
 	testing.expect(t, audio_tile_gain(gs, near) > 0.9, "beside the builder the dig is full volume")
+}
+
+// Did a Play_Sound for this id go into the queue?  Reads without popping.
+queued_sound :: proc(gs: ^Game_State, id: Sound_ID) -> bool {
+	q := &gs.events
+	for i in 0 ..< q.size {
+		e := q.events[(q.head + i) % MAX_EVENTS]
+		if e.type == .Play_Sound && Sound_ID(e.payload.int_val) == id do return true
+	}
+	return false
+}
+
+@(test)
+every_sound_row_names_a_real_file :: proc(t: ^testing.T) {
+	// audio_init stays silent on a missing file, so a typo here would ship as
+	// a sound that never plays.
+	for id in Sound_ID {
+		if id == .None do continue
+		testing.expectf(t, os.exists(string(sound_file[id])), "%v: no file %s", id, sound_file[id])
+		testing.expectf(t, sound_base_volume[id] > 0, "%v has no volume", id)
+	}
+}
+
+@(test)
+the_ritual_opens_with_its_swirl_sound :: proc(t: ^testing.T) {
+	gs := test_state()
+	defer free(gs)
+	gs.level_index = LEVEL_SKY
+	gs.progression.rune_scroll_found[0] = true
+
+	handle_ritual_request(gs)
+	testing.expect(t, !queued_sound(gs, .Ritual_Swirl), "a refused offering stays silent")
+
+	eq_clear(&gs.events)
+	for ing in structure_costs[0] do inventory_insert(&gs.player.inventory, ing.item, ing.count)
+	handle_ritual_request(gs)
+	testing.expect(t, gs.ritual.active, "the offering should begin")
+	testing.expect(t, queued_sound(gs, .Ritual_Swirl), "the swirl sounds as it begins")
+}
+
+@(test)
+the_wave_warning_is_a_horn :: proc(t: ^testing.T) {
+	gs := test_state()
+	defer free(gs)
+	wave_arm_warning(gs, .Ground)
+	testing.expect(t, queued_sound(gs, .Wave_Horn), "the warning sounds the horn")
+	testing.expect(t, !queued_sound(gs, .Builder_Shriek), "the raid alarm stays the raid's")
+}
+
+@(test)
+a_boiler_breath_hisses :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	rule := boiler_rules[0]
+	bx, by := boiler_build(gs, rule)
+	spawn_ground_item(&gs.world, {i32(bx - 1), i32(by)}, rule.fuel_item, 3)
+
+	heard := false
+	for _ in 0 ..< 200 {
+		update_sim(gs)
+		heard = heard || queued_sound(gs, .Steam_Hiss)
+		eq_clear(&gs.events)
+	}
+	testing.expect(t, heard, "the boiler's breath should hiss")
+}
+
+@(test)
+a_smelter_cast_pours :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	sx, sy := GRID_W/2, SURFACE_Y - 1
+	set_tile(&gs.world, sx, sy, .Smelter)
+	in_idx := grid_idx(sx - 1, sy)
+	gs.world.items[in_idx]       = .Iron_Ore
+	gs.world.item_counts[in_idx] = 1
+	gs.world.sim_data[grid_idx(sx, sy)].fuel_count = u8(FUEL_PER_BAR)
+
+	heard := false
+	for _ in 0 ..< int(SMELT_TIME / gs.delta_time) + 4 {
+		update_sim(gs)
+		heard = heard || queued_sound(gs, .Smelter_Pour)
+		eq_clear(&gs.events)
+	}
+	testing.expect(t, heard, "a cast bar should pour")
 }
 
 // ─── Gem Replicator (sim.odin) ────────────────────────────────────────────────
@@ -10201,6 +10314,39 @@ survivors_hold_the_next_wave :: proc(t: ^testing.T) {
     despawn_enemy(gs, wi)
     wave_step(gs, 1)
     testing.expect(t, gs.wave.pressure > 0, "with the field clear, pressure resumes")
+}
+
+@(test)
+the_hud_gauge_reads_the_pressure :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // Nothing built: nothing to show.
+    wave_step(gs, 10)
+    value, show := wave_gauge(gs)
+    testing.expect_value(t, value, f32(0))
+    testing.expect(t, !show, "a bare surface shows no gauge")
+
+    // Mid-build the gauge is the director's own pressure, not a copy of it.
+    set_tile(&gs.world, 70, SURFACE_Y - 1, .Smelter)
+    wave_step(gs, 100)
+    testing.expect(t, gs.wave.pressure > 0, "the smelter should be building pressure")
+    value, show = wave_gauge(gs)
+    testing.expect_value(t, value, gs.wave.pressure / WAVE_PRESSURE_TARGET)
+    testing.expect(t, show, "building pressure shows the gauge")
+
+    // Held past the target by a cooldown, the gauge stops at full.
+    gs.wave.pressure = WAVE_PRESSURE_TARGET * 2
+    value, _ = wave_gauge(gs)
+    testing.expect_value(t, value, f32(1))
+
+    // A scripted warning shows even with an empty meter.
+    gs.wave.pressure = 0
+    gs.wave.warning_active = true
+    value, show = wave_gauge(gs)
+    testing.expect_value(t, value, f32(0))
+    testing.expect(t, show, "a running warning shows the gauge")
 }
 
 @(test)

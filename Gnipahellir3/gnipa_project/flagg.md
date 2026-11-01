@@ -18,7 +18,7 @@ Severity: 🔴 CRITICAL (breaks a run or crashes) · 🟡 WARN (real risk, act s
 > casts straight into it). G6 fixed: catch-up pours owed time into mine_timer,
 > drained at MINER_STEPS_PER_FRAME (32) per frame — re-entry fast-forwards
 > instead of stalling.
-> ⏳ STILL OPEN: G4, G7 (accepted v1), G9, A3, and the ⚪ INFO section.
+> ⏳ STILL OPEN: G4, G7 (accepted v1), A3, and the ⚪ INFO section.
 
 ---
 
@@ -92,7 +92,7 @@ Most expensive shipped recipe is 20 Stone_Block; full gold gear ≈ 30+30 ore, h
 ### G9. Permadeath is soft against force-quit
 `src/save.odin:100-108` (deletion only in `save_on_quit`), `src/save.odin:68` (load rejects dead player)
 
-Killing the process on the death screen resurrects the last autosave. Known roguelike-lite tradeoff — decide if permadeath should be firm.
+Closed 2026-11-02 (board card 37), Glenn's decision: permadeath is firm. The autosave is removed when the player dies, so killing the process on the death screen has nothing to load.
 
 ---
 

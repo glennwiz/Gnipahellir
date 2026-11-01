@@ -813,6 +813,7 @@ Game_State :: struct {
     zoom_cursor_active: bool,   // true while the live zoom is easing around that cursor anchor; not saved
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // sprite look; one form today, always zero; cosmetic, not saved
+    save_path:    string, // the run's autosave file; empty until main arms it, so tests never touch one
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
@@ -872,6 +873,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     stats    := gs.stats
     bindings := gs.bindings
     log_path := gs.debug_log.path
+    save_path := gs.save_path
 
     gs^ = {}  // zero all fields
 
@@ -879,6 +881,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.assets = assets
     gs.stats  = stats
     gs.debug_log.path = log_path
+    gs.save_path = save_path
     // First boot arrives zeroed (KEY_NULL) — take the defaults then.
     gs.bindings = bindings[.Move_Left] == .KEY_NULL ? default_bindings : bindings
     gs.ui.settings_capture = -1

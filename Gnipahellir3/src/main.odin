@@ -52,6 +52,7 @@ main :: proc() {
     defer free(gs)
     defer agent_close(agent, gs)
     game_state_init(gs, agent_boot_seed(agent))
+    gs.save_path = SAVE_FILE
     audio_init(&gs.audio)
     assets_init(&gs.assets)
     load_pixel_art(gs) // missing/invalid file leaves every sprite's has_data false (procedural fallback)

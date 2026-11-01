@@ -1380,8 +1380,7 @@ draw_raid_menu :: proc(gs: ^Game_State) {
 	w := gs.wave
 	wave_col := w.warning_active ? rl.GREEN : rl.GRAY
 	rl.DrawText(
-		fmt.ctprintf("threat %.0f  pressure %.0f%%  cd %.0fs",
-			w.threat, w.pressure / WAVE_PRESSURE_TARGET * 100, w.cooldown),
+		fmt.ctprintf("threat %.0f  cd %.0fs", w.threat, w.cooldown),
 		RAID_MENU_X,
 		RAID_MENU_Y - 9,
 		10,
@@ -2662,9 +2661,36 @@ draw_hud :: proc(gs: ^Game_State) {
 	fmt.bprintf(hint_buf[:47], "[%v] Bag / Craft", gs.bindings[.Inventory])
 	rl.DrawText(cstring(raw_data(hint_buf[:])), 24, i32(UI_H) - 22, 11, rl.Color{200, 150, 70, 150})
 
+	draw_wave_gauge(gs)
 	draw_buffs(gs)
 	draw_hotbar(gs)
 	draw_rs_chip(gs)
+}
+
+// The wave pressure gauge, under the buff row and its seconds line: a rune,
+// the meter, and the share as text so tuning still has a number to read.  It
+// turns from ember to bright red while a warning runs.  Pure display, like the
+// buff row.
+WAVE_GAUGE_X :: 232
+WAVE_GAUGE_Y :: 60
+WAVE_GAUGE_W :: 120
+WAVE_GAUGE_H :: 10
+
+draw_wave_gauge :: proc(gs: ^Game_State) {
+	value, show := wave_gauge(gs)
+	if !show do return
+	warn := gs.wave.warning_active
+	col := warn ? rl.Color{244, 72, 56, 255} : rl.Color{200, 150, 70, 255}
+	draw_rune(0, WAVE_GAUGE_X, WAVE_GAUGE_Y - 1, 8, 12, col, 1.5)
+	draw_pixel_meter(
+		WAVE_GAUGE_X + 14, WAVE_GAUGE_Y, WAVE_GAUGE_W, WAVE_GAUGE_H,
+		value,
+		warn ? rl.Color{96, 14, 16, 255} : rl.Color{84, 44, 14, 255},
+		warn ? rl.Color{206, 40, 34, 255} : rl.Color{176, 96, 30, 255},
+		warn ? rl.Color{255, 112, 84, 255} : rl.Color{236, 164, 72, 255},
+	)
+	rl.DrawText(fmt.ctprintf("wave %.0f%%", value * 100),
+		WAVE_GAUGE_X + 14 + WAVE_GAUGE_W + 6, WAVE_GAUGE_Y, 10, col)
 }
 
 // Active-buff row beside the HP bar: one icon per running buff with the

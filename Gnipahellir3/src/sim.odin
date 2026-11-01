@@ -311,7 +311,7 @@ tick_smelter :: proc(gs: ^Game_State, x, y: int) {
     eq_push(&gs.events, Event{
         type    = .Play_Sound,
         tile    = {i32(x), i32(y)},
-        payload = {int_val = i32(Sound_ID.Place)},
+        payload = {int_val = i32(Sound_ID.Smelter_Pour)},
     })
     log_action(gs, "Smelter at (%d,%d) casts %v into its tray", x, y, rule.bar)
 }
@@ -408,7 +408,7 @@ tick_boiler :: proc(gs: ^Game_State, x, y: int) {
     eq_push(&gs.events, Event{
         type    = .Play_Sound,
         tile    = {i32(x), i32(y)},
-        payload = {int_val = i32(Sound_ID.Place)},
+        payload = {int_val = i32(Sound_ID.Steam_Hiss)},
     })
     log_action(gs, "Boiler at (%d,%d) breathes %v", x, y, rule.vapour)
 }

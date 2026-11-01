@@ -308,7 +308,11 @@ process_events :: proc(gs: ^Game_State) {
             }
 
         case .Player_Died:
+            // Permadeath: the autosave goes now, so killing the process on the
+            // death screen has nothing to load.  Stats are their own file, and
+            // debug snapshots are too: neither is touched.
             gs.player.dead = true
+            save_remove(gs)
 
         case .Rune_Scroll_Found:
             tier := int(e.payload.int_val)
