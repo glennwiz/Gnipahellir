@@ -539,6 +539,12 @@ smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int) -> bool {
         return true
     }
 
+    // A leftover too small to cast can never finish on its own, so the new ore
+    // hands it back to the bag instead of being turned away by it.
+    if rule, ok := smelt_rule_for(sd.in_item); ok && sd.in_item != s.item &&
+       int(sd.in_count) < rule.ore_per_bar {
+        if !smelter_withdraw(gs, tile) do return false
+    }
     if sd.in_item != .None && sd.in_item != s.item {
         notify(gs, "The furnace is busy with another ore")
         return false
