@@ -4552,6 +4552,68 @@ garm_fight_soak :: proc(t: ^testing.T) {
         f32(frame_done) / 60.0, fireballs, player_hits)
 }
 
+// Run 3, f103091: the player stood still in a cage at (143,94) with Garm outside
+// it at (137.18,96.2).  Every stone he smashed from the x=139 wall came back
+// within 10 frames, 34 times over, and he never moved again.
+@(test)
+garm_breaks_into_his_own_cage_and_keeps_fighting :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+
+    // An open room with a floor, so the only wall between them is the cage.
+    for y in 88 ..= 98 {
+        for x in 130 ..= 156 { set_tile(&gs.world, x, y, .Air) }
+    }
+    for x in 130 ..= 156 { set_tile(&gs.world, x, 98, .Stone) }
+
+    gs.player.pos = {143.17, 96 - PLAYER_H + 1}
+    g.pos   = {132, 98 - GARM_H}
+    g.hp    = GARM_PHASE3_HP
+    g.builder.den_built = true
+    g.garm.phase        = .Ring
+    gs.cage.anchor      = player_tile(&gs.player)
+    a := gs.cage.anchor
+    wall_x := int(a.x) - GARM_CAGE_HALF_W - 1
+    for y in int(a.y) - GARM_CAGE_HALF_H - 1 ..= int(a.y) + GARM_CAGE_HALF_H + 1 {
+        set_tile(&gs.world, wall_x, y, .Stone)
+    }
+
+    smashes, bites: int
+    for _ in 0 ..< 20 * 60 {
+        gs.player.hp = 1000
+        gs.player.vel = {}
+        update_enemies(gs)
+        update_projectiles(gs)
+        n  := gs.events.size
+        qi := gs.events.head
+        for _ in 0 ..< n {
+            ev := gs.events.events[qi]
+            if ev.type == .Builder_Mined && int(ev.tile.x) == wall_x { smashes += 1 }
+            if ev.type == .Damage_Dealt && ev.target == PLAYER_ID { bites += 1 }
+            qi = (qi + 1) % MAX_EVENTS
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    testing.expect_value(t, gs.cage.anchor, a)
+    testing.expectf(t, smashes <= 8, "Garm should not chew one wall forever (%d smashes)", smashes)
+    testing.expect(t, f32(wall_x) < g.pos.x, "Garm should be through the wall")
+    testing.expect(t, chebyshev(builder_tile(g), player_tile(&gs.player)) <= GARM_BITE_REACH,
+        "Garm should stand in biting reach of the caged player")
+    testing.expect(t, bites >= 1, "Garm should keep fighting inside the cage")
+
+    // The breach closes behind him, and the cage goes on to flood.
+    for y in int(a.y) - GARM_CAGE_HALF_H - 1 ..= int(a.y) + GARM_CAGE_HALF_H + 1 {
+        testing.expectf(t, is_solid(&gs.world, wall_x, y), "breach cell y=%d should close behind him", y)
+    }
+    testing.expect_value(t, g.garm.phase, Garm_Phase.Flood)
+}
+
 // The exact geometry from Glenn's 2026-08-13 live save, replayed headlessly:
 // Garm stood at (146.7,99.2) with his 1.6-wide body's left toe resting on the
 // ledge corner (146,101), his waypoint (147,101) directly BELOW him.  dx ~ 0
@@ -10239,6 +10301,65 @@ air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
     for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == .Fire_Sprite do last = i
     testing.expect(t, gs.enemies.data[last].pos.y < f32(SURFACE_Y), "an air wave enters from above the surface")
     testing.expect_value(t, gs.enemies.data[last].builder.goal, Builder_Goal.Wave_Hunt)
+}
+
+// Run 3: two sprites parked over the cave altar (147,93) under solid rock, and
+// the survivors held back every later wave.  A flyer cannot dig.
+@(private = "file")
+sprite_sealed_fixture :: proc(gs: ^Game_State, Y: int) {
+    for x in 15 ..= 85 do for y in Y - 6 ..= Y + 8 do set_tile(&gs.world, x, y, .Stone)
+    for x in 15 ..= 85 do for y in Y - 5 ..= Y do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, 22, Y + 6, .Crafting_Bench)   // under the rock
+    gs.player.pos = {8, 8}
+}
+
+@(test)
+a_flyer_gives_up_on_a_target_under_rock_and_takes_the_next :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    Y :: 20
+    sprite_sealed_fixture(gs, Y)
+    set_tile(&gs.world, 60, Y, .Crafting_Bench)       // farther, in the open
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 22, Y - 2)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 40 * 60 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, 60, Y) != .Crafting_Bench do break
+    }
+    testing.expect(t, get_tile(&gs.world, 60, Y) != .Crafting_Bench, "it should give up and burn the open bench")
+    testing.expect_value(t, get_tile(&gs.world, 22, Y + 6), Tile_Type.Crafting_Bench)
+}
+
+@(test)
+a_flyer_with_nothing_it_can_reach_gutters_out :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    Y :: 20
+    sprite_sealed_fixture(gs, Y)
+    // The player is sealed away as well, so nothing is reachable at all.
+    for x in 4 ..= 12 do for y in 4 ..= 12 do set_tile(&gs.world, x, y, .Stone)
+    set_tile(&gs.world, 8, 8, .Air)
+    set_tile(&gs.world, 8, 9, .Air)
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 22, Y - 2)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 90 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if !gs.enemies.active[fi] do break
+    }
+    testing.expect(t, !gs.enemies.active[fi], "a parked flyer must not hold back every later wave")
+    gone := enemy_entity_id(fi)
+    for id in gs.world.entity_map do testing.expect(t, id != gone, "a gutted sprite must leave the entity map")
 }
 
 @(test)

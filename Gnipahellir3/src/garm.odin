@@ -68,6 +68,7 @@ GARM_CAGE_HALF_W :: 3
 GARM_CAGE_HALF_H :: 2
 GARM_CAGE_STALL  :: f32(6.0)  // nothing landed this long -> give up, re-box
 GARM_CAGE_FLASH  :: f32(0.3)  // warning beat in a cell before its stone lands
+GARM_CAGE_BREACH :: f32(1.3)  // wall cells this near him, while he is outside, wait
 GARM_LAVA_DEPTH      :: 4          // flood stops this many rows above the floor
 
 // Arena interior carved by gen_cave_level (depth_tier 2).
@@ -277,9 +278,26 @@ garm_cage_holds :: proc(a: [2]i32, T: [2]i32) -> bool {
     return int(T.x) >= x0 && int(T.x) <= x1 && int(T.y) >= y0 && int(T.y) <= y1
 }
 
+// Coming in from outside, the wall in front of him is the breach he is
+// smashing to reach you.  Conjuring it back fed a smash/conjure loop that froze
+// him at the wall for the rest of the phase (run 3: 34 smashes of (139,96)).
+// So the cage leaves the cells around him open until he is through, and closes
+// them behind him: he fights you inside the box.  Once his center is in the
+// interior this is false, and only his body holds a slot open.
+@(private = "file")
+garm_cage_breach :: proc(gs: ^Game_State, e: ^Enemy, x, y: int) -> bool {
+    x0, y0, x1, y1 := garm_cage_rect(gs.cage.anchor)
+    bt := builder_tile(e)
+    if int(bt.x) > x0 && int(bt.x) < x1 && int(bt.y) > y0 && int(bt.y) < y1 { return false }
+    cx, cy := f32(x), f32(y)
+    return cx < e.pos.x + GARM_W + GARM_CAGE_BREACH && cx + 1 > e.pos.x - GARM_CAGE_BREACH &&
+           cy < e.pos.y + GARM_H + GARM_CAGE_BREACH && cy + 1 > e.pos.y - GARM_CAGE_BREACH
+}
+
 // Next cell to conjure, or ok=false when the cage is finished.  Walls are
 // picked NEAREST TO GARM first, so the far side closes last and you can see
-// the gap you are meant to run through shrinking.
+// the gap you are meant to run through shrinking.  A breach cell is picked
+// only when no other wall gap is left: it holds the seal open, never the rest.
 @(private = "file")
 garm_cage_slot :: proc(gs: ^Game_State, e: ^Enemy) -> (T: [2]i32, tile: Tile_Type, ok: bool) {
     x0, y0, x1, y1 := garm_cage_rect(gs.cage.anchor)
@@ -294,7 +312,9 @@ garm_cage_slot :: proc(gs: ^Game_State, e: ^Enemy) -> (T: [2]i32, tile: Tile_Typ
             // deletes nothing solid to do it: your machine becomes a segment.
             if is_solid(&gs.world, x, y) { continue }
             if is_sacred_tile(get_tile(&gs.world, x, y)) { continue }
-            if d := chebyshev(bt, {i32(x), i32(y)}); d < best {
+            d := chebyshev(bt, {i32(x), i32(y)})
+            if garm_cage_breach(gs, e, x, y) { d += GRID_W }
+            if d < best {
                 best, T, ok = d, {i32(x), i32(y)}, true
             }
         }
@@ -371,7 +391,7 @@ garm_cage_tick :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
         on_slot := !pl.dead &&
             f32(x) < pl.pos.x + PLAYER_W && f32(x+1) > pl.pos.x &&
             f32(y) < pl.pos.y + PLAYER_H && f32(y+1) > pl.pos.y
-        if on_slot || builder_overlaps_tile(e, x, y) {
+        if on_slot || builder_overlaps_tile(e, x, y) || garm_cage_breach(gs, e, x, y) {
             g.build_timer = garm_interval(g.phase)
             return
         }
