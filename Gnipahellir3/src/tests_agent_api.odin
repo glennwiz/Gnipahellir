@@ -267,6 +267,26 @@ agent_act_plays_through_the_real_game_update :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_client_gone_mid_act_leaves_nothing_to_replay :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    // The state a client leaves behind when it dies right after a 1-frame act.
+    agent_handle_line(link, gs, `{"cmd":"act","move":"right","jump":true}`)
+    agent_drive(link, gs)
+    testing.expect(t, gs.agent.first)
+
+    link.listening = true  // agent_pump's early out; the socket is never touched
+    link.connected = false
+    link.frames_left = 0
+    link.listener = net.TCP_Socket(-1)
+    testing.expect(t, agent_pump(link, gs), "the game runs on")
+    testing.expect(t, !gs.agent.driving)
+    testing.expect_value(t, gs.agent.cmd, Agent_Command{})
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
@@ -307,4 +327,7 @@ agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
         if agent_pump(link, gs) && !link.connected do break
     }
     testing.expect(t, !link.connected, "a closed client hands the game back")
+    testing.expect(t, !gs.agent.driving, "the keyboard is live again")
+    testing.expect_value(t, gs.agent.cmd, Agent_Command{})
+    testing.expect(t, !gs.agent.first)
 }

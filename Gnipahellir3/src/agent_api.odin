@@ -115,7 +115,10 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
         }
     }
     if link.connected && link.frames_left == 0 do agent_read(link, gs)
-    if !link.connected do return true
+    if !link.connected {
+        gs.agent = {}  // back to the keyboard, with nothing of the last act left to replay
+        return true
+    }
     return agent_drive(link, gs)
 }
 
