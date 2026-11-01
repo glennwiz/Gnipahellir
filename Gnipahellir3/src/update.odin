@@ -55,6 +55,10 @@ game_update :: proc(gs: ^Game_State) {
     //      arming a warned tunneller raid. Spawns enemies/events only.
     update_raids(gs)
 
+    // 5b1z. Robbed dens — a grudge coming due arms a wave, so before the
+    //        director that spends the trigger.
+    update_den_revenge(gs)
+
     // 5b1a. Wave director — spends an armed wave trigger on the surface.
     //       Spawns enemies and pushes notify/sound, so it must precede
     //       process_events too.

@@ -185,9 +185,10 @@ wave_arm_warning :: proc(gs: ^Game_State, kind: Wave_Kind) {
 // surface frame arms it.  It rides the same warning machinery as a pressure
 // wave — announced the same, landing the same — it just does not wait for the
 // meter.  Wiring a new milestone is this one call.
-wave_trigger :: proc(gs: ^Game_State, kind: Wave_Kind) {
-    gs.wave.pending      = true
-    gs.wave.pending_kind = kind
+wave_trigger :: proc(gs: ^Game_State, kind: Wave_Kind, party := 0) {
+    gs.wave.pending       = true
+    gs.wave.pending_kind  = kind
+    gs.wave.pending_party = party
 }
 
 // What the HUD gauge reads: pressure as a 0..1 share of the target, and whether
@@ -236,7 +237,8 @@ update_waves :: proc(gs: ^Game_State) {
         // No cancel path.  Unlike a raid you cannot quiet the base down
         // mid-warning, and mining your own bench to dodge a wave is not a game
         // we reward.
-        wave_force(gs, w.warning_kind, wave_scaled_count(wave_table[w.warning_kind].count, w.threat))
+        wave_force(gs, w.warning_kind, max(w.warning_party, wave_scaled_count(wave_table[w.warning_kind].count, w.threat)))
+        w.warning_party  = 0
         w.cycle         += 1
         w.pressure       = 0
         w.cooldown       = WAVE_COOLDOWN
@@ -249,6 +251,7 @@ update_waves :: proc(gs: ^Game_State) {
     if w.pending {
         w.pending = false
         wave_arm_warning(gs, w.pending_kind)
+        w.warning_party = w.pending_party
         return
     }
 

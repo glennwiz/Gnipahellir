@@ -10678,3 +10678,148 @@ the_event_trace_logs_what_the_queue_processed :: proc(t: ^testing.T) {
     testing.expect(t, !strings.contains(traced, "evt Play_Sound"),
         "pure audio noise stays out of the trace")
 }
+
+// ─── Dens are the dungeon ─────────────────────────────────────────────────────
+
+// A builder with a finished den on the surface level, its hoard on the floor.
+@(private = "file")
+den_robbery_fixture :: proc(gs: ^Game_State) -> (oi: int, a: [2]i32) {
+    gs.enemies = {}
+    gs.wave    = {}
+    gs.level_index = LEVEL_SURFACE
+    spawn_builder(gs, 60)
+    oi = 0
+    a = {60, 96}
+    b := &gs.enemies.data[oi].builder
+    b.anchor, b.den_built, b.goal = a, true, .Fetch_Mineral
+    gs.world.items[grid_idx(60, 96)] = .Iron_Ore
+    gs.world.item_counts[grid_idx(60, 96)] = 5
+    gs.world.items[grid_idx(59, 96)] = .Gold_Ore
+    gs.world.item_counts[grid_idx(59, 96)] = 2
+    return
+}
+
+@(private = "file")
+den_rob :: proc(gs: ^Game_State, T: [2]i32) {
+    eq_push(&gs.events, Event{type = .Item_Pickup, tile = T, payload = {int_val = i32(Item.Iron_Ore)}})
+    process_events(gs)
+    eq_clear(&gs.events)
+}
+
+@(private = "file")
+den_tick_directors :: proc(gs: ^Game_State, seconds: int) {
+    for _ in 0 ..< seconds * 60 {
+        update_den_revenge(gs)
+        update_waves(gs)
+        eq_clear(&gs.events)
+    }
+}
+
+@(test)
+a_den_hoard_counts_what_lies_on_its_floor :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    oi, _ := den_robbery_fixture(gs)
+    testing.expect_value(t, den_hoard(gs, &gs.enemies.data[oi].builder), 7)
+}
+
+@(test)
+a_robbed_owner_returns_as_a_raider_with_friends :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+
+    // Lifting something elsewhere is not a robbery.
+    den_rob(gs, a + {9, 0})
+    testing.expect(t, !gs.den_revenge.active, "only a den's floor counts")
+
+    den_rob(gs, a)
+    testing.expect(t, gs.den_revenge.active, "taking from the hoard starts the grudge")
+    testing.expect_value(t, gs.enemies.data[oi].builder.goal, Builder_Goal.Hunt)
+
+    den_tick_directors(gs, int(DEN_REVENGE_DELAY) - 1)
+    testing.expect(t, gs.enemies.active[oi], "the owner stays home until it comes due")
+    testing.expect_value(t, wave_count_kind(gs, .Raider), 0)
+
+    den_tick_directors(gs, 2)
+    testing.expect(t, !gs.enemies.active[oi] || gs.enemies.data[oi].kind == .Raider,
+        "the owner leaves his den")
+    testing.expect(t, gs.wave.warning_active, "it comes through the wave warning")
+
+    den_tick_directors(gs, int(WAVE_WARNING_TIME) + 1)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), DEN_REVENGE_PARTY)
+    testing.expect_value(t, gs.wave.warning_party, 0)
+    testing.expect(t, !gs.den_revenge.active, "the grudge is spent")
+}
+
+@(test)
+killing_the_owner_settles_the_grudge :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+
+    den_rob(gs, a)
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(oi)})
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    gs.den_revenge.timer = 0
+    den_tick_directors(gs, int(WAVE_WARNING_TIME) + 2)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), 0)
+    testing.expect(t, !gs.den_revenge.active, "a dead owner leaves no debt behind")
+}
+
+@(test)
+a_grudge_from_a_deep_cave_waits_for_the_surface_and_clears_his_slot :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+    den_rob(gs, a)
+
+    // He lives in a level that is stashed by the time it comes due.
+    gs.den_revenge.level = LEVEL_CAVE2
+    gs.levels.enemies[LEVEL_CAVE2] = gs.enemies
+    gs.enemies = {}
+    gs.den_revenge.timer = 0
+
+    gs.level_index = LEVEL_CAVE3
+    den_tick_directors(gs, 2)
+    testing.expect(t, gs.den_revenge.active, "it holds while the player is off the surface")
+
+    gs.level_index = LEVEL_SURFACE
+    den_tick_directors(gs, 1)
+    testing.expect(t, !gs.levels.enemies[LEVEL_CAVE2].active[oi], "the stashed owner has left")
+    testing.expect(t, gs.wave.warning_active, "and the wave is on its way")
+}
+
+// The whole loop in the real game order on the real world: robbed, due, and the
+// party reaches the base.
+@(test)
+robbed_den_soak_the_raiders_reach_the_base :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    _, a := den_robbery_fixture(gs)
+    px, py := snap_to_standable(&gs.world, 40, SURFACE_Y - 2)
+    set_tile(&gs.world, px, py, .Crafting_Bench)
+
+    den_rob(gs, a)
+    gs.den_revenge.timer = 5
+
+    landed, smashed: bool
+    for _ in 0 ..< 240 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        update_den_revenge(gs)
+        update_waves(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if wave_count_kind(gs, .Raider) >= DEN_REVENGE_PARTY do landed = true
+        if get_tile(&gs.world, px, py) != .Crafting_Bench { smashed = true; break }
+    }
+    testing.expect(t, landed, "the party should land")
+    testing.expect(t, smashed, "the party should reach the base and smash it")
+}

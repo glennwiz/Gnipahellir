@@ -148,6 +148,16 @@ Wave_Kind :: enum u8 {
     Underground,
 }
 
+// A robbed den's owner, on his way back with friends.  Transient like the
+// directors below: a reload drops the grudge, no save impact.
+Den_Revenge :: struct {
+    active: bool,
+    timer:  f32,
+    owner:  int,     // enemy slot in that level's store
+    level:  int,
+    anchor: [2]i32,  // proves the slot still holds the same builder
+}
+
 // The wave director. Transient exactly like Raid_State: the enemies a wave
 // spawns persist in the saved Enemy_Store, while an unconsumed trigger is
 // harmless to drop on a reload. Zero save impact.
@@ -161,6 +171,8 @@ Wave_State :: struct {
     warning_timer:  f32,
     warning_active: bool,
     warning_kind:   Wave_Kind, // decided when the warning arms, not at spawn
+    pending_party:  int,       // a scripted wave's floor on its size (0 = none)
+    warning_party:  int,
     cooldown:       f32,
     // Structure index for the hunters: rebuilt on the WAVE_THREAT_RESCAN beat
     // (lazily on first use), so picking a target walks a few dozen entries
@@ -742,6 +754,7 @@ Game_State :: struct {
     enemies:     Enemy_Store,
     raid:        Raid_State, // transient industry-pressure director (enemy.odin)
     wave:        Wave_State, // transient wave director (wave.odin)
+    den_revenge: Den_Revenge, // transient robbed-den grudge (enemy.odin)
     nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
                              // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
