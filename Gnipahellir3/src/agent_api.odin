@@ -54,6 +54,9 @@ AGENT_SEND_TIMEOUT :: 2 * time.Second // a client that stops reading is dropped
 
 // Printable, JSON-safe, one per distinct tile type seen in a view.
 AGENT_ACTS_FILE    :: "acts.jsonl"
+AGENT_FIGHT_FILE   :: "fight.log"
+AGENT_FIGHT_RANGE  :: 30      // tiles from the player
+AGENT_FIGHT_BUF    :: 64 * 1024
 
 AGENT_TILE_CHARS :: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#*+-=~:;.,!?@$%^&()[]{}<>/|_"
 
@@ -69,6 +72,9 @@ Agent_Link :: struct {
     reply_due:   bool,           // an act finished: its state waits in out
     recording:   bool,
     acts_file:   ^os.File,
+    fight_file:  ^os.File,
+    fight_len:   int,
+    fight_buf:   [AGENT_FIGHT_BUF]u8,
     act_len:     int,            // the act in progress, as it was sent
     act_line:    [AGENT_LINE_MAX]u8,
     in_len:      int,
@@ -105,6 +111,9 @@ agent_open :: proc(link: ^Agent_Link) {
         link.acts_file = fd
         link.recording = true
     }
+    if fd, ferr := os.open(AGENT_FIGHT_FILE, os.O_WRONLY | os.O_CREATE | os.O_APPEND); ferr == nil {
+        link.fight_file = fd
+    }
     fmt.printfln("agent api: listening on 127.0.0.1:%d", port)
 }
 
@@ -124,6 +133,10 @@ agent_close :: proc(link: ^Agent_Link, gs: ^Game_State) {
     if link.connected do agent_drop_client(link, gs)
     if link.listening do net.close(link.listener)
     if link.recording do os.close(link.acts_file)
+    if link.fight_file != nil {
+        agent_fight_flush(link)
+        os.close(link.fight_file)
+    }
     link.listening = false
 }
 
@@ -173,10 +186,13 @@ agent_drive :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
 // After a ticked frame: counts the act down and answers when it has run out.
 agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
     if !link.connected || link.frames_left == 0 do return
+    agent_fight_log(link, gs)
     link.frames_left -= 1
     if link.frames_left == 0 {
         link.cmd = {}
         agent_record_act(link, gs)
+        agent_fight_flush(link)
+        flush_action_log(gs)  // what a reply reports is already on disk
         agent_reply_state(link, gs, nil)
         link.reply_due = true
     }
@@ -213,6 +229,35 @@ agent_read :: proc(link: ^Agent_Link, gs: ^Game_State) {
 agent_newline :: proc(link: ^Agent_Link) -> int {
     for i in 0 ..< link.in_len do if link.in_buf[i] == '\n' do return i
     return -1
+}
+
+// Every enemy near the player, every frame: frame,slot,kind,x,y,hp,goal,tx,ty.
+// A frame with one also gets a `P` line, frame,P,x,y,hp, so a fight reads whole.
+agent_fight_log :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    if link.fight_file == nil do return
+    p := &gs.player
+    near := false
+    for i in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[i] do continue
+        e := &gs.enemies.data[i]
+        if abs(e.pos.x - p.pos.x) > AGENT_FIGHT_RANGE || abs(e.pos.y - p.pos.y) > AGENT_FIGHT_RANGE do continue
+        near = true
+        if link.fight_len > AGENT_FIGHT_BUF - 128 do agent_fight_flush(link)
+        s := fmt.bprintf(link.fight_buf[link.fight_len:], "%d,%d,%v,%.2f,%.2f,%d,%v,%d,%d\n",
+            gs.frame, i, e.kind, e.pos.x, e.pos.y, e.hp, e.builder.goal, e.builder.target_tile.x, e.builder.target_tile.y)
+        link.fight_len += len(s)
+    }
+    if near {
+        if link.fight_len > AGENT_FIGHT_BUF - 128 do agent_fight_flush(link)
+        s := fmt.bprintf(link.fight_buf[link.fight_len:], "%d,P,%.2f,%.2f,%d\n", gs.frame, p.pos.x, p.pos.y, p.hp)
+        link.fight_len += len(s)
+    }
+}
+
+agent_fight_flush :: proc(link: ^Agent_Link) {
+    if link.fight_file == nil || link.fight_len == 0 do return
+    os.write(link.fight_file, link.fight_buf[:link.fight_len])
+    link.fight_len = 0
 }
 
 // One line per finished act: the request as sent, and where it left the player,
@@ -381,13 +426,23 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object) -> (c: Agent_Command, f
     c.mine,  present, ok = agent_tile(o, "mine");  c.has_mine  = ok; tile_ok &&= ok || !present
     c.place, present, ok = agent_tile(o, "place"); c.has_place = ok; tile_ok &&= ok || !present
     c.use,   present, ok = agent_tile(o, "use");   c.has_use   = ok; tile_ok &&= ok || !present
+    c.reclaim, present, ok = agent_tile(o, "reclaim"); c.has_reclaim = ok; tile_ok &&= ok || !present
     if !tile_ok {
-        problem = "mine, place and use take [x,y] inside the map"
+        problem = "mine, place, use and reclaim take [x,y] inside the map"
         return
     }
-    if int(c.has_mine) + int(c.has_place) + int(c.has_use) > 1 {
-        problem = "one of mine, place or use per act: there is one cursor"
+    if int(c.has_mine) + int(c.has_place) + int(c.has_use) + int(c.has_reclaim) > 1 {
+        problem = "one of mine, place, use or reclaim per act: there is one cursor"
         return
+    }
+    if agent_flag(o, "warp") {
+        ring := false
+        for it in gs.player.equipment do ring ||= it == .Jade_Ring
+        if !ring {
+            problem = "warp needs the Jade Ring worn"
+            return
+        }
+        c.warp = true
     }
 
     if "select" in o {
@@ -492,6 +547,7 @@ agent_input :: proc(gs: ^Game_State) {
     if c.has_mine  do tile = c.mine
     if c.has_place do tile = c.place
     if c.has_use   do tile = c.use
+    if c.has_reclaim do tile = c.reclaim
     inp.mouse_tile   = tile
     inp.mouse_world  = {(f32(tile.x) + 0.5) * CELL_SIZE, (f32(tile.y) + 0.5) * CELL_SIZE}
     gs.ui.hover_tile = tile
@@ -512,8 +568,11 @@ agent_input :: proc(gs: ^Game_State) {
         inp.attack = first
     }
 
+    inp.reclaim = c.has_reclaim && !command_active  // a held Shift+click
+
     if !first do return
 
+    if c.warp do eq_push(&gs.events, Event{type = .Warp_Home_Request})
     if c.has_place {
         type := Event_Type.Golem_Deploy if command_active else Event_Type.Place_Request
         eq_push(&gs.events, Event{type = type, tile = tile})
@@ -631,6 +690,19 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
     fmt.sbprintf(&b, `"player":{{"x":%.2f,"y":%.2f,"vx":%.2f,"vy":%.2f,"hp":%d,"hp_max":%d,"mana":%.1f,"grounded":%v,"facing":%d,"dead":%v}},`,
         p.pos.x, p.pos.y, p.vel.x, p.vel.y, p.hp, p.hp_max, p.mana, p.grounded, p.facing, p.dead)
 
+    // What a player reads off the screen: the buffs, the tile the body is in, and
+    // the toasts, which are also the only reason a refused action ever gives.
+    body := player_tile(p)
+    fmt.sbprintf(&b, `"flight_s":%.1f,"leaf_s":%.1f,"in_tile":"%v","notes":[`,
+        gs.flight_t, gs.leaf_fall_t, get_tile(&gs.world, int(body.x), int(body.y)))
+    for i in 0 ..< gs.notify.count {
+        if i > 0 do strings.write_byte(&b, ',')
+        n := &gs.notify.items[i]
+        strings.write_quoted_string(&b, string(n.text[:n.len]))
+    }
+    strings.write_string(&b, "],")
+    agent_write_window(&b, gs)
+
     fmt.sbprintf(&b, `"selected":%d,"inventory":[`, p.inventory.selected)
     comma := false
     for s, i in p.inventory.slots {
@@ -680,6 +752,29 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
     link.out_len = strings.builder_len(b)
 }
 
+// The contents of an open smelter or barrel window.
+@(private="file")
+agent_write_window :: proc(b: ^strings.Builder, gs: ^Game_State) {
+    if gs.ui.show_smelter {
+        sd := gs.world.sim_data[grid_idx(int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))]
+        fmt.sbprintf(b, `"smelter":{{"input":"%v","input_count":%d,"tray":"%v","tray_count":%d}},`,
+            sd.in_item, sd.in_count, sd.store_item, sd.store_count)
+    }
+    if gs.ui.show_barrel {
+        if barrel := barrel_at(gs, gs.level_index, gs.ui.barrel_tile); barrel != nil {
+            strings.write_string(b, `"barrel":[`)
+            comma := false
+            for s, i in barrel.slots {
+                if s.item == .None || s.count <= 0 do continue
+                if comma do strings.write_byte(b, ',')
+                comma = true
+                fmt.sbprintf(b, `{{"slot":%d,"item":"%v","count":%d}}`, i, s.item, s.count)
+            }
+            strings.write_string(b, "],")
+        }
+    }
+}
+
 // Tiles as rows of single characters, with a legend for just the ones present.
 @(private="file")
 agent_write_view :: proc(b: ^strings.Builder, gs: ^Game_State, v: Agent_View) {
@@ -701,7 +796,9 @@ agent_write_view :: proc(b: ^strings.Builder, gs: ^Game_State, v: Agent_View) {
         }
         strings.write_byte(b, '"')
     }
-    strings.write_string(b, `],"legend":{`)
+    strings.write_string(b, `],"solid":"`)
+    for ch, t in chars do if ch != 0 && .Solid in terrain_table[t].flags do strings.write_byte(b, ch)
+    strings.write_string(b, `","legend":{`)
     comma := false
     for ch, t in chars {
         if ch == 0 do continue

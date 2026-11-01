@@ -3,6 +3,7 @@ package game
 import "core:encoding/json"
 import "core:fmt"
 import "core:net"
+import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -434,6 +435,89 @@ agent_same_acts_same_seed_same_world :: proc(t: ^testing.T) {
     testing.expect_value(t, h1, h2)
     testing.expect_value(t, t1, t2)
     testing.expect_value(t, e1, e2)
+}
+
+@(test)
+agent_state_says_what_the_screen_says :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    notify(gs, "The bag is \"full\"")
+    gs.flight_t = 7
+    set_tile(&gs.world, 20, 40, .Smelter)
+    gs.ui.show_smelter = true
+    gs.ui.smelter_tile = {20, 40}
+    gs.world.sim_data[grid_idx(20, 40)].in_item  = .Iron_Ore
+    gs.world.sim_data[grid_idx(20, 40)].in_count = 5
+
+    agent_handle_line(link, gs, `{"cmd":"state"}`)
+    value, err := json.parse_string(agent_test_reply(link), allocator = context.temp_allocator)
+    testing.expect_value(t, err, json.Error.None)
+    root := value.(json.Object)
+    testing.expect_value(t, root["notes"].(json.Array)[0].(json.String), `The bag is "full"`)
+    testing.expect_value(t, root["flight_s"].(json.Float), 7)
+    testing.expect_value(t, root["smelter"].(json.Object)["input"].(json.String), "Iron_Ore")
+    testing.expect_value(t, root["smelter"].(json.Object)["input_count"].(json.Float), 5)
+    view := root["view"].(json.Object)
+    testing.expect(t, len(view["solid"].(json.String)) > 0)
+}
+
+@(test)
+agent_warp_needs_the_ring_and_reclaim_holds :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
+    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`))
+
+    gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
+    agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
+    testing.expect_value(t, link.frames_left, 1)
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect_value(t, gs.events.size, 1)
+    eq_clear(&gs.events)
+    link.frames_left = 0
+
+    agent_handle_line(link, gs, `{"cmd":"act","reclaim":[20,40],"frames":2}`)
+    for _ in 0 ..< 2 {
+        agent_drive(link, gs)
+        agent_input(gs)
+        testing.expect(t, gs.input.reclaim)
+        testing.expect_value(t, gs.input.mouse_tile, [2]i32{20, 40})
+    }
+}
+
+@(test)
+agent_fight_log_names_enemies_near_the_player_only :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    link.fight_file = nil
+    for i in 0 ..< 2 do gs.enemies.active[i] = true
+    gs.enemies.data[0].pos = gs.player.pos + {5, 0}
+    gs.enemies.data[0].kind = .Builder
+    gs.enemies.data[1].pos = gs.player.pos + {AGENT_FIGHT_RANGE + 1, 0}
+
+    // No file: nothing is logged and nothing is buffered.
+    agent_fight_log(link, gs)
+    testing.expect_value(t, link.fight_len, 0)
+
+    path := "agent_fight_test.log"
+    defer os.remove(path)
+    fd, err := os.open(path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC)
+    testing.expect_value(t, err, nil)
+    link.fight_file = fd
+    gs.frame = 42
+    agent_fight_log(link, gs)
+    line := string(link.fight_buf[:link.fight_len])
+    testing.expect(t, strings.has_prefix(line, "42,0,Builder,"), line)
+    testing.expect(t, strings.contains(line, "42,P,"))
+    testing.expect(t, !strings.contains(line, "42,1,"), "out of range")
+    os.close(fd)
 }
 
 @(test)

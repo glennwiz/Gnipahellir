@@ -509,9 +509,12 @@ Agent_Command :: struct {
     has_mine:  bool,
     has_place: bool,
     has_use:   bool,
+    has_reclaim: bool,
+    warp:      bool,
     mine:      [2]i32,
     place:     [2]i32,
     use:       [2]i32,
+    reclaim:   [2]i32,
     verb:      Agent_Verb,
     verb_arg:  i32,
 }
