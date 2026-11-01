@@ -9358,6 +9358,37 @@ legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 }
 
 @(test)
+death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
+	save :: "gnipahellir_save_death_test.dat"
+	snap :: "gnipahellir_snap_death_test.dat"
+	defer os.remove(save)
+	defer os.remove(snap)
+
+	gs := test_state()
+	defer free(gs)
+	testing.expect(t, len(gs.save_path) == 0, "an unarmed state can never touch a real save")
+
+	gs.save_path = save
+	testing.expect(t, save_game_to(gs, save), "autosave written")
+	testing.expect(t, save_game_to(gs, snap), "snapshot written")
+	runs := gs.stats.runs_played
+
+	eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+	process_events(gs)
+
+	testing.expect(t, gs.player.dead, "the player is dead")
+	testing.expect(t, !os.exists(save), "the autosave goes the moment the player dies")
+	testing.expect_value(t, gs.stats.runs_played, runs + 1)
+
+	// A snapshot from before the death still loads, and the state that comes
+	// back is still armed: a New Game must keep removing the same file.
+	testing.expect(t, os.exists(snap), "a snapshot is not the autosave")
+	testing.expect(t, snapshot_restore_from(gs, snap), "the snapshot still restores")
+	testing.expect(t, !gs.player.dead, "the restored run is alive")
+	testing.expect_value(t, gs.save_path, save)
+}
+
+@(test)
 machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
 	// A boiler puffing every two seconds must not ping the whole map: a
 	// tile-stamped Play_Sound attenuates through audio_machine_gain, which
