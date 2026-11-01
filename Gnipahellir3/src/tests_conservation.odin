@@ -260,6 +260,10 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         }
 
         process_events(gs)
+        for _ in 0 ..< ITEM_FALL_FRAMES {  // falling piles move, and only move
+            update_item_fall(gs)
+            gs.frame += 1
+        }
         after := fuzz_ledger(gs)
 
         ok: bool

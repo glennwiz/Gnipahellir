@@ -9563,6 +9563,71 @@ a_failed_place_gives_the_player_a_note :: proc(t: ^testing.T) {
 }
 
 @(test)
+drops_fall_until_they_land_on_something_solid :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	X :: 60
+	for y in 20 ..= 40 do for x in X ..= X + 3 {
+		set_tile(w, x, y, .Void)
+		w.items[grid_idx(x, y)] = .None
+		w.item_counts[grid_idx(x, y)] = 0
+	}
+	for x in X ..= X + 3 do set_tile(w, x, 41, .Stone)
+	settle :: proc(gs: ^Game_State) {
+		for _ in 0 ..< ITEM_FALL_FRAMES * GRID_H {
+			update_item_fall(gs)
+			gs.frame += 1
+		}
+	}
+	pile :: proc(w: ^World_Grid, x, y: int) -> (Item, int) {
+		return w.items[grid_idx(x, y)], int(w.item_counts[grid_idx(x, y)])
+	}
+
+	// The run 3 stones: a hanging pile comes down onto the floor, whole.
+	spawn_ground_item(w, {X, 25}, .Stone_Block, 7)
+	settle(gs)
+	it, n := pile(w, X, 40)
+	testing.expect_value(t, it, Item.Stone_Block)
+	testing.expect_value(t, n, 7)
+	_, n = pile(w, X, 25)
+	testing.expect_value(t, n, 0)
+
+	// Same kind merges where it lands; the overflow rests on the full stack.
+	w.items[grid_idx(X + 1, 40)], w.item_counts[grid_idx(X + 1, 40)] = .Stone_Block, u8(MAX_STACK - 2)
+	w.items[grid_idx(X + 1, 30)], w.item_counts[grid_idx(X + 1, 30)] = .Stone_Block, 5
+	settle(gs)
+	_, n = pile(w, X + 1, 40)
+	testing.expect_value(t, n, MAX_STACK)
+	_, n = pile(w, X + 1, 39)
+	testing.expect_value(t, n, 3)
+
+	// A different kind holds it up, and both survive.
+	w.items[grid_idx(X + 2, 40)], w.item_counts[grid_idx(X + 2, 40)] = .Plank, 1
+	w.items[grid_idx(X + 2, 30)], w.item_counts[grid_idx(X + 2, 30)] = .Iron_Ore, 2
+	settle(gs)
+	it, n = pile(w, X + 2, 39)
+	testing.expect_value(t, it, Item.Iron_Ore)
+	testing.expect_value(t, n, 2)
+
+	// Mining the floor out from under a pile drops it again.
+	set_tile(w, X + 3, 38, .Stone)
+	w.items[grid_idx(X + 3, 37)], w.item_counts[grid_idx(X + 3, 37)] = .Iron_Ore, 1
+	settle(gs)
+	it, n = pile(w, X + 3, 37)
+	testing.expect_value(t, it, Item.Iron_Ore)
+	set_tile(w, X + 3, 38, .Void)
+	settle(gs)
+	it, n = pile(w, X + 3, 40)
+	testing.expect_value(t, it, Item.Iron_Ore)
+	testing.expect_value(t, n, 1)
+
+	// The bottom row of the world holds whatever reaches it.
+	w.items[grid_idx(X, GRID_H - 1)], w.item_counts[grid_idx(X, GRID_H - 1)] = .Plank, 1
+	update_item_fall(gs)
+	testing.expect_value(t, w.items[grid_idx(X, GRID_H - 1)], Item.Plank)
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"

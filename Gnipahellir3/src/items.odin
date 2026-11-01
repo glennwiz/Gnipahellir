@@ -286,6 +286,38 @@ player_unequip :: proc(gs: ^Game_State, slot: Equip_Slot) {
     log_action(gs, "Player unequips %s", item_table[it].name)
 }
 
+// ─── Falling Drops ────────────────────────────────────────────────────────────
+
+ITEM_FALL_FRAMES :: 3  // frames per cell of fall
+
+// Drops fall until they land on something solid, Glenn 2026-11-02.  A pile falls
+// into an empty cell or merges down into its own kind; a full or different pile
+// holds it up.  The bottom row is the floor of the world.  Rows run bottom-up so
+// a pile moves one cell a step, and piles only ever move, so none are lost.
+update_item_fall :: proc(gs: ^Game_State) {
+    if gs.frame % ITEM_FALL_FRAMES != 0 do return
+    w := &gs.world
+    for y := GRID_H - 2; y >= 0; y -= 1 {
+        for x in 0 ..< GRID_W {
+            idx := grid_idx(x, y)
+            if w.items[idx] == .None || w.item_counts[idx] == 0 do continue
+            if is_solid(w, x, y + 1) do continue
+            below := grid_idx(x, y + 1)
+            have := 0
+            if w.items[below] != .None && w.item_counts[below] > 0 {
+                if w.items[below] != w.items[idx] do continue
+                have = int(w.item_counts[below])
+            }
+            take := min(int(w.item_counts[idx]), MAX_STACK - have)
+            if take <= 0 do continue
+            w.items[below]       = w.items[idx]
+            w.item_counts[below] = u8(have + take)
+            w.item_counts[idx]  -= u8(take)
+            if w.item_counts[idx] == 0 do w.items[idx] = .None
+        }
+    }
+}
+
 // ─── Inventory Operations ─────────────────────────────────────────────────────
 
 // Insert items, stacking onto existing slots first.  Returns false if the
