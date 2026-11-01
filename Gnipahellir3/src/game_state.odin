@@ -393,6 +393,7 @@ MAX_FLOATING_TEXT :: 32
 Floating_Text :: struct {
     pos:      [2]f32,   // world tile coords; drifts upward as it ages
     value:    int,
+    label:    string,   // static word after the number ("lava"); empty for a plain hit
     color:    rl.Color,
     age:      f32,
     lifetime: f32,
@@ -560,8 +561,7 @@ UI_State :: struct {
     show_barrel:     bool,   // barrel window; barrel_tile says which barrel
     show_debug:      bool,
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
-    show_title:      bool,   // boot title screen; any key dismisses it into the character-select
-    show_charselect: bool,   // startup form picker; dismissed by choosing a look
+    show_title:      bool,   // boot title screen; any key dismisses it into the world
     show_settings:   bool,   // volume sliders + key rebinding screen
     show_snapshots:  bool,   // F3 snapshot save/load menu (full-screen modal)
     snap_exists:     [SNAP_SLOTS]bool,      // slot cache, refreshed by snapshot_scan
@@ -787,6 +787,7 @@ Game_State :: struct {
     delta_time:   f32,
     world_seed:   u32,    // seed mixed into level generation; set per run, not saved
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
+    death_by:     string, // what landed the killing blow, from a static table — not saved; read by the death screen
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved
@@ -811,7 +812,7 @@ Game_State :: struct {
     zoom_anchor_screen: [2]f32, // virtual-screen cursor captured by an ALT wheel zoom; not saved
     zoom_cursor_active: bool,   // true while the live zoom is easing around that cursor anchor; not saved
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
-    player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
+    player_form:  Player_Form,  // sprite look; one form today, always zero; cosmetic, not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown
@@ -819,6 +820,7 @@ Game_State :: struct {
     craft_hint_shown:   bool, // one-shot: the "open bag to craft" popup on first wood log (not saved)
     forage_hint_shown:  bool, // one-shot: the "brew potions" popup on first foraged flower (not saved)
     wand_hint_shown:    bool, // one-shot: the "equip the wand" popup on first crafted wand (not saved)
+    scroll_hint_shown:  bool, // one-shot: the "altar answers only in the sky" popup on the first Rune Scroll (not saved)
     spring_hint_shown:  bool, // one-shot: the "it will not run dry" popup on the first spring (not saved)
     sky_apparition_glimpsed: bool, // one-shot: "something moves..." popup on first clear glimpse of the sky apparition (not saved)
 

@@ -84,13 +84,17 @@ process_events :: proc(gs: ^Game_State) {
                     if dmg > 0 {
                         gs.player.hp -= dmg
                         audio_play(&gs.audio, .Hurt)
+                        // The world has no body to blame, so its hits say what they are.
+                        world_hit := e.source == INVALID_ENTITY
+                        cause := damage_cause_names[e.cause] if world_hit else ""
                         spawn_damage_number(&gs.floating_text,
-                            {gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y}, dmg, DAMAGE_COLOR)
+                            {gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y}, dmg, DAMAGE_COLOR, cause)
                         src_buf: [32]u8
                         log_action(gs, "Player takes %d damage from %s (hp %d)",
-                            dmg, entity_name(gs, e.source, src_buf[:]), gs.player.hp)
+                            dmg, cause if world_hit else entity_name(gs, e.source, src_buf[:]), gs.player.hp)
                         if gs.player.hp <= 0 {
                             gs.player.hp = 0
+                            gs.death_by  = damage_source_name(gs, e)
                             eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
                         }
                     } else {
@@ -316,6 +320,10 @@ process_events :: proc(gs: ^Game_State) {
                 notify(gs, "Rune Scroll! Altar ritual needs %d %s + %d %s",
                     c[0].count, item_table[c[0].item].name,
                     c[1].count, item_table[c[1].item].name)
+                if !gs.scroll_hint_shown {
+                    gs.scroll_hint_shown = true
+                    notify(gs, "The altar answers only in the sky")
+                }
             }
 
         case .Structure_Complete:
@@ -475,6 +483,38 @@ process_events :: proc(gs: ^Game_State) {
             }
         }
     }
+}
+
+// Player-facing names for the death screen.
+@(rodata)
+damage_cause_names := [Damage_Cause]string{
+    .None       = "the world",
+    .Fall       = "the fall",
+    .Lava       = "lava",
+    .Magic_Lava = "magic lava",
+    .Void_Sky   = "the void",
+    .Steam      = "steam",
+}
+
+@(rodata)
+enemy_kind_names := [Enemy_Kind]string{
+    .Garm        = "Garm",
+    .Undead      = "a draugr",
+    .Fire_Sprite = "a fire sprite",
+    .Builder     = "a Builder",
+    .Raider      = "a Tunneller",
+    .Vargr       = "a Vargr",
+}
+
+// Who or what dealt a Damage_Dealt, in words.  A projectile can outlive its
+// owner, so a dead source reads as something unseen.
+damage_source_name :: proc(gs: ^Game_State, e: Event) -> string {
+    if e.source == INVALID_ENTITY do return damage_cause_names[e.cause]
+    i := entity_id_to_enemy_index(e.source)
+    if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
+        return enemy_kind_names[gs.enemies.data[i].kind]
+    }
+    return "something unseen"
 }
 
 handle_entity_died :: proc(gs: ^Game_State, e: Event) {

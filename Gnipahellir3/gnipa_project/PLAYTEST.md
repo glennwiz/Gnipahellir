@@ -54,7 +54,7 @@ a second stack into VOID permanently erases the first and retains the new one.
 | Key | Tool |
 |---|---|
 | F1 | Debug menu — click to toggle: **Fly mode** (W/S or ↑/↓ vertical, no gravity, collision stays on); **Ultra wand** (13-tile mining shots, free, impact blasts a 3×3 — needs no wand in the bag); **Stamp Metal/Gold spawner** (arms the cursor: the next world click stamps the spawner tile there, free); **Give Auto-Miner** (drops one in the bag); **Game of Life** (easter egg toy, `life.odin` — not part of the game; it WILL eat the level, fly first) |
-| F3 | Debug overlay: player pos/vel, builder scan rays, hover tile |
+| F3 | Snapshot menu: ten save/load slots, also on the death screen. Release builds have no snapshots: death is final |
 
 `action.log` records everything (flushed every 5 s + on quit) — after a
 playtest, grep it for `strike`, `WARNING`, `Player` to reconstruct the

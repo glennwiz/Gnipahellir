@@ -337,6 +337,21 @@ spawn_deep_rune_scroll :: proc(gs: ^Game_State) {
     notify(gs, "Something stirs deep below - seek the sealed chamber")
 }
 
+// Does a Crafting Bench stand on any level?  No flag holds this across a
+// save, so the tiles answer; only the opening objectives ask, until the altar.
+bench_placed :: proc(gs: ^Game_State) -> bool {
+    for t in gs.world.terrain {
+        if t == .Crafting_Bench do return true
+    }
+    for i in 0 ..< NUM_LEVELS {
+        if i == gs.level_index do continue
+        for t in gs.levels.worlds[i].terrain {
+            if t == .Crafting_Bench do return true
+        }
+    }
+    return false
+}
+
 // The HUD objective line: the first incomplete step of the progression loop,
 // so a new player always knows the next move.  Pure read; formats into the
 // caller's buffer.  Empty = nothing to show (game won).
@@ -358,6 +373,21 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
         return fmt.bprintf(buf, "All rituals done - face GARM in %s", level_names[LEVEL_CAVE3])
     }
     if p.sky_altar_pos == {0, 0} {
+        if !bench_placed(gs) {
+            inv := &gs.player.inventory
+            switch {
+            case inventory_count(inv, .Crafting_Bench) > 0:
+                return fmt.bprintf(buf, "Place your Crafting Bench")
+            // Stone once held means the pick was found, even if it was dropped.
+            case inventory_count(inv, .Pickaxe) == 0 && !recipe_revealed(p, .Sky_Altar):
+                return fmt.bprintf(buf, "Find the pickaxe on the ledge down the shaft")
+            case inventory_count(inv, .Wood_Log) == 0 && inventory_count(inv, .Plank) < 4:
+                return fmt.bprintf(buf, "Chop a tree for wood")
+            case:
+                return fmt.bprintf(buf, "Press [%v]: turn logs into planks, planks into a Crafting Bench",
+                    gs.bindings[.Inventory])
+            }
+        }
         return fmt.bprintf(buf, "Raise a Sky Altar on the Surface to open the way above")
     }
     if !p.rune_scroll_found[tier] {

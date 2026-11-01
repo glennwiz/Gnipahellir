@@ -215,7 +215,6 @@ item_palette_maps_cursor_to_item :: proc(t: ^testing.T) {
     defer free(gs)
     gs.ui.show_menu       = false
     gs.ui.show_title      = false
-    gs.ui.show_charselect = false
     gs.ui.show_settings   = false
     gs.debug.item_palette = true
 
@@ -3179,12 +3178,51 @@ notifications_explain_ritual_state :: proc(t: ^testing.T) {
 }
 
 @(test)
+objective_line_opens_at_the_pickaxe :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs)  // production init — frame 0, empty-handed
+    buf: [128]u8
+    inv := &gs.player.inventory
+
+    s := current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "pickaxe"), "frame 0 points at the pickaxe")
+
+    test_hold(gs, .Pickaxe)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "wood"), "pick in hand: go get wood")
+
+    inventory_insert(inv, .Wood_Log, 1)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "planks"), "logs in the bag: craft planks")
+    inventory_remove(inv, .Wood_Log, 1)
+
+    inventory_insert(inv, .Plank, 3)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "wood"), "too few planks for a bench: more wood")
+    inventory_insert(inv, .Plank, 1)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Crafting Bench"), "enough planks: make the bench")
+
+    inventory_insert(inv, .Crafting_Bench, 1)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Place"), "bench in the bag: place it")
+
+    // A bench standing on another level still counts, and the altar comes next.
+    inventory_remove(inv, .Crafting_Bench, 1)
+    gs.levels.worlds[LEVEL_CAVE2].terrain[grid_idx(10, 10)] = .Crafting_Bench
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Sky Altar"), "bench placed: raise the altar")
+}
+
+@(test)
 objective_line_walks_the_loop :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
     buf: [128]u8
 
-    // Fresh run: raise the sky gate first (Rune Scroll A doesn't exist yet)
+    // Bench up: raise the sky gate next (Rune Scroll A doesn't exist yet)
+    set_tile(&gs.world, 90, 90, .Crafting_Bench)
     s := current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "Sky Altar"), "fresh run points at raising the sky altar")
 
@@ -3208,6 +3246,93 @@ objective_line_walks_the_loop :: proc(t: ^testing.T) {
     gs.progression.sky_structure_complete = {true, true, true}
     s = current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "GARM"), "endgame points at the boss")
+}
+
+// Stand the player in `tile` at 1 HP and let the hazard pass kill them.
+die_in_tile :: proc(gs: ^Game_State, tile: Tile_Type) {
+    gs.player.hp = 1
+    pt := player_tile(&gs.player)
+    for ty in pt.y - 3 ..= pt.y + 3 {
+        for tx in pt.x - 2 ..= pt.x + 2 {
+            set_tile(&gs.world, int(tx), int(ty), tile)
+        }
+    }
+    for i := 0; i < 240 && !gs.player.dead; i += 1 {
+        player_tile_hazard(gs, gs.delta_time)
+        process_events(gs)
+        process_events(gs)
+    }
+}
+
+@(test)
+death_line_names_the_lava_and_the_level :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE2
+    die_in_tile(gs, .Lava)
+    testing.expect(t, gs.player.dead, "the lava kills")
+    buf: [96]u8
+    testing.expect_value(t, death_cause_line(gs, buf[:95]), "Killed by lava - Deep Cave")
+}
+
+@(test)
+death_line_names_the_fall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.hp = 1
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID, payload = {int_val = 1}, cause = .Fall})
+    process_events(gs)
+    process_events(gs)
+    buf: [96]u8
+    testing.expect_value(t, death_cause_line(gs, buf[:95]), "Killed by the fall - Surface")
+}
+
+@(test)
+death_line_names_the_enemy_and_the_dimension :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.hp = 1
+    gs.level_index = LEVEL_DIMENSION
+    gs.dimension.kind = .Hell
+    i, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok)
+    gs.enemies.data[i].kind = .Vargr
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(i), target = PLAYER_ID, payload = {int_val = 1}})
+    process_events(gs)
+    process_events(gs)
+    buf: [96]u8
+    testing.expect_value(t, death_cause_line(gs, buf[:95]), "Killed by a Vargr - Hell")
+}
+
+@(test)
+every_damaging_tile_has_a_cause :: proc(t: ^testing.T) {
+    for tile in Tile_Type {
+        if .Damaging in terrain_table[tile].flags {
+            testing.expectf(t, hazard_cause[tile] != .None, "%v has no Damage_Cause", tile)
+        }
+    }
+}
+
+@(test)
+first_rune_scroll_hints_at_the_sky_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    notify_text :: proc(gs: ^Game_State, i: int) -> string {
+        return string(gs.notify.items[i].text[:gs.notify.items[i].len])
+    }
+
+    testing.expect(t, !gs.scroll_hint_shown)
+    eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 0}})
+    process_events(gs)
+    testing.expect(t, gs.scroll_hint_shown, "the first scroll flips the flag")
+    testing.expect_value(t, gs.notify.count, 2)
+    testing.expect(t, strings.contains(notify_text(gs, 1), "only in the sky"), "the hint is the second line")
+
+    // The next scroll still reports its cost, without the hint.
+    eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 1}})
+    process_events(gs)
+    testing.expect_value(t, gs.notify.count, 3)
+    testing.expect(t, !strings.contains(notify_text(gs, 2), "only in the sky"), "one hint only")
 }
 
 @(test)
@@ -3958,6 +4083,60 @@ armor_blunts_enemy_blows_but_not_the_world :: proc(t: ^testing.T) {
         target = PLAYER_ID, payload = {int_val = 2}})
     process_events(gs)
     testing.expect_value(t, gs.player.hp, hp - 4)
+}
+
+@(test)
+world_damage_says_what_it_is :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.debug_log.pos = 0
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
+        target = PLAYER_ID, payload = {int_val = 1}, cause = .Lava})
+    process_events(gs)
+    log_text := string(gs.debug_log.buf[:gs.debug_log.pos])
+    testing.expect(t, strings.contains(log_text, "Player takes 1 damage from lava"), "the log names the lava")
+    testing.expect_value(t, gs.floating_text.data[0].label, "lava")
+    testing.expect_value(t, gs.floating_text.data[0].color, DAMAGE_COLOR)
+
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
+        target = PLAYER_ID, payload = {int_val = 2}, cause = .Fall})
+    process_events(gs)
+    log_text = string(gs.debug_log.buf[:gs.debug_log.pos])
+    testing.expect(t, strings.contains(log_text, "Player takes 2 damage from the fall"), "the log names the fall")
+    testing.expect_value(t, gs.floating_text.data[1].label, "the fall")
+
+    // An enemy's hit stays a plain number: the body is right there.
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(0),
+        target = PLAYER_ID, payload = {int_val = 1}})
+    process_events(gs)
+    testing.expect_value(t, gs.floating_text.data[2].label, "")
+}
+
+@(test)
+fall_warning_starts_past_the_safe_drop :: proc(t: ^testing.T) {
+    p: Player
+    p.fall_peak_y = 10
+
+    p.pos.y = 10 + SAFE_FALL_TILES
+    testing.expect_value(t, fall_warning(&p), 0)   // exactly safe: no warning
+
+    p.pos.y = 10 + SAFE_FALL_TILES + 0.01
+    testing.expect(t, fall_warning(&p) >= FALL_WARN_MIN, "one step past safe shows at once")
+
+    p.pos.y = 10 + SAFE_FALL_TILES + FALL_WARN_RAMP_TILES
+    testing.expect_value(t, fall_warning(&p), 1)
+    p.pos.y += 40
+    testing.expect_value(t, fall_warning(&p), 1)
+
+    p.grounded = true
+    testing.expect_value(t, fall_warning(&p), 0)   // landed
+    p.grounded = false
+    p.dead = true
+    testing.expect_value(t, fall_warning(&p), 0)
+    p.dead = false
+    p.fall_peak_y = 0
+    testing.expect_value(t, fall_warning(&p), 0)   // boot state, peak not armed
 }
 
 @(test)
@@ -5113,6 +5292,10 @@ garm_death_opens_the_hell_gate :: proc(t: ^testing.T) {
 
     testing.expect(t, gs.game_won, "breaking the Final Seal wins the game")
     testing.expect_value(t, gs.stats.runs_won, won_before + 1)
+    // The win screen names what was just done: the Seal, not the hound.
+    testing.expect_value(t, WIN_TITLE, "THE FINAL SEAL IS BROKEN")
+    testing.expect(t, !strings.contains(WIN_TITLE, "GARM"), "the win is not Garm's death")
+    testing.expect(t, !strings.contains(WIN_CODA, "hound"), "the coda is not about Garm either")
 
     pos_before := gs.player.pos
     gs.input.move_right = true

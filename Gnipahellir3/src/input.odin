@@ -127,31 +127,11 @@ update_input :: proc(gs: ^Game_State) {
     }
     gs.ui.hover_tile = inp.mouse_tile
 
-    // Title screen: any key or click advances to the character-select.
+    // Title screen: any key or click drops into the world.
     if gs.ui.show_title {
         if rl.GetKeyPressed() != .KEY_NULL ||
            rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT) {
-            gs.ui.show_title      = false
-            gs.ui.show_charselect = true
-        }
-        return
-    }
-
-    // Character-select: click a form card or press its number (1..N) to choose
-    // a look and drop into the world. Nothing else runs while it's up.
-    if gs.ui.show_charselect {
-        chosen := -1
-        if rl.IsMouseButtonPressed(.LEFT) {
-            chosen = charselect_card_at_cursor(gs)
-        }
-        for n in 0 ..< PLAYER_FORM_COUNT {
-            if rl.IsKeyPressed(rl.KeyboardKey(i32(rl.KeyboardKey.ONE) + i32(n))) {
-                chosen = n
-            }
-        }
-        if chosen >= 0 {
-            gs.player_form        = Player_Form(chosen)
-            gs.ui.show_charselect = false
+            gs.ui.show_title = false
         }
         return
     }
@@ -162,12 +142,15 @@ update_input :: proc(gs: ^Game_State) {
         return
     }
 
-    // Snapshot menu (F3): ten save/load slots. Takes all input while open;
-    // the sim is frozen (see game_update). Checked before the death screen so
-    // a doomed run can still be rewound to an earlier snapshot.
-    if gs.ui.show_snapshots {
-        update_snapshots_input(gs)
-        return
+    // Snapshot menu (F3): ten save/load slots, debug builds only — in release
+    // nothing opens it, so death stays final. Takes all input while open; the
+    // sim is frozen (see game_update). Checked before the death screen so a
+    // doomed run can still be rewound to an earlier snapshot.
+    when GAME_DEBUG {
+        if gs.ui.show_snapshots {
+            update_snapshots_input(gs)
+            return
+        }
     }
 
     // Pause menu takes over all input while open: ESC (or Resume) closes it,
@@ -191,11 +174,16 @@ update_input :: proc(gs: ^Game_State) {
 
     // Death screen: the fallen give no orders. After a short beat, ENTER or a
     // click carves a new hero (roguelike — the old run is ash). ESC still
-    // reaches the pause menu for Save and Quit.
+    // reaches the pause menu for Save and Quit.  Death is final: the F3 rewind
+    // exists only in a debug build.
     if gs.player.dead {
-        if rl.IsKeyPressed(.F3) {
-            snapshot_menu_open(gs)  // rewind the doomed run to a snapshot
-        } else if rl.IsKeyPressed(.ESCAPE) {
+        when GAME_DEBUG {
+            if rl.IsKeyPressed(.F3) {
+                snapshot_menu_open(gs)  // rewind the doomed run to a snapshot
+                return
+            }
+        }
+        if rl.IsKeyPressed(.ESCAPE) {
             gs.ui.show_menu = true
         } else if gs.player.death_timer > DEATH_INPUT_DELAY &&
            (rl.IsKeyPressed(.ENTER) || rl.IsMouseButtonPressed(.LEFT)) {
@@ -453,9 +441,11 @@ update_input :: proc(gs: ^Game_State) {
             gs.player.inventory.selected = gs.player.inventory.selected == i ? -1 : i
         }
     }
-    // F3: snapshot menu (save/load slots).
-    if rl.IsKeyPressed(.F3) {
-        snapshot_menu_open(gs)
+    // F3: snapshot menu (save/load slots), debug builds only.
+    when GAME_DEBUG {
+        if rl.IsKeyPressed(.F3) {
+            snapshot_menu_open(gs)
+        }
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect

@@ -771,7 +771,7 @@ agent_input :: proc(gs: ^Game_State) {
     inp.fly_down   = false
 
     if first && c.dismiss do agent_dismiss(gs)
-    if gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings ||
+    if gs.ui.show_title || gs.ui.show_settings ||
        gs.ui.show_snapshots || gs.ui.show_menu || gs.player.dead || gs.ui.show_book {
         return
     }
@@ -862,12 +862,7 @@ agent_close_windows :: proc(gs: ^Game_State) {
 @(private="file")
 agent_dismiss :: proc(gs: ^Game_State) {
     switch {
-    case gs.ui.show_title:
-        gs.ui.show_title      = false
-        gs.ui.show_charselect = true
-    case gs.ui.show_charselect:
-        gs.player_form        = Player_Form(0)
-        gs.ui.show_charselect = false
+    case gs.ui.show_title:     gs.ui.show_title     = false
     case gs.ui.show_settings:  gs.ui.show_settings  = false
     case gs.ui.show_snapshots: gs.ui.show_snapshots = false
     case gs.ui.show_menu:      gs.ui.show_menu      = false
@@ -883,7 +878,6 @@ agent_dismiss :: proc(gs: ^Game_State) {
 agent_screen :: proc(gs: ^Game_State) -> string {
     switch {
     case gs.ui.show_title:      return "title"
-    case gs.ui.show_charselect: return "charselect"
     case gs.ui.show_settings:   return "settings"
     case gs.ui.show_snapshots:  return "snapshots"
     case gs.ui.show_menu:       return "menu"

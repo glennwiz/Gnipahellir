@@ -19,7 +19,6 @@ agent_test_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
     link = new(Agent_Link)
     game_state_init(gs)
     gs.ui.show_title = false
-    gs.ui.show_charselect = false
     gs.player.pos = SURFACE_HOME_POS
     link.connected = true  // no socket: agent_send is only reached through agent_pump
     link.idle_off  = true  // each test about idling turns it back on
@@ -224,9 +223,7 @@ agent_dismiss_walks_past_each_screen_in_turn :: proc(t: ^testing.T) {
 
     gs.ui.show_title = true
     agent_test_run_act(link, gs, `{"cmd":"act","dismiss":true}`)
-    testing.expect(t, gs.ui.show_charselect)
-    agent_test_run_act(link, gs, `{"cmd":"act","dismiss":true}`)
-    testing.expect(t, !gs.ui.show_charselect)
+    testing.expect(t, !gs.ui.show_title)
 
     agent_handle_line(link, gs, `{"cmd":"state"}`)
     testing.expect(t, strings.contains(agent_test_reply(link), `"screen":"play"`))

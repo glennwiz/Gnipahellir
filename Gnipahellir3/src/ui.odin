@@ -799,82 +799,6 @@ draw_title :: proc(gs: ^Game_State) {
 	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
 }
 
-// ─── Character Select (startup form picker) ───────────────────────────────────
-
-CSEL_CARD_W  :: 160
-CSEL_CARD_H  :: 240
-CSEL_GAP     :: 16
-CSEL_TOTAL_W :: PLAYER_FORM_COUNT * CSEL_CARD_W + (PLAYER_FORM_COUNT - 1) * CSEL_GAP
-CSEL_X0      :: (UI_W - CSEL_TOTAL_W) / 2
-CSEL_Y0      :: 230
-
-// Index of the card under the cursor, or -1.
-charselect_card_at_cursor :: proc(gs: ^Game_State) -> int {
-	mx := i32(gs.input.mouse_screen.x)
-	my := i32(gs.input.mouse_screen.y)
-	if my < CSEL_Y0 || my >= CSEL_Y0 + CSEL_CARD_H do return -1
-	for i in 0 ..< PLAYER_FORM_COUNT {
-		x := i32(CSEL_X0 + i * (CSEL_CARD_W + CSEL_GAP))
-		if mx >= x && mx < x + CSEL_CARD_W do return i
-	}
-	return -1
-}
-
-draw_charselect :: proc(gs: ^Game_State) {
-	t := f32(rl.GetTime())
-	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{12, 10, 14, 255})
-
-	center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
-		tw := rl.MeasureText(text, size)
-		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
-	}
-	center_text("CHOOSE YOUR FORM", 110, 48, rl.Color{240, 205, 130, 255})
-	center_text("click a form - or press its number - to begin", 168, 20, text_dim)
-
-	pulse := 0.6 + 0.4 * math.sin(t * 1.5)
-	hover := charselect_card_at_cursor(gs)
-	for i in 0 ..< PLAYER_FORM_COUNT {
-		form := Player_Form(i)
-		x := i32(CSEL_X0 + i * (CSEL_CARD_W + CSEL_GAP))
-		y := i32(CSEL_Y0)
-		hovered := i == hover
-
-		rl.DrawRectangle(x, y, CSEL_CARD_W, CSEL_CARD_H, hovered ? NORSE_ROW_HOT : NORSE_ROW)
-		rl.DrawRectangleLinesEx(
-			{f32(x), f32(y), CSEL_CARD_W, CSEL_CARD_H},
-			hovered ? 3 : 2,
-			hovered ? NORSE_GOLD_HOT : NORSE_BORDER,
-		)
-
-		// Sprite preview, centered in the card's upper area (uses the new-game
-		// default tints so it matches the in-world look).
-		ps := f32(6)  // 16×22 grid → 96×132 px preview, fits the 160×240 card
-		sw := f32(FRAME_WIDTH) * ps
-		sx := f32(x) + (CSEL_CARD_W - sw) / 2
-		sy := f32(y) + 36
-		if hovered do sy -= 4 * f32(pulse)  // a little lift on hover
-		draw_form_sprite(form, sx, sy, ps, rl.ORANGE, rl.BLUE)
-
-		// Name plate.
-		name := player_form_names[form]
-		tw := rl.MeasureText(name, 18)
-		rl.DrawText(
-			name,
-			x + (CSEL_CARD_W - tw) / 2,
-			y + CSEL_CARD_H - 44,
-			18,
-			hovered ? NORSE_GOLD_HOT : rl.Color{225, 215, 195, 255},
-		)
-
-		// Number hint under the name.
-		num_buf: [4]u8
-		num := fmt.bprintf(num_buf[:], "%d", i + 1)
-		nt := rl.MeasureText(cstring(raw_data(num_buf[:])), 16)
-		rl.DrawText(cstring(raw_data(num_buf[:])), x + (CSEL_CARD_W - nt) / 2, y + CSEL_CARD_H - 22, 16, text_dim)
-		_ = num
-	}
-}
-
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
 
 MENU_ROWS :: 4 // row 0: Resume; 1: Settings; 2: New Game; 3: Save and Quit
@@ -1712,7 +1636,7 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	   my >= GOLEM_CMD_Y && my < GOLEM_CMD_Y+GOLEM_CMD_H {
 		return true
 	}
-	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings ||
+	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings ||
 	   gs.ui.show_snapshots {
 		return true // full-screen modals — everything behind them is blocked
 	}
@@ -1846,6 +1770,7 @@ draw_station_prompt :: proc(gs: ^Game_State) {
 }
 
 draw_ui :: proc(gs: ^Game_State) {
+	draw_fall_warning(gs)
 	draw_hud(gs)
 	draw_golem_command_strip(gs)
 	draw_hover_label(gs)
@@ -1875,7 +1800,6 @@ draw_ui :: proc(gs: ^Game_State) {
 		if gs.ui.show_pixel_editor do draw_pixel_editor(gs)
 	}
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top
-	if gs.ui.show_charselect do draw_charselect(gs)
 	if gs.ui.show_settings do draw_settings(gs)
 	if gs.ui.show_snapshots do draw_snapshots(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included
@@ -2268,6 +2192,15 @@ book_lines :: proc(tier: int) -> (cstring, cstring, cstring) {
 	return "A passage has opened below. Descend, and seek the next portal.", "", ""
 }
 
+// "Killed by lava - Deep Cave".  Empty if the run did not end by a blow.
+// Pure read; formats into the caller's buffer.
+death_cause_line :: proc(gs: ^Game_State, buf: []u8) -> string {
+	if len(gs.death_by) == 0 do return ""
+	place := level_names[gs.level_index]
+	if gs.level_index == LEVEL_DIMENSION do place = dimension_table[gs.dimension.kind].name
+	return fmt.bprintf(buf, "Killed by %s - %s", gs.death_by, place)
+}
+
 // ─── Death Screen ─────────────────────────────────────────────────────────────
 //
 //  Roguelike death: the run is over and the save burns with it.  Blood-dark
@@ -2310,6 +2243,11 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		rl.Color{200, 160, 140, u8(255 * fade)},
 	)
 
+	cause_buf: [96]u8
+	if len(death_cause_line(gs, cause_buf[:95])) > 0 {
+		center_text(cstring(raw_data(cause_buf[:])), ty + 132, 22, rl.Color{255, 190, 150, u8(255 * fade)})
+	}
+
 	mins := int(gs.elapsed_time) / 60
 	secs := int(gs.elapsed_time) % 60
 	buf: [96]u8
@@ -2321,7 +2259,7 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		gs.stats.total_kills,
 		gs.stats.runs_played,
 	)
-	center_text(cstring(raw_data(buf[:])), ty + 150, 20, rl.Color{255, 255, 255, u8(255 * fade)})
+	center_text(cstring(raw_data(buf[:])), ty + 165, 20, rl.Color{255, 255, 255, u8(255 * fade)})
 
 	center_text(
 		"Death is final - the save burns on the pyre.",
@@ -2341,6 +2279,11 @@ draw_death_screen :: proc(gs: ^Game_State) {
 	}
 }
 
+// What the win screen says.  The win is the Final Seal breaking (levels.odin),
+// not Garm's death: he only drops the key.
+WIN_TITLE :: "THE FINAL SEAL IS BROKEN"
+WIN_CODA  :: "Hel's last door stands open."
+
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the
 // run (save cleared on exit); menus and restart flow land in Phase 6.
 draw_win_screen :: proc(gs: ^Game_State) {
@@ -2351,7 +2294,7 @@ draw_win_screen :: proc(gs: ^Game_State) {
 		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
 	}
 
-	center_text("GARM IS SLAIN", 380, 60, rl.Color{255, 200, 80, 255})
+	center_text(WIN_TITLE, 380, 60, rl.Color{255, 200, 80, 255})
 	center_text("Gnipahellir is conquered", 450, 30, rl.Color{255, 240, 180, 255})
 
 	mins := int(gs.elapsed_time) / 60
@@ -2368,7 +2311,7 @@ draw_win_screen :: proc(gs: ^Game_State) {
 	)
 	center_text(cstring(raw_data(buf[:])), 520, 20, rl.WHITE)
 
-	center_text("The hound guards the gate no more.", 580, 20, rl.Color{160, 160, 170, 255})
+	center_text(WIN_CODA, 580, 20, rl.Color{160, 160, 170, 255})
 }
 
 // The current objective — one dim line, top-center, always on so a new
@@ -2645,6 +2588,21 @@ draw_item_tooltip :: proc(gs: ^Game_State, item: Item) {
 	if desc != "" {
 		draw_wrapped_text(desc, x + PAD, y + PAD + FONT + 3, ITEM_TOOLTIP_W, FONT, rl.Color{205, 195, 175, 255})
 	}
+}
+
+// Screen edges darken once a drop will hurt (fall_warning).  Under the HUD.
+FALL_WARN_BAND  :: i32(140)
+FALL_WARN_ALPHA :: f32(170)
+
+draw_fall_warning :: proc(gs: ^Game_State) {
+	w := fall_warning(&gs.player)
+	if w <= 0 do return
+	dark := rl.Color{0, 0, 0, u8(FALL_WARN_ALPHA * w)}
+	clear := rl.Color{0, 0, 0, 0}
+	rl.DrawRectangleGradientV(0, 0, UI_W, FALL_WARN_BAND, dark, clear)
+	rl.DrawRectangleGradientV(0, UI_H - FALL_WARN_BAND, UI_W, FALL_WARN_BAND, clear, dark)
+	rl.DrawRectangleGradientH(0, 0, FALL_WARN_BAND, UI_H, dark, clear)
+	rl.DrawRectangleGradientH(UI_W - FALL_WARN_BAND, 0, FALL_WARN_BAND, UI_H, clear, dark)
 }
 
 draw_hud :: proc(gs: ^Game_State) {

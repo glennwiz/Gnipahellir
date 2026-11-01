@@ -567,12 +567,23 @@ Event_Payload :: struct #raw_union {
 	entity_id: Entity_ID,
 }
 
+// What hurt the player when no entity did (source == INVALID_ENTITY).
+Damage_Cause :: enum u8 {
+	None,
+	Fall,
+	Lava,
+	Magic_Lava,
+	Void_Sky,
+	Steam,
+}
+
 Event :: struct {
 	type:    Event_Type,
 	source:  Entity_ID,
 	target:  Entity_ID,
 	tile:    [2]i32,
 	payload: Event_Payload,
+	cause:   Damage_Cause,  // Damage_Dealt from the world: which part of it
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
