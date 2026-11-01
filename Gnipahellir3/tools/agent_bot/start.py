@@ -1,0 +1,39 @@
+from b import *
+def newgame():
+    g=G()
+    for i in range(40):
+        r=g.st(0,53,1,1)
+        if r['screen']=='play' and not r['player']['dead']: return
+        g.act(30,dismiss=True)
+    raise SystemExit('no play')
+def p1():
+    b=B(); b.st()
+    trees=[x for x in range(W) if b.m[53][x]=='Wood' or b.m[52][x]=='Wood']; fl=[x for x in range(W) if b.m[53][x]=='Flower']
+    wat=max([x for x in range(88) if b.m[54][x]=='Water' or b.m[55][x]=='Water'],default=0)
+    log(trees,fl,'water',wat)
+    tw=sorted([q for q in trees if wat+3<q<88],reverse=True)
+    for x in tw:
+        if b.count('Wood_Log')>=30: break
+        for f in [q for q in fl if x<q<b.pos()[0]]: b.walkx(f,limit=40)
+        b.chop(x,x+2)
+    if b.count('Wood_Log')<10: raise Exception('logs')
+    b.st()
+    for i in range(40):
+        if b.walkx(95,limit=60): break
+        b.a(1,jump=True,move='right'); b.a(15,move='right')
+    b.a(2,move='left')
+    b.sel('Wood_Log'); b.a(2,place=[96,58]); assert b.t(96,58)=='Wood'
+    b.walkx(96,limit=20); b.waitland(); b.a(10); b.st()
+    b.a(1,select=-1); b.dig(96,58,tries=30); b.waitland(); b.a(15); b.walkx(96,limit=3); b.st()
+    assert b.count('Pickaxe')==1
+    b.sel('Pickaxe')
+    for c in((95,60),(95,61)): b.dig(*c)
+    b.walkx(97,limit=6); b.sel('Pickaxe')
+    for c in((98,60),(98,61)): b.dig(*c)
+    b.a(3); b.st()
+    b.a(2,craft='Plank'); b.craft('Crafting_Bench'); b.sel('Crafting_Bench'); b.a(3,place=[98,61])
+    assert b.t(98,61)=='Crafting_Bench'
+    b.a(2); b.craft('Fire_Wand'); b.craft('Potion_Health'); b.a(2,craft='Plank'); b.st()
+    assert b.count('Fire_Wand')==1
+if __name__=='__main__':
+    newgame(); p1()
