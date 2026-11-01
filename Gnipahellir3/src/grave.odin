@@ -58,6 +58,7 @@ grave_record_death :: proc(gs: ^Game_State) {
     fmt.bprintf(g.cause[:GRAVE_TEXT - 1], "%s", cause)
     fmt.bprintf(g.place[:GRAVE_TEXT - 1], "%s", place)
     gs.stats.grave = g
+    kit_collect(gs)
 }
 
 // The death screen's choice: one of the slot's items goes on.  Choosing again
@@ -118,9 +119,101 @@ grave_raise :: proc(gs: ^Game_State) {
     }
     gs.grave = g
     gs.stats.grave = {}
+    kit_take_up(gs, g.tithe)
+    if RISEN_HERO_WALKS do risen_hero_rise(gs)
     if len(gs.save_path) > 0 do _ = save_game_to(gs, gs.save_path)
     _ = save_stats(gs)
     log_action(gs, "Grave stone raised at (%d,%d), tithe %v", x, SURFACE_Y - 1, g.tithe)
+}
+
+// ─── The risen hero (design review I2, Glenn 2026-11-02) ──────────────────────
+//
+//  The last hero walks the new world as a draugr with everything they carried
+//  but the tithe, and scrolls and keys burn with the run.  Kill them to get it
+//  back.  The kit travels with the grave: gs.stats.kit between worlds, then
+//  gs.risen, saved with the run, until the body falls and it lands on the ground.
+//
+//  Still a prototype: F1 raises the hero by hand, and RISEN_HERO_WALKS keeps
+//  them out of a new world until Glenn has looked.  Without the flag the kit
+//  burns with the old run, as it always did.
+
+RISEN_HERO_WALKS :: false
+RISEN_HERO_HP    :: 12
+RISEN_HERO_X     :: GRID_W - 40   // where they start, far from the shaft
+RISEN_KIT        :: MAX_INVENTORY + len(Equip_Slot)
+
+Risen_Hero :: struct {
+    has_kit: bool,
+    walking: bool,                         // kit is on the body in enemy slot `slot`
+    slot:    int,                          // gs.levels.enemies[LEVEL_SURFACE] when away
+    kit:     [RISEN_KIT]Inventory_Slot,
+}
+
+@(private="file")
+kit_collect :: proc(gs: ^Game_State) {
+    n := 0
+    gs.stats.kit = {}
+    for s in gs.player.inventory.slots {
+        if tithe_offerable(s) {
+            gs.stats.kit[n] = s
+            n += 1
+        }
+    }
+    for it in gs.player.equipment {
+        s := Inventory_Slot{item = it, count = 1}
+        if tithe_offerable(s) {
+            gs.stats.kit[n] = s
+            n += 1
+        }
+    }
+}
+
+// The kit passes from stats to run, leaving the tithe behind in its coffer.
+@(private="file")
+kit_take_up :: proc(gs: ^Game_State, tithe: Item) {
+    gs.risen = {kit = gs.stats.kit}
+    gs.stats.kit = {}
+    if tithe != .None {
+        for &s in gs.risen.kit {
+            if s.item != tithe do continue
+            s.count -= 1
+            if s.count == 0 do s = {}
+            break
+        }
+    }
+    for s in gs.risen.kit do if s.count > 0 do gs.risen.has_kit = true
+}
+
+// The last hero claws up on the surface.  With no floor to stand on, or no
+// free enemy slot, they stay in the ground and the attempt changes nothing.
+risen_hero_rise :: proc(gs: ^Game_State) -> bool {
+    if !gs.risen.has_kit || gs.risen.walking || gs.level_index != LEVEL_SURFACE do return false
+    before := gs.enemies.active
+    spawn_builder(gs, RISEN_HERO_X)
+    for active, i in gs.enemies.active {
+        if !active || before[i] do continue
+        rise_draugr(gs, i)
+        gs.enemies.data[i].hp     = RISEN_HERO_HP
+        gs.enemies.data[i].hp_max = RISEN_HERO_HP
+        gs.risen.walking = true
+        gs.risen.slot    = i
+        notify(gs, "The %d%s hero walks again", gs.grave.hero, ordinal_suffix(gs.grave.hero))
+        log_action(gs, "Risen hero walks, enemy slot %d", i)
+        return true
+    }
+    return false
+}
+
+// Called as enemy slot i leaves the pool, however it left: the kit lands
+// where the body stood.  Enemy slots are per level and the hero's is the surface.
+risen_hero_on_despawn :: proc(gs: ^Game_State, i: int, tile: [2]i32) {
+    if !gs.risen.walking || gs.level_index != LEVEL_SURFACE || i != gs.risen.slot do return
+    for s in gs.risen.kit {
+        if s.count > 0 do spawn_ground_item(&gs.world, tile, s.item, s.count)
+    }
+    gs.risen = {}
+    notify(gs, "The hero falls - what they carried is yours")
+    log_action(gs, "Risen hero falls at (%d,%d)", tile.x, tile.y)
 }
 
 grave_text :: proc(b: ^[GRAVE_TEXT]u8) -> string {

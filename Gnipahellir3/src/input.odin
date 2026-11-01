@@ -797,6 +797,9 @@ update_input :: proc(gs: ^Game_State) {
             case 14:
                 gs.debug.item_palette = !gs.debug.item_palette
                 gs.debug.menu_open    = false
+            case 15:
+                if !risen_hero_rise(gs) do notify(gs, "Debug: no kit to raise, or not on the Surface")
+                gs.debug.menu_open = false
             }
         }
 

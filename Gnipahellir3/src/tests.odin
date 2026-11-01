@@ -10706,11 +10706,20 @@ a_saved_run_keeps_its_stone_and_a_v24_save_still_loads :: proc(t: ^testing.T) {
         "Here fell the 3rd hero, to a Vargr, in Hell, after 1:01.")
     testing.expect_value(t, grave_count_item(back, .Sword), 1)
 
-    // A v24 file is this one cut short, with the old number.
+    // A v24 or v25 file is this one cut short, with the old number.
     bytes, err := os.read_entire_file_from_path(PATH, context.allocator)
     testing.expect(t, err == nil, "read")
     defer delete(bytes)
-    v := i32(24)
+    v := i32(25)
+    mem.copy(raw_data(bytes), &v, size_of(v))
+    testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V25_SIZE]) == nil, "wrote v25")
+    was := test_state()
+    defer free(was)
+    testing.expect(t, load_game_from(was, PATH), "v25 loads")
+    testing.expect(t, was.grave.active, "a v25 world keeps its stone")
+    testing.expect(t, !was.risen.has_kit, "a v25 world has no kit")
+
+    v = 24
     mem.copy(raw_data(bytes), &v, size_of(v))
     testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V24_SIZE]) == nil, "wrote v24")
     old := test_state()
@@ -10764,4 +10773,121 @@ tests_write_no_stats_file :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
     testing.expect(t, !save_stats(gs), "an unarmed state has no stats file")
+}
+
+// ─── The risen hero (board card 49) ───────────────────────────────────────────
+
+@(private="file")
+risen_ground_count :: proc(gs: ^Game_State, it: Item) -> (n: int) {
+    for i in 0 ..< GRID_W * GRID_H do if gs.world.items[i] == it do n += int(gs.world.item_counts[i])
+    return
+}
+
+@(private="file")
+risen_setup :: proc(gs: ^Game_State) {
+    gs.player.inventory = {}
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.player.inventory.slots[1] = {item = .Plank, count = 30}
+    gs.player.inventory.slots[2] = {item = .Rune_Scroll_A, count = 1}
+    gs.player.inventory.slots[3] = {item = .Hell_Key, count = 1}
+    gs.player.inventory.slots[4] = {item = .Scroll_Of_Waters, count = 1}
+    gs.player.equipment[.Head] = .Iron_Helm
+    grave_die(gs, "lava", 90)
+}
+
+@(test)
+the_risen_hero_carries_all_but_the_tithe_and_gives_it_back :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    grave_choose_tithe(gs, 1)  // one Plank stays at the grave
+    start_new_game(gs)
+    planks_in_world := risen_ground_count(gs, .Plank)
+    swords_in_world := risen_ground_count(gs, .Sword)
+    waters_in_world := risen_ground_count(gs, .Scroll_Of_Waters)  // the pond's own
+
+    testing.expect(t, gs.risen.has_kit, "the run holds the kit")
+    testing.expect(t, risen_hero_rise(gs), "the hero rises")
+    i := gs.risen.slot
+    testing.expect_value(t, gs.enemies.data[i].kind, Enemy_Kind.Undead)
+    testing.expect_value(t, gs.enemies.data[i].hp, RISEN_HERO_HP)
+    testing.expect(t, !risen_hero_rise(gs), "one body at a time")
+
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(i)})
+    process_events(gs)
+    process_events(gs)
+    testing.expect(t, !gs.enemies.active[i], "the body fell")
+    testing.expect(t, !gs.risen.has_kit, "the kit left the record")
+
+    testing.expect_value(t, risen_ground_count(gs, .Plank) - planks_in_world, 29)
+    testing.expect_value(t, grave_count_item(gs, .Plank), 1)  // the tithe, in its coffer
+    testing.expect_value(t, risen_ground_count(gs, .Sword) - swords_in_world, 1)
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+    testing.expect_value(t, risen_ground_count(gs, .Rune_Scroll_A), 0)
+    testing.expect_value(t, risen_ground_count(gs, .Hell_Key), 0)
+    testing.expect_value(t, risen_ground_count(gs, .Scroll_Of_Waters), waters_in_world)
+}
+
+@(test)
+a_tithe_of_a_single_item_leaves_no_ghost_stack_on_the_hero :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    grave_choose_tithe(gs, 0)  // the only Sword
+    start_new_game(gs)
+    for s in gs.risen.kit do testing.expect(t, s.item != .Sword, "the sword stayed at the grave")
+    testing.expect_value(t, grave_count_item(gs, .Sword), 1)
+}
+
+@(test)
+the_risen_hero_stays_on_the_surface_while_the_player_is_away :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    risen_hero_rise(gs)
+    i := gs.risen.slot
+
+    // Another level has its own pool: the same slot number there is not them.
+    gs.level_index = LEVEL_CAVE2
+    gs.enemies.active[i] = true
+    despawn_enemy(gs, i)
+    testing.expect(t, gs.risen.walking, "still on the surface, kit and all")
+    gs.level_index = LEVEL_SURFACE
+    gs.enemies.active[i] = true
+    despawn_enemy(gs, i)
+    testing.expect(t, !gs.risen.has_kit, "a despawn drops the kit too")
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+}
+
+@(test)
+a_saved_run_keeps_the_hero_and_the_kit :: proc(t: ^testing.T) {
+    PATH := "test_risen_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    risen_hero_rise(gs)
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "loads")
+    testing.expect(t, back.risen.walking, "still walking")
+    testing.expect_value(t, back.risen.kit, gs.risen.kit)
+    testing.expect_value(t, back.enemies.data[back.risen.slot].kind, Enemy_Kind.Undead)
+}
+
+@(test)
+a_v2_stats_file_migrates_and_keeps_the_grave :: proc(t: ^testing.T) {
+    PATH := "test_stats_v2.dat"
+    defer os.remove(PATH)
+    old := Persistent_Stats{version = 2, runs_played = 4, total_kills = 12}
+    old.grave = {active = true, hero = 4, tithe = .Sword}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)[:STATS_V2_SIZE]) == nil, "wrote")
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, PATH), "v2 loads")
+    testing.expect_value(t, stats.version, STATS_VERSION)
+    testing.expect_value(t, stats.total_kills, 12)
+    testing.expect_value(t, stats.grave.tithe, Item.Sword)
 }

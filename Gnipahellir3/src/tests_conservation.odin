@@ -79,6 +79,9 @@ fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     if v := gs.player.void_slot; v.item != .None && v.count > 0 {
         tot[v.item] += v.count
     }
+    for s in gs.risen.kit {
+        if s.item != .None && s.count > 0 do tot[s.item] += s.count
+    }
     tot[.None] = 0
     return tot
 }
@@ -120,8 +123,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [6]int
-    action_names := [6]string{"pickup", "drop", "mine", "place", "craft", "loot spawn"}
+    viol_by: [7]int
+    action_names := [7]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls"}
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -174,7 +177,7 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         placed_at:  [2]int
         placed_old: Tile_Type
 
-        action := fz_range(&rng, 0, 5)
+        action := fz_range(&rng, 0, 6)
         switch action {
         case 0:
             name = "pickup"
@@ -257,6 +260,20 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             allow_zero = false
             before = fuzz_ledger(gs)
             spawn_ground_item(&gs.world, {i32(px + fz_range(&rng, -2, 2)), i32(py + fz_range(&rng, -2, 2))}, it, n)
+
+        case 6:
+            // The risen hero falls: the kit leaves the record for the ground,
+            // and the ledger counts both, so the only allowed delta is nothing.
+            name = "risen hero falls"
+            id, got := enemy_alloc(&gs.enemies)
+            if !got do continue
+            gs.enemies.data[id].pos = {f32(px + fz_range(&rng, -2, 2)), f32(py + fz_range(&rng, -2, 2))}
+            gs.risen = {has_kit = true, walking = true, slot = id}
+            for i in 0 ..< fz_range(&rng, 1, RISEN_KIT) {
+                gs.risen.kit[i] = {fuzz_pool[fz_range(&rng, 0, len(fuzz_pool) - 1)], fz_range(&rng, 1, MAX_STACK)}
+            }
+            before = fuzz_ledger(gs)
+            despawn_enemy(gs, id)
         }
 
         process_events(gs)

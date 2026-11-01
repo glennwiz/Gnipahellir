@@ -29,6 +29,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	draw_golem_orders(gs)
 	draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
 	draw_enemies(&gs.enemies, gs.elapsed_time)
+	draw_risen_mark(gs)
 	draw_lasers(gs)
 	draw_golems(gs)
 	draw_projectiles(&gs.projectiles)
@@ -2352,6 +2353,15 @@ draw_enemies :: proc(es: ^Enemy_Store, t: f32) {
 		if !es.active[i] {continue}
 		draw_enemy(&es.data[i], t)
 	}
+}
+
+// The last hero wears a gold band, so they read as someone, not a draugr.
+draw_risen_mark :: proc(gs: ^Game_State) {
+	if !gs.risen.walking || gs.level_index != LEVEL_SURFACE do return
+	e := &gs.enemies.data[gs.risen.slot]
+	x := i32(e.pos.x * CELL_SIZE)
+	y := i32(e.pos.y * CELL_SIZE)
+	rl.DrawRectangle(x, y - 2, i32(BUILDER_W * CELL_SIZE), 2, rl.Color{235, 195, 60, 255})
 }
 
 draw_enemy :: proc(e: ^Enemy, t: f32) {

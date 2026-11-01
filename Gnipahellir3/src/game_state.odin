@@ -732,6 +732,7 @@ Persistent_Stats :: struct {
     deepest_cave: int,
     total_kills:  int,
     grave:        Grave_Record,  // the last hero, until a new world raises the stone (grave.odin)
+    kit:          [RISEN_KIT]Inventory_Slot,  // what they carried, until then too
 }
 
 // ─── Game State (fat struct) ──────────────────────────────────────────────────
@@ -785,6 +786,7 @@ Game_State :: struct {
     dimension:   Dimension_State,
     stats:       Persistent_Stats,
     grave:       Grave_Record,   // the stone in this world, if one stands; saved with the run
+    risen:       Risen_Hero,     // the last hero's kit in this world; saved with the run
 
     elapsed_time: f32,
     frame:        u64,

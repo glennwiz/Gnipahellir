@@ -874,7 +874,9 @@ spawn_builder :: proc(gs: ^Game_State, start_x: int) {
 // Clear the entity-map marker and release the pool slot.
 despawn_enemy :: proc(gs: ^Game_State, i: int) {
     if i < 0 || i >= MAX_ENEMIES || !gs.enemies.active[i] { return }
-    entity_map_clear(&gs.world, enemy_entity_id(i), builder_tile(&gs.enemies.data[i]))
+    tile := builder_tile(&gs.enemies.data[i])
+    risen_hero_on_despawn(gs, i, tile)
+    entity_map_clear(&gs.world, enemy_entity_id(i), tile)
     enemy_free(&gs.enemies, i)
 }
 

@@ -1089,7 +1089,7 @@ DBG_MENU_X :: 24
 DBG_MENU_Y :: 80
 DBG_MENU_W :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS :: 15 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor; 14:item palette
+DBG_MENU_ROWS :: 16 // 15:raise the last hero; 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor; 14:item palette
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -1214,6 +1214,14 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 		DBG_MENU_Y + 14 * DBG_MENU_ROW_H + 7,
 		10,
 		ip_col,
+	)
+
+	rl.DrawText(
+		"Raise the last hero >",
+		DBG_MENU_X,
+		DBG_MENU_Y + 15 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.YELLOW,
 	)
 
 	if r := debug_menu_row_at_cursor(gs); r >= 0 {
