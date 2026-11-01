@@ -265,6 +265,7 @@ agent_fight_flush :: proc(link: ^Agent_Link) {
 @(private="file")
 agent_record_act :: proc(link: ^Agent_Link, gs: ^Game_State) {
     if !link.recording do return
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     p := &gs.player
     line := fmt.tprintf(`{{"f":%d,"act":%s,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f,"lvl":%d,"enemies":%d}}` + "\n",
         gs.frame, string(link.act_line[:link.act_len]), p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index, gs.enemies.count)
@@ -274,6 +275,7 @@ agent_record_act :: proc(link: ^Agent_Link, gs: ^Game_State) {
 @(private="file")
 agent_record_mark :: proc(link: ^Agent_Link, gs: ^Game_State, mark: string) {
     if !link.recording do return
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"mark":"%s"}}` + "\n", gs.frame, mark))
 }
 

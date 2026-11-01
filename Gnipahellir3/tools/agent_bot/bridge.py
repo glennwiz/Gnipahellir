@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Holds the one game connection; serves local clients over a unix socket, one line in, one line out.
+# Holds the one game connection; serves local clients over local TCP on 7778, one line in, one line out.
 import socket, socketserver, threading, os, sys, time
 HERE=os.path.dirname(os.path.abspath(__file__)); PORT=7778
 for _ in range(120):
