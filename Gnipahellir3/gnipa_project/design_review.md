@@ -287,3 +287,15 @@ exists and the Seal is behind lava. (a) still no; (b) yes, as a tool (I7);
 and four of the five 512-stall fixes landed; Glenn reported no stutter at 512 (context.md). (a) revert to 64; (b) 256 with a
 frame-time test; (c) keep 1024. *Recommend (b):* the sky swarm needs more
 than 64, and 1024 has only ever had a load test, not a frame-time one.
+
+---
+
+## 6. Glenn's decisions (2026-11-01)
+
+- **Q1 permadeath:** tithe. The F3 rewind is debug only, and one chosen item carries to a grave stone.
+- **Q2 new world:** fresh by default, with a seed field and "Yesterday's world".
+- **Q3 ending:** Seal ceremony now, Hel boss later.
+- **Q4 quench:** yes, the placed stone option. The exact rule is settled before card 22 starts.
+- **Q5 enemy cap:** 256 with a frame-time test.
+- **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
+- **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
