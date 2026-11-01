@@ -3,15 +3,19 @@ from start import newgame,p1
 import sys
 ph=sys.argv[1:] or ['1','2','3','4','5']
 def p2(b):
-    b.harvest({'Stone':16},(85,55,110,68),maxsec=30); b.st()
-    assert b.goto(99,53,maxrepl=12); b.st()
+    if b.count('Stone_Block')<14: b.quarry(16,d=1 if not b.solid(b.pos()[0]+1,b.pos()[1]) or b.pos()[0]<150 else -1); b.st()
+    for _ in range(6):
+        if b.pos()[1]<=53: break
+        b.a(1,jump=True,move='right'); b.a(26,move='right'); b.waitland()
+    assert b.pos()[1]<=53
     trees=[x for x in range(W) if (b.m[53][x]=='Wood' or b.m[52][x]=='Wood') and 99<x<170]; fl=[x for x in range(W) if b.m[53][x]=='Flower' and 99<x<170]
     for x in trees:
         for f in [q for q in fl if b.pos()[0]<q<x]: b.walkj(f,limit=40)
         b.chop(x,x-2)
     b.st()
     assert b.goto(147,92,maxrepl=30,near=3); b.st()
-    b.harvest({'Iron_Ore':10,'Silver_Ore':14,'Stone':55},(100,70,175,104),maxsec=150); b.st()
+    b.harvest({'Iron_Ore':10,'Silver_Ore':14},(100,70,175,104),maxsec=200); b.st()
+    b.quarry(55,d=1 if b.pos()[0]<140 else -1); b.quarry(55,d=-1 if b.pos()[0]<140 else 1); b.st()
     assert b.goto(145,94,maxrepl=30); b.st(); assert b.pos()==(145,94)
     b.waitland(); b.sel('Stone_Block')
     for x in [146,147,148,149,144,143,142,141,140,139,138]:
@@ -82,8 +86,9 @@ def p5(b):
     assert b.goto(12,104,maxrepl=40); b.st()
     b.a(3,use=[12,101]); b.a(3,take=5); b.a(2); b.st(); assert b.count('Rune_Scroll_B')==1
     log('PHASE scroll B',b.r['frame'])
-if '1' in ph: newgame(); 
-if '1' in ph: p1()
-b=B(); b.st()
-for n,f in (('2',p2),('3',p3),('4',p4),('5',p5)):
-    if n in ph: f(b)
+if __name__=='__main__':
+    if '1' in ph: newgame(); 
+    if '1' in ph: p1()
+    b=B(); b.st()
+    for n,f in (('2',p2),('3',p3),('4',p4),('5',p5)):
+        if n in ph: f(b)

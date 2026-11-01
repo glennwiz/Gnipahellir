@@ -20,6 +20,9 @@ class B:
         for j,row in enumerate(v['rows']):
             for i,c in enumerate(row):
                 s.m[v['y']+j][v['x']+i]=L[c]
+        if 'solid' in v:  # the game says which legend chars block: trust it over tiles.py
+            for c,name in L.items():
+                (SOLID.add if c in v['solid'] else SOLID.discard)(name)
         s.items_view=r['items']
         if r['screen']=='dead' and not getattr(s,'allowdead',False): raise Dead()
     def scan(s):
@@ -47,6 +50,7 @@ class B:
         return s.r
     def inhaz(s):
         p=s.p
+        if s.r.get('in_tile') in HAZ: return True
         return any(s.t(x,y) in HAZ for x in {int(p['x']),int(p['x']+.79)} for y in {int(p['y']),int(p['y']+.9),int(p['y']+1.79)})
     def flee(s):
         s.noguard=True; log('FLEE',s.p,s.pos())
@@ -73,7 +77,8 @@ class B:
         if r['screen']!='play':
             s.noguard=True; s.a(2,dismiss=True); s.noguard=False; return
         p=s.p
-        if s.inhaz(): s.flee()
+        hp0=getattr(s,'lasthp',p['hp']); s.lasthp=p['hp']
+        if s.inhaz() or (p['hp']<hp0 and s.nearhaz(*s.pos(),r=2)): s.flee()
         p=s.p
         if p['hp']<=5 and s.slot('Potion_Health') is not None:
             log('drink',p['hp']); s.noguard=True; s.a(2,equip=s.slot('Potion_Health')); s.noguard=False
@@ -126,14 +131,13 @@ class B:
         for _ in range(tries):
             if not s.solid(x,y): return True
             if s.t(x,y) not in MINE: return False
-            if not s.reach(x,y) and not (s.slot('Mine_Wand') is not None and s.p['mana']>=45 and s.cheb(x,y)<=3): 
-                log('noreach',(x,y),'from',s.p['x'],s.p['y']); return False
-            mw=None
-            if s.slot('Mine_Wand') is not None and s.p['mana']>=45 and s.cheb(x,y)<=3:
-                s.sel('Mine_Wand'); s.a(16,mine=[x,y])
-            else:
+            wand=s.slot('Mine_Wand') is not None and s.cheb(x,y)<=3
+            if s.reach(x,y) and not (wand and s.p['mana']>=45):
                 if not s.sel('Pickaxe'): s.a(1,select=-1)
-                s.a(17,mine=[x,y])
+                s.a(17,mine=[x,y]); continue
+            if not wand: log('noreach',(x,y),'from',s.p['x'],s.p['y']); return False
+            if s.p['mana']<6: s.a(30); continue   # out of pick reach: wait for mana, never chip what is under the cursor's nearest
+            s.sel('Mine_Wand'); s.a(16,mine=[x,y])
         return not s.solid(x,y)
     def reach(s,x,y):
         p=s.p; col=int(p['x']+.4); top=int(p['y']); bot=int(p['y']+1.799)
@@ -198,7 +202,7 @@ class B:
                 out.append((1.5+a+b+c,nx,y-1,'up'))
         if blocks:
             a=s.cost(x,y-2,digok); b=s.cost(x,y-3,digok)
-            if a is not None and b is not None:
+            if a is not None and b is not None and s.t(x,y) in('Air','Void'):  # a mushroom cell refuses the block
                 out.append((2.6+a+b,x,y-1,'Pillar'))
         if s.solid(x,y+1):
             a=s.cost(x,y+1,digok)
@@ -289,11 +293,14 @@ class B:
             if not s.dig(x,y+1): return False
             s.walkx(x,limit=10); s.waitland(); return True
     def goto(s,tx,ty,digok=True,blocks=True,near=0,maxrepl=25):
+        fails={}
         for _ in range(maxrepl):
             if abs(s.pos()[0]-tx)<=near and abs(s.pos()[1]-ty)<=near: return True
             pth=s.path(tx,ty,digok,blocks,near)
             if pth is None:
                 log('nopath',s.pos(),(tx,ty)); return False
+            key=(s.pos(),pth[0][0],pth[0][1]); fails[key]=fails.get(key,0)+1
+            if fails[key]>2: log('same step failed',key); return False
             ok=True
             log('plan',s.pos(),'->',(tx,ty),len(pth),''.join(m[0] for _,m,_ in pth)[:90],'blocks',sum(m in('bridge','Pillar') for _,m,_ in pth),'have',s.count('Stone_Block'))
             i=0
@@ -331,7 +338,7 @@ class B:
     def st(s): log('frame',s.r['frame'],'L',s.r['level'],'pos',s.pos(),'hp',s.p['hp'],'mana',s.p['mana'],s.inv(),'en',[(e['kind'],int(e['x']),int(e['y'])) for e in s.r['enemies']])
     def harvest(s,want,box,maxsec=240):
         """want: {tile:targetcount}"""
-        t0=time.time(); drop={'Cloud':'Cloud_Stone','Cloud_Ore':'Cloud_Stone','Stone':'Stone_Block'}
+        t0=time.time(); drop={'Cloud':'Cloud_Stone','Cloud_Ore':'Cloud_Stone','Stone':'Stone_Block','Jade_Ore':'Jade','Emerald_Ore':'Emerald','Diamond_Ore':'Diamond'}
         bad=set()
         while time.time()-t0<maxsec:
             names=[n for n,c in want.items() if s.count(drop.get(n,n))<c]
@@ -339,7 +346,7 @@ class B:
             x0,y0,x1,y1=box; px,py=s.pos(); c=[]
             for y in range(y0,y1+1):
                 for x in range(x0,x1+1):
-                    if s.m[y][x] in names and (x,y) not in bad and not s.nearhaz(x,y) and not (136<=x<=151 and 92<=y<=97):
+                    if s.m[y][x] in names and (x,y) not in bad and not s.nearhaz(x,y,2) and not (136<=x<=151 and 92<=y<=97):
                         c.append((max(abs(x-px),abs(y-py))+abs(y-py),x,y))
             if not c: log('no ore',names); return False
             c.sort(); _,x,y=c[0]
@@ -375,8 +382,13 @@ class B:
             elif dx>.15: k['move']='right'
             if dy<-.15: k['jump']=True
             elif dy>.15: k['down']=True
-            ox,oy=s.p['x'],s.p['y']
+            ox,oy,hp0=s.p['x'],s.p['y'],s.p['hp']
             s.a(f,**k)
+            # run 3 died here: a conjured wall stopped the flight and this loop kept
+            # pushing in rising lava with noguard on, ring and potion unused
+            if s.r.get('in_tile') in HAZ or s.p['hp']<hp0:
+                if s.warpout('fly hurt at %s'%(s.pos(),)): return False
+                if s.r.get('in_tile') in HAZ: s.flee(); return False
             if abs(s.p['x']-ox)+abs(s.p['y']-oy)<.01:
                 stuck=getattr(s,'_st',0)+1; s._st=stuck
                 if stuck>4: s._st=0; return False
@@ -386,6 +398,11 @@ class B:
                 if fx>.21 and fx<.6: s.a(1,move='left')
                 elif fx>=.6: s.a(1,move='right')
         return False
+    def flyall(s,w):
+        """fly a waypoint list; stop at the first leg that fails"""
+        for x,y in w[1:]:
+            if not s.fly(x,y): return False
+        return True
     def bless(s):
         """walk to swirl; returns frame"""
         s.goto(92,77); s.a(3); s.flightf=s.r['frame']; log('blessed at',s.r['frame'],s.pos()); return s.flightf
@@ -624,3 +641,142 @@ class B:
             j=min(i+6,len(out)-1)
             s.fly(*out[j]); i=j
         log('at',s.pos(),'t',s.ftime()); return True
+    def skyfarm(s,want,x0=100,x1=112):
+        """stone bridge along row 80, shoot the cloud roof above it, then jump straight
+        up under each floating drop.  Never leaves the bridge, so it cannot fall off."""
+        for x in range(x0,x1+1):
+            if s.count('Cloud_Stone')>=want: break
+            if not s.solid(x+1,80): s.placeblock(x+1,80)
+            for y in (79,78):
+                if s.solid(x+1,y): s.dig(x+1,y,tries=8)
+            s.walkx(x+1,limit=8)
+            if s.pos()[0]!=x+1: log('skyfarm stuck',x,s.p); break
+            c=[(s.cheb(q,y),q,y) for y in range(73,80) for q in range(x-2,x+5) if s.t(q,y) in('Cloud','Cloud_Ore') and s.cheb(q,y)<=3]
+            for _,q,y in sorted(c):
+                if s.p['mana']<6: s.a(60)
+                s.sel('Mine_Wand'); s.a(16,mine=[q,y])
+            s.pickup(x0,x+1)
+        return s.count('Cloud_Stone')>=want
+    def pickup(s,x0,x1,names=('Cloud_Stone','Wood_Log')):
+        for _ in range(12):
+            its=[i for i in s.r['items'] if i['item'] in names and x0<=i['x']<=x1 and 72<=i['y']<=79]
+            if not its: return
+            it=min(its,key=lambda i:abs(i['x']-s.p['x'])); n=s.count(it['item'])
+            s.walkx(it['x'],limit=12); s.a(1,jump=True); s.a(28); s.waitland(); s.a(2)
+            if s.count(it['item'])<=n: log('pickup miss',it,s.p['x']); return
+    def hoverchop(s,gx):
+        """cut the tree on grower gx from the side, in flight; drops float, so sweep them up"""
+        ys=[y for y in range(70,79) if s.t(gx,y) in('Wood','Leaves')]
+        if not ys: return 0
+        top=min(y for y in ys if s.t(gx,y)=='Wood') if any(s.t(gx,y)=='Wood' for y in ys) else 78
+        s.flyto(gx+1,top-1,tmax=19.5) 
+        for y in range(top,79):
+            if s.t(gx,y)=='Wood':
+                s.fly(gx+1,y-1); s.sel('Pickaxe'); s.dig(gx,y,tries=8)
+        return 1
+    def sweep_items(s,names=('Wood_Log',),x0=86,x1=112,y0=70,y1=80):
+        for _ in range(14):
+            its=[i for i in s.r['items'] if i['item'] in names and x0<=i['x']<=x1 and y0<=i['y']<=y1]
+            if not its or s.ftime()>17: return
+            it=min(its,key=lambda i:abs(i['x']-s.p['x'])+abs(i['y']-s.p['y'])); n=s.count(it['item'])
+            s.flyto(it['x'],it['y'],tmax=18)
+            s.a(3)
+            if s.count(it['item'])<=n:
+                s.flyto(it['x'],it['y']-1,tmax=18); s.a(3)
+                if s.count(it['item'])<=n: log('sweep miss',it); return
+    # ---- Garm: orbs fly 48 tiles, his fireball reaches 12, the ring warps out of anything
+    def garm(s): return next((e for e in s.r['enemies'] if e['kind']=='Garm'),None)
+    def airline(s,tx,ty):
+        """8-way free-air path as turning points; None if out of air"""
+        from collections import deque
+        px,py=int(s.p['x']+.4),int(s.p['y']+.2)
+        def ok(x,y): return 1<=x<W-1 and 1<=y<H-2 and not s.solid(x,y) and not s.solid(x,y+1) and s.t(x,y) not in HAZ and s.t(x,y+1) not in HAZ
+        q=deque([(px,py)]); par={(px,py):None}
+        while q:
+            c=q.popleft()
+            if c==(tx,ty):
+                out=[]
+                while c: out.append(c); c=par[c]
+                out=out[::-1]
+                return [out[i] for i in range(len(out)) if i in(0,len(out)-1) or (out[i+1][0]-out[i][0],out[i+1][1]-out[i][1])!=(out[i][0]-out[i-1][0],out[i][1]-out[i-1][1])]
+            for dx,dy in((1,1),(-1,1),(1,-1),(-1,-1),(0,1),(1,0),(-1,0),(0,-1)):
+                n=(c[0]+dx,c[1]+dy)
+                if n in par or not ok(*n): continue
+                if dx and dy and not(ok(c[0]+dx,c[1]) and ok(c[0],c[1]+dy)): continue
+                par[n]=c; q.append(n)
+        return None
+    def warpout(s,why):
+        # a worn ring leaves the inventory and is not in state: try, a refusal has no player
+        log('WARP',why,s.p,s.r['frame']); r=s.g.act(3,warp=True)
+        if 'player' not in r: log('no warp',r); return None
+        s.ingest(r); s.a(2); s.scan(); log('now L',s.level,s.pos()); return 'warp'
+    def garmloop(s,maxf=3000,nolos_stop=240,closeat=3.6):
+        s.noguard=True; f0=s.r['frame']; nolos=0; last=None; hurt=0
+        if s.r['inventory'][s.r['selected']]['item']!='Fire_Wand' if False else True: s.sel('Fire_Wand')
+        while s.r['frame']-f0<maxf:
+            q=s.p; s.ingest(s.g.st(max(0,int(q['x'])-60),max(0,int(q['y'])-35),121,71))  # enemies are listed only inside the view
+            g=s.garm(); p=s.p
+            if g is None:
+                log('NO GARM',s.r['notes'][-3:]); return 'gone'
+            if p['dead'] or s.r['screen']=='dead': return 'dead'
+            cx,cy=p['x']+.4,p['y']+.9; gx,gy=g['x']+.8,g['y']+.9
+            d=((gx-cx)**2+(gy-cy)**2)**.5
+            cheb=max(abs(gx-cx),abs(gy-cy))
+            if s.r.get('in_tile') in HAZ: return s.warpout('hazard')
+            if p['hp']<=6:  # a bite is 6, a fireball 5
+                if s.slot('Potion_Health') is not None: s.a(2,equip=s.slot('Potion_Health')); log('drink',s.p['hp'],s.count('Potion_Health')); continue
+                return s.warpout('hp')
+            if cheb<=closeat: return s.warpout('close')
+            vx=0 if last is None else (gx-last)/6.0  # tiles per frame over the last step
+            last=gx
+            t=d/16; ax=gx+vx*60*t; ay=gy
+            lo=s.los(cx,cy,ax,ay)
+            if lo and p['mana']>=4:
+                nolos=0; s.a(6,mine=[int(ax),int(ay)])
+            else:
+                nolos+=6; s.a(6)
+                if nolos>=nolos_stop: log('no shot for',nolos,'frames',g,p); return 'nolos'
+            if (s.r['frame']-f0)%60<6: log('t',s.r['frame']-f0,'G',g['x'],g['y'],g['hp'],'P',round(p['x'],1),round(p['y'],1),p['hp'],'m',round(p['mana']),'d',round(d,1),'los',lo,s.r['notes'][-1:])
+        return 'time'
+    def strafe(s,y=87,minflight=0.7,span=7):
+        """hover on row y and sweep past him, firing down: out of fireball range, and moving
+        out of each cage before it closes.  Warp before the blessing runs out."""
+        s.noguard=True; s.sel('Fire_Wand'); d=1
+        while s.r['flight_s']>minflight:
+            q=s.p; s.ingest(s.g.st(max(0,int(q['x'])-40),max(0,int(q['y'])-25),81,51))
+            g=s.garm(); p=s.p
+            if g is None: log('NO GARM',s.r['notes'][-3:]); return 'gone'
+            cx,cy=p['x']+.4,p['y']+.9; gx,gy=g['x']+.8,g['y']+.9
+            if p['hp']<=6 and s.slot('Potion_Health') is not None: s.a(2,equip=s.slot('Potion_Health')); continue
+            if p['hp']<=5: return s.warpout('hp')
+            if gx-cx>span: d=1
+            elif cx-gx>span: d=-1
+            lo=s.los(cx,cy,gx,gy); k={'move':'right' if d>0 else 'left'}
+            if p['mana']>=4: k['mine']=[int(gx),int(gy)]
+            ox=p['x']; s.a(6,**k)
+            if abs(s.p['x']-ox)<.05: d=-d
+            if (s.r['frame']%30)<6: log('G',g['x'],g['y'],g['hp'],'P',round(p['x'],1),round(p['y'],1),p['hp'],'m',round(p['mana']),'fl',s.r['flight_s'],'los',lo)
+        g=s.garm(); log('flight low',g); return s.warpout('flight low')
+    def vstrafe(s,yhi=74,ylo=88,minflight=0.6):
+        """climb and dive on the column with a clear line to him: a cage closes round a
+        hovering player in under a second, and one that is left is abandoned."""
+        s.noguard=True; s.sel('Fire_Wand'); up=False
+        while s.r['flight_s']>minflight:
+            q=s.p; s.ingest(s.g.st(max(0,int(q['x'])-40),max(0,int(q['y'])-30),81,61))
+            g=s.garm(); p=s.p
+            if g is None: log('NO GARM',s.r['notes'][-3:]); return 'gone'
+            cx,cy=p['x']+.4,p['y']+.9; gx,gy=g['x']+.8,g['y']+.9
+            if p['hp']<=6 and s.slot('Potion_Health') is not None: s.a(2,equip=s.slot('Potion_Health')); continue
+            if p['hp']<=5: return s.warpout('hp')
+            if p['y']<=yhi+.5: up=False
+            elif p['y']>=ylo-.5: up=True
+            best=min(range(int(gx)-5,int(gx)+6),key=lambda x:(not s.los(x+.5,cy,gx,gy),abs(x+.5-cx)))
+            k={'jump':True} if up else {'down':True}
+            if best+.5-cx>.3: k['move']='right'
+            elif best+.5-cx<-.3: k['move']='left'
+            lo=s.los(cx,cy,gx,gy)
+            if p['mana']>=4: k['mine']=[int(gx),int(gy)]
+            ox=p['y']; s.a(6,**k)
+            if abs(s.p['y']-ox)<.05: up=not up
+            if (s.r['frame']%30)<6: log('G',g['x'],g['y'],g['hp'],'P',round(p['x'],1),round(p['y'],1),p['hp'],'m',round(p['mana']),'fl',s.r['flight_s'],'los',lo)
+        log('flight low',s.garm()); return s.warpout('flight low')
