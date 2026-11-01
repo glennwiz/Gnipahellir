@@ -10942,3 +10942,51 @@ a_hero_killed_mid_ceremony_does_not_win :: proc(t: ^testing.T) {
     testing.expect(t, !gs.ritual.active, "the ceremony ended")
     testing.expect(t, !gs.ui.show_book, "no saga for the dead")
 }
+
+// ─── Grave stone rework (board card 42) ───────────────────────────────────────
+
+@(test)
+the_stone_gives_way_to_what_stands_near_it :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 1}
+    grave_raise(gs)
+    x := int(gs.grave.tile.x)
+    y := int(gs.grave.tile.y)
+    set_tile(&gs.world, x + 3, y, .Sky_Altar)
+    gs.progression.sky_altar_pos = {i32(x + 3), i32(y)}
+    gs.player.pos = {f32(x + 2), f32(y) - PLAYER_H + 1}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SKY)
+}
+
+@(test)
+an_enemy_cannot_dig_the_tithe_away :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    gs.player.inventory = {}
+    coffer := [2]i32{gs.grave.tile.x + 1, gs.grave.tile.y}
+
+    smash_tile(gs, int(coffer.x), int(coffer.y))
+    testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
+
+    // Reach it the way the player does: E, then take from the open window.
+    gs.player.pos = {f32(coffer.x) + 2, f32(coffer.y) - PLAYER_H + 1}
+    player_interact(gs)
+    process_events(gs)
+    testing.expect(t, gs.ui.show_barrel, "the coffer opens")
+    barrel_take(gs, barrel_at(gs, LEVEL_SURFACE, gs.ui.barrel_tile), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Sword), 1)
+
+    // Empty, it is ordinary furniture again, and no record outlives it.
+    smash_tile(gs, int(coffer.x), int(coffer.y))
+    testing.expect(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)) != .Rune_Coffer, "it falls")
+    testing.expect(t, barrel_at(gs, LEVEL_SURFACE, coffer) == nil, "no orphan record")
+}
+
+@(test)
+tithe_choose_is_appended_to_the_event_enum :: proc(t: ^testing.T) {
+    testing.expect_value(t, int(max(Event_Type)), int(Event_Type.Tithe_Choose))
+}

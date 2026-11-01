@@ -543,7 +543,6 @@ Event_Type :: enum u8 {
 	Structure_Interact, // tile = exact player-built equipment clicked
 	Structure_Reclaim, // tile = equipment whose deliberate hold completed
 	Void_Store, // int_val = bag slot; replaces (deletes) the prior void stack
-	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
 	Void_Take, // tile.x = target bag slot; recovers the current void stack
 	// Clay-golem commands (appended so existing event values stay stable)
 	Golem_Load, // int_val = bag slot containing a crafted Clay_Golem
@@ -565,6 +564,8 @@ Event_Type :: enum u8 {
 	Golem_Pickup, // int_val = golem slot; recall in reach, else come-then-recall
 	// (appended so existing event values stay stable)
 	Mushroom_Grew, // tile = the sprouted mushroom; sound + spore glow burst
+	// The death screen (appended so existing event values stay stable)
+	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
 }
 
 Event_Payload :: struct #raw_union {

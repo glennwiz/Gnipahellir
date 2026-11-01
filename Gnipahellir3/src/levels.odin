@@ -178,8 +178,6 @@ player_interact :: proc(gs: ^Game_State) {
     // permanent progression finds, not mineable storage furniture.
     if open_nearby_rune_scroll_chest(gs, cx, cy) do return
 
-    if grave_interact(gs, cx, cy) do return
-
     // Standing in a dimension's return gate: step back home.
     if gs.level_index == LEVEL_DIMENSION && get_tile(&gs.world, cx, cy) == .Dimension_Gate {
         dimension_exit(gs)
@@ -280,6 +278,10 @@ player_interact :: proc(gs: ^Game_State) {
             }
         }
     }
+
+    // Last: the grave takes only an E nothing else claimed, because it stands
+    // near home, where players build.
+    grave_interact(gs, cx, cy)
 }
 
 // ─── Sky Structure Ritual ─────────────────────────────────────────────────────

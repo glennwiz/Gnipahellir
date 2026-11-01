@@ -240,15 +240,14 @@ grave_inscription :: proc(g: ^Grave_Record, buf: []u8) -> string {
 }
 
 // E beside the stone reads it and opens the coffer that stands with it.
-grave_interact :: proc(gs: ^Game_State, cx, cy: int) -> bool {
-    if !gs.grave.active || gs.level_index != LEVEL_SURFACE do return false
+grave_interact :: proc(gs: ^Game_State, cx, cy: int) {
+    if !gs.grave.active || gs.level_index != LEVEL_SURFACE do return
     t := gs.grave.tile
-    if abs(int(t.x) - cx) > BENCH_RANGE || abs(int(t.y) - cy) > BENCH_RANGE do return false
+    if abs(int(t.x) - cx) > BENCH_RANGE || abs(int(t.y) - cy) > BENCH_RANGE do return
     buf: [128]u8
     notify(gs, "%s", grave_inscription(&gs.grave, buf[:]))
     coffer := [2]i32{t.x + 1, t.y}
     if get_tile(&gs.world, int(coffer.x), int(coffer.y)) == .Rune_Coffer {
         eq_push(&gs.events, Event{type = .Barrel_Interact, tile = coffer})
     }
-    return true
 }

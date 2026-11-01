@@ -263,6 +263,11 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) {
             s^ = {}
         }
     }
+    // Nor is a loaded chest: its record would outlive the tile, out of reach.
+    if old == .Barrel || old == .Rune_Coffer || is_rune_scroll_chest(old) {
+        if wave_target_refused(gs, {i32(x), i32(y)}) do return
+        barrel_on_mined(gs, {i32(x), i32(y)})
+    }
     set_tile(&gs.world, x, y, .Void)
     if .Placeable in terrain_table[old].flags {
         if drop := terrain_table[old].drop_item; drop != .None {
