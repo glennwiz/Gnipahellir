@@ -467,6 +467,8 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 //  If the found path exceeds MAX_NAV_PATH, the prefix nearest the start is
 //  kept — the builder walks it and replans from there.
 
+PLAN_CARVE_LOOKBACK :: 5   // steps back a climb checks its support against the plan
+
 astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1, allow_mining := true, complete: ^bool = nil, protect_placed := false) -> bool {
     w := &gs.world
     out^ = {}
@@ -499,6 +501,26 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         g:       f32,
         parent:  i16,   // index into nodes[], -1 = start
         bridges: u8,    // bridge moves on the path to this node
+    }
+
+    // Does the plan so far carve (x,y)?  A rise mines its landing, its own
+    // headroom and the landing's headroom, so a later climb that needs that
+    // tile as support contradicts its own plan: the builder carves it, then
+    // bridges it back, on every commute.  flip_after_rise only sees one step
+    // back; a walk between the two climbs hid the rest.
+    plan_carves :: proc(nodes: []A_Node, from: int, x, y: int) -> bool {
+        T := [2]i32{i32(x), i32(y)}
+        c := from
+        for _ in 0 ..< PLAN_CARVE_LOOKBACK {
+            pi := int(nodes[c].parent)
+            if pi < 0 { return false }
+            a, b := nodes[pi].pos, nodes[c].pos
+            if b.y == a.y - 1 && b.x != a.x {
+                if T == b || T == {a.x, a.y - 1} || T == {b.x, b.y - 1} { return true }
+            }
+            c = pi
+        }
+        return false
     }
 
     A_Trans :: struct {
@@ -699,7 +721,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                         flip_after_rise = pdy == -1 && pdx != 0 && int(pdx) != d
                         if pdx != 0 && int(pdx) != d { cost += COST_MINE * 2 }
                     }
-                    if !flip_after_rise {
+                    // Garm conjures his stone, so the laying back costs him nothing.
+                    self_undone := bridge_budget < MAX_NAV_PATH && plan_carves(nodes[:], int(cur_idx), nx, y)
+                    if !flip_after_rise && !self_undone {
                         push_trans(&trans, &nt, i32(nx), i32(y-1), cost)
                     }
                 }
