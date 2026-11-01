@@ -1905,7 +1905,8 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 			copy(buf[:WRAP], s[:n])
 			rl.DrawText(cstring(raw_data(buf[:])), x, y^, 11, col)
 			y^ += LINE
-			s = s[min(n + 1, len(s)):]
+			s = s[n:]
+			if len(s) > 0 && s[0] == ' ' do s = s[1:]
 		}
 	}
 

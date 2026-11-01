@@ -559,6 +559,35 @@ agent_text_is_cut_to_fit_and_cleaned :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_a_long_goal_sent_again_is_the_same_goal :: proc(t: ^testing.T) {
+    panel: Agent_Panel
+    long := strings.repeat("x", AGENT_TEXT_MAX + 50, context.temp_allocator)
+    tabbed := "dig\tdown"
+    for _ in 0 ..< 3 do agent_set_objective(&panel, long, "step", true, true, false)
+    testing.expect_value(t, panel.count, 0)
+    testing.expect_value(t, panel.step.len, 4)
+
+    agent_set_objective(&panel, tabbed, "", true, false, false)
+    agent_set_objective(&panel, tabbed, "kept", true, true, false)
+    agent_set_objective(&panel, tabbed, "", true, false, false)
+    testing.expect_value(t, panel.count, 1)
+    testing.expect_value(t, panel.step.len, 4)
+}
+
+@(test)
+agent_records_strict_json_whatever_it_was_sent :: proc(t: ^testing.T) {
+    context.allocator = context.temp_allocator
+    for line in ([?]string{"{cmd:'act',move:'left'}", "{\"cmd\":\"objective\",\"goal\":\"a\tb\"}"}) {
+        value, err := json.parse_string(line)
+        testing.expect_value(t, err, json.Error.None)
+        recorded := agent_canonical(value)
+        _, strict := json.parse_string(recorded, .JSON)
+        testing.expect_value(t, strict, json.Error.None)
+        testing.expect(t, !strings.contains_rune(recorded, '\t'), recorded)
+    }
+}
+
+@(test)
 agent_panel_goes_when_the_client_does :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)

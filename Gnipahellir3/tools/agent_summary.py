@@ -58,7 +58,11 @@ if os.path.exists(path):
     print("\n== acts ==")
     acts = [json.loads(l) for l in open(path)]
     played = [a for a in acts if "act" in a]
-    goals = [a for a in acts if "goal" in a.get("objective", {})]
+    goals = []
+    for a in acts:
+        goal = a.get("objective", {}).get("goal")
+        if goal and (not goals or goals[-1]["objective"]["goal"] != goal):
+            goals.append(a)
     if goals:
         print("objectives:")
         for a, b in zip(goals, goals[1:] + [None]):

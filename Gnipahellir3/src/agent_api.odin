@@ -161,6 +161,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
             link.connected = true
             link.realtime  = false
             link.in_len    = 0
+            link.panel     = {}
             if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
         }
     }
@@ -342,9 +343,14 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         }
         link.cmd         = c
         link.first       = true
+        canonical := agent_canonical(value)
+        if len(canonical) > len(link.act_line) {
+            agent_reply_error(link, "act too long to record")
+            return
+        }
         link.frames_left = frames
         link.out_len     = 0
-        link.act_len     = copy(link.act_line[:], line)
+        link.act_len     = copy(link.act_line[:], canonical)
     case "realtime":
         on, ok := root["on"].(json.Boolean)
         if !ok {
@@ -363,11 +369,19 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         }
         result, _ := root["result"].(json.String)
         agent_set_objective(&link.panel, goal, step, has_goal, has_step, result == "failed")
-        agent_record_objective(link, gs, line)
+        agent_record_objective(link, gs, agent_canonical(value))
         agent_reply_text(link, `{"ok":true}`)
     case:
         agent_reply_error(link, "unknown cmd: use state, act, realtime or objective")
     }
+}
+
+// The request as strict JSON.  The parser takes JSON5 and raw tabs, which the
+// tools reading acts.jsonl do not, so what is recorded is re-encoded, not the
+// line as sent.
+agent_canonical :: proc(value: json.Value) -> string {
+    data, err := json.marshal(value)
+    return string(data) if err == nil else "{}"
 }
 
 @(private="file")
@@ -378,13 +392,17 @@ agent_text_set :: proc(t: ^Agent_Text, s: string) {
 }
 
 agent_set_objective :: proc(p: ^Agent_Panel, goal, step: string, has_goal, has_step, failed: bool) {
-    if has_goal && goal != string(p.goal.buf[:p.goal.len]) {
+    // Compared as stored: the text is cut and cleaned, so a goal sent again with
+    // a new step is the same goal however long it is.
+    next: Agent_Text
+    agent_text_set(&next, goal)
+    if has_goal && string(next.buf[:next.len]) != string(p.goal.buf[:p.goal.len]) {
         if p.goal.len > 0 {
             copy(p.past[1:], p.past[:AGENT_LOG_MAX - 1])
             p.past[0]  = {text = p.goal, failed = failed}
             p.count    = min(p.count + 1, AGENT_LOG_MAX)
         }
-        agent_text_set(&p.goal, goal)
+        p.goal = next
         p.step = {}
     }
     if has_step do agent_text_set(&p.step, step)
