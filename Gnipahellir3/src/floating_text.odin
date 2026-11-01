@@ -23,12 +23,12 @@ HEAL_COLOR :: rl.Color{90, 220, 90, 255}
 ENEMY_HIT_COLOR :: rl.Color{255, 210, 90, 255}
 
 // Pop a number off a world position (tile coords).  Full store = silently
-// dropped, like a lost particle.
-spawn_damage_number :: proc(store: ^Floating_Text_Store, pos: [2]f32, value: int, color: rl.Color) {
+// dropped, like a lost particle.  `label` must outlive the text (a static string).
+spawn_damage_number :: proc(store: ^Floating_Text_Store, pos: [2]f32, value: int, color: rl.Color, label := "") {
     for i in 0 ..< MAX_FLOATING_TEXT {
         ft := &store.data[i]
         if ft.active { continue }
-        ft^ = {pos = pos, value = value, color = color, lifetime = FLOAT_TEXT_LIFETIME, active = true}
+        ft^ = {pos = pos, value = value, label = label, color = color, lifetime = FLOAT_TEXT_LIFETIME, active = true}
         store.count += 1
         return
     }
@@ -56,8 +56,12 @@ draw_floating_text :: proc(store: ^Floating_Text_Store) {
         ft := &store.data[i]
         if !ft.active { continue }
 
-        buf: [12]u8   // zero-initialised → keeps a NUL for the cstring
-        fmt.bprintf(buf[:len(buf)-1], "%d", ft.value)
+        buf: [32]u8   // zero-initialised → keeps a NUL for the cstring
+        if len(ft.label) > 0 {
+            fmt.bprintf(buf[:len(buf)-1], "%d %s", ft.value, ft.label)
+        } else {
+            fmt.bprintf(buf[:len(buf)-1], "%d", ft.value)
+        }
         c := cstring(raw_data(buf[:]))
 
         fade := clamp(1.0 - ft.age / max(ft.lifetime, 0.001), 0, 1)

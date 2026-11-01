@@ -84,11 +84,14 @@ process_events :: proc(gs: ^Game_State) {
                     if dmg > 0 {
                         gs.player.hp -= dmg
                         audio_play(&gs.audio, .Hurt)
+                        // The world has no body to blame, so its hits say what they are.
+                        world_hit := e.source == INVALID_ENTITY
+                        cause := damage_cause_names[e.cause] if world_hit else ""
                         spawn_damage_number(&gs.floating_text,
-                            {gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y}, dmg, DAMAGE_COLOR)
+                            {gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y}, dmg, DAMAGE_COLOR, cause)
                         src_buf: [32]u8
                         log_action(gs, "Player takes %d damage from %s (hp %d)",
-                            dmg, entity_name(gs, e.source, src_buf[:]), gs.player.hp)
+                            dmg, cause if world_hit else entity_name(gs, e.source, src_buf[:]), gs.player.hp)
                         if gs.player.hp <= 0 {
                             gs.player.hp = 0
                             gs.death_by  = damage_source_name(gs, e)

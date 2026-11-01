@@ -393,6 +393,7 @@ MAX_FLOATING_TEXT :: 32
 Floating_Text :: struct {
     pos:      [2]f32,   // world tile coords; drifts upward as it ages
     value:    int,
+    label:    string,   // static word after the number ("lava"); empty for a plain hit
     color:    rl.Color,
     age:      f32,
     lifetime: f32,

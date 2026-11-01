@@ -4064,6 +4064,34 @@ armor_blunts_enemy_blows_but_not_the_world :: proc(t: ^testing.T) {
 }
 
 @(test)
+world_damage_says_what_it_is :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gs.debug_log.pos = 0
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
+        target = PLAYER_ID, payload = {int_val = 1}, cause = .Lava})
+    process_events(gs)
+    log_text := string(gs.debug_log.buf[:gs.debug_log.pos])
+    testing.expect(t, strings.contains(log_text, "Player takes 1 damage from lava"), "the log names the lava")
+    testing.expect_value(t, gs.floating_text.data[0].label, "lava")
+    testing.expect_value(t, gs.floating_text.data[0].color, DAMAGE_COLOR)
+
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
+        target = PLAYER_ID, payload = {int_val = 2}, cause = .Fall})
+    process_events(gs)
+    log_text = string(gs.debug_log.buf[:gs.debug_log.pos])
+    testing.expect(t, strings.contains(log_text, "Player takes 2 damage from the fall"), "the log names the fall")
+    testing.expect_value(t, gs.floating_text.data[1].label, "the fall")
+
+    // An enemy's hit stays a plain number: the body is right there.
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(0),
+        target = PLAYER_ID, payload = {int_val = 1}})
+    process_events(gs)
+    testing.expect_value(t, gs.floating_text.data[2].label, "")
+}
+
+@(test)
 player_damage_pops_a_floating_number :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
