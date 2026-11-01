@@ -35,5 +35,6 @@ def p1():
     assert b.t(98,61)=='Crafting_Bench'
     b.a(2); b.craft('Fire_Wand'); b.craft('Potion_Health'); b.a(2,craft='Plank'); b.st()
     assert b.count('Fire_Wand')==1
+    b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.craft('Tree_Grower',6); b.st()
 if __name__=='__main__':
     newgame(); p1()

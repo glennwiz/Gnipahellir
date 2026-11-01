@@ -1,4 +1,4 @@
-import sys,heapq,time,os,json
+import sys,heapq,time,os,json,atexit
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
 from g import G,show,brief
 from tiles import SOLID,MINE,HAZ
@@ -11,8 +11,9 @@ NAT={'Stone','Dirt','Grass','Sand','Mossy_Stone','Cloud','Cloud_Ore','Aether_Ore
 class B:
     def __init__(s):
         s.maxfall=5; s.safeonly=True; s.flightf=0; s.vp=set(); s.g=G(); s.r=None; s.m=[['Void']*W for _ in range(H)]; s.level=None; s.noguard=False; s.deaths=0
-        s.items={}
+        s.items={}; s.planned=False
         s.scan()
+        atexit.register(s.endplan)
     def ingest(s,r):
         if not r.get('ok'):
             log('ERR',r); return
@@ -165,6 +166,26 @@ class B:
         for _ in range(maxf):
             if s.p['grounded']: return
             s.a(3)
+    def think(s,*acts,sec=20):
+        """Last call before a think: what the player does meanwhile. Plays at 15 ticks/s and
+        is blind, so give it only moves that are safe from where it starts."""
+        acts=list(acts) or s.safeacts(sec)
+        r=s.g.plan(*acts); s.planned=True
+        log('plan sent',r,len(acts),'steps, left',s.g.st(0,0,1,1).get('plan_left')); return r
+    def safeacts(s,sec=20):
+        """mine rock beside the body if any is clear of the floor and of hazards, else hold still.
+        Worth a free stone while thinking; the cells are checked now, not when they play."""
+        if s.r['screen']!='play' or s.p['dead'] or s.r.get('flight_s',0)>0 or s.slot('Pickaxe') is None: return [{'frames':min(600,sec*15)}]
+        x,y=s.pos(); cells=[(c,r) for c in(x-1,x+1) for r in(y-1,y) if s.t(c,r)=='Stone' and s.reach(c,r) and not s.nearhaz(c,r,2)]
+        acts=[{'select':s.slot('Pickaxe'),'frames':1}]+[{'mine':list(c),'frames':24} for c in cells]
+        left=sec*15-24*len(cells)
+        if left>0: acts.append({'frames':min(600,left)})
+        return acts
+    def endplan(s):
+        # every script ends in a think, so a forgotten plan must not leave him standing idle
+        if s.planned: return
+        try: s.think()
+        except Exception as e: print('endplan failed',e,flush=True)
     # ---- pathing
     def free(s,x,y):
         t=s.t(x,y); return t not in SOLID and t not in HAZ and t!='Water'
@@ -338,7 +359,7 @@ class B:
     def st(s): log('frame',s.r['frame'],'L',s.r['level'],'pos',s.pos(),'hp',s.p['hp'],'mana',s.p['mana'],s.inv(),'en',[(e['kind'],int(e['x']),int(e['y'])) for e in s.r['enemies']])
     def harvest(s,want,box,maxsec=240):
         """want: {tile:targetcount}"""
-        t0=time.time(); drop={'Cloud':'Cloud_Stone','Cloud_Ore':'Cloud_Stone','Stone':'Stone_Block','Jade_Ore':'Jade','Emerald_Ore':'Emerald','Diamond_Ore':'Diamond'}
+        t0=time.time(); drop={'Wood':'Wood_Log','Cloud':'Cloud_Stone','Cloud_Ore':'Cloud_Stone','Stone':'Stone_Block','Jade_Ore':'Jade','Emerald_Ore':'Emerald','Diamond_Ore':'Diamond'}
         bad=set()
         while time.time()-t0<maxsec:
             names=[n for n,c in want.items() if s.count(drop.get(n,n))<c]
@@ -642,6 +663,7 @@ class B:
             s.fly(*out[j]); i=j
         log('at',s.pos(),'t',s.ftime()); return True
     def skyfarm(s,want,x0=100,x1=112):
+        if s.level!=3 or s.pos()[1]!=79: log('skyfarm: not on row 79',s.level,s.pos()); return False
         """stone bridge along row 80, shoot the cloud roof above it, then jump straight
         up under each floating drop.  Never leaves the bridge, so it cannot fall off."""
         for x in range(x0,x1+1):
@@ -650,7 +672,7 @@ class B:
             for y in (79,78):
                 if s.solid(x+1,y): s.dig(x+1,y,tries=8)
             s.walkx(x+1,limit=8)
-            if s.pos()[0]!=x+1: log('skyfarm stuck',x,s.p); break
+            if s.pos()!=(x+1,79): log('skyfarm stuck',x,s.p); break
             c=[(s.cheb(q,y),q,y) for y in range(73,80) for q in range(x-2,x+5) if s.t(q,y) in('Cloud','Cloud_Ore') and s.cheb(q,y)<=3]
             for _,q,y in sorted(c):
                 if s.p['mana']<6: s.a(60)
@@ -684,6 +706,20 @@ class B:
             if s.count(it['item'])<=n:
                 s.flyto(it['x'],it['y']-1,tmax=18); s.a(3)
                 if s.count(it['item'])<=n: log('sweep miss',it); return
+    def trench(s,want,xs,row):
+        """walk a cloud row with a stone floor laid under it: dig the next cell, floor it,
+        step in. Cloud drops float in the cell, so you must stand in them; a body in a
+        one-wide gap falls through the sky, hence the floor first."""
+        for x in xs:
+            if s.count('Cloud_Stone')>=want: return True
+            d=1 if x>s.pos()[0] else -1
+            if not s.solid(x,row+1):
+                s.sel('Stone_Block'); s.a(2,place=[x,row+1])
+                if not s.solid(x,row+1): log('trench no floor',x,s.r['notes'][-1:]); return False
+            for c in ((x,row),(x,row-1)):
+                if s.solid(*c) and not s.dig(*c,tries=8): log('trench dig',c); return False
+            s.walkx(x,limit=10); s.waitland(); s.a(2)
+        return s.count('Cloud_Stone')>=want
     # ---- Garm: orbs fly 48 tiles, his fireball reaches 12, the ring warps out of anything
     def garm(s): return next((e for e in s.r['enemies'] if e['kind']=='Garm'),None)
     def airline(s,tx,ty):
@@ -709,7 +745,10 @@ class B:
         # a worn ring leaves the inventory and is not in state: try, a refusal has no player
         log('WARP',why,s.p,s.r['frame']); r=s.g.act(3,warp=True)
         if 'player' not in r: log('no warp',r); return None
-        s.ingest(r); s.a(2); s.scan(); log('now L',s.level,s.pos()); return 'warp'
+        before=(s.level,s.pos()); s.ingest(r); s.a(2); s.scan(); log('now L',s.level,s.pos())
+        # refused on the surface level, chamber included: no note, nothing moves
+        if (s.level,s.pos())==before: log('warp did nothing',before); return None
+        return 'warp'
     def garmloop(s,maxf=3000,nolos_stop=240,closeat=3.6):
         s.noguard=True; f0=s.r['frame']; nolos=0; last=None; hurt=0
         if s.r['inventory'][s.r['selected']]['item']!='Fire_Wand' if False else True: s.sel('Fire_Wand')
