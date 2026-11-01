@@ -9563,6 +9563,27 @@ a_failed_place_gives_the_player_a_note :: proc(t: ^testing.T) {
 }
 
 @(test)
+hovering_in_flight_keeps_the_grounded_it_took_off_with :: proc(t: ^testing.T) {
+	// Run 3 f106100: "grounded on Void at (95,54)".  The flight blessing was
+	// on: move_body writes grounded only on vertical motion, so a hover keeps
+	// the last value.  Nothing holds the player up but the blessing.
+	gs := test_state(); defer free(gs)
+	X, Y := 95, 54
+	for y in Y - 4 ..= Y do set_tile(&gs.world, X, y, .Void)
+	gs.player.pos = {f32(X), f32(Y) - PLAYER_H}
+	gs.player.grounded = true
+	gs.flight_t = 10
+	y0 := gs.player.pos.y
+	for _ in 0 ..< 30 do update_player(gs)
+	testing.expect_value(t, gs.player.pos.y, y0)
+	testing.expect(t, gs.player.grounded, "a hover does not rewrite grounded")
+
+	gs.flight_t = 0
+	for _ in 0 ..< 30 do update_player(gs)
+	testing.expect(t, gs.player.pos.y > y0, "without the blessing the Void does not hold")
+}
+
+@(test)
 drops_fall_until_they_land_on_something_solid :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	w := &gs.world
