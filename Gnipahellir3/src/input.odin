@@ -144,7 +144,7 @@ update_input :: proc(gs: ^Game_State) {
 
     // Snapshot menu (F3): ten save/load slots. Takes all input while open;
     // the sim is frozen (see game_update). Checked before the death screen so
-    // a doomed run can still be rewound to an earlier snapshot.
+    // a debug build can still rewind a doomed run to an earlier snapshot.
     if gs.ui.show_snapshots {
         update_snapshots_input(gs)
         return
@@ -171,11 +171,16 @@ update_input :: proc(gs: ^Game_State) {
 
     // Death screen: the fallen give no orders. After a short beat, ENTER or a
     // click carves a new hero (roguelike — the old run is ash). ESC still
-    // reaches the pause menu for Save and Quit.
+    // reaches the pause menu for Save and Quit.  Death is final: the F3 rewind
+    // exists only in a debug build.
     if gs.player.dead {
-        if rl.IsKeyPressed(.F3) {
-            snapshot_menu_open(gs)  // rewind the doomed run to a snapshot
-        } else if rl.IsKeyPressed(.ESCAPE) {
+        when GAME_DEBUG {
+            if rl.IsKeyPressed(.F3) {
+                snapshot_menu_open(gs)  // rewind the doomed run to a snapshot
+                return
+            }
+        }
+        if rl.IsKeyPressed(.ESCAPE) {
             gs.ui.show_menu = true
         } else if gs.player.death_timer > DEATH_INPUT_DELAY &&
            (rl.IsKeyPressed(.ENTER) || rl.IsMouseButtonPressed(.LEFT)) {
