@@ -28,6 +28,7 @@ WAVE_THREAT_RESCAN   :: f32(2)     // the scan is full-grid — keep it off the 
 WAVE_TIER_AIR        :: f32(20)
 WAVE_TIER_UNDER      :: f32(40)
 WAVE_SIZE_PIVOT      :: f32(40)    // wave size reaches the table count at PIVOT/2
+WAVE_LURE_EVERY      :: 2          // every Nth wave follows the industry's lure
 
 Wave_Spec :: struct {
     enemy: Enemy_Kind,
@@ -66,6 +67,20 @@ wave_threat_weight := #partial [Tile_Type]f32{
     .Rainbow_Laser  = 2,
 }
 
+// What a machine draws while it burns (I9): steam's heat calls Raiders up from
+// below, a Kettle's mana mist calls Fire Sprites down.  Which industry you run
+// decides which wall you need.  The tier gates still apply.
+Wave_Lure :: struct {
+    kind:   Wave_Kind,
+    weight: f32,
+}
+
+@(rodata)
+wave_lure_table := #partial [Tile_Type]Wave_Lure{
+    .Boiler       = {.Underground, 1},
+    .Magic_Kettle = {.Air, 1},
+}
+
 // Threat at which each kind joins the cycle.  Ground is always open — some-
 // thing always walks in.
 @(rodata)
@@ -79,9 +94,13 @@ wave_tier_gate := [Wave_Kind]f32{
 // the WAVE_THREAT_RESCAN beat, never per frame (raid_heat_target's per-frame
 // scan is already a known smell — do not add a second one).
 wave_threat :: proc(gs: ^Game_State) -> (score: f32) {
+    gs.wave.lure = {}
     for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
         t := gs.world.terrain[grid_idx(x, y)]
         if !is_structure_tile[t] do continue
+        if l := wave_lure_table[t]; l.weight > 0 && raid_machine_hot(gs, {i32(x), i32(y)}) {
+            gs.wave.lure[l.kind] += l.weight
+        }
         if w := wave_threat_weight[t]; w > 0 {
             score += w
         } else {
@@ -138,6 +157,21 @@ wave_pick_kind :: proc(gs: ^Game_State, threat: f32) -> Wave_Kind {
     // Ground's gate is 0, so the list is never empty; the guard is here
     // because the alternative to it is a modulo by zero.
     if n == 0 do return .Ground
+
+    // Every other wave answers the industry, so a steam base still meets the
+    // rest of the cycle.  A tie between tracks falls through to the cycle.
+    if (gs.wave.cycle + 1) % WAVE_LURE_EVERY == 0 {
+        best, best_w, tied := Wave_Kind.Ground, f32(0), false
+        for k in unlocked[:n] {
+            w := gs.wave.lure[k]
+            if w > best_w {
+                best, best_w, tied = k, w, false
+            } else if w > 0 && w == best_w {
+                tied = true
+            }
+        }
+        if best_w > 0 && !tied do return best
+    }
     return unlocked[gs.wave.cycle %% n]
 }
 

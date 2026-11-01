@@ -166,6 +166,7 @@ Wave_State :: struct {
     pending_kind:   Wave_Kind, // which wave the script asked for
     cycle:          int,       // how many waves have been sent
     threat:         f32,       // cached base score, rescanned on a slow beat
+    lure:           [Wave_Kind]f32, // burning industry per kind, same beat
     threat_timer:   f32,
     pressure:       f32,       // threat-seconds accumulated toward the next wave
     warning_timer:  f32,

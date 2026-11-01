@@ -11020,3 +11020,98 @@ a_digging_wave_stays_inside_the_frame :: proc(t: ^testing.T) {
     testing.expect(t, gs.enemies.count >= 60, "the whole wave is still alive to path")
     testing.expect_value(t, most, MAX_NAV_SEARCHES_PER_FRAME)
 }
+
+// ─── Steam or magic ───────────────────────────────────────────────────────────
+
+@(private = "file")
+hot_machine :: proc(gs: ^Game_State, x, y: int, tile: Tile_Type) {
+    set_tile(&gs.world, x, y, tile)
+    gs.world.sim_data[grid_idx(x, y)].growth_timer = 1
+}
+
+@(private = "file")
+lure_fixture :: proc(gs: ^Game_State) {
+    wave_clear_structures(gs)
+    gs.progression.rune_scroll_found[0] = true
+    // Enough plain structures to open every tier.
+    for x in 60 ..< 60 + int(WAVE_TIER_UNDER) do set_tile(&gs.world, x, SURFACE_Y - 1, .Crafting_Bench)
+    gs.wave.cycle = WAVE_LURE_EVERY - 1
+}
+
+@(test)
+a_burning_boiler_draws_raiders_and_a_kettle_draws_sprites :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+
+    hot_machine(gs, 110, SURFACE_Y - 1, .Boiler)
+    th := wave_threat(gs)
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Underground)
+
+    set_tile(&gs.world, 110, SURFACE_Y - 1, .Air)
+    hot_machine(gs, 112, SURFACE_Y - 1, .Magic_Kettle)
+    th = wave_threat(gs)
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Air)
+
+    // The heavier industry wins a mixed base.
+    hot_machine(gs, 114, SURFACE_Y - 1, .Boiler)
+    hot_machine(gs, 116, SURFACE_Y - 1, .Boiler)
+    th = wave_threat(gs)
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Underground)
+}
+
+@(test)
+a_cold_machine_draws_nothing_and_the_lure_keeps_its_gates :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+
+    set_tile(&gs.world, 110, SURFACE_Y - 1, .Boiler)   // built, never lit
+    th := wave_threat(gs)
+    testing.expect_value(t, gs.wave.lure[.Underground], f32(0))
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Ground)   // the plain cycle's turn
+
+    // Before the first rune scroll nothing comes from below, lure or no lure.
+    hot_machine(gs, 110, SURFACE_Y - 1, .Boiler)
+    gs.progression.rune_scroll_found[0] = false
+    th = wave_threat(gs)
+    testing.expect(t, wave_pick_kind(gs, th) != .Underground, "the tier gate outranks the lure")
+}
+
+@(test)
+only_every_other_wave_follows_the_lure :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+    hot_machine(gs, 110, SURFACE_Y - 1, .Magic_Kettle)
+    th := wave_threat(gs)
+
+    seen: [Wave_Kind]int
+    for c in 0 ..< 12 {
+        gs.wave.cycle = c
+        seen[wave_pick_kind(gs, th)] += 1
+    }
+    testing.expect(t, seen[.Air] >= 6, "the lured kind takes at least its share")
+    testing.expect(t, seen[.Ground] > 0 && seen[.Underground] > 0, "the rest of the cycle still comes")
+
+    // Steam and magic level: no winner, the plain cycle keeps its turn.
+    hot_machine(gs, 112, SURFACE_Y - 1, .Boiler)
+    th = wave_threat(gs)
+    gs.wave.cycle = WAVE_LURE_EVERY - 1
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Ground)
+}
+
+@(test)
+the_director_sends_what_the_kettle_drew :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+    hot_machine(gs, 110, SURFACE_Y - 1, .Magic_Kettle)
+
+    gs.wave.pressure = WAVE_PRESSURE_TARGET
+    wave_step(gs, 3)
+    testing.expect(t, gs.wave.warning_active, "the warning should arm")
+    testing.expect_value(t, gs.wave.warning_kind, Wave_Kind.Air)
+    wave_step(gs, int(WAVE_WARNING_TIME) + 1)
+    testing.expect(t, wave_count_kind(gs, .Fire_Sprite) > 0, "the sky answers the mist")
+}
