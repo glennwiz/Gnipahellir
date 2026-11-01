@@ -7,7 +7,7 @@ set -euo pipefail
 
 SERVER=http://127.0.0.1:41070
 BOARD=gnipahellir
-COORD=claude-gnipa-coord-369A
+COORD=claude-gnipa-coord-7b1e
 
 dry=0
 if [[ ${1:-} == --dry-run ]]; then dry=1; shift; fi
