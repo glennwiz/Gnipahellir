@@ -249,12 +249,13 @@ is_standable :: proc(w: ^World_Grid, x, y: int) -> bool {
            !is_solid(w, x, y) && is_solid(w, x, y+1)
 }
 
-// Scroll chests are .Mineable for the player's reclaim only: no enemy digs one,
-// full or emptied, and every enemy dig and dig plan asks here first.
-is_builder_mineable :: proc(w: ^World_Grid, x, y: int) -> bool {
+// What an enemy dig may take, and every dig and dig plan asks here first.  Scroll
+// chests are .Mineable for the player's reclaim only, and a loaded silo, barrel
+// or coffer is rock to a digger, so none is hammered at or planned through.
+is_builder_mineable :: proc(gs: ^Game_State, x, y: int) -> bool {
     if !in_bounds(x, y) { return false }
-    t := w.terrain[grid_idx(x, y)]
-    return .Mineable in terrain_table[t].flags && !is_rune_scroll_chest(t)
+    t := gs.world.terrain[grid_idx(x, y)]
+    return .Mineable in terrain_table[t].flags && !wave_target_refused(gs, {i32(x), i32(y)})
 }
 
 // Enemy demolition of a tile.  A player machine (any .Placeable tile) is
@@ -262,18 +263,13 @@ is_builder_mineable :: proc(w: ^World_Grid, x, y: int) -> bool {
 // recoverable instead of a silent hole in the base.
 smash_tile :: proc(gs: ^Game_State, x, y: int) {
     old := get_tile(&gs.world, x, y)
-    // A loaded silo shrugs off demolition — the hoard is never smashed away.
+    // A hoard is never smashed away, whoever swings; an emptied container's
+    // record goes with its tile.
+    if wave_target_refused(gs, {i32(x), i32(y)}) do return
     if old == .Silo {
-        if s := silo_at(gs, gs.level_index, {i32(x), i32(y)}); s != nil {
-            if silo_total(s) > 0 do return
-            s^ = {}
-        }
+        if s := silo_at(gs, gs.level_index, {i32(x), i32(y)}); s != nil do s^ = {}
     }
-    // Nor is a loaded chest: its record would outlive the tile, out of reach.
-    if old == .Barrel || old == .Rune_Coffer || is_rune_scroll_chest(old) {
-        if wave_target_refused(gs, {i32(x), i32(y)}) do return
-        barrel_on_mined(gs, {i32(x), i32(y)})
-    }
+    if old == .Barrel || old == .Rune_Coffer do barrel_on_mined(gs, {i32(x), i32(y)})
     set_tile(&gs.world, x, y, .Void)
     if .Placeable in terrain_table[old].flags {
         if drop := terrain_table[old].drop_item; drop != .None {
@@ -604,7 +600,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
         // Dig through the floor (only when landing one tile down).
         floor_mineable := dig_allowed(w, x, y+1, protect_placed)
-        if allow_mining && floor_mineable && is_builder_mineable(w, x, y+1) && is_solid(w, x, y+2) && !den_blocks(gs, &dens, x, y+1, owner) {
+        if allow_mining && floor_mineable && is_builder_mineable(gs, x, y+1) && is_solid(w, x, y+2) && !den_blocks(gs, &dens, x, y+1, owner) {
             push_trans(&trans, &nt, i32(x), i32(y+1), COST_MINE)
         }
 
@@ -666,7 +662,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
             // Tunnel into a mineable wall (needs a floor under the mined tile).
             wall_mineable := dig_allowed(w, nx, y, protect_placed)
-            if allow_mining && wall_mineable && is_builder_mineable(w, nx, y) && is_solid(w, nx, y+1) && !den_blocks(gs, &dens, nx, y, owner) {
+            if allow_mining && wall_mineable && is_builder_mineable(gs, nx, y) && is_solid(w, nx, y+1) && !den_blocks(gs, &dens, nx, y, owner) {
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
             }
 
@@ -683,7 +679,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
                     cell_mineable := dig_allowed(w, c.x, c.y, protect_placed)
-                    if cell_mineable && is_builder_mineable(w, c.x, c.y) && !den_blocks(gs, &dens, c.x, c.y, owner) {
+                    if cell_mineable && is_builder_mineable(gs, c.x, c.y) && !den_blocks(gs, &dens, c.x, c.y, owner) {
                         mines += 1
                     } else {
                         climbable = false
@@ -1270,7 +1266,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
         for c in climb {
             cx := int(c.x)
             cy := int(c.y)
-            if is_solid(&gs.world, cx, cy) && is_builder_mineable(&gs.world, cx, cy) &&
+            if is_solid(&gs.world, cx, cy) && is_builder_mineable(gs, cx, cy) &&
                !den_protected(gs, cx, cy, id) {
                 smash_tile(gs, cx, cy)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
@@ -1284,7 +1280,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     }
 
     // Mine: waypoint tile is solid and mineable (dens are off-limits).
-    if is_builder_mineable(&gs.world, tx, ty) && !den_protected(gs, tx, ty, id) {
+    if is_builder_mineable(gs, tx, ty) && !den_protected(gs, tx, ty, id) {
         smash_tile(gs, tx, ty)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
         log_action(gs, "Builder mines (%d,%d)", tx, ty)
@@ -1379,7 +1375,7 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     if nav.mine_timer > 0 { return }   // update_builder ticks it down
     // Ceiling in the way: eat it.  Otherwise hop.
     if is_solid(&gs.world, x, y-1) {
-        if is_builder_mineable(&gs.world, x, y-1) && !den_protected(gs, x, y-1, id) {
+        if is_builder_mineable(gs, x, y-1) && !den_protected(gs, x, y-1, id) {
             smash_tile(gs, x, y-1)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y-1)}})
             b.pocket = min(b.pocket + 1, POCKET_MAX)
@@ -1487,7 +1483,7 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
                 log_action(gs, "Builder#%d knocks %v loose at (%d,%d)", id, old, x, y)
                 nav.mine_timer = MINE_TIME
             }
-        } else if is_builder_mineable(w, x, y) {
+        } else if is_builder_mineable(gs, x, y) {
             set_tile(w, x, y, .Void)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = T})
             log_action(gs, "Builder#%d carves (%d,%d)", id, x, y)
@@ -1524,7 +1520,7 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     bot   := int(e.pos.y + size.y - BODY_EPS)
     for y in top ..= bot {
         for x in left ..= right {
-            if is_builder_mineable(&gs.world, x, y) {
+            if is_builder_mineable(gs, x, y) {
                 set_tile(&gs.world, x, y, .Void)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
                 e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)

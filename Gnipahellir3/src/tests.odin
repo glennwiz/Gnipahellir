@@ -8314,7 +8314,7 @@ no_enemy_dig_breaks_a_scroll_chest :: proc(t: ^testing.T) {
 	}
 
 	// Every gate an enemy dig goes through refuses, sealed or emptied.
-	testing.expect(t, !is_builder_mineable(&gs.world, CX, CY), "no enemy dig may pick the chest")
+	testing.expect(t, !is_builder_mineable(gs, CX, CY), "no enemy dig may pick the chest")
 	testing.expect(t, wave_target_refused(gs, T), "no wave hunter may target the chest")
 	handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
 	expect_intact(t, gs, T)
@@ -11343,4 +11343,76 @@ a_v3_stats_file_migrates :: proc(t: ^testing.T) {
     testing.expect_value(t, stats.version, STATS_VERSION)
     testing.expect_value(t, stats.kit[0].item, Item.Sword)
     testing.expect(t, !stats.has_last_seed, "v3 knew no seed")
+}
+
+// A loaded chest in a hunter's only way: the reviewer's box, card 42 rework 2.
+@(private="file")
+sealed_box_run :: proc(gs: ^Game_State, loaded: bool) -> (hits, pocket, tile_x: int, stands: bool) {
+    wave_clear_structures(gs)
+    Y :: SURFACE_Y - 1
+    L, DOOR, R :: 60, 66, 72
+    for x in L - 1 ..= R + 1 do for y in Y - 4 ..= Y + 1 do set_tile(&gs.world, x, y, .Quick_Clay)
+    for x in L ..= R do for y in Y - 2 ..= Y do if x != DOOR do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, DOOR, Y - 2, .Quick_Clay)
+    set_tile(&gs.world, DOOR, Y - 1, .Barrel)
+    set_tile(&gs.world, DOOR, Y, .Barrel)
+    barrel_on_placed(gs, {DOOR, Y - 1})
+    barrel_on_placed(gs, {DOOR, Y})
+    if loaded {
+        barrel_deposit(barrel_at(gs, gs.level_index, {DOOR, Y - 1}), .Plank, 5)
+        barrel_deposit(barrel_at(gs, gs.level_index, {DOOR, Y}), .Plank, 5)
+    }
+    gs.player.pos = {R - 1, f32(Y) - PLAYER_H + 1}
+    gs.player.hp = 100000
+    gs.player.hp_max = 100000
+    wi := wave_seed_hunter(gs, .Vargr, L + 2, Y)
+    for _ in 0 ..< 60 * 60 {
+        gs.frame += 1
+        update_enemies(gs)
+        for i in 0 ..< gs.events.size {
+            ev := gs.events.events[(gs.events.head + i) % MAX_EVENTS]
+            // The world's own builders dig far from here all the while.
+            if ev.type == .Builder_Mined && ev.tile.x >= L && ev.tile.x <= R && ev.tile.y <= Y do hits += 1
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    e := &gs.enemies.data[wi]
+    return hits, int(e.builder.pocket), int(e.pos.x), get_tile(&gs.world, DOOR, Y) == .Barrel
+}
+
+@(test)
+a_hunter_does_not_hammer_a_loaded_barrel_in_its_only_path :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    hits, pocket, _, stands := sealed_box_run(gs, true)
+    testing.expect(t, stands, "the hoard holds")
+    testing.expect_value(t, hits, 0)
+    testing.expect_value(t, pocket, 0)
+
+    // The control: an empty barrel is no obstacle, so the test can fail.
+    open := test_state()
+    defer free(open)
+    _, _, x, gone := sealed_box_run(open, false)
+    testing.expect(t, !gone || x > 66, "an empty barrel does not stop it")
+}
+
+@(test)
+a_loaded_silo_or_barrel_is_rock_to_a_digger :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    set_tile(&gs.world, 10, 10, .Barrel)
+    barrel_on_placed(gs, {10, 10})
+    testing.expect(t, is_builder_mineable(gs, 10, 10), "an empty barrel can be dug")
+    barrel_deposit(barrel_at(gs, gs.level_index, {10, 10}), .Plank, 1)
+    testing.expect(t, !is_builder_mineable(gs, 10, 10), "a loaded one cannot")
+    set_tile(&gs.world, 11, 10, .Silo)
+    silo_on_placed(gs, {11, 10})
+    testing.expect(t, is_builder_mineable(gs, 11, 10), "an empty silo can be dug")
+    s := silo_at(gs, gs.level_index, {11, 10})
+    testing.expect(t, s != nil, "the silo has a record")
+    if s != nil {
+        s.slots[0] = {item = .Stone_Block, count = 3}
+        testing.expect(t, !is_builder_mineable(gs, 11, 10), "a loaded one cannot")
+    }
 }
