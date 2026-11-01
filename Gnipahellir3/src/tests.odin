@@ -9507,6 +9507,62 @@ stats_only_reach_an_armed_path :: proc(t: ^testing.T) {
 }
 
 @(test)
+the_pick_works_a_walkable_tile_the_body_stands_in :: proc(t: ^testing.T) {
+	// Run 3 f58800: mining the Green Cave Mushroom at (83,49) from inside its
+	// cell did nothing, because the pick skips the body's own tiles.
+	gs := test_state(); defer free(gs)
+	test_hold(gs, .Pickaxe)
+	X, Y := 83, 49
+	gs.player.pos = {f32(X) + 0.13, f32(Y) - 0.8}
+	set_tile(&gs.world, X, Y, .Green_Cave_Mushroom)
+	gs.input.mine = true
+	gs.input.mouse_tile = {i32(X), i32(Y)}
+	gs.input.mouse_world = {(f32(X) + 0.5) * CELL_SIZE, (f32(Y) + 0.5) * CELL_SIZE}
+	for _ in 0 ..< 600 {
+		player_mine(gs, 1.0/60.0)
+		process_events(gs)
+		eq_clear(&gs.events)
+		if get_tile(&gs.world, X, Y) != .Green_Cave_Mushroom do break
+	}
+	testing.expect(t, get_tile(&gs.world, X, Y) != .Green_Cave_Mushroom, "the mushroom underfoot must come up")
+}
+
+@(test)
+a_failed_place_gives_the_player_a_note :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	X, Y := 83, 49
+	for y in Y - 6 ..= Y + 2 do for x in X - 12 ..= X + 12 do set_tile(&gs.world, x, y, .Void)
+	set_tile(&gs.world, X, Y + 1, .Stone)
+	gs.player.pos = {f32(X) + 0.13, f32(Y) - 0.8}
+	inventory_insert(&gs.player.inventory, .Stone_Block, 3)
+	inventory_insert(&gs.player.inventory, .Flower_Bed, 1)
+	pick :: proc(gs: ^Game_State, it: Item) {
+		for s, i in gs.player.inventory.slots do if s.item == it do gs.player.inventory.selected = i
+	}
+	note_after :: proc(t: ^testing.T, gs: ^Game_State, x, y: int, want: string, loc := #caller_location) {
+		gs.notify.count = 0
+		handle_place_request(gs, Event{tile = {i32(x), i32(y)}})
+		testing.expect_value(t, gs.notify.count, 1, loc)
+		n := &gs.notify.items[0]
+		testing.expect_value(t, string(n.text[:n.len]), want, loc)
+	}
+	pick(gs, .Stone_Block)
+	note_after(t, gs, X, Y, "You are standing there")                   // a block in its own cell
+	note_after(t, gs, X, Y + 1, "Something is already there")
+	note_after(t, gs, X + 9, Y, "Out of reach")
+	pick(gs, .Flower_Bed)
+	note_after(t, gs, X + 4, Y - 3, "It needs something solid beside it")  // a bed in open air
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Flower_Bed), 1)
+
+	// A sweep over the same refusal shows it once.
+	gs.notify.count = 0
+	pick(gs, .Stone_Block)
+	handle_place_request(gs, Event{tile = {i32(X), i32(Y + 1)}})
+	handle_place_request(gs, Event{tile = {i32(X), i32(Y + 1)}})
+	testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"
