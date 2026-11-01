@@ -6121,6 +6121,71 @@ smelter_input_pulls_back_out :: proc(t: ^testing.T) {
 }
 
 @(test)
+an_odd_ore_leftover_never_jams_the_smelter :: proc(t: ^testing.T) {
+    // Run 4: three silver at two a bar left one ore that could never cast, and
+    // it turned every other ore away.
+    gs := test_state()
+    defer free(gs)
+
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    T := [2]i32{i32(sx), i32(sy)}
+    set_tile(&gs.world, sx, sy, .Smelter)
+    gs.player.pos = {f32(sx - 2), f32(sy - 1)}  // within BENCH_RANGE
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.fuel_count = u8(FUEL_PER_BAR * 2)
+    inv := &gs.player.inventory
+
+    slot_of :: proc(inv: ^Inventory, it: Item) -> int {
+        for s, i in inv.slots do if s.item == it do return i
+        return -1
+    }
+    run :: proc(gs: ^Game_State) {
+        for _ in 0 ..< int(SMELT_TIME / gs.delta_time) + 4 {
+            update_sim(gs)
+            eq_clear(&gs.events)
+        }
+    }
+
+    inventory_insert(inv, .Silver_Ore, 3)
+    testing.expect(t, smelter_feed(gs, T, slot_of(inv, .Silver_Ore)), "silver feed rejected")
+    run(gs)
+    testing.expect_value(t, int(sd.store_count), 1)
+    testing.expect_value(t, int(sd.in_count), 1)  // the odd one, stuck
+    run(gs)
+    testing.expect_value(t, int(sd.in_count), 1)
+
+    // Gold goes in, and the stuck silver comes home to the bag.
+    inventory_insert(inv, .Gold_Ore, 2)
+    testing.expect(t, smelter_feed(gs, T, slot_of(inv, .Gold_Ore)), "the leftover must not block gold")
+    testing.expect_value(t, sd.in_item, Item.Gold_Ore)
+    testing.expect_value(t, int(sd.in_count), 2)
+    testing.expect_value(t, inventory_count(inv, .Silver_Ore), 1)
+    testing.expect_value(t, inventory_count(inv, .Gold_Ore), 0)
+
+    // The second ore really smelts once the silver bar is out of the tray.
+    testing.expect(t, smelter_collect(gs, T), "collect rejected")
+    run(gs)
+    testing.expect_value(t, sd.store_item, Item.Gold_Bar)
+    testing.expect_value(t, int(sd.store_count), 1)
+    testing.expect_value(t, int(sd.in_count), 0)
+
+    // A batch that can still cast keeps its place.
+    sd.in_item, sd.in_count = .Silver_Ore, 2
+    inventory_insert(inv, .Gold_Ore, 2)
+    testing.expect(t, !smelter_feed(gs, T, slot_of(inv, .Gold_Ore)), "a castable batch still refuses another ore")
+    testing.expect_value(t, int(sd.in_count), 2)
+
+    // A full bag keeps the leftover loaded rather than losing it.
+    sd.in_item, sd.in_count = .Silver_Ore, 1
+    for &s in inv.slots do s = {item = .Stone_Block, count = MAX_STACK}
+    inv.slots[0] = {item = .Gold_Ore, count = 2}
+    testing.expect(t, !smelter_feed(gs, T, 0), "no room for the leftover")
+    testing.expect_value(t, sd.in_item, Item.Silver_Ore)
+    testing.expect_value(t, int(sd.in_count), 1)
+    testing.expect_value(t, int(inv.slots[0].count), 2)
+}
+
+@(test)
 tree_grower_raises_trees_over_time :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
