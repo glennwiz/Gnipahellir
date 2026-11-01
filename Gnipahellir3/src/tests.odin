@@ -9379,6 +9379,88 @@ machine_sounds_die_away_with_distance :: proc(t: ^testing.T) {
 	testing.expect(t, audio_tile_gain(gs, near) > 0.9, "beside the builder the dig is full volume")
 }
 
+// Did a Play_Sound for this id go into the queue?  Reads without popping.
+queued_sound :: proc(gs: ^Game_State, id: Sound_ID) -> bool {
+	q := &gs.events
+	for i in 0 ..< q.size {
+		e := q.events[(q.head + i) % MAX_EVENTS]
+		if e.type == .Play_Sound && Sound_ID(e.payload.int_val) == id do return true
+	}
+	return false
+}
+
+@(test)
+every_sound_row_names_a_real_file :: proc(t: ^testing.T) {
+	// audio_init stays silent on a missing file, so a typo here would ship as
+	// a sound that never plays.
+	for id in Sound_ID {
+		if id == .None do continue
+		testing.expectf(t, os.exists(string(sound_file[id])), "%v: no file %s", id, sound_file[id])
+		testing.expectf(t, sound_base_volume[id] > 0, "%v has no volume", id)
+	}
+}
+
+@(test)
+the_ritual_opens_with_its_swirl_sound :: proc(t: ^testing.T) {
+	gs := test_state()
+	defer free(gs)
+	gs.level_index = LEVEL_SKY
+	gs.progression.rune_scroll_found[0] = true
+
+	handle_ritual_request(gs)
+	testing.expect(t, !queued_sound(gs, .Ritual_Swirl), "a refused offering stays silent")
+
+	eq_clear(&gs.events)
+	for ing in structure_costs[0] do inventory_insert(&gs.player.inventory, ing.item, ing.count)
+	handle_ritual_request(gs)
+	testing.expect(t, gs.ritual.active, "the offering should begin")
+	testing.expect(t, queued_sound(gs, .Ritual_Swirl), "the swirl sounds as it begins")
+}
+
+@(test)
+the_wave_warning_is_a_horn :: proc(t: ^testing.T) {
+	gs := test_state()
+	defer free(gs)
+	wave_arm_warning(gs, .Ground)
+	testing.expect(t, queued_sound(gs, .Wave_Horn), "the warning sounds the horn")
+	testing.expect(t, !queued_sound(gs, .Builder_Shriek), "the raid alarm stays the raid's")
+}
+
+@(test)
+a_boiler_breath_hisses :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	rule := boiler_rules[0]
+	bx, by := boiler_build(gs, rule)
+	spawn_ground_item(&gs.world, {i32(bx - 1), i32(by)}, rule.fuel_item, 3)
+
+	heard := false
+	for _ in 0 ..< 200 {
+		update_sim(gs)
+		heard = heard || queued_sound(gs, .Steam_Hiss)
+		eq_clear(&gs.events)
+	}
+	testing.expect(t, heard, "the boiler's breath should hiss")
+}
+
+@(test)
+a_smelter_cast_pours :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	sx, sy := GRID_W/2, SURFACE_Y - 1
+	set_tile(&gs.world, sx, sy, .Smelter)
+	in_idx := grid_idx(sx - 1, sy)
+	gs.world.items[in_idx]       = .Iron_Ore
+	gs.world.item_counts[in_idx] = 1
+	gs.world.sim_data[grid_idx(sx, sy)].fuel_count = u8(FUEL_PER_BAR)
+
+	heard := false
+	for _ in 0 ..< int(SMELT_TIME / gs.delta_time) + 4 {
+		update_sim(gs)
+		heard = heard || queued_sound(gs, .Smelter_Pour)
+		eq_clear(&gs.events)
+	}
+	testing.expect(t, heard, "a cast bar should pour")
+}
+
 // ─── Gem Replicator (sim.odin) ────────────────────────────────────────────────
 //
 //  Fixtures sit in the x=76 pond-free band (a lesson learned twice) and below

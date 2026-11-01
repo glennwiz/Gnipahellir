@@ -470,7 +470,7 @@ RITUAL_DURATION :: f32(2.0)
 
 start_ritual :: proc(gs: ^Game_State, tier: int, altar: [2]i32) {
     gs.ritual = {active = true, timer = 0, tier = tier, altar = altar}
-    audio_play(&gs.audio, .Wand_Fire)
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Ritual_Swirl)}})
     notify(gs, "The altar draws in your offering...")
     log_action(gs, "Ritual tier %d begun", tier)
 }

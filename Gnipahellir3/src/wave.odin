@@ -176,7 +176,7 @@ wave_arm_warning :: proc(gs: ^Game_State, kind: Wave_Kind) {
     w.warning_timer  = WAVE_WARNING_TIME
     w.warning_active = true
     notify(gs, "A howl rises beyond the treeline - something comes for your works!")
-    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Builder_Shriek)}})
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Wave_Horn)}})
     log_action(gs, "Wave warning: %s in %.0fs (threat %.1f, pressure %.0f)",
         wave_name[kind], WAVE_WARNING_TIME, w.threat, w.pressure)
 }

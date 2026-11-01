@@ -28,6 +28,10 @@ Sound_ID :: enum u8 {
 	Garm_Roar,
 	Wand_Fire,
 	Blast,
+	Ritual_Swirl,
+	Wave_Horn,
+	Steam_Hiss,
+	Smelter_Pour,
 }
 
 @(rodata)
@@ -49,6 +53,10 @@ sound_file := [Sound_ID]cstring {
 	.Garm_Roar      = "sounds/splash_bang_pop/sound_enrage_blast.wav",
 	.Wand_Fire      = "sounds/splash_bang_pop/sfx_sr_magickedfleche_attack.wav",
 	.Blast          = "sounds/splash_bang_pop/sfx_sr_novidark_attack.wav",
+	.Ritual_Swirl   = "sounds/splash_bang_pop/sound_magnus_start.wav",
+	.Wave_Horn      = "sounds/splash_bang_pop/sound_enemy_charge.wav",
+	.Steam_Hiss     = "sounds/splash_bang_pop/sfx_br_footwork_trigger_2.wav",
+	.Smelter_Pour   = "sounds/splash_bang_pop/sound_chain.wav",
 }
 
 @(rodata)
@@ -70,6 +78,12 @@ sound_base_volume := [Sound_ID]f32 {
 	.Garm_Roar      = 1.0, // a boss phase announcing itself — must dominate
 	.Wand_Fire      = 0.6,
 	.Blast          = 0.9,
+	// First guesses, for Glenn's ear.  The boiler repeats every two seconds, so
+	// its hiss sits lowest.
+	.Ritual_Swirl   = 0.7,
+	.Wave_Horn      = 0.9,
+	.Steam_Hiss     = 0.3,
+	.Smelter_Pour   = 0.5,
 }
 
 // World sounds (builders digging and placing, raiders, growth, fireballs)
