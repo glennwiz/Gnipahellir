@@ -563,6 +563,10 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     idx := grid_idx(x, y)
     old_tile := gs.world.terrain[idx]
 
+    // Enemies never break a scroll chest, Glenn 2026-11-02.  The player's
+    // reclaim is the only way one comes loose.
+    if e.source != PLAYER_ID && is_rune_scroll_chest(old_tile) do return
+
     // A loaded silo is too heavy to lift — nothing is ever lost from one.
     if old_tile == .Silo {
         if s := silo_at(gs, gs.level_index, e.tile); s != nil {

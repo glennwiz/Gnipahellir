@@ -7,7 +7,7 @@ def plant(b,xs,row=54):
     for x in xs:
         b.walkj(x-1,limit=30); b.waitland()
         b.sel('Pickaxe'); b.dig(x,row,tries=20); b.a(3)
-        b.sel('Tree_Grower'); b.a(3,place=[x,row]); log('grower',x,b.t(x,row),b.r['notes'][-1:])
+        b.sel('Tree_Grower'); b.a(3,place=[x,row]); log('grower',x,b.t(x,row),b.r.get('refused'),b.r['notes'][-1:])
 def farm(b,xs,row=54):
     """cut every grown trunk at its base and walk through the drops"""
     for x in xs:
@@ -55,7 +55,7 @@ def p3(b):
     b.sel('Sky_Altar'); b.a(3,place=[91,77]); assert b.t(91,77)=='Sky_Altar'
     b.walkx(96); b.sel('Tree_Grower'); b.a(3,place=[94,79]); b.a(2,move='left')
     b.sel('Smelter'); b.a(3,place=[97,79]); assert b.t(97,79)=='Smelter'
-    b.sel('Smelter'); b.a(3,place=[98,79]); log('second smelter',b.t(98,79))
+    b.sel('Smelter'); b.a(3,place=[98,79]); log('second smelter',b.t(98,79),b.r.get('refused'))
     b.walkj(100,limit=20); b.sel('Tree_Grower')
     for c in((102,79),(104,79)): b.a(3,place=list(c)); log(c,b.t(*c))
     b.walkj(96,limit=20)

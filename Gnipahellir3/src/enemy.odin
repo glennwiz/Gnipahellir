@@ -254,9 +254,12 @@ is_standable :: proc(w: ^World_Grid, x, y: int) -> bool {
            !is_solid(w, x, y) && is_solid(w, x, y+1)
 }
 
+// Scroll chests are .Mineable for the player's reclaim only: no enemy digs one,
+// full or emptied, and every enemy dig and dig plan asks here first.
 is_builder_mineable :: proc(w: ^World_Grid, x, y: int) -> bool {
     if !in_bounds(x, y) { return false }
-    return .Mineable in terrain_table[w.terrain[grid_idx(x, y)]].flags
+    t := w.terrain[grid_idx(x, y)]
+    return .Mineable in terrain_table[t].flags && !is_rune_scroll_chest(t)
 }
 
 // Enemy demolition of a tile.  A player machine (any .Placeable tile) is
@@ -1075,7 +1078,7 @@ update_raids :: proc(gs: ^Game_State) {
 // ─── Wave hunting (shared by every wave enemy) ──────────────────────────────
 
 // Would handle_tile_mined turn this tile away?  It refuses a loaded silo, a
-// loaded barrel/coffer, and a scroll chest still holding its scroll.  A wave
+// loaded barrel/coffer, and any scroll chest (enemies never break one).  A wave
 // hunter must know that BEFORE it picks a target: discovering it by failing
 // at the tile is a livelock — the hunter arrives, swings forever, the tile
 // never falls, and the wave never resolves.  So refused containers are
@@ -1088,8 +1091,8 @@ wave_target_refused :: proc(gs: ^Game_State, T: [2]i32) -> bool {
         if s := silo_at(gs, gs.level_index, T); s != nil do return silo_total(s) > 0
         return false
     }
-    if tile == .Barrel || tile == .Rune_Coffer || is_rune_scroll_chest(tile) {
-        if is_rune_scroll_chest(tile) && rune_scroll_chest_holds_scroll(gs, T) do return true
+    if is_rune_scroll_chest(tile) do return true
+    if tile == .Barrel || tile == .Rune_Coffer {
         if b := barrel_at(gs, gs.level_index, T); b != nil do return barrel_total(b) > 0
         return false
     }

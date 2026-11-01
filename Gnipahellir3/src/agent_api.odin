@@ -7,6 +7,11 @@ package game
 // Protocol: one JSON object per line each way, on 127.0.0.1.
 //   {"cmd":"state"}                                 full state, x/y/w/h pick the tile view
 //   {"cmd":"act","move":"left","frames":30,...}     play those frames, reply with state after
+//                                                   a refused warp answers ok:false and plays
+//                                                   nothing; a place the game turned away
+//                                                   leaves "refused":"place" in the state,
+//                                                   the reason, if any, in notes;
+//                                                   withdraw:true pulls an open smelter's ore
 //   {"cmd":"plan","acts":[{"move":"left","frames":30},...]}
 //                                                   what to do while you think: played
 //                                                   at quarter speed, no reply per step;
@@ -689,6 +694,10 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
             problem = "warp needs the Jade Ring worn"
             return
         }
+        if why := warp_refusal(gs); live && why != "" {
+            problem = fmt.tprintf("warp refused: %s", why)
+            return
+        }
         c.warp = true
     }
 
@@ -706,6 +715,7 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
     if p := agent_slot_verb(&c, o, "store", .Store); p != "" { problem = p; return }
     if p := agent_slot_verb(&c, o, "take", .Take);   p != "" { problem = p; return }
     if agent_flag(o, "collect") do c.verb = .Collect
+    if agent_flag(o, "withdraw") do c.verb = .Withdraw
 
     if "craft" in o {
         name, _ := o["craft"].(json.String)
@@ -723,7 +733,7 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
     // The smelter and barrel verbs act on the window a `use` opened, as the
     // drag-and-drop they stand in for does.
     #partial switch c.verb {
-    case .Feed, .Collect:
+    case .Feed, .Collect, .Withdraw:
         t := get_tile(&gs.world, int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))
         if !gs.ui.show_smelter || t != .Smelter {
             problem = "no smelter window open: use the smelter first"
@@ -788,7 +798,7 @@ agent_input :: proc(gs: ^Game_State) {
 
     // Windows are only open for the verbs that work on them.  Anything else
     // sweeps them shut, so the view stays clear for whoever is watching.
-    if first && !c.has_use && c.verb != .Feed && c.verb != .Collect && c.verb != .Store && c.verb != .Take {
+    if first && !c.has_use && c.verb != .Feed && c.verb != .Collect && c.verb != .Withdraw && c.verb != .Store && c.verb != .Take {
         agent_close_windows(gs)
     }
 
@@ -820,6 +830,7 @@ agent_input :: proc(gs: ^Game_State) {
     inp.reclaim = c.has_reclaim && !command_active  // a held Shift+click
 
     if !first do return
+    gs.agent.place_refused = false
 
     if c.warp do eq_push(&gs.events, Event{type = .Warp_Home_Request})
     if c.has_place {
@@ -842,6 +853,7 @@ agent_input :: proc(gs: ^Game_State) {
     case .Equip:   eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = arg}})
     case .Feed:    eq_push(&gs.events, Event{type = .Smelter_Feed, tile = gs.ui.smelter_tile, payload = {int_val = arg}})
     case .Collect: eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
+    case .Withdraw: eq_push(&gs.events, Event{type = .Smelter_Withdraw, tile = gs.ui.smelter_tile})
     case .Store:   eq_push(&gs.events, Event{type = .Barrel_Store, tile = gs.ui.barrel_tile, payload = {int_val = arg}})
     case .Take:    eq_push(&gs.events, Event{type = .Barrel_Take, tile = gs.ui.barrel_tile, payload = {int_val = arg}})
     }
@@ -933,6 +945,8 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
     fmt.sbprintf(&b, `"player":{{"x":%.2f,"y":%.2f,"vx":%.2f,"vy":%.2f,"hp":%d,"hp_max":%d,"mana":%.1f,"grounded":%v,"facing":%d,"dead":%v}},`,
         p.pos.x, p.pos.y, p.vel.x, p.vel.y, p.hp, p.hp_max, p.mana, p.grounded, p.facing, p.dead)
 
+    fmt.sbprintf(&b, `"place_reach":%d,`, PLAYER_REACH)
+    if gs.agent.place_refused do strings.write_string(&b, `"refused":"place",`)
     fmt.sbprintf(&b, `"plan_left":%d,`, link.plan_len - link.plan_next)
     if link.plan_stopped.len > 0 {
         strings.write_string(&b, `"plan_stopped":`)

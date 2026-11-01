@@ -379,6 +379,11 @@ garm_cage_tick :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     if g.build_timer > 0 { return }
 
     x, y := int(T.x), int(T.y)
+    // A scroll chest in the wall stays: no cage block replaces it.
+    if is_rune_scroll_chest(get_tile(&gs.world, x, y)) {
+        g.build_timer = garm_interval(g.phase)
+        return
+    }
     if tile == .Stone {
         // Never conjure stone into a body — the slot just waits, so standing
         // in the last gap delays the seal instead of killing you.
