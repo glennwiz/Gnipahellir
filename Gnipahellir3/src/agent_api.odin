@@ -423,6 +423,12 @@ agent_input :: proc(gs: ^Game_State) {
         if t != .Barrel && t != .Rune_Coffer && !is_rune_scroll_chest(t) do gs.ui.show_barrel = false
     }
 
+    // Windows are only open for the verbs that work on them.  Anything else
+    // sweeps them shut, so the view stays clear for whoever is watching.
+    if first && !c.has_use && c.verb != .Feed && c.verb != .Collect && c.verb != .Store && c.verb != .Take {
+        agent_close_windows(gs)
+    }
+
     tile := player_tile(&gs.player)
     if c.has_mine  do tile = c.mine
     if c.has_place do tile = c.place
@@ -472,6 +478,17 @@ agent_input :: proc(gs: ^Game_State) {
     case .Store:   eq_push(&gs.events, Event{type = .Barrel_Store, tile = gs.ui.barrel_tile, payload = {int_val = arg}})
     case .Take:    eq_push(&gs.events, Event{type = .Barrel_Take, tile = gs.ui.barrel_tile, payload = {int_val = arg}})
     }
+}
+
+// What the first ESC does in update_input.
+@(private="file")
+agent_close_windows :: proc(gs: ^Game_State) {
+    gs.ui.show_inventory    = false
+    gs.ui.show_crafting     = false
+    gs.ui.show_rune_scroll  = false
+    gs.ui.show_smelter      = false
+    gs.ui.show_barrel       = false
+    gs.ui.show_golem_roster = false
 }
 
 // The one key that gets past any screen holding the game up.

@@ -321,6 +321,31 @@ agent_a_window_closes_with_its_machine :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_windows_close_unless_the_act_works_on_them :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    set_tile(&gs.world, 20, 40, .Smelter)
+    gs.ui.show_inventory = true
+    gs.ui.show_smelter   = true
+    gs.ui.smelter_tile   = {20, 40}
+
+    agent_handle_line(link, gs, `{"cmd":"act","collect":true}`)
+    agent_drive(link, gs)
+    agent_input(gs)
+    eq_clear(&gs.events)
+    testing.expect(t, gs.ui.show_smelter, "a window verb keeps its window")
+    link.frames_left = 0
+
+    agent_handle_line(link, gs, `{"cmd":"act","move":"left"}`)
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect(t, !gs.ui.show_smelter, "any other act closes it")
+    testing.expect(t, !gs.ui.show_inventory)
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
