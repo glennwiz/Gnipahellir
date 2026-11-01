@@ -10178,6 +10178,65 @@ air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.enemies.data[last].builder.goal, Builder_Goal.Wave_Hunt)
 }
 
+// Run 3: two sprites parked over the cave altar (147,93) under solid rock, and
+// the survivors held back every later wave.  A flyer cannot dig.
+@(private = "file")
+sprite_sealed_fixture :: proc(gs: ^Game_State, Y: int) {
+    for x in 15 ..= 85 do for y in Y - 6 ..= Y + 8 do set_tile(&gs.world, x, y, .Stone)
+    for x in 15 ..= 85 do for y in Y - 5 ..= Y do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, 22, Y + 6, .Crafting_Bench)   // under the rock
+    gs.player.pos = {8, 8}
+}
+
+@(test)
+a_flyer_gives_up_on_a_target_under_rock_and_takes_the_next :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    Y :: 20
+    sprite_sealed_fixture(gs, Y)
+    set_tile(&gs.world, 60, Y, .Crafting_Bench)       // farther, in the open
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 22, Y - 2)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 40 * 60 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, 60, Y) != .Crafting_Bench do break
+    }
+    testing.expect(t, get_tile(&gs.world, 60, Y) != .Crafting_Bench, "it should give up and burn the open bench")
+    testing.expect_value(t, get_tile(&gs.world, 22, Y + 6), Tile_Type.Crafting_Bench)
+}
+
+@(test)
+a_flyer_with_nothing_it_can_reach_gutters_out :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    Y :: 20
+    sprite_sealed_fixture(gs, Y)
+    // The player is sealed away as well, so nothing is reachable at all.
+    for x in 4 ..= 12 do for y in 4 ..= 12 do set_tile(&gs.world, x, y, .Stone)
+    set_tile(&gs.world, 8, 8, .Air)
+    set_tile(&gs.world, 8, 9, .Air)
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 22, Y - 2)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 90 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if !gs.enemies.active[fi] do break
+    }
+    testing.expect(t, !gs.enemies.active[fi], "a parked flyer must not hold back every later wave")
+    gone := enemy_entity_id(fi)
+    for id in gs.world.entity_map do testing.expect(t, id != gone, "a gutted sprite must leave the entity map")
+}
+
 @(test)
 a_flyer_climbs_over_a_tree_instead_of_pinning_against_it :: proc(t: ^testing.T) {
     gs := test_state()
