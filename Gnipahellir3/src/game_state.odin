@@ -519,10 +519,33 @@ Agent_Command :: struct {
     verb_arg:  i32,
 }
 
+AGENT_TEXT_MAX :: 96
+AGENT_LOG_MAX  :: 6
+
+Agent_Text :: struct {
+    buf: [AGENT_TEXT_MAX + 1]u8,  // kept NUL-terminated for raylib
+    len: int,
+}
+
+Agent_Past_Goal :: struct {
+    text:   Agent_Text,
+    failed: bool,
+}
+
+// What the agent says it is doing, for the watcher's panel.  Owned by the link,
+// so it outlives a New Game; render reads it through gs.agent.panel.
+Agent_Panel :: struct {
+    goal:  Agent_Text,
+    step:  Agent_Text,
+    past:  [AGENT_LOG_MAX]Agent_Past_Goal,  // newest first
+    count: int,
+}
+
 // Rewritten by agent_pump every frame; never saved.
 Agent_Drive :: struct {
     driving: bool,
     first:   bool,
+    panel:   ^Agent_Panel,
     framed:  bool,  // the view is set; a New Game or a reconnect zeroes this, so the framing is applied again
     cmd:     Agent_Command,
 }

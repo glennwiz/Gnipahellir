@@ -31,6 +31,10 @@ for raw in open(os.path.join(run, "acts.jsonl")):
     if "mark" in rec:
         print(f"stopped at frame {rec['f']}: {rec['mark']} let wall time in, so the rest cannot be replayed")
         break
+    if "objective" in rec:
+        sock.sendall((json.dumps(rec["objective"]) + "\n").encode())
+        replies.readline()
+        continue
     sock.sendall((json.dumps(rec["act"]) + "\n").encode())
     reply = json.loads(replies.readline())
     p = reply["player"]

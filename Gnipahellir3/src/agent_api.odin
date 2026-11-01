@@ -8,6 +8,9 @@ package game
 //   {"cmd":"state"}                                 full state, x/y/w/h pick the tile view
 //   {"cmd":"act","move":"left","frames":30,...}     play those frames, reply with state after
 //   {"cmd":"realtime","on":true}                    keep ticking between acts
+//   {"cmd":"objective","goal":"...","step":"..."}   tell the watcher what you are up to;
+//                                                   a new goal files the old one, with
+//                                                   "result":"failed" if it did not work
 //
 // While a client is connected the game WAITS: the sim only ticks through an act,
 // at a fixed 1/60 s step, and the keyboard and mouse are ignored.  Disconnecting
@@ -66,6 +69,7 @@ Agent_Link :: struct {
     realtime:    bool,
     listener:    net.TCP_Socket,
     client:      net.TCP_Socket,
+    panel:       Agent_Panel,
     cmd:         Agent_Command,  // the act in progress
     first:       bool,           // its first frame has not run yet
     frames_left: int,
@@ -171,6 +175,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
 // Loads this frame's input into gs.agent and decides whether the sim ticks.
 agent_drive :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     gs.agent.driving = true
+    gs.agent.panel   = &link.panel
     if !link.realtime do gs.delta_time = AGENT_STEP
     if link.frames_left > 0 {
         gs.agent.cmd   = link.cmd
@@ -273,6 +278,13 @@ agent_record_act :: proc(link: ^Agent_Link, gs: ^Game_State) {
 }
 
 @(private="file")
+agent_record_objective :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
+    if !link.recording do return
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"objective":%s}}` + "\n", gs.frame, line))
+}
+
+@(private="file")
 agent_record_mark :: proc(link: ^Agent_Link, gs: ^Game_State, mark: string) {
     if !link.recording do return
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
@@ -342,9 +354,40 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         link.realtime = on
         agent_record_mark(link, gs, "realtime on" if on else "realtime off")
         agent_reply_text(link, `{"ok":true}`)
+    case "objective":
+        goal, has_goal := root["goal"].(json.String)
+        step, has_step := root["step"].(json.String)
+        if !has_goal && !has_step {
+            agent_reply_error(link, "objective needs goal or step")
+            return
+        }
+        result, _ := root["result"].(json.String)
+        agent_set_objective(&link.panel, goal, step, has_goal, has_step, result == "failed")
+        agent_record_objective(link, gs, line)
+        agent_reply_text(link, `{"ok":true}`)
     case:
-        agent_reply_error(link, "unknown cmd: use state, act or realtime")
+        agent_reply_error(link, "unknown cmd: use state, act, realtime or objective")
     }
+}
+
+@(private="file")
+agent_text_set :: proc(t: ^Agent_Text, s: string) {
+    t.len = copy(t.buf[:AGENT_TEXT_MAX], s)
+    t.buf[t.len] = 0
+    for &ch in t.buf[:t.len] do if ch < 0x20 do ch = ' '
+}
+
+agent_set_objective :: proc(p: ^Agent_Panel, goal, step: string, has_goal, has_step, failed: bool) {
+    if has_goal && goal != string(p.goal.buf[:p.goal.len]) {
+        if p.goal.len > 0 {
+            copy(p.past[1:], p.past[:AGENT_LOG_MAX - 1])
+            p.past[0]  = {text = p.goal, failed = failed}
+            p.count    = min(p.count + 1, AGENT_LOG_MAX)
+        }
+        agent_text_set(&p.goal, goal)
+        p.step = {}
+    }
+    if has_step do agent_text_set(&p.step, step)
 }
 
 @(private="file")

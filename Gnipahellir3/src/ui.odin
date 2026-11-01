@@ -1883,6 +1883,50 @@ draw_ui :: proc(gs: ^Game_State) {
 	// important feedback must stay readable over inventory/storage windows,
 	// tooltips, dragged icons, books, menus, and every full-screen modal.
 	draw_notifications(gs)
+	if gs.agent.panel != nil do draw_agent_panel(gs.agent.panel)
+}
+
+// The agent's own account of what it is doing, for whoever is watching.
+draw_agent_panel :: proc(p: ^Agent_Panel) {
+	PANEL_W :: i32(310)
+	PANEL_X :: i32(UI_W) - PANEL_W - 12
+	PANEL_Y :: i32(12)
+	LINE    :: i32(14)
+	WRAP    :: 48   // characters of the 11 px font in PANEL_W
+
+	wrapped :: proc(text: ^Agent_Text, x: i32, y: ^i32, col: rl.Color) {
+		s := string(text.buf[:text.len])
+		for len(s) > 0 {
+			n := min(len(s), WRAP)
+			if n < len(s) {
+				for i := n; i > WRAP / 2; i -= 1 do if s[i] == ' ' { n = i; break }
+			}
+			buf: [WRAP + 1]u8
+			copy(buf[:WRAP], s[:n])
+			rl.DrawText(cstring(raw_data(buf[:])), x, y^, 11, col)
+			y^ += LINE
+			s = s[min(n + 1, len(s)):]
+		}
+	}
+
+	if p.goal.len == 0 && p.step.len == 0 do return
+	lines := i32(2) + (i32(p.goal.len) / (WRAP / 2) + 1) + (i32(p.step.len) / (WRAP / 2) + 1) + i32(p.count) * 2
+	rl.DrawRectangle(PANEL_X, PANEL_Y, PANEL_W, lines * LINE + 12, NORSE_PANEL)
+	rl.DrawRectangleLinesEx({f32(PANEL_X), f32(PANEL_Y), f32(PANEL_W), f32(lines * LINE + 12)}, 2, NORSE_BORDER)
+
+	x := PANEL_X + 8
+	y := PANEL_Y + 6
+	rl.DrawText("AGENT OBJECTIVE", x, y, 11, NORSE_BORDER)
+	y += LINE
+	wrapped(&p.goal, x, &y, NORSE_GOLD_HOT)
+	if p.step.len > 0 {
+		wrapped(&p.step, x, &y, rl.RAYWHITE)
+	}
+	y += 4
+	for i in 0 ..< p.count {
+		past := &p.past[i]
+		wrapped(&past.text, x, &y, rl.Color{200, 90, 70, 255} if past.failed else rl.Color{130, 170, 120, 255})
+	}
 }
 
 draw_golem_command_strip :: proc(gs: ^Game_State) {

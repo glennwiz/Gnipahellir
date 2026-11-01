@@ -58,6 +58,13 @@ if os.path.exists(path):
     print("\n== acts ==")
     acts = [json.loads(l) for l in open(path)]
     played = [a for a in acts if "act" in a]
+    goals = [a for a in acts if "goal" in a.get("objective", {})]
+    if goals:
+        print("objectives:")
+        for a, b in zip(goals, goals[1:] + [None]):
+            end = b["f"] if b else acts[-1]["f"]
+            note = " (failed)" if b and b["objective"].get("result") == "failed" else ""
+            print(f"  f{a['f']}: {a['objective']['goal']} - {(end - a['f']) // 60} s{note}")
     print(f"{len(played)} acts, last frame {acts[-1]['f'] if acts else 0}")
     wasted = collections.Counter()
     for a, b in zip(played, played[1:]):

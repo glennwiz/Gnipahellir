@@ -521,6 +521,59 @@ agent_fight_log_names_enemies_near_the_player_only :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_objectives_stack_up_for_the_watcher :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_handle_line(link, gs, `{"cmd":"objective","goal":"Reach cave 2","step":"Dig the shaft"}`)
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "Reach cave 2")
+    testing.expect_value(t, link.panel.count, 0)
+
+    agent_handle_line(link, gs, `{"cmd":"objective","step":"Climb out"}`)
+    testing.expect_value(t, string(link.panel.step.buf[:link.panel.step.len]), "Climb out")
+    testing.expect_value(t, link.panel.count, 0)  // a new step is not a new goal
+
+    agent_handle_line(link, gs, `{"cmd":"objective","goal":"Find gold","result":"failed"}`)
+    testing.expect_value(t, link.panel.count, 1)
+    testing.expect(t, link.panel.past[0].failed)
+    testing.expect_value(t, link.panel.step.len, 0)
+
+    for i in 0 ..< AGENT_LOG_MAX + 3 {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"objective","goal":"goal %d"}}`, i))
+    }
+    testing.expect_value(t, link.panel.count, AGENT_LOG_MAX)
+
+    agent_handle_line(link, gs, `{"cmd":"objective"}`)
+    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`))
+}
+
+@(test)
+agent_text_is_cut_to_fit_and_cleaned :: proc(t: ^testing.T) {
+    panel: Agent_Panel
+    long := strings.repeat("x", AGENT_TEXT_MAX + 50, context.temp_allocator)
+    agent_set_objective(&panel, long, "two\nlines", true, true, false)
+    testing.expect_value(t, panel.goal.len, AGENT_TEXT_MAX)
+    testing.expect_value(t, panel.goal.buf[AGENT_TEXT_MAX], 0)
+    testing.expect_value(t, string(panel.step.buf[:panel.step.len]), "two lines")
+}
+
+@(test)
+agent_panel_goes_when_the_client_does :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_drive(link, gs)
+    testing.expect(t, gs.agent.panel == &link.panel)
+    link.connected = false
+    link.listening = true
+    link.listener  = net.TCP_Socket(-1)
+    agent_pump(link, gs)
+    testing.expect(t, gs.agent.panel == nil)
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
