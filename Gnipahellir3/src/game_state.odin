@@ -787,6 +787,7 @@ Game_State :: struct {
     delta_time:   f32,
     world_seed:   u32,    // seed mixed into level generation; set per run, not saved
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
+    death_by:     string, // what landed the killing blow, from a static table — not saved; read by the death screen
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved

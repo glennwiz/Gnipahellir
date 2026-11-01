@@ -186,6 +186,7 @@ update_player :: proc(gs: ^Game_State) {
                     source  = INVALID_ENTITY,   // the world itself — armor won't help
                     target  = PLAYER_ID,
                     payload = {int_val = i32(dmg)},
+                    cause   = .Fall,
                 })
                 log_action(gs, "Player falls %.1f tiles (%d damage)", fall, dmg)
             }
@@ -291,6 +292,15 @@ player_in_water :: proc(gs: ^Game_State) -> bool {
     return false
 }
 
+// Which Damage_Cause a .Damaging tile deals.
+@(rodata)
+hazard_cause := #partial [Tile_Type]Damage_Cause{
+    .Lava       = .Lava,
+    .Magic_Lava = .Magic_Lava,
+    .Void_Sky   = .Void_Sky,
+    .Steam      = .Steam,
+}
+
 // Damaging tiles (lava, void sky) hurt while the body overlaps them: the
 // strongest overlapped tile's damage_per_second accumulates into hazard_timer,
 // which buys 1 hp of damage per unit — dps 2 means 1 damage every 0.5 s.
@@ -302,10 +312,14 @@ player_tile_hazard :: proc(gs: ^Game_State, dt: f32) {
     bot   := int(p.pos.y + PLAYER_H - 0.001)
 
     dps := f32(0)
+    cause := Damage_Cause.None
     for ty in top ..= bot {
         for tx in left ..= right {
             b := terrain_table[get_tile(&gs.world, tx, ty)]
-            if .Damaging in b.flags { dps = max(dps, b.damage_per_second) }
+            if .Damaging in b.flags && b.damage_per_second > dps {
+                dps   = b.damage_per_second
+                cause = hazard_cause[get_tile(&gs.world, tx, ty)]
+            }
         }
     }
     if dps <= 0 {
@@ -320,6 +334,7 @@ player_tile_hazard :: proc(gs: ^Game_State, dt: f32) {
             source  = INVALID_ENTITY,   // the world itself
             target  = PLAYER_ID,
             payload = {int_val = 1},
+            cause   = cause,
         })
     }
 }

@@ -2268,6 +2268,15 @@ book_lines :: proc(tier: int) -> (cstring, cstring, cstring) {
 	return "A passage has opened below. Descend, and seek the next portal.", "", ""
 }
 
+// "Killed by lava - Deep Cave".  Empty if the run did not end by a blow.
+// Pure read; formats into the caller's buffer.
+death_cause_line :: proc(gs: ^Game_State, buf: []u8) -> string {
+	if len(gs.death_by) == 0 do return ""
+	place := level_names[gs.level_index]
+	if gs.level_index == LEVEL_DIMENSION do place = dimension_table[gs.dimension.kind].name
+	return fmt.bprintf(buf, "Killed by %s - %s", gs.death_by, place)
+}
+
 // ─── Death Screen ─────────────────────────────────────────────────────────────
 //
 //  Roguelike death: the run is over and the save burns with it.  Blood-dark
@@ -2310,6 +2319,11 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		rl.Color{200, 160, 140, u8(255 * fade)},
 	)
 
+	cause_buf: [96]u8
+	if len(death_cause_line(gs, cause_buf[:95])) > 0 {
+		center_text(cstring(raw_data(cause_buf[:])), ty + 132, 22, rl.Color{255, 190, 150, u8(255 * fade)})
+	}
+
 	mins := int(gs.elapsed_time) / 60
 	secs := int(gs.elapsed_time) % 60
 	buf: [96]u8
@@ -2321,7 +2335,7 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		gs.stats.total_kills,
 		gs.stats.runs_played,
 	)
-	center_text(cstring(raw_data(buf[:])), ty + 150, 20, rl.Color{255, 255, 255, u8(255 * fade)})
+	center_text(cstring(raw_data(buf[:])), ty + 165, 20, rl.Color{255, 255, 255, u8(255 * fade)})
 
 	center_text(
 		"Death is final - the save burns on the pyre.",

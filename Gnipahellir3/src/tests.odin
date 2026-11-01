@@ -3210,6 +3210,71 @@ objective_line_walks_the_loop :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(s, "GARM"), "endgame points at the boss")
 }
 
+// Stand the player in `tile` at 1 HP and let the hazard pass kill them.
+die_in_tile :: proc(gs: ^Game_State, tile: Tile_Type) {
+    gs.player.hp = 1
+    pt := player_tile(&gs.player)
+    for ty in pt.y - 3 ..= pt.y + 3 {
+        for tx in pt.x - 2 ..= pt.x + 2 {
+            set_tile(&gs.world, int(tx), int(ty), tile)
+        }
+    }
+    for i := 0; i < 240 && !gs.player.dead; i += 1 {
+        player_tile_hazard(gs, gs.delta_time)
+        process_events(gs)
+        process_events(gs)
+    }
+}
+
+@(test)
+death_line_names_the_lava_and_the_level :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE2
+    die_in_tile(gs, .Lava)
+    testing.expect(t, gs.player.dead, "the lava kills")
+    buf: [96]u8
+    testing.expect_value(t, death_cause_line(gs, buf[:95]), "Killed by lava - Deep Cave")
+}
+
+@(test)
+death_line_names_the_fall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.hp = 1
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID, payload = {int_val = 1}, cause = .Fall})
+    process_events(gs)
+    process_events(gs)
+    buf: [96]u8
+    testing.expect_value(t, death_cause_line(gs, buf[:95]), "Killed by the fall - Surface")
+}
+
+@(test)
+death_line_names_the_enemy_and_the_dimension :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.hp = 1
+    gs.level_index = LEVEL_DIMENSION
+    gs.dimension.kind = .Hell
+    i, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok)
+    gs.enemies.data[i].kind = .Vargr
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = enemy_entity_id(i), target = PLAYER_ID, payload = {int_val = 1}})
+    process_events(gs)
+    process_events(gs)
+    buf: [96]u8
+    testing.expect_value(t, death_cause_line(gs, buf[:95]), "Killed by a Vargr - Hell")
+}
+
+@(test)
+every_damaging_tile_has_a_cause :: proc(t: ^testing.T) {
+    for tile in Tile_Type {
+        if .Damaging in terrain_table[tile].flags {
+            testing.expectf(t, hazard_cause[tile] != .None, "%v has no Damage_Cause", tile)
+        }
+    }
+}
+
 @(test)
 deep_rune_scroll_waits_for_the_altar :: proc(t: ^testing.T) {
     gs := test_state()

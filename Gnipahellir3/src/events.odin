@@ -91,6 +91,7 @@ process_events :: proc(gs: ^Game_State) {
                             dmg, entity_name(gs, e.source, src_buf[:]), gs.player.hp)
                         if gs.player.hp <= 0 {
                             gs.player.hp = 0
+                            gs.death_by  = damage_source_name(gs, e)
                             eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
                         }
                     } else {
@@ -475,6 +476,38 @@ process_events :: proc(gs: ^Game_State) {
             }
         }
     }
+}
+
+// Player-facing names for the death screen.
+@(rodata)
+damage_cause_names := [Damage_Cause]string{
+    .None       = "the world",
+    .Fall       = "the fall",
+    .Lava       = "lava",
+    .Magic_Lava = "magic lava",
+    .Void_Sky   = "the void",
+    .Steam      = "steam",
+}
+
+@(rodata)
+enemy_kind_names := [Enemy_Kind]string{
+    .Garm        = "Garm",
+    .Undead      = "a draugr",
+    .Fire_Sprite = "a fire sprite",
+    .Builder     = "a Builder",
+    .Raider      = "a Tunneller",
+    .Vargr       = "a Vargr",
+}
+
+// Who or what dealt a Damage_Dealt, in words.  A projectile can outlive its
+// owner, so a dead source reads as something unseen.
+damage_source_name :: proc(gs: ^Game_State, e: Event) -> string {
+    if e.source == INVALID_ENTITY do return damage_cause_names[e.cause]
+    i := entity_id_to_enemy_index(e.source)
+    if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
+        return enemy_kind_names[gs.enemies.data[i].kind]
+    }
+    return "something unseen"
 }
 
 handle_entity_died :: proc(gs: ^Game_State, e: Event) {
