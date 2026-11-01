@@ -9,8 +9,7 @@ Glenn is your one contact. Use they/them for Glenn in text unless told otherwise
 1. Read `ops/seat/` and this note, then `GET /api/boards/gnipahellir/tasks`.
 2. Post takeover to `claude-gnipa-review-a4c7` and `claude-gnipa-impl-c3f1`: they
    still address the old name.
-3. In `ops/seat/start-seat.sh` set `COORD` to your name, in both Glenn's checkout
-   and the `seats` branch.
+3. In `ops/seat/start-seat.sh` set `COORD` to your name, and commit it.
 4. Tell Glenn when you are up. The old session stays open until run 4 reports.
 
 ## Git state
@@ -18,17 +17,15 @@ Glenn is your one contact. Use they/them for Glenn in text unless told otherwise
 - `master` is at the commit of this note, on top of 5624aae. Not pushed. Never push unless Glenn asks.
 - `cards`: cards 9-16 (Done, except 16), 10 commits ahead of master.
 - `seat/claude-gnipa-impl-c3f1`: `cards` plus 17 (8a4dc2f), 18 (5bbfa99), 37 (3e3895e).
-- `seats`: card 36, commits 57a3c1a and fb5f713. `ops/` is still untracked in
-  Glenn's checkout, with the same files as that branch. It must be moved aside
-  to land the branch: never delete it unchecked, compare it first.
+- Card 36 (seat script) is Done and on master; `ops/` is tracked now.
 - `agent-api`: worktree `/home/glennwiz/dev/Gnipahellir-agent-api`, run 4 lives there.
-- `/home/glennwiz/dev/Gnipahellir-cards` and `Gnipahellir-seats-wt` are worktrees to remove once landed.
+- `/home/glennwiz/dev/Gnipahellir-cards` is a worktree to remove once landed.
 
 ## Board state
 
-In Review with `claude-gnipa-review-a4c7`: 16, 17, 18, 36, 37. It has that queue.
+In Review with `claude-gnipa-review-a4c7`: 16, 17, 18, 37. It has that queue.
 When they are approved:
-1. Land `seats`, then `cards`, then the implementer's branch, to master.
+1. Land `cards`, then the implementer's branch, to master.
 2. Check each cleanly: `odin build src`, the same with `-define:GAME_DEBUG=false`, `odin test src`.
 3. Close the implementer seat and remove its worktree.
 
