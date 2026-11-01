@@ -480,7 +480,7 @@ process_events :: proc(gs: ^Game_State) {
                 gs.game_won = true
                 gs.stats.runs_played += 1
                 gs.stats.runs_won    += 1
-                _ = save_stats(&gs.stats)   // the victory survives even a crash
+                _ = save_stats(gs)   // the victory survives even a crash
                 audio_play(&gs.audio, .Fanfare)
                 log_action(gs, "GAME WON after %.0f s, %d kills",
                     gs.elapsed_time, gs.stats.total_kills)
@@ -528,7 +528,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
         eq_push(&gs.events, Event{type = .Player_Died})
         audio_play(&gs.audio, .Death)
         gs.stats.runs_played += 1
-        _ = save_stats(&gs.stats)  // persist immediately — a crash after death shouldn't lose the run
+        _ = save_stats(gs)  // persist immediately — a crash after death shouldn't lose the run
     } else {
         i := entity_id_to_enemy_index(e.source)
         if i >= 0 && i < MAX_ENEMIES && gs.enemies.active[i] {
