@@ -387,6 +387,56 @@ agent_view_glide_finishes_while_the_game_waits :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_seeds_chain_while_driving :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, 1234)
+    gs.agent.driving = true
+    a := agent_new_game_seed(gs)
+    b := agent_new_game_seed(gs)
+    testing.expect_value(t, a, b)
+    testing.expect(t, a != 1234, "a new life is a new world")
+}
+
+// The promise a replay rests on: the same acts from the same seed end the same.
+@(test)
+agent_same_acts_same_seed_same_world :: proc(t: ^testing.T) {
+    play :: proc() -> (pos: [2]f32, hp: int, terrain_sum: u64, enemies: [8][2]f32) {
+        gs := new(Game_State)
+        defer free(gs)
+        link := new(Agent_Link)
+        defer free(link)
+        game_state_init(gs, 777)
+        gs.ui.show_title = false
+        gs.player.pos = SURFACE_HOME_POS
+        link.connected = true
+        script := [?]string{
+            `{"cmd":"act","move":"right","frames":90}`,
+            `{"cmd":"act","jump":true,"move":"left","frames":40}`,
+            `{"cmd":"act","mine":[92,53],"frames":120}`,
+            `{"cmd":"act","frames":300}`,
+        }
+        for line in script {
+            agent_handle_line(link, gs, line)
+            for link.frames_left > 0 {
+                agent_drive(link, gs)
+                game_update(gs)
+                agent_after_tick(link, gs)
+            }
+        }
+        for tile in gs.world.terrain do terrain_sum = terrain_sum*31 + u64(tile)
+        for i in 0 ..< len(enemies) do enemies[i] = gs.enemies.data[i].pos
+        return gs.player.pos, gs.player.hp, terrain_sum, enemies
+    }
+    p1, h1, t1, e1 := play()
+    p2, h2, t2, e2 := play()
+    testing.expect_value(t, p1, p2)
+    testing.expect_value(t, h1, h2)
+    testing.expect_value(t, t1, t2)
+    testing.expect_value(t, e1, e2)
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
@@ -399,7 +449,7 @@ agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     net.set_blocking(sock, false)
     link.listener  = sock
     link.listening = true
-    defer agent_close(link)
+    defer agent_close(link, gs)
 
     client, derr := net.dial_tcp(net.Endpoint{address = net.IP4_Loopback, port = PORT})
     testing.expect_value(t, derr, nil)

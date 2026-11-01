@@ -20,6 +20,13 @@ package game
 // The link lives in main, not in Game_State: game_state_init zeroes gs on a New
 // Game, and the socket has to outlive that.  gs.agent is rewritten every frame.
 //
+// A run is recorded and repeatable.  acts.jsonl holds every act with where it
+// left the player, and the same acts from the same GNIPA_SEED play out the same:
+// the frame clock starts at the first connect, the step is fixed, and a New Game
+// while driving derives its seeds from the last one.  `realtime` and a disconnect
+// let wall time in, so they are recorded, and a replay stops at them.
+// tools/agent_replay.py plays a recording back.
+//
 // An agent run writes a save and truncates action.log in the working directory,
 // so agent_open refuses to run anywhere that does not hold AGENT_SANDBOX_FILE.
 // tools/agent_play.sh builds such a folder.
@@ -46,6 +53,8 @@ AGENT_ITEMS_MAX    :: 2000 // ground piles in one reply; caps it well inside AGE
 AGENT_SEND_TIMEOUT :: 2 * time.Second // a client that stops reading is dropped
 
 // Printable, JSON-safe, one per distinct tile type seen in a view.
+AGENT_ACTS_FILE    :: "acts.jsonl"
+
 AGENT_TILE_CHARS :: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#*+-=~:;.,!?@$%^&()[]{}<>/|_"
 
 Agent_Link :: struct {
@@ -58,6 +67,10 @@ Agent_Link :: struct {
     first:       bool,           // its first frame has not run yet
     frames_left: int,
     reply_due:   bool,           // an act finished: its state waits in out
+    recording:   bool,
+    acts_file:   ^os.File,
+    act_len:     int,            // the act in progress, as it was sent
+    act_line:    [AGENT_LINE_MAX]u8,
     in_len:      int,
     in_buf:      [AGENT_LINE_MAX]u8,
     out_len:     int,
@@ -88,12 +101,29 @@ agent_open :: proc(link: ^Agent_Link) {
     net.set_blocking(sock, false)
     link.listener  = sock
     link.listening = true
+    if fd, ferr := os.open(AGENT_ACTS_FILE, os.O_WRONLY | os.O_CREATE | os.O_APPEND); ferr == nil {
+        link.acts_file = fd
+        link.recording = true
+    }
     fmt.printfln("agent api: listening on 127.0.0.1:%d", port)
 }
 
-agent_close :: proc(link: ^Agent_Link) {
-    if link.connected do agent_drop_client(link)
+// The boot world: GNIPA_SEED when a run names one, so a replay starts in it.
+agent_boot_seed :: proc(link: ^Agent_Link) -> u32 {
+    if link.listening do return new_game_world_seed()
+    return DEFAULT_WORLD_SEED
+}
+
+// The seed for a New Game: chained while an agent drives, so one seed fixes every
+// world of a run.
+agent_new_game_seed :: proc(gs: ^Game_State) -> u32 {
+    return gs.world_seed * 2654435761 + 1 if gs.agent.driving else new_game_world_seed()
+}
+
+agent_close :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    if link.connected do agent_drop_client(link, gs)
     if link.listening do net.close(link.listener)
+    if link.recording do os.close(link.acts_file)
     link.listening = false
 }
 
@@ -103,7 +133,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
 
     if link.reply_due {
         link.reply_due = false
-        agent_send(link)
+        agent_send(link, gs)
     }
     if !link.connected {
         client, _, err := net.accept_tcp(link.listener)
@@ -114,6 +144,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
             link.connected = true
             link.realtime  = false
             link.in_len    = 0
+            if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
         }
     }
     if link.connected && link.frames_left == 0 do agent_read(link, gs)
@@ -145,6 +176,7 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
     link.frames_left -= 1
     if link.frames_left == 0 {
         link.cmd = {}
+        agent_record_act(link, gs)
         agent_reply_state(link, gs, nil)
         link.reply_due = true
     }
@@ -157,20 +189,20 @@ agent_read :: proc(link: ^Agent_Link, gs: ^Game_State) {
         if nl := agent_newline(link); nl >= 0 {
             line := string(link.in_buf[:nl])
             agent_handle_line(link, gs, line)
-            agent_send(link)
+            agent_send(link, gs)
             remaining := link.in_len - nl - 1
             copy(link.in_buf[:], link.in_buf[nl + 1:link.in_len])
             link.in_len = remaining
             continue
         }
         if link.in_len == len(link.in_buf) {
-            agent_drop_client(link)  // a line this long is not the protocol
+            agent_drop_client(link, gs)  // a line this long is not the protocol
             return
         }
         n, err := net.recv_tcp(link.client, link.in_buf[link.in_len:])
         if err == .Would_Block || err == .Timeout do return
         if err != nil || n == 0 {
-            agent_drop_client(link)
+            agent_drop_client(link, gs)
             return
         }
         link.in_len += n
@@ -183,8 +215,26 @@ agent_newline :: proc(link: ^Agent_Link) -> int {
     return -1
 }
 
+// One line per finished act: the request as sent, and where it left the player,
+// which is what a replay checks itself against.
 @(private="file")
-agent_drop_client :: proc(link: ^Agent_Link) {
+agent_record_act :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    if !link.recording do return
+    p := &gs.player
+    line := fmt.tprintf(`{{"f":%d,"act":%s,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f,"lvl":%d,"enemies":%d}}` + "\n",
+        gs.frame, string(link.act_line[:link.act_len]), p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index, gs.enemies.count)
+    os.write_string(link.acts_file, line)
+}
+
+@(private="file")
+agent_record_mark :: proc(link: ^Agent_Link, gs: ^Game_State, mark: string) {
+    if !link.recording do return
+    os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"mark":"%s"}}` + "\n", gs.frame, mark))
+}
+
+@(private="file")
+agent_drop_client :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    agent_record_mark(link, gs, "disconnect")
     net.close(link.client)
     link.connected   = false
     link.realtime    = false
@@ -195,13 +245,13 @@ agent_drop_client :: proc(link: ^Agent_Link) {
 
 // A reply is one line; a short send means the client stopped reading.
 @(private="file")
-agent_send :: proc(link: ^Agent_Link) {
+agent_send :: proc(link: ^Agent_Link, gs: ^Game_State) {
     if !link.connected || link.out_len == 0 do return
     net.set_blocking(link.client, true)
     net.set_option(link.client, .Send_Timeout, AGENT_SEND_TIMEOUT)
     n, err := net.send_tcp(link.client, link.out[:link.out_len])
     net.set_blocking(link.client, false)
-    if err != nil || n != link.out_len do agent_drop_client(link)
+    if err != nil || n != link.out_len do agent_drop_client(link, gs)
 }
 
 // One request line.  Leaves the reply in link.out, except for an act, which
@@ -235,6 +285,7 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         link.first       = true
         link.frames_left = frames
         link.out_len     = 0
+        link.act_len     = copy(link.act_line[:], line)
     case "realtime":
         on, ok := root["on"].(json.Boolean)
         if !ok {
@@ -242,6 +293,7 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
             return
         }
         link.realtime = on
+        agent_record_mark(link, gs, "realtime on" if on else "realtime off")
         agent_reply_text(link, `{"ok":true}`)
     case:
         agent_reply_error(link, "unknown cmd: use state, act or realtime")
@@ -400,6 +452,7 @@ agent_input :: proc(gs: ^Game_State) {
 
     if !gs.agent.framed {
         gs.agent.framed = true
+        gs.loot_rng = u64(gs.world_seed) * 2 + 1  // the clock seeds it otherwise
         request_zoom(gs, (AGENT_VIEW_ZOOM - gs.zoom_target) / ZOOM_STEP, {}, false)
     }
 

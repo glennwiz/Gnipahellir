@@ -28,7 +28,6 @@ main :: proc() {
     agent := new(Agent_Link)
     defer free(agent)
     agent_open(agent)  // before anything writes: it can refuse to run in this folder
-    defer agent_close(agent)
 
     // VSYNC_HINT syncs buffer swaps to the display (no tearing); the 60-fps cap
     // stays because the sim integrates on the real frame time and the physics
@@ -51,7 +50,8 @@ main :: proc() {
 
     gs := new(Game_State)
     defer free(gs)
-    game_state_init(gs)
+    defer agent_close(agent, gs)
+    game_state_init(gs, agent_boot_seed(agent))
     audio_init(&gs.audio)
     assets_init(&gs.assets)
     load_pixel_art(gs) // missing/invalid file leaves every sprite's has_data false (procedural fallback)

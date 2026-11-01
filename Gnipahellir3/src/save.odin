@@ -316,7 +316,7 @@ snapshot_menu_open :: proc(gs: ^Game_State) {
 start_new_game :: proc(gs: ^Game_State) {
     flush_action_log(gs)  // game_state_init doesn't preserve the log buffer
     os.remove(SAVE_FILE)
-    seed := new_game_world_seed()   // random per run, or GNIPA_SEED override
+    seed := agent_new_game_seed(gs)   // random per run, GNIPA_SEED override, chained under an agent
     game_state_init(gs, seed)
     log_action(gs, "New game - world seed %d", seed)
     gs.player.pos            = SURFACE_HOME_POS
