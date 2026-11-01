@@ -4552,6 +4552,68 @@ garm_fight_soak :: proc(t: ^testing.T) {
         f32(frame_done) / 60.0, fireballs, player_hits)
 }
 
+// Run 3, f103091: the player stood still in a cage at (143,94) with Garm outside
+// it at (137.18,96.2).  Every stone he smashed from the x=139 wall came back
+// within 10 frames, 34 times over, and he never moved again.
+@(test)
+garm_breaks_into_his_own_cage_and_keeps_fighting :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+
+    // An open room with a floor, so the only wall between them is the cage.
+    for y in 88 ..= 98 {
+        for x in 130 ..= 156 { set_tile(&gs.world, x, y, .Air) }
+    }
+    for x in 130 ..= 156 { set_tile(&gs.world, x, 98, .Stone) }
+
+    gs.player.pos = {143.17, 96 - PLAYER_H + 1}
+    g.pos   = {132, 98 - GARM_H}
+    g.hp    = GARM_PHASE3_HP
+    g.builder.den_built = true
+    g.garm.phase        = .Ring
+    gs.cage.anchor      = player_tile(&gs.player)
+    a := gs.cage.anchor
+    wall_x := int(a.x) - GARM_CAGE_HALF_W - 1
+    for y in int(a.y) - GARM_CAGE_HALF_H - 1 ..= int(a.y) + GARM_CAGE_HALF_H + 1 {
+        set_tile(&gs.world, wall_x, y, .Stone)
+    }
+
+    smashes, bites: int
+    for _ in 0 ..< 20 * 60 {
+        gs.player.hp = 1000
+        gs.player.vel = {}
+        update_enemies(gs)
+        update_projectiles(gs)
+        n  := gs.events.size
+        qi := gs.events.head
+        for _ in 0 ..< n {
+            ev := gs.events.events[qi]
+            if ev.type == .Builder_Mined && int(ev.tile.x) == wall_x { smashes += 1 }
+            if ev.type == .Damage_Dealt && ev.target == PLAYER_ID { bites += 1 }
+            qi = (qi + 1) % MAX_EVENTS
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    testing.expect_value(t, gs.cage.anchor, a)
+    testing.expectf(t, smashes <= 8, "Garm should not chew one wall forever (%d smashes)", smashes)
+    testing.expect(t, f32(wall_x) < g.pos.x, "Garm should be through the wall")
+    testing.expect(t, chebyshev(builder_tile(g), player_tile(&gs.player)) <= GARM_BITE_REACH,
+        "Garm should stand in biting reach of the caged player")
+    testing.expect(t, bites >= 1, "Garm should keep fighting inside the cage")
+
+    // The breach closes behind him, and the cage goes on to flood.
+    for y in int(a.y) - GARM_CAGE_HALF_H - 1 ..= int(a.y) + GARM_CAGE_HALF_H + 1 {
+        testing.expectf(t, is_solid(&gs.world, wall_x, y), "breach cell y=%d should close behind him", y)
+    }
+    testing.expect_value(t, g.garm.phase, Garm_Phase.Flood)
+}
+
 // The exact geometry from Glenn's 2026-08-13 live save, replayed headlessly:
 // Garm stood at (146.7,99.2) with his 1.6-wide body's left toe resting on the
 // ledge corner (146,101), his waypoint (147,101) directly BELOW him.  dx ~ 0
