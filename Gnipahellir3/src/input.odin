@@ -142,12 +142,15 @@ update_input :: proc(gs: ^Game_State) {
         return
     }
 
-    // Snapshot menu (F3): ten save/load slots. Takes all input while open;
-    // the sim is frozen (see game_update). Checked before the death screen so
-    // a debug build can still rewind a doomed run to an earlier snapshot.
-    if gs.ui.show_snapshots {
-        update_snapshots_input(gs)
-        return
+    // Snapshot menu (F3): ten save/load slots, debug builds only — in release
+    // nothing opens it, so death stays final. Takes all input while open; the
+    // sim is frozen (see game_update). Checked before the death screen so a
+    // doomed run can still be rewound to an earlier snapshot.
+    when GAME_DEBUG {
+        if gs.ui.show_snapshots {
+            update_snapshots_input(gs)
+            return
+        }
     }
 
     // Pause menu takes over all input while open: ESC (or Resume) closes it,
@@ -438,9 +441,11 @@ update_input :: proc(gs: ^Game_State) {
             gs.player.inventory.selected = gs.player.inventory.selected == i ? -1 : i
         }
     }
-    // F3: snapshot menu (save/load slots).
-    if rl.IsKeyPressed(.F3) {
-        snapshot_menu_open(gs)
+    // F3: snapshot menu (save/load slots), debug builds only.
+    when GAME_DEBUG {
+        if rl.IsKeyPressed(.F3) {
+            snapshot_menu_open(gs)
+        }
     }
     if rl.IsKeyPressed(.ESCAPE) {
         gs.player.inventory.selected = -1  // deselect
