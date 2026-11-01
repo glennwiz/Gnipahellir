@@ -15,25 +15,61 @@ import "core:strconv"
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
-SAVE_VERSION :: i32(27)  // v27: world_seed, so a reload generates the same later levels
+SAVE_VERSION :: i32(28)  // v28: MAX_ENEMIES 256 (Glenn's Q5), down from 1024
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
 // (save_data_size_probe logs the real number, plus len(Item).)
-SAVE_DATA_EXPECTED_SIZE :: 7_555_552   // EXPERIMENT: MAX_ENEMIES 1024
+SAVE_DATA_EXPECTED_SIZE :: 4_048_864
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
-// v24, v25 and v26 are v27 cut short before grave, risen and world_seed, so
-// they read straight into the front of Save_Data and the rest stays zero: no
-// stone, no kit, and seed 0, which is what an old run's reload always used.
+// Every older save was written at MAX_ENEMIES 1024, so those files are read
+// through the frozen Save_Data_1024 below, then shrunk (save_data_shrink).  v24,
+// v25 and v26 are v27 cut short before grave, risen and world_seed, and the rest
+// stays zero: no stone, no kit, and seed 0, which is what an old run's reload
+// always used.
 SAVE_V24_SIZE :: 7_554_872
 SAVE_V25_SIZE :: 7_554_968
 SAVE_V26_SIZE :: 7_555_544
-#assert(offset_of(Save_Data, grave) == SAVE_V24_SIZE)
-#assert(offset_of(Save_Data, risen) == SAVE_V25_SIZE)
-#assert(offset_of(Save_Data, world_seed) == SAVE_V26_SIZE)
+SAVE_V27_SIZE :: 7_555_552
+#assert(offset_of(Save_Data_1024, grave) == SAVE_V24_SIZE)
+#assert(offset_of(Save_Data_1024, risen) == SAVE_V25_SIZE)
+#assert(offset_of(Save_Data_1024, world_seed) == SAVE_V26_SIZE)
+#assert(size_of(Save_Data_1024) == SAVE_V27_SIZE)
+
+ENEMIES_1024 :: 1024   // FROZEN: the cap every save before v28 was written at
+
+Enemy_Store_1024 :: struct {
+    data:   [ENEMIES_1024]Enemy,
+    active: [ENEMIES_1024]bool,
+    count:  int,
+}
+
+Level_Store_1024 :: struct {
+    worlds:    [NUM_LEVELS]World_Grid,
+    enemies:   [NUM_LEVELS]Enemy_Store_1024,
+    generated: [NUM_LEVELS]bool,
+}
+
+Save_Data_1024 :: struct {
+    version:      i32,
+    level_index:  int,
+    world:        World_Grid,
+    levels:       Level_Store_1024,
+    player:       Player,
+    enemies:      Enemy_Store_1024,
+    golems:       Golem_System,
+    sim:          Sim_State,
+    progression:  Progression_State,
+    dimension:    Dimension_State,
+    elapsed_time: f32,
+    frame:        u64,
+    grave:        Grave_Record,
+    risen:        Risen_Hero,
+    world_seed:   u32,
+}
 
 // One-version migration keeps the active playtest run intact.
 //
@@ -66,9 +102,9 @@ Save_Data_v23 :: struct {
     version:      i32,
     level_index:  int,
     world:        World_Grid,
-    levels:       Level_Store,
+    levels:       Level_Store_1024,
     player:       Player,
-    enemies:      Enemy_Store,
+    enemies:      Enemy_Store_1024,
     golems:       Golem_System,
     sim:          Sim_State,
     progression:  Progression_State_v23,
@@ -76,7 +112,7 @@ Save_Data_v23 :: struct {
     elapsed_time: f32,
     frame:        u64,
 }
-#assert(size_of(Save_Data_v23) == 7_554_824)   // EXPERIMENT: 3_171_464 at MAX_ENEMIES 64
+#assert(size_of(Save_Data_v23) == 7_554_824)
 
 Save_Data :: struct {
     version:      i32,
@@ -96,24 +132,103 @@ Save_Data :: struct {
     world_seed:   u32,           // keep last: see SAVE_V26_SIZE
 }
 
+// Slots are kept where they fit: enemy_alloc fills from the bottom, so a 1024
+// save rarely holds anything past 255.  Those above move down into free slots
+// and their entity_map marks follow; with no free slot the body is gone, the
+// one thing the smaller cap costs.  Returns where each old slot went, -1 if lost.
+enemy_store_shrink :: proc(from: ^Enemy_Store_1024, to: ^Enemy_Store, w: ^World_Grid) -> (moved: [ENEMIES_1024]int) {
+    to^ = {}
+    for i in 0 ..< ENEMIES_1024 do moved[i] = -1
+    for i in 0 ..< MAX_ENEMIES {
+        if !from.active[i] do continue
+        to.data[i]   = from.data[i]
+        to.active[i] = true
+        to.count    += 1
+        moved[i]     = i
+    }
+    free_slot := 0
+    for i in MAX_ENEMIES ..< ENEMIES_1024 {
+        if !from.active[i] do continue
+        for free_slot < MAX_ENEMIES && to.active[free_slot] do free_slot += 1
+        if free_slot == MAX_ENEMIES do break
+        to.data[free_slot]   = from.data[i]
+        to.active[free_slot] = true
+        to.count += 1
+        moved[i]  = free_slot
+    }
+    for &id in w.entity_map {
+        if id == PLAYER_ID || id == INVALID_ENTITY do continue
+        i := entity_id_to_enemy_index(id)
+        id = i < ENEMIES_1024 && moved[i] >= 0 ? enemy_entity_id(moved[i]) : INVALID_ENTITY
+    }
+    return
+}
+
+// Returns `moved` for the stashed surface, where a risen hero may be standing.
+level_store_shrink :: proc(from: ^Level_Store_1024, to: ^Level_Store) -> (surface: [ENEMIES_1024]int) {
+    to.worlds    = from.worlds
+    to.generated = from.generated
+    for i in 0 ..< NUM_LEVELS {
+        moved := enemy_store_shrink(&from.enemies[i], &to.enemies[i], &to.worlds[i])
+        if i == LEVEL_SURFACE do surface = moved
+    }
+    return
+}
+
+// A body lost to the cap must not take the kit with it: the kit stays in the
+// record, unwalked, and the hero can rise again.
+@(private="file")
+risen_after_shrink :: proc(r: ^Risen_Hero, moved: ^[ENEMIES_1024]int) {
+    if !r.walking do return
+    r.slot = moved[r.slot]
+    if r.slot < 0 do r.walking, r.slot = false, 0
+}
+
+// An older file's run, at the current cap.  Returns a new Save_Data.
+save_data_shrink :: proc(old: ^Save_Data_1024) -> ^Save_Data {
+    sd := new(Save_Data)
+    sd.version      = SAVE_VERSION
+    sd.level_index  = old.level_index
+    sd.world        = old.world
+    sd.player       = old.player
+    sd.golems       = old.golems
+    sd.sim          = old.sim
+    sd.progression  = old.progression
+    sd.dimension    = old.dimension
+    sd.elapsed_time = old.elapsed_time
+    sd.frame        = old.frame
+    sd.grave        = old.grave
+    sd.risen        = old.risen
+    sd.world_seed   = old.world_seed
+    surface := level_store_shrink(&old.levels, &sd.levels)
+    moved := enemy_store_shrink(&old.enemies, &sd.enemies, &sd.world)
+    risen_after_shrink(&sd.risen, old.level_index == LEVEL_SURFACE ? &moved : &surface)
+    return sd
+}
+
 // The bytes as a Save_Data if they are a run that can resume, else nil.  Older
 // files are shorter; the caller frees the result.
 save_data_read :: proc(data: []u8) -> ^Save_Data {
-    version: i32
-    switch len(data) {
-    case size_of(Save_Data): version = SAVE_VERSION
-    case SAVE_V26_SIZE:      version = 26
-    case SAVE_V25_SIZE:      version = 25
-    case SAVE_V24_SIZE:      version = 24
-    case:                    return nil
-    }
-    sd := new(Save_Data)
-    mem.copy(sd, raw_data(data), len(data))
-    if sd.version != version || sd.player.dead {  // dead runs don't resume
+    if len(data) == size_of(Save_Data) {
+        sd := new(Save_Data)
+        mem.copy(sd, raw_data(data), len(data))
+        if sd.version == SAVE_VERSION && !sd.player.dead do return sd  // dead runs don't resume
         free(sd)
         return nil
     }
-    return sd
+    version: i32
+    switch len(data) {
+    case SAVE_V27_SIZE: version = 27
+    case SAVE_V26_SIZE: version = 26
+    case SAVE_V25_SIZE: version = 25
+    case SAVE_V24_SIZE: version = 24
+    case:               return nil
+    }
+    old := new(Save_Data_1024)
+    defer free(old)
+    mem.copy(old, raw_data(data), len(data))
+    if old.version != version || old.player.dead do return nil
+    return save_data_shrink(old)
 }
 
 save_game :: proc(gs: ^Game_State) -> bool {
@@ -162,9 +277,9 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
 
         gs.level_index = old.level_index
         gs.world = old.world
-        gs.levels = old.levels
+        _ = level_store_shrink(&old.levels, &gs.levels)
         gs.player = old.player
-        gs.enemies = old.enemies
+        _ = enemy_store_shrink(&old.enemies, &gs.enemies, &gs.world)
         gs.golems = old.golems
         gs.sim = old.sim
         gs.dimension = old.dimension

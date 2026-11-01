@@ -2,6 +2,8 @@ package game
 
 import "core:testing"
 import "core:mem"
+import "core:time"
+import "core:slice"
 import rl "vendor:raylib"
 import "core:strings"
 import "core:fmt"
@@ -10960,36 +10962,104 @@ a_saved_run_keeps_its_stone_and_a_v24_save_still_loads :: proc(t: ^testing.T) {
         "Here fell the 3rd hero, to a Vargr, in Hell, after 1:01.")
     testing.expect_value(t, grave_count_item(back, .Sword), 1)
 
-    // A v24 or v25 file is this one cut short, with the old number.
-    bytes, err := os.read_entire_file_from_path(PATH, context.allocator)
-    testing.expect(t, err == nil, "read")
-    defer delete(bytes)
-    v := i32(26)
-    mem.copy(raw_data(bytes), &v, size_of(v))
-    testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V26_SIZE]) == nil, "wrote v26")
-    v26 := test_state()
-    defer free(v26)
-    testing.expect(t, load_game_from(v26, PATH), "v26 loads")
-    testing.expect(t, v26.grave.active, "a v26 world keeps its stone")
+    // An older file: the same run at the old cap, cut short with the old number.
+    old_run := save_1024_fixture(gs)
+    defer free(old_run)
+    for c in ([3]struct{version: i32, size: int}{{26, SAVE_V26_SIZE}, {25, SAVE_V25_SIZE}, {24, SAVE_V24_SIZE}}) {
+        old_run.version = c.version
+        whole := mem.ptr_to_bytes(old_run)
+        testing.expect(t, os.write_entire_file(PATH, whole[:c.size]) == nil, "wrote")
+        was := test_state()
+        defer free(was)
+        testing.expect(t, load_game_from(was, PATH), "an older save loads")
+        testing.expect_value(t, was.player.hp, gs.player.hp)
+        testing.expect_value(t, was.grave.active, c.version >= 25)
+        testing.expect(t, !was.risen.has_kit, "older worlds have no kit")
+        testing.expect(t, snapshot_restore_from(was, PATH), "and restores as a snapshot")
+    }
+}
 
-    v = 25
-    mem.copy(raw_data(bytes), &v, size_of(v))
-    testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V25_SIZE]) == nil, "wrote v25")
-    was := test_state()
-    defer free(was)
-    testing.expect(t, load_game_from(was, PATH), "v25 loads")
-    testing.expect(t, was.grave.active, "a v25 world keeps its stone")
-    testing.expect(t, !was.risen.has_kit, "a v25 world has no kit")
+@(private="file")
+save_1024_fixture :: proc(gs: ^Game_State) -> ^Save_Data_1024 {
+    old := new(Save_Data_1024)
+    old.version     = 27
+    old.level_index = gs.level_index
+    old.world       = gs.world
+    old.player      = gs.player
+    old.golems      = gs.golems
+    old.sim         = gs.sim
+    old.progression = gs.progression
+    old.dimension   = gs.dimension
+    old.elapsed_time = gs.elapsed_time
+    old.frame       = gs.frame
+    old.grave       = gs.grave
+    old.risen       = gs.risen
+    old.world_seed  = gs.world_seed
+    old.levels.worlds    = gs.levels.worlds
+    old.levels.generated = gs.levels.generated
+    for i in 0 ..< MAX_ENEMIES {
+        old.enemies.data[i]   = gs.enemies.data[i]
+        old.enemies.active[i] = gs.enemies.active[i]
+    }
+    old.enemies.count = gs.enemies.count
+    return old
+}
 
-    v = 24
-    mem.copy(raw_data(bytes), &v, size_of(v))
-    testing.expect(t, os.write_entire_file(PATH, bytes[:SAVE_V24_SIZE]) == nil, "wrote v24")
-    old := test_state()
+@(test)
+a_1024_save_shrinks_to_the_cap_and_keeps_its_bodies :: proc(t: ^testing.T) {
+    PATH := "test_shrink_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    old := save_1024_fixture(gs)
     defer free(old)
-    testing.expect(t, load_game_from(old, PATH), "v24 loads")
-    testing.expect(t, !old.grave.active, "a v24 world has no grave record")
-    testing.expect_value(t, old.player.hp, gs.player.hp)
-    testing.expect(t, snapshot_restore_from(old, PATH), "a v24 snapshot restores")
+
+    // A body high above the new cap, marked on the map.
+    HIGH :: 700
+    old.enemies.data[HIGH] = Enemy{kind = .Raider, hp = 3, hp_max = 3, pos = {50, 40}}
+    old.enemies.active[HIGH] = true
+    old.enemies.count += 1
+    idx := grid_idx(50, 40)
+    old.world.entity_map[idx] = enemy_entity_id(HIGH)
+    old.risen = {has_kit = true, walking = true, slot = HIGH}
+    old.risen.kit[0] = {item = .Sword, count = 1}
+    count_before := old.enemies.count
+
+    old.version = 27
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "a v27 save at 1024 loads")
+    testing.expect_value(t, back.enemies.count, count_before)
+    slot := back.risen.slot
+    testing.expect(t, slot < MAX_ENEMIES && back.enemies.active[slot], "the hero's body came down with them")
+    testing.expect_value(t, back.enemies.data[slot].kind, Enemy_Kind.Raider)
+    testing.expect_value(t, back.world.entity_map[idx], enemy_entity_id(slot))
+
+    // A store past the new cap loses the overflow, and the map marks with it,
+    // but a kit on a lost body stays in the record.
+    full := new(Enemy_Store_1024)
+    defer free(full)
+    for i in 0 ..< MAX_ENEMIES + 2 {
+        full.active[i] = true
+        full.data[i].kind = .Raider
+        full.count += 1
+    }
+    w := new(World_Grid)
+    defer free(w)
+    w.entity_map[5] = enemy_entity_id(MAX_ENEMIES + 1)
+    out := new(Enemy_Store)
+    defer free(out)
+    moved := enemy_store_shrink(full, out, w)
+    testing.expect_value(t, out.count, MAX_ENEMIES)
+    testing.expect_value(t, moved[MAX_ENEMIES + 1], -1)
+    testing.expect_value(t, w.entity_map[5], INVALID_ENTITY)
+    old.enemies = full^
+    old.risen.slot = MAX_ENEMIES + 1
+    shrunk := save_data_shrink(old)
+    defer free(shrunk)
+    testing.expect(t, !shrunk.risen.walking, "no body")
+    testing.expect(t, shrunk.risen.has_kit, "but the kit is whole")
 }
 
 @(test)
@@ -11514,4 +11584,78 @@ quench_soak_pays_one_water_per_stone :: proc(t: ^testing.T) {
             }
         }
     }
+}
+
+// ─── Enemy cap (board card 45) ────────────────────────────────────────────────
+
+CAP_TEST_FRAMES :: 240
+CAP_TEST_BLOCK  :: 20
+CAP_SCALE_LIMIT :: 8.0   // four times the bodies may cost at most this many times the frame
+
+@(private="file")
+cap_fill :: proc(gs: ^Game_State, n: int) {
+    gs.enemies = {}
+    gs.player.hp = 1 << 30
+    gs.player.hp_max = 1 << 30
+    for i in 0 ..< n {
+        x := 8 + (i * 7) % (GRID_W - 16)
+        y := 5 + (i * 3) % (SURFACE_Y - 8)
+        kind: Enemy_Kind = i % 2 == 0 ? .Vargr : .Fire_Sprite
+        wave_seed_hunter(gs, kind, x, y)
+    }
+}
+
+@(private="file")
+cap_median :: proc(ns: []i64) -> i64 {
+    slice.sort(ns)
+    return ns[len(ns) / 2]
+}
+
+// The counts decide this test, not a clock.  Two things are asserted: the budgets
+// that keep a frame bounded hold at the cap, and the cap's frame scales with the
+// small swarm's.  The two swarms run in alternating blocks on the same machine at
+// the same moment, so load inflates both and the ratio survives it.  Wall times
+// are logged for a reader; no absolute time can fail the test.
+@(test)
+a_full_enemy_store_holds_its_budgets_and_scales :: proc(t: ^testing.T) {
+    big := test_state()
+    defer free(big)
+    small := test_state()
+    defer free(small)
+    cap_fill(big, MAX_ENEMIES)
+    cap_fill(small, MAX_ENEMIES / 4)
+    testing.expect_value(t, big.enemies.count, MAX_ENEMIES)
+    _, more := enemy_alloc(&big.enemies)
+    testing.expect(t, !more, "the store is full at the cap")
+
+    big_ns: [CAP_TEST_FRAMES]i64
+    small_ns: [CAP_TEST_FRAMES]i64
+    worst_searches := 0
+    for f in 0 ..< CAP_TEST_FRAMES {
+        // Blocks, so neither swarm owns the quiet moments.
+        order := [2]^Game_State{big, small}
+        if (f / CAP_TEST_BLOCK) % 2 == 1 do order = {small, big}
+        for gs in order {
+            gs.frame += 1
+            start := time.tick_now()
+            update_enemies(gs)
+            spent := i64(time.tick_since(start))
+            if gs == big {
+                big_ns[f] = spent
+                worst_searches = max(worst_searches, gs.nav_searches)
+            } else {
+                small_ns[f] = spent
+            }
+            process_events(gs)
+            eq_clear(&gs.events)
+        }
+    }
+    testing.expect(t, worst_searches <= MAX_NAV_SEARCHES_PER_FRAME, "the nav budget holds at the cap")
+    testing.expect_value(t, big.events.dropped, 0)
+
+    b, s := cap_median(big_ns[:]), cap_median(small_ns[:])
+    ratio := f64(b) / f64(max(s, 1))
+    log.infof("enemy cap: %d bodies %.2f ms, %d bodies %.2f ms, ratio %.2f (limit %.1f)",
+        MAX_ENEMIES, f64(b) / 1e6, MAX_ENEMIES / 4, f64(s) / 1e6, ratio, f64(CAP_SCALE_LIMIT))
+    testing.expect(t, ratio <= CAP_SCALE_LIMIT, "the frame must not grow faster than the swarm does")
 }
