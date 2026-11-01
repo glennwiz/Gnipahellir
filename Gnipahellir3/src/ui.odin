@@ -1770,6 +1770,7 @@ draw_station_prompt :: proc(gs: ^Game_State) {
 }
 
 draw_ui :: proc(gs: ^Game_State) {
+	draw_fall_warning(gs)
 	draw_hud(gs)
 	draw_golem_command_strip(gs)
 	draw_hover_label(gs)
@@ -2587,6 +2588,21 @@ draw_item_tooltip :: proc(gs: ^Game_State, item: Item) {
 	if desc != "" {
 		draw_wrapped_text(desc, x + PAD, y + PAD + FONT + 3, ITEM_TOOLTIP_W, FONT, rl.Color{205, 195, 175, 255})
 	}
+}
+
+// Screen edges darken once a drop will hurt (fall_warning).  Under the HUD.
+FALL_WARN_BAND  :: i32(140)
+FALL_WARN_ALPHA :: f32(170)
+
+draw_fall_warning :: proc(gs: ^Game_State) {
+	w := fall_warning(&gs.player)
+	if w <= 0 do return
+	dark := rl.Color{0, 0, 0, u8(FALL_WARN_ALPHA * w)}
+	clear := rl.Color{0, 0, 0, 0}
+	rl.DrawRectangleGradientV(0, 0, UI_W, FALL_WARN_BAND, dark, clear)
+	rl.DrawRectangleGradientV(0, UI_H - FALL_WARN_BAND, UI_W, FALL_WARN_BAND, clear, dark)
+	rl.DrawRectangleGradientH(0, 0, FALL_WARN_BAND, UI_H, dark, clear)
+	rl.DrawRectangleGradientH(UI_W - FALL_WARN_BAND, 0, FALL_WARN_BAND, UI_H, clear, dark)
 }
 
 draw_hud :: proc(gs: ^Game_State) {

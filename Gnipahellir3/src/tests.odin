@@ -4092,6 +4092,32 @@ world_damage_says_what_it_is :: proc(t: ^testing.T) {
 }
 
 @(test)
+fall_warning_starts_past_the_safe_drop :: proc(t: ^testing.T) {
+    p: Player
+    p.fall_peak_y = 10
+
+    p.pos.y = 10 + SAFE_FALL_TILES
+    testing.expect_value(t, fall_warning(&p), 0)   // exactly safe: no warning
+
+    p.pos.y = 10 + SAFE_FALL_TILES + 0.01
+    testing.expect(t, fall_warning(&p) >= FALL_WARN_MIN, "one step past safe shows at once")
+
+    p.pos.y = 10 + SAFE_FALL_TILES + FALL_WARN_RAMP_TILES
+    testing.expect_value(t, fall_warning(&p), 1)
+    p.pos.y += 40
+    testing.expect_value(t, fall_warning(&p), 1)
+
+    p.grounded = true
+    testing.expect_value(t, fall_warning(&p), 0)   // landed
+    p.grounded = false
+    p.dead = true
+    testing.expect_value(t, fall_warning(&p), 0)
+    p.dead = false
+    p.fall_peak_y = 0
+    testing.expect_value(t, fall_warning(&p), 0)   // boot state, peak not armed
+}
+
+@(test)
 player_damage_pops_a_floating_number :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

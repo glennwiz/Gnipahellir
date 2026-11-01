@@ -81,6 +81,19 @@ melee_target :: proc(gs: ^Game_State) -> (best: int, found: bool) {
 SAFE_FALL_TILES   :: f32(5)
 FALL_TILES_PER_HP :: f32(2)
 
+// The fall telegraph: 0 while the drop so far is safe, then FALL_WARN_MIN up to
+// 1 over FALL_WARN_RAMP_TILES.  Water, flight and leaf fall reset the peak every
+// frame, so a fall they break never reads as one.  Pure read, for the overlay.
+FALL_WARN_MIN        :: f32(0.3)
+FALL_WARN_RAMP_TILES :: f32(6)
+
+fall_warning :: proc(p: ^Player) -> f32 {
+    if p.dead || p.grounded || p.fall_peak_y <= 0 do return 0
+    over := p.pos.y - p.fall_peak_y - SAFE_FALL_TILES
+    if over <= 0 do return 0
+    return FALL_WARN_MIN + (1 - FALL_WARN_MIN) * clamp(over / FALL_WARN_RAMP_TILES, 0, 1)
+}
+
 update_player :: proc(gs: ^Game_State) {
     p  := &gs.player
     dt := gs.delta_time
