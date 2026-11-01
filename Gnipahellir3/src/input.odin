@@ -64,6 +64,8 @@ request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: boo
 
 update_input :: proc(gs: ^Game_State) {
     if gs.agent.driving {
+        // The wheel stays with whoever is watching, as the one input not locked out.
+        if wheel := rl.GetMouseWheelMove(); wheel != 0 do request_zoom(gs, wheel, {}, false)
         agent_input(gs)
         return
     }

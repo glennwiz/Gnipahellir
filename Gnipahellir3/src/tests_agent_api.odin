@@ -346,6 +346,27 @@ agent_windows_close_unless_the_act_works_on_them :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_frames_the_view_for_a_watcher_again_after_a_new_game :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_handle_line(link, gs, `{"cmd":"act"}`)
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect_value(t, gs.zoom_target, AGENT_VIEW_ZOOM)
+
+    gs.zoom_target = 3  // the wheel's choice stands for the rest of the game
+    agent_input(gs)
+    testing.expect_value(t, gs.zoom_target, f32(3))
+
+    game_state_init(gs)  // what New Game does: zooms out and forgets
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect_value(t, gs.zoom_target, AGENT_VIEW_ZOOM)
+}
+
+@(test)
 agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)

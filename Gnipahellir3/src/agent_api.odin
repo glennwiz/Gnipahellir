@@ -37,6 +37,7 @@ AGENT_PORT_ENV     :: "GNIPA_AGENT_PORT"
 AGENT_SANDBOX_FILE :: "agent_sandbox"
 AGENT_STEP         :: f32(1.0 / 60.0)
 AGENT_MAX_FRAMES   :: 600
+AGENT_VIEW_ZOOM    :: f32(2.5) // the framing a watching human gets; the wheel still changes it
 AGENT_VIEW_W       :: 41   // default tile view, centered on the player
 AGENT_VIEW_H       :: 25
 AGENT_LINE_MAX     :: 4096
@@ -396,6 +397,11 @@ agent_input :: proc(gs: ^Game_State) {
     inp   := &gs.input
     c     := gs.agent.cmd
     first := gs.agent.first
+
+    if !gs.agent.framed {
+        gs.agent.framed = true
+        request_zoom(gs, (AGENT_VIEW_ZOOM - gs.zoom_target) / ZOOM_STEP, {}, false)
+    }
 
     inp.move_left  = false
     inp.move_right = false

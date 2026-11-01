@@ -520,6 +520,7 @@ Agent_Command :: struct {
 Agent_Drive :: struct {
     driving: bool,
     first:   bool,
+    framed:  bool,  // the view is set for this game; a New Game zeroes it, and with it the zoom
     cmd:     Agent_Command,
 }
 
