@@ -63,6 +63,11 @@ request_zoom :: proc(gs: ^Game_State, wheel: f32, cursor: [2]f32, to_cursor: boo
 }
 
 update_input :: proc(gs: ^Game_State) {
+    if gs.agent.driving {
+        agent_input(gs)
+        return
+    }
+
     inp := &gs.input
 
     // Mouse in virtual-screen space (window -> virtual, letterbox-aware).  UI

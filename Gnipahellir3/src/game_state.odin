@@ -494,6 +494,35 @@ Input_State :: struct {
     golem_paint_button: i8, // 0 none, 1 mark, 2 erase; dedupes held wand paint
 }
 
+// ─── Agent drive (agent_api.odin) ─────────────────────────────────────────────
+
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take }
+
+// One act: held input for its frames, one-shots on the first.  Tiles are only
+// meaningful under their has_ flag.
+Agent_Command :: struct {
+    move:      i8,    // -1 left, 1 right
+    jump:      bool,  // a jump on the first frame, fly-up held
+    down:      bool,  // fly-down held
+    interact:  bool,
+    dismiss:   bool,  // past whatever screen is holding the game up
+    has_mine:  bool,
+    has_place: bool,
+    has_use:   bool,
+    mine:      [2]i32,
+    place:     [2]i32,
+    use:       [2]i32,
+    verb:      Agent_Verb,
+    verb_arg:  i32,
+}
+
+// Rewritten by agent_pump every frame; never saved.
+Agent_Drive :: struct {
+    driving: bool,
+    first:   bool,
+    cmd:     Agent_Command,
+}
+
 // ─── UI ───────────────────────────────────────────────────────────────────────
 
 UI_State :: struct {
@@ -713,6 +742,7 @@ Game_State :: struct {
     events:      Event_Queue,
 
     input:       Input_State,
+    agent:       Agent_Drive,     // an outside agent's input this frame (agent_api.odin); transient, not saved
     bindings:    [Action]rl.KeyboardKey,   // rebindable keys (settings screen)
     ui:          UI_State,
     notify:      Notification_State,

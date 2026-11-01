@@ -25,6 +25,11 @@ screen_transform :: proc() -> (scale: f32, offset: [2]f32) {
 }
 
 main :: proc() {
+    agent := new(Agent_Link)
+    defer free(agent)
+    agent_open(agent)  // before anything writes: it can refuse to run in this folder
+    defer agent_close(agent)
+
     // VSYNC_HINT syncs buffer swaps to the display (no tearing); the 60-fps cap
     // stays because the sim integrates on the real frame time and the physics
     // constants are tuned for dt≈1/60 (BODY_MARGIN < gravity*dt², see
@@ -68,7 +73,9 @@ main :: proc() {
         profile_scope("frame")
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
-        game_update(gs)
+        tick := agent_pump(agent, gs)
+        if tick do game_update(gs)
+        if tick do agent_after_tick(agent, gs)
 
         // Autosave after a meaningful player action (place/pickup/mine/craft),
         // debounced: the multi-MB serialize + blocking write fires at most
