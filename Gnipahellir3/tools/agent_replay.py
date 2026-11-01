@@ -24,6 +24,8 @@ for _ in range(120):
 else:
     sys.exit("the game did not start listening")
 replies = sock.makefile("r")
+sock.sendall(b'{"cmd":"idle","on":false}\n')  # recorded idle ticks are played as acts
+replies.readline()
 
 done, status = 0, 0
 for raw in open(os.path.join(run, "acts.jsonl")):
@@ -31,11 +33,17 @@ for raw in open(os.path.join(run, "acts.jsonl")):
     if "mark" in rec:
         print(f"stopped at frame {rec['f']}: {rec['mark']} let wall time in, so the rest cannot be replayed")
         break
+    if "idle" in rec:
+        sock.sendall((json.dumps({"cmd": "wait", "frames": rec["idle"]}) + "\n").encode())
+        replies.readline()
+        continue
     if "objective" in rec:
         sock.sendall((json.dumps(rec["objective"]) + "\n").encode())
         replies.readline()
         continue
-    sock.sendall((json.dumps(rec["act"]) + "\n").encode())
+    if "played" in rec:  # a plan step the agent overrode part way
+        rec["act"]["frames"] = rec["played"]
+    sock.sendall((json.dumps({**rec["act"], "cmd": rec["act"].get("cmd", "act")}) + "\n").encode())
     reply = json.loads(replies.readline())
     p = reply["player"]
     want = (rec["f"], rec["x"], rec["y"], rec["hp"], rec["lvl"], rec["mana"])

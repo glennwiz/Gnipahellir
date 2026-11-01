@@ -22,6 +22,7 @@ agent_test_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
     gs.ui.show_charselect = false
     gs.player.pos = SURFACE_HOME_POS
     link.connected = true  // no socket: agent_send is only reached through agent_pump
+    link.idle_off  = true  // each test about idling turns it back on
     return
 }
 
@@ -600,6 +601,255 @@ agent_panel_goes_when_the_client_does :: proc(t: ^testing.T) {
     link.listener  = net.TCP_Socket(-1)
     agent_pump(link, gs)
     testing.expect(t, gs.agent.panel == nil)
+}
+
+@(test)
+agent_idles_slowly_then_holds :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    link.idle_off = false
+
+    ticks := 0
+    for _ in 0 ..< AGENT_IDLE_EVERY * AGENT_IDLE_MAX * 2 {
+        if agent_drive(link, gs) {
+            ticks += 1
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expect_value(t, ticks, AGENT_IDLE_MAX)
+
+    // An act starts a new wait.
+    agent_handle_line(link, gs, `{"cmd":"act"}`)
+    agent_drive(link, gs)
+    agent_after_tick(link, gs)
+    testing.expect_value(t, link.idle_ticks, 0)
+    for _ in 0 ..< AGENT_IDLE_EVERY do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    testing.expect_value(t, link.idle_ticks, 1)
+
+    agent_handle_line(link, gs, `{"cmd":"idle","on":false}`)
+    for _ in 0 ..< AGENT_IDLE_EVERY * 2 do testing.expect(t, !agent_drive(link, gs))
+}
+
+@(test)
+agent_plan_plays_slowly_and_an_act_overrides_it :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left","frames":3},{"move":"right","frames":2}]}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"ticks":5`))
+    link.out_len = 0
+
+    ticks := 0
+    for _ in 0 ..< AGENT_IDLE_EVERY * 4 {
+        if agent_drive(link, gs) {
+            ticks += 1
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expect_value(t, ticks, 4)
+    testing.expect_value(t, link.frames_left, 1)
+    testing.expect_value(t, link.out_len, 0)  // nobody is waiting on a plan step
+    testing.expect(t, link.reply_due == false)
+    testing.expect(t, agent_listening(link))
+
+    agent_handle_line(link, gs, `{"cmd":"act","frames":2}`)
+    testing.expect(t, !link.planning)
+    testing.expect_value(t, link.frames_left, 2)
+    testing.expect_value(t, link.plan_len, 0)
+}
+
+@(test)
+agent_override_keeps_its_own_input :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":50}]}`)
+    for _ in 0 ..< AGENT_IDLE_EVERY do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":30}`)
+    testing.expect_value(t, link.cmd.move, -1)
+    testing.expect(t, link.first)
+}
+
+// A plan is a promise about a world that has not happened yet, so what depends
+// on that world is judged when the step starts.
+@(test)
+agent_plan_judges_state_verbs_when_the_step_starts :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"frames":1},{"feed":0},{"frames":5}]}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"steps":3`))
+
+    for _ in 0 ..< AGENT_IDLE_EVERY * 3 do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    testing.expect_value(t, link.plan_len, 0)
+    testing.expect_value(t, link.frames_left, 0)
+    testing.expect(t, link.plan_stopped.len > 0)
+    agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"plan_stopped":"step 1: no smelter`))
+}
+
+@(test)
+agent_wait_has_no_first_frame :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_handle_line(link, gs, `{"cmd":"wait","frames":3}`)
+    testing.expect_value(t, link.frames_left, 3)
+    testing.expect(t, !link.first)
+    agent_drive(link, gs)
+    testing.expect(t, !gs.agent.first)
+}
+
+@(test)
+agent_plan_is_all_or_nothing :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"}]}`)
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"},{"frames":0}]}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), "step 1"))
+    testing.expect_value(t, link.plan_len, 1)  // the good plan stands
+}
+
+// What a replay does with a recording must be what the plan did: this plays the
+// real rows back, the way tools/agent_replay.py does.
+@(test)
+agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
+    start :: proc(gs: ^Game_State, link: ^Agent_Link) {
+        game_state_init(gs, 778)
+        gs.ui.show_title = false
+        gs.player.pos = SURFACE_HOME_POS
+        link.connected = true
+    }
+    run :: proc(link: ^Agent_Link, gs: ^Game_State, ticks: int) {
+        n := 0
+        for _ in 0 ..< ticks * AGENT_IDLE_EVERY * 2 {
+            if n == ticks do break
+            if agent_drive(link, gs) {
+                game_update(gs)
+                agent_after_tick(link, gs)
+                n += 1
+            }
+        }
+    }
+    path := "agent_plan_test.jsonl"
+    defer os.remove(path)
+
+    gs := new(Game_State)
+    defer free(gs)
+    link := new(Agent_Link)
+    defer free(link)
+    start(gs, link)
+    f, err := os.open(path, {.Write, .Create, .Trunc}, os.Permissions_Default_File)
+    testing.expect(t, err == nil)
+    link.acts_file = f
+    link.recording = true
+    agent_handle_line(link, gs, `{"cmd":"act","move":"right","frames":10}`)
+    run(link, gs, 10)
+    run(link, gs, 20)  // an idle wait
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":40},{"move":"left","frames":50}]}`)
+    run(link, gs, 47)
+    agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":10}`)
+    run(link, gs, 10)
+    link.recording = false
+    os.close(f)
+
+    data, read_err := os.read_entire_file(path, context.allocator)
+    testing.expect(t, read_err == nil)
+    defer delete(data)
+    testing.expect(t, strings.contains(string(data), `"played":7`))
+    testing.expect(t, strings.contains(string(data), `"idle":20`))
+
+    gs2 := new(Game_State)
+    defer free(gs2)
+    link2 := new(Agent_Link)
+    defer free(link2)
+    start(gs2, link2)
+    link2.idle_off = true
+    // Parsed up front: the temp allocator does not outlive a game tick.
+    Replay_Row :: struct { line: string, ticks: int }
+    replay := make([dynamic]Replay_Row)  // made here: appending below would pick the temp allocator
+    defer {
+        for r in replay do delete(r.line)
+        delete(replay)
+    }
+    {
+        heap := context.allocator
+        context.allocator = context.temp_allocator
+        defer free_all(context.temp_allocator)
+        for row in strings.split_lines(string(data)) {
+            if row == "" do continue
+            value, _ := json.parse_string(row)
+            rec := value.(json.Object)
+            if n, ok := agent_int(rec, "idle"); ok {
+                append(&replay, Replay_Row{fmt.aprintf(`{{"cmd":"wait","frames":%d}}`, n, allocator = heap), n})
+                continue
+            }
+            act := rec["act"].(json.Object)
+            frames, _ := agent_int(act, "frames")
+            if played, ok := agent_int(rec, "played"); ok {
+                frames = played
+                act["frames"] = json.Integer(played)
+            }
+            act["cmd"] = "act"  // plan steps are recorded without one
+            append(&replay, Replay_Row{fmt.aprintf("%s", agent_canonical(act), allocator = heap), frames})
+        }
+    }
+    for r in replay {
+        agent_handle_line(link2, gs2, r.line)
+        testing.expect(t, link2.frames_left == r.ticks, r.line)
+        run(link2, gs2, r.ticks)
+    }
+    testing.expect_value(t, gs2.frame, gs.frame)
+    testing.expect_value(t, gs2.player.pos, gs.player.pos)
+    testing.expect_value(t, gs2.enemies.count, gs.enemies.count)
+}
+
+// Replay plays a recorded wait as an empty act, so the two must be the same.
+@(test)
+agent_idle_ticks_equal_an_empty_act :: proc(t: ^testing.T) {
+    play :: proc(idle: bool) -> (pos: [2]f32, frame: u64, enemies: [8][2]f32) {
+        gs := new(Game_State)
+        defer free(gs)
+        link := new(Agent_Link)
+        defer free(link)
+        game_state_init(gs, 777)
+        gs.ui.show_title = false
+        gs.player.pos = SURFACE_HOME_POS
+        link.connected = true
+        link.idle_off = !idle
+        run :: proc(link: ^Agent_Link, gs: ^Game_State) {
+            for link.frames_left > 0 {
+                agent_drive(link, gs)
+                game_update(gs)
+                agent_after_tick(link, gs)
+            }
+        }
+        agent_handle_line(link, gs, `{"cmd":"act","move":"right","frames":30}`)
+        run(link, gs)
+        if idle {
+            for link.idle_ticks < 90 {
+                if agent_drive(link, gs) {
+                    game_update(gs)
+                    agent_after_tick(link, gs)
+                }
+            }
+        } else {
+            agent_handle_line(link, gs, `{"cmd":"act","frames":90}`)
+            run(link, gs)
+        }
+        agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":30}`)
+        run(link, gs)
+        for i in 0 ..< len(enemies) do enemies[i] = gs.enemies.data[i].pos
+        return gs.player.pos, gs.frame, enemies
+    }
+    p1, f1, e1 := play(true)
+    p2, f2, e2 := play(false)
+    testing.expect_value(t, f1, f2)
+    testing.expect_value(t, p1, p2)
+    testing.expect_value(t, e1, e2)
 }
 
 @(test)
