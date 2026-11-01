@@ -10204,6 +10204,39 @@ survivors_hold_the_next_wave :: proc(t: ^testing.T) {
 }
 
 @(test)
+the_hud_gauge_reads_the_pressure :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    // Nothing built: nothing to show.
+    wave_step(gs, 10)
+    value, show := wave_gauge(gs)
+    testing.expect_value(t, value, f32(0))
+    testing.expect(t, !show, "a bare surface shows no gauge")
+
+    // Mid-build the gauge is the director's own pressure, not a copy of it.
+    set_tile(&gs.world, 70, SURFACE_Y - 1, .Smelter)
+    wave_step(gs, 100)
+    testing.expect(t, gs.wave.pressure > 0, "the smelter should be building pressure")
+    value, show = wave_gauge(gs)
+    testing.expect_value(t, value, gs.wave.pressure / WAVE_PRESSURE_TARGET)
+    testing.expect(t, show, "building pressure shows the gauge")
+
+    // Held past the target by a cooldown, the gauge stops at full.
+    gs.wave.pressure = WAVE_PRESSURE_TARGET * 2
+    value, _ = wave_gauge(gs)
+    testing.expect_value(t, value, f32(1))
+
+    // A scripted warning shows even with an empty meter.
+    gs.wave.pressure = 0
+    gs.wave.warning_active = true
+    value, show = wave_gauge(gs)
+    testing.expect_value(t, value, f32(0))
+    testing.expect(t, show, "a running warning shows the gauge")
+}
+
+@(test)
 a_scripted_trigger_ignores_pressure_and_gates :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
