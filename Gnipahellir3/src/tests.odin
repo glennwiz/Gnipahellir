@@ -3314,6 +3314,28 @@ every_damaging_tile_has_a_cause :: proc(t: ^testing.T) {
 }
 
 @(test)
+first_rune_scroll_hints_at_the_sky_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    notify_text :: proc(gs: ^Game_State, i: int) -> string {
+        return string(gs.notify.items[i].text[:gs.notify.items[i].len])
+    }
+
+    testing.expect(t, !gs.scroll_hint_shown)
+    eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 0}})
+    process_events(gs)
+    testing.expect(t, gs.scroll_hint_shown, "the first scroll flips the flag")
+    testing.expect_value(t, gs.notify.count, 2)
+    testing.expect(t, strings.contains(notify_text(gs, 1), "only in the sky"), "the hint is the second line")
+
+    // The next scroll still reports its cost, without the hint.
+    eq_push(&gs.events, Event{type = .Rune_Scroll_Found, payload = {int_val = 1}})
+    process_events(gs)
+    testing.expect_value(t, gs.notify.count, 3)
+    testing.expect(t, !strings.contains(notify_text(gs, 2), "only in the sky"), "one hint only")
+}
+
+@(test)
 deep_rune_scroll_waits_for_the_altar :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

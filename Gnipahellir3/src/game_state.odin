@@ -820,6 +820,7 @@ Game_State :: struct {
     craft_hint_shown:   bool, // one-shot: the "open bag to craft" popup on first wood log (not saved)
     forage_hint_shown:  bool, // one-shot: the "brew potions" popup on first foraged flower (not saved)
     wand_hint_shown:    bool, // one-shot: the "equip the wand" popup on first crafted wand (not saved)
+    scroll_hint_shown:  bool, // one-shot: the "altar answers only in the sky" popup on the first Rune Scroll (not saved)
     spring_hint_shown:  bool, // one-shot: the "it will not run dry" popup on the first spring (not saved)
     sky_apparition_glimpsed: bool, // one-shot: "something moves..." popup on first clear glimpse of the sky apparition (not saved)
 

@@ -320,6 +320,10 @@ process_events :: proc(gs: ^Game_State) {
                 notify(gs, "Rune Scroll! Altar ritual needs %d %s + %d %s",
                     c[0].count, item_table[c[0].item].name,
                     c[1].count, item_table[c[1].item].name)
+                if !gs.scroll_hint_shown {
+                    gs.scroll_hint_shown = true
+                    notify(gs, "The altar answers only in the sky")
+                }
             }
 
         case .Structure_Complete:
