@@ -11416,3 +11416,102 @@ a_loaded_silo_or_barrel_is_rock_to_a_digger :: proc(t: ^testing.T) {
         testing.expect(t, !is_builder_mineable(gs, 11, 10), "a loaded one cannot")
     }
 }
+
+// ─── Quench (board card 44) ───────────────────────────────────────────────────
+
+@(private="file")
+quench_steps :: proc(gs: ^Game_State, n: int) {
+    for _ in 0 ..< n {
+        fluid_step(gs, fluid_rules[0], gs.frame % 2 == 0)
+        fluid_step(gs, fluid_rules[1], gs.frame % 2 == 0)
+        fluid_step(gs, fluid_rules[2], gs.frame % 2 == 0)
+        gs.frame += 1
+    }
+}
+
+@(test)
+water_on_lava_leaves_scoria_and_spends_the_water :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    for lava in ([2]Tile_Type{.Lava, .Magic_Lava}) {
+        set_tile(&gs.world, 45, 70, lava)
+        set_tile(&gs.world, 45, 69, .Water)
+        quench_steps(gs, 1)
+        testing.expect_value(t, get_tile(&gs.world, 45, 70), Tile_Type.Scoria)
+        testing.expect(t, get_tile(&gs.world, 45, 69) != .Water, "the water is spent")
+        set_tile(&gs.world, 45, 70, .Void)
+    }
+}
+
+@(test)
+scoria_is_footing_and_pays_nothing :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    testing.expect(t, .Solid in terrain_table[.Scoria].flags, "it bears weight")
+    testing.expect(t, .Mineable in terrain_table[.Scoria].flags, "it can be cleared")
+    testing.expect_value(t, terrain_table[.Scoria].drop_item, Item.None)
+    testing.expect(t, .Falls not_in terrain_table[.Scoria].flags, "a bridge stays up")
+    testing.expect(t, .Falls_Placed not_in terrain_table[.Scoria].flags, "a bridge stays up")
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    set_tile(&gs.world, 45, 70, .Scoria)
+    before := inventory_count(&gs.player.inventory, .Stone_Block)
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {45, 70}})
+    process_events(gs)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), before)
+    testing.expect_value(t, gs.world.items[grid_idx(45, 70)], Item.None)
+}
+
+@(test)
+lava_past_the_water_burns_on :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    for x in 41 ..= 49 do set_tile(&gs.world, x, 70, .Lava)
+    set_tile(&gs.world, 45, 69, .Water)   // one bucket's worth
+    quench_steps(gs, 40)
+    testing.expect_value(t, fluid_count_in(gs, .Lava, 40, 50, 60, 70), 8)
+    testing.expect_value(t, get_tile(&gs.world, 45, 70), Tile_Type.Scoria)
+}
+
+@(test)
+a_scoria_plug_stops_a_drip :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    set_tile(&gs.world, 45, 62, .Lava)
+    set_tile(&gs.world, 45, 63, .Scoria)
+    quench_steps(gs, 10)
+    testing.expect_value(t, get_tile(&gs.world, 45, 64) == .Lava, false)
+}
+
+// Water, lava and open cells at random: every Scoria was paid for by one water,
+// water never touches lava once it has settled, and the box goes still.
+@(test)
+quench_soak_pays_one_water_per_stone :: proc(t: ^testing.T) {
+    for seed in u32(1) ..= 8 {
+        gs := test_state()
+        defer free(gs)
+        X0, X1, Y0, Y1 :: 40, 70, 58, 72
+        fluid_carve_box(gs, X0, X1, Y0, Y1)
+        for y in Y0 + 1 ..= Y1 - 1 do for x in X0 + 1 ..= X1 - 1 {
+            switch whash(u32(x) * 73 + u32(y) * 179 + seed * 7919) % 8 {
+            case 0:    set_tile(&gs.world, x, y, .Water)
+            case 1:    set_tile(&gs.world, x, y, .Stone)
+            case 2:    if y > Y1 - 4 do set_tile(&gs.world, x, y, .Lava)
+            }
+        }
+        water := fluid_count_in(gs, .Water, X0, X1, Y0, Y1)
+        quench_steps(gs, 300)
+        left := fluid_count_in(gs, .Water, X0, X1, Y0, Y1)
+        scoria := 0
+        for y in Y0 ..= Y1 do for x in X0 ..= X1 do if get_tile(&gs.world, x, y) == .Scoria do scoria += 1
+        testing.expect_value(t, water - left, scoria)
+        for y in Y0 ..= Y1 do for x in X0 ..= X1 {
+            if get_tile(&gs.world, x, y) != .Water do continue
+            for n in ([4][2]int{{x, y + 1}, {x + 1, y}, {x - 1, y}, {x, y - 1}}) {
+                testing.expect(t, get_tile(&gs.world, n.x, n.y) != .Lava, "settled water touches no lava")
+            }
+        }
+    }
+}

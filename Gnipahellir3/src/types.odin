@@ -220,6 +220,9 @@ Tile_Type :: enum u8 {
 	// beside it (grave.odin).  Never mined, never placed.  (appended: terrain
 	// ordinals are serialized)
 	Rune_Stone,
+	// What water leaves of lava: footing over a hazard, not a quarry.  Mining
+	// it pays nothing.  (appended: terrain ordinals are serialized)
+	Scoria,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────

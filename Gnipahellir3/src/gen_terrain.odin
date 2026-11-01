@@ -105,6 +105,7 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Final_Seal = { "Final Seal", {.Solid}, {120, 20, 30, 255}, 0, 0, .None, 0 },
 	.Rainbow_Laser = { "Rainbow Laser", {.Solid, .Mineable, .Placeable}, {170, 150, 210, 255}, 0, 0, .Rainbow_Laser, 0 },
 	.Rune_Stone = { "Rune Stone", {.Solid}, {112, 116, 130, 255}, 0, 0, .None, 0 },
+	.Scoria = { "Scoria", {.Solid, .Mineable}, {74, 62, 60, 255}, 0, 0, .None, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -152,6 +153,7 @@ terrain_desc := #partial [Tile_Type]string{
 	.Hell_Gate = "Torn open by Garm's fall. Only the Hell Key turns it.",
 	.Final_Seal = "The last door. Break it with the Hell Key and the long night ends.",
 	.Rune_Stone = "A fallen hero's name. Press E beside it.",
+	.Scoria = "Lava water has killed. It bears your weight and is worth nothing.",
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
