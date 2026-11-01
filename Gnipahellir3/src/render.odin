@@ -670,6 +670,7 @@ draw_ritual :: proc(gs: ^Game_State) {
 	r := &gs.ritual
 	t := r.timer
 	prog := clamp(t / RITUAL_DURATION, 0, 1)
+	if r.seal do prog = 1 - prog  // the bloom collapses: the ritual undone
 	cx := i32(r.altar.x * CELL_SIZE) + CELL_SIZE / 2
 	cy := i32((r.altar.y - 2) * CELL_SIZE)
 	tick := int(t * 12)

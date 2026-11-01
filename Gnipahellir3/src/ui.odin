@@ -1797,7 +1797,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	}
 	if gs.ui.show_rune_scroll do draw_rune_scroll(gs)
 	if gs.ui.show_book do draw_book(gs)
-	if gs.game_won do draw_win_screen(gs)
+	if gs.game_won && !gs.ui.show_book do draw_win_screen(gs)
 	if gs.player.dead do draw_death_screen(gs)
 	when GAME_DEBUG {
 		if gs.debug.menu_open do draw_debug_menu(gs)
@@ -2092,6 +2092,7 @@ draw_book :: proc(gs: ^Game_State) {
 	draw_rune_strip(f32(bx + bw / 2), f32(by + 34), 12, NORSE_GOLD)
 	title := book_title(gs.ui.book_tier)
 	if gs.ui.book_page == .Waters do title = "Of Water and Fire"
+	if gs.ui.book_page == .Saga do title = "The Saga"
 	tw := rl.MeasureText(title, 40)
 	rl.DrawText(title, bx + (bw - tw) / 2, by + 60, 40, ink)
 	rl.DrawLine(bx + 60, by + 112, bx + bw - 60, by + 112, faint)
@@ -2110,6 +2111,15 @@ draw_book :: proc(gs: ^Game_State) {
 		}
 	case .Waters:
 		draw_book_waters(gs, bx, by, bw, ink, faint)
+	case .Saga:
+		bufs: [4][64]u8
+		ty := by + 156
+		saga_lines(gs, &bufs)
+		for &line in bufs {
+			text := cstring(raw_data(line[:]))
+			rl.DrawText(text, bx + (bw - rl.MeasureText(text, 20)) / 2, ty, 20, ink)
+			ty += 40
+		}
 	}
 
 	hint: cstring = "[E] close the tome"

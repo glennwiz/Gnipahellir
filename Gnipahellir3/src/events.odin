@@ -285,6 +285,7 @@ process_events :: proc(gs: ^Game_State) {
         case .Level_Enter:
             // transition already performed by level_transition
             lvl := int(e.payload.int_val)
+            gs.stats.deepest_cave = max(gs.stats.deepest_cave, deepest_rank(gs, lvl))
             if lvl == LEVEL_DIMENSION {
                 notify(gs, "- %s -", dimension_table[gs.dimension.kind].name)
             } else if lvl >= 0 && lvl < NUM_LEVELS {

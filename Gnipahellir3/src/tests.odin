@@ -5288,10 +5288,17 @@ garm_death_opens_the_hell_gate :: proc(t: ^testing.T) {
     won_before := gs.stats.runs_won
     gs.player.pos = {f32(seal_x - 1), f32(seal_y + 1) - PLAYER_H}
     player_interact(gs)
+    testing.expect(t, gs.ritual.active && gs.ritual.seal, "the key starts the ceremony")
+    process_events(gs)
+    testing.expect(t, !gs.game_won, "the Seal holds until the ceremony ends")
+    gs.ritual.timer = RITUAL_DURATION
+    update_ritual(gs)
     process_events(gs)
     eq_clear(&gs.events)
 
     testing.expect(t, gs.game_won, "breaking the Final Seal wins the game")
+    testing.expect(t, gs.ui.show_book, "the tome opens on the saga")
+    testing.expect_value(t, gs.ui.book_page, Book_Page.Saga)
     testing.expect_value(t, gs.stats.runs_won, won_before + 1)
     // The win screen names what was just done: the Seal, not the hound.
     testing.expect_value(t, WIN_TITLE, "THE FINAL SEAL IS BROKEN")
@@ -10890,4 +10897,48 @@ a_v2_stats_file_migrates_and_keeps_the_grave :: proc(t: ^testing.T) {
     testing.expect_value(t, stats.version, STATS_VERSION)
     testing.expect_value(t, stats.total_kills, 12)
     testing.expect_value(t, stats.grave.tithe, Item.Sword)
+}
+
+// ─── The Seal ceremony (board card 41) ────────────────────────────────────────
+
+@(test)
+the_saga_tells_the_run :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.elapsed_time = 3725
+    gs.stats = {runs_played = 7, runs_won = 1, total_kills = 411, deepest_cave = 2}
+    bufs: [4][64]u8
+    l := saga_lines(gs, &bufs)
+    testing.expect_value(t, l[0], "This saga lasted 1:02:05")
+    testing.expect_value(t, l[1], "Heroes fallen before you: 6")
+    testing.expect_value(t, l[2], "Foes slain by all of them: 411")
+    testing.expect_value(t, l[3], "Deepest reached: Gnipahellir")
+}
+
+@(test)
+entering_a_level_marks_the_deepest :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    eq_push(&gs.events, Event{type = .Level_Enter, payload = {int_val = i32(LEVEL_CAVE3)}})
+    eq_push(&gs.events, Event{type = .Level_Enter, payload = {int_val = i32(LEVEL_CAVE2)}})
+    process_events(gs)
+    testing.expect_value(t, gs.stats.deepest_cave, 2)
+    gs.dimension.kind = .Hell
+    testing.expect_value(t, deepest_rank(gs, LEVEL_DIMENSION), 3)
+    gs.dimension.kind = Dimension_Kind(0)
+    if gs.dimension.kind != .Hell do testing.expect_value(t, deepest_rank(gs, LEVEL_DIMENSION), 0)
+}
+
+@(test)
+a_hero_killed_mid_ceremony_does_not_win :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    start_seal_ceremony(gs, {10, 10})
+    gs.player.dead = true
+    gs.ritual.timer = RITUAL_DURATION
+    update_ritual(gs)
+    process_events(gs)
+    testing.expect(t, !gs.game_won, "the Seal holds")
+    testing.expect(t, !gs.ritual.active, "the ceremony ended")
+    testing.expect(t, !gs.ui.show_book, "no saga for the dead")
 }

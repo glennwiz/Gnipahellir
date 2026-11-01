@@ -383,6 +383,7 @@ Item :: enum u8 {
 Book_Page :: enum u8 {
 	Seal,
 	Waters,
+	Saga, // the run's account, opened by breaking the Final Seal
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────

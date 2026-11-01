@@ -196,8 +196,7 @@ player_interact :: proc(gs: ^Game_State) {
                         notify(gs, "The seal ignores you - it answers only the Hell Key")
                         return
                     }
-                    log_action(gs, "The Final Seal breaks")
-                    eq_push(&gs.events, Event{type = .Game_Won})
+                    if !gs.ritual.active do start_seal_ceremony(gs, {i32(cx + dx), i32(cy + dy)})
                     return
                 }
             }
@@ -477,6 +476,15 @@ start_ritual :: proc(gs: ^Game_State, tier: int, altar: [2]i32) {
     log_action(gs, "Ritual tier %d begun", tier)
 }
 
+// The Seal comes undone the way every altar was raised, backwards: the swirl
+// pours out of it, and the win lands when the ceremony ends (update_ritual).
+start_seal_ceremony :: proc(gs: ^Game_State, seal: [2]i32) {
+    gs.ritual = {active = true, altar = seal, seal = true}
+    eq_push(&gs.events, Event{type = .Play_Sound, payload = {int_val = i32(Sound_ID.Ritual_Swirl)}})
+    notify(gs, "The Hell Key turns...")
+    log_action(gs, "The Final Seal ceremony begins")
+}
+
 // The eternal swirl's gift: stand inside the ring over a blessed altar and it
 // bears you aloft — FLIGHT_BUFF_TIME of free flight, kept topped up while you
 // stay in the swirl.  Same gates as draw_altar_eternal_swirl, so the buff can
@@ -535,13 +543,25 @@ update_ritual :: proc(gs: ^Game_State) {
         return
     }
     gs.ritual.timer += gs.delta_time
-    spawn_ritual_swirl(gs, gs.ritual.altar, gs.ritual.timer)
+    spawn_ritual_swirl(gs, gs.ritual.altar, gs.ritual.timer, gs.ritual.seal)
 
     if gs.ritual.timer < RITUAL_DURATION do return
 
     tier := gs.ritual.tier
     altar := gs.ritual.altar
+    seal := gs.ritual.seal
     gs.ritual.active = false
+
+    if seal {
+        if gs.player.dead do return  // killed mid-ceremony: the Seal holds
+        log_action(gs, "The Final Seal breaks")
+        spawn_ritual_flash(gs, altar)
+        eq_push(&gs.events, Event{type = .Game_Won})
+        gs.ui.show_book       = true
+        gs.ui.book_page       = .Saga
+        gs.ui.book_open_frame = gs.frame
+        return
+    }
 
     // Re-check the offering is still in the bag — nothing normally spends it
     // during the swirl, but be safe: if it's gone, the altar falls silent.
@@ -563,6 +583,30 @@ update_ritual :: proc(gs: ^Game_State) {
     gs.ui.book_tier       = tier
     gs.ui.book_open_frame = gs.frame
     log_action(gs, "Sky structure %d complete (ritual)", tier)
+}
+
+// How deep a level lies, for stats.deepest_cave.  Dimensions other than Hell
+// hang off the map and do not count.
+deepest_rank :: proc(gs: ^Game_State, level: int) -> int {
+    switch level {
+    case LEVEL_CAVE2: return 1
+    case LEVEL_CAVE3: return 2
+    case LEVEL_DIMENSION: return gs.dimension.kind == .Hell ? 3 : 0
+    }
+    return 0
+}
+
+// The tome's account of the run, one line each; `bufs` holds the formatted text.
+// Deaths and kills are the player's whole record: only the run time is this run's.
+saga_lines :: proc(gs: ^Game_State, bufs: ^[4][64]u8) -> [4]string {
+    deepest := [4]string{"the Surface", level_names[LEVEL_CAVE2], level_names[LEVEL_CAVE3], dimension_table[.Hell].name}
+    secs := int(gs.elapsed_time)
+    return {
+        fmt.bprintf(bufs[0][:63], "This saga lasted %d:%02d:%02d", secs / 3600, secs / 60 % 60, secs % 60),
+        fmt.bprintf(bufs[1][:63], "Heroes fallen before you: %d", gs.stats.runs_played - gs.stats.runs_won),
+        fmt.bprintf(bufs[2][:63], "Foes slain by all of them: %d", gs.stats.total_kills),
+        fmt.bprintf(bufs[3][:63], "Deepest reached: %s", deepest[clamp(gs.stats.deepest_cave, 0, 3)]),
+    }
 }
 
 // ─── Generation: caves 2–3 ────────────────────────────────────────────────────

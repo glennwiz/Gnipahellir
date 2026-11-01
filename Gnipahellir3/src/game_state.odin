@@ -712,6 +712,7 @@ Ritual_State :: struct {
     timer:  f32,     // 0 → RITUAL_DURATION
     tier:   int,     // structure tier being raised
     altar:  [2]i32,  // the Sky_Altar tile the offering plays over
+    seal:   bool,    // the Final Seal's ceremony: the swirl runs backwards, altar is the Seal
 }
 
 // Deliberate removal of player equipment. Transient: cancelling, travelling or
