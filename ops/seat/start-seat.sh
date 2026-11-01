@@ -48,8 +48,8 @@ if [[ $dry == 1 ]]; then
 fi
 
 mkdir -p "$home"
-grep -qxF '.seats/' "$(git -C "$repo" rev-parse --git-path info/exclude)" ||
-    echo '.seats/' >>"$(git -C "$repo" rev-parse --git-path info/exclude)"
+exclude=$(git -C "$repo" rev-parse --path-format=absolute --git-path info/exclude)
+grep -qxF '.seats/' "$exclude" || echo '.seats/' >>"$exclude"
 git -C "$repo" worktree add -q -b "seat/$name" "$worktree" "$base"
 
 curl -sf -X POST -H 'Content-Type: application/json' "$SERVER/api/boards/$BOARD/agents" -d "{\"name\":\"$name\"}" >/dev/null || true
