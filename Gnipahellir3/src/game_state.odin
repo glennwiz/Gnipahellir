@@ -497,7 +497,7 @@ Input_State :: struct {
 
 // ─── Agent drive (agent_api.odin) ─────────────────────────────────────────────
 
-Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take }
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw }
 
 // One act: held input for its frames, one-shots on the first.  Tiles are only
 // meaningful under their has_ flag.
@@ -549,6 +549,7 @@ Agent_Drive :: struct {
     panel:   ^Agent_Panel,
     framed:  bool,  // the view is set; a New Game or a reconnect zeroes this, so the framing is applied again
     cmd:     Agent_Command,
+    place_refused: bool,  // the game turned the last act's place away; the next act clears it
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────

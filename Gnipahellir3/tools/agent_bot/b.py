@@ -742,12 +742,10 @@ class B:
                 par[n]=c; q.append(n)
         return None
     def warpout(s,why):
-        # a worn ring leaves the inventory and is not in state: try, a refusal has no player
+        # a worn ring leaves the inventory and is not in state: try, a refusal has ok:false and no player
         log('WARP',why,s.p,s.r['frame']); r=s.g.act(3,warp=True)
         if 'player' not in r: log('no warp',r); return None
-        before=(s.level,s.pos()); s.ingest(r); s.a(2); s.scan(); log('now L',s.level,s.pos())
-        # refused on the surface level, chamber included: no note, nothing moves
-        if (s.level,s.pos())==before: log('warp did nothing',before); return None
+        s.ingest(r); s.a(2); s.scan(); log('now L',s.level,s.pos())
         return 'warp'
     def garmloop(s,maxf=3000,nolos_stop=240,closeat=3.6):
         s.noguard=True; f0=s.r['frame']; nolos=0; last=None; hurt=0

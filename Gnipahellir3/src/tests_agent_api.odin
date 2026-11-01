@@ -471,6 +471,7 @@ agent_warp_needs_the_ring_and_reclaim_holds :: proc(t: ^testing.T) {
     testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`))
 
     gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
+    gs.level_index = 1  // the surface refuses: home already
     agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
     testing.expect_value(t, link.frames_left, 1)
     agent_drive(link, gs)
@@ -486,6 +487,80 @@ agent_warp_needs_the_ring_and_reclaim_holds :: proc(t: ^testing.T) {
         testing.expect(t, gs.input.reclaim)
         testing.expect_value(t, gs.input.mouse_tile, [2]i32{20, 40})
     }
+}
+
+@(test)
+agent_refused_warp_says_so_and_plays_nothing :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    // Run 4's death 1: warp on the surface level answered ok, and nothing moved.
+    gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
+    gs.level_index = LEVEL_SURFACE
+    agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
+    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), agent_test_reply(link))
+    testing.expect(t, strings.contains(agent_test_reply(link), "Already on the surface"), agent_test_reply(link))
+    testing.expect_value(t, link.frames_left, 0)
+
+    gs.level_index = 1
+    agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
+    testing.expect_value(t, link.frames_left, 1)
+}
+
+@(test)
+agent_failed_place_is_reported_and_reach_is_in_state :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    state :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
+        agent_handle_line(link, gs, `{"cmd":"state"}`)
+        return agent_test_reply(link)
+    }
+    testing.expect(t, strings.contains(state(link, gs), fmt.tprintf(`"place_reach":%d`, PLAYER_REACH)))
+
+    inventory_insert(&gs.player.inventory, .Stone_Block, 2)
+    for s, i in gs.player.inventory.slots do if s.item == .Stone_Block do gs.player.inventory.selected = i
+    T := player_tile(&gs.player)
+
+    // Far outside reach: the stack stays and the reply says so.
+    far := fmt.tprintf(`{{"cmd":"act","place":[%d,%d]}}`, (T.x + PLAYER_REACH + 5) % GRID_W, T.y)
+    agent_test_run_act(link, gs, far)
+    process_events(gs)
+    testing.expect(t, strings.contains(state(link, gs), `"refused":"place"`), "a failed place must say so")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 2)
+
+    // The next act clears it, and a place that lands never carries it.
+    set_tile(&gs.world, int(T.x) + 1, int(T.y), .Air)
+    set_tile(&gs.world, int(T.x) + 1, int(T.y) + 1, .Stone)
+    agent_test_run_act(link, gs, fmt.tprintf(`{{"cmd":"act","place":[%d,%d]}}`, T.x + 1, T.y))
+    process_events(gs)
+    testing.expect(t, !strings.contains(state(link, gs), `"refused"`), "a place that landed is not refused")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 1)
+}
+
+@(test)
+agent_withdraw_pulls_the_ore_through_the_key_handler :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    T := player_tile(&gs.player)
+    sx, sy := int(T.x) + 1, int(T.y)
+    agent_handle_line(link, gs, `{"cmd":"act","withdraw":true}`)
+    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), "withdraw needs the window")
+
+    set_tile(&gs.world, sx, sy, .Smelter)
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.in_item, sd.in_count = .Silver_Ore, 1
+    gs.ui.show_smelter = true
+    gs.ui.smelter_tile = {i32(sx), i32(sy)}
+    agent_test_run_act(link, gs, `{"cmd":"act","withdraw":true}`)
+    process_events(gs)
+    testing.expect_value(t, int(sd.in_count), 0)
+    testing.expect_value(t, sd.in_item, Item.None)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Silver_Ore), 1)
 }
 
 @(test)
