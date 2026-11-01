@@ -1,6 +1,7 @@
 package game
 
 import "core:testing"
+import "core:time"
 import "core:strings"
 import "core:fmt"
 import "core:log"
@@ -10947,4 +10948,75 @@ robbed_den_soak_the_raiders_reach_the_base :: proc(t: ^testing.T) {
     }
     testing.expect(t, landed, "the party should land")
     testing.expect(t, smashed, "the party should reach the base and smash it")
+}
+
+// ─── Waves that dig ───────────────────────────────────────────────────────────
+
+// A bench sealed in a stone box on the surface; no way in on foot.
+@(private = "file")
+walled_bench :: proc(gs: ^Game_State, X, Y: int) {
+    for y in Y - 4 ..= Y + 1 do for x in X - 4 ..= X + 4 do set_tile(&gs.world, x, y, .Stone)
+    for y in Y - 3 ..= Y do for x in X - 3 ..= X + 3 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, X, Y, .Crafting_Bench)
+}
+
+@(test)
+vargr_come_through_the_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+
+    X, Y := 90, SURFACE_Y - 2
+    walled_bench(gs, X, Y)
+    gs.wave.structures_indexed = false
+    testing.expect(t, wave_force(gs, .Ground, wave_table[.Ground].count) > 0, "wolves should land")
+
+    mined, smashed := 0, false
+    for _ in 0 ..< 180 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        for k in 0 ..< gs.events.size {
+            if gs.events.events[(gs.events.head + k) % MAX_EVENTS].type == .Builder_Mined do mined += 1
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, X, Y) != .Crafting_Bench { smashed = true; break }
+    }
+    log.infof("digging wave: %d tiles mined", mined)
+    testing.expect(t, smashed, "wolves should reach a walled bench")
+    testing.expect(t, mined >= 1, "they come through the wall, not around it")
+}
+
+@(test)
+a_digging_wave_stays_inside_the_frame :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+
+    walled_bench(gs, 90, SURFACE_Y - 2)
+    gs.wave.structures_indexed = false
+    wave_force(gs, .Ground, 60)
+
+    // Counts work, not wall time: a timing assert proves nothing on a loaded
+    // machine, so the times are logged for a quiet run to read.
+    worst, total: time.Duration
+    frames := 60 * 60
+    most := 0
+    for _ in 0 ..< frames {
+        gs.player.hp = 1000
+        start := time.tick_now()
+        update_enemies(gs)
+        d := time.tick_since(start)
+        worst = max(worst, d)
+        total += d
+        most = max(most, gs.nav_searches)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    log.infof("digging wave: %d enemies, worst frame %v, mean %v, most searches %d",
+        gs.enemies.count, worst, total / time.Duration(frames), most)
+    testing.expect(t, gs.enemies.count >= 60, "the whole wave is still alive to path")
+    testing.expect_value(t, most, MAX_NAV_SEARCHES_PER_FRAME)
 }
