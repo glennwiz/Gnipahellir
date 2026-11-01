@@ -8104,8 +8104,9 @@ a_golem_never_plans_a_dig_through_a_structure :: proc(t: ^testing.T) {
 	// astar_dig planned a dig straight through a structure that
 	// golem_mine_tile refuses — obstructed, unclearable, and every replan
 	// produced the same route.  The planner must honor the executor's law:
-	// a golem plan never digs a structure.  Enemy builders keep the dig —
-	// their executor (smash_tile) really can demolish machines.
+	// a golem plan never digs a structure.  Enemy builders keep the dig for
+	// other structures — their executor (smash_tile) really can demolish
+	// machines — but no enemy digs a scroll chest.
 	gs := test_state(); defer free(gs)
 
 	// A sealed two-room box high in the sky air, walls of Quick_Clay (solid,
@@ -8138,13 +8139,72 @@ a_golem_never_plans_a_dig_through_a_structure :: proc(t: ^testing.T) {
 			"a golem waypoint must never require mining a structure")
 	}
 
-	// The deliberate asymmetry: an enemy builder may still dig through — its
-	// executor really can smash the structure loose.
+	// No enemy plan digs a scroll chest either.
 	path = {}
 	complete = false
 	_ = astar_dig(gs,{62,44},{68,44},0,MAX_NAV_PATH,&path,
 		allow_mining=true,complete=&complete,protect_placed=false)
-	testing.expect(t,complete,"a builder plan may dig through the chest doorway")
+	testing.expect(t,!complete,"a builder plan must not dig through a scroll chest")
+
+	// The deliberate asymmetry: an enemy builder may still dig through another
+	// structure — its executor really can smash it loose.
+	set_tile(&gs.world,65,44,.Barrel)
+	path = {}
+	complete = false
+	_ = astar_dig(gs,{62,44},{68,44},0,MAX_NAV_PATH,&path,
+		allow_mining=true,complete=&complete,protect_placed=false)
+	testing.expect(t,complete,"a builder plan may dig through the barrel doorway")
+}
+
+@(test)
+no_enemy_dig_breaks_a_scroll_chest :: proc(t: ^testing.T) {
+	// Run 4 f27348: a Vargr broke the Scroll A chest at (141,94).  That one was
+	// already empty, but smash_tile and the builder carves never asked about a
+	// held scroll, so a digger could void it.  Glenn: enemies cannot dig it.
+	gs := test_state(); defer free(gs)
+	wave_clear_structures(gs)
+	gs.player.pos = {8, 8}
+	CX :: 70
+	CY :: SURFACE_Y - 1
+	for x in CX - 5 ..= CX + 5 {
+		for y in CY - 4 ..= CY do set_tile(&gs.world, x, y, .Air)
+		set_tile(&gs.world, x, CY + 1, .Stone)
+	}
+	testing.expect(t, place_rune_scroll_chest(&gs.world, CX, CY, .Rune_Scroll_A), "the fixture chest")
+	T := [2]i32{CX, CY}
+	expect_intact :: proc(t: ^testing.T, gs: ^Game_State, T: [2]i32, loc := #caller_location) {
+		testing.expect_value(t, get_tile(&gs.world, int(T.x), int(T.y)), Tile_Type.Rune_Scroll_Chest_A, loc)
+		testing.expect_value(t, rune_scroll_chest_holds_scroll(gs, T), true, loc)
+	}
+
+	// Every gate an enemy dig goes through refuses, sealed or emptied.
+	testing.expect(t, !is_builder_mineable(&gs.world, CX, CY), "no enemy dig may pick the chest")
+	testing.expect(t, wave_target_refused(gs, T), "no wave hunter may target the chest")
+	handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
+	expect_intact(t, gs, T)
+
+	// A wolf and a fire sprite beside it leave it alone, and do not livelock on it.
+	wi := wave_seed_hunter(gs, .Vargr, CX + 1, CY)
+	si := wave_seed_hunter(gs, .Fire_Sprite, CX - 1, CY)
+	testing.expect(t, wi >= 0 && si >= 0, "the hunters should have slots")
+	for _ in 0 ..< 600 {
+		update_enemies(gs)
+		process_events(gs)
+		eq_clear(&gs.events)
+	}
+	expect_intact(t, gs, T)
+
+	// A taken scroll changes nothing for enemies: that was the run 4 chest.
+	b := rune_scroll_chest_record(gs, T, .Rune_Scroll_Chest_A)
+	testing.expect(t, b != nil, "the chest should have a record")
+	b.slots[RUNE_SCROLL_CHEST_SLOT] = {}
+	testing.expect(t, wave_target_refused(gs, T), "an emptied chest is still refused")
+	handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
+	testing.expect_value(t, get_tile(&gs.world, CX, CY), Tile_Type.Rune_Scroll_Chest_A)
+
+	// The player's reclaim is untouched.
+	handle_tile_mined(gs, Event{type = .Tile_Mined, source = PLAYER_ID, tile = T})
+	testing.expect(t, get_tile(&gs.world, CX, CY) != .Rune_Scroll_Chest_A, "the player still reclaims an emptied chest")
 }
 
 @(test)
