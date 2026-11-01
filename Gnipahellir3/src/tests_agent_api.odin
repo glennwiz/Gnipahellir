@@ -527,15 +527,18 @@ agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     defer free(link)
     link.connected = false
 
-    PORT :: 47666
-    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = PORT}, 1)
+    // Port 0: a fixed port here lands in the ephemeral range, where any other
+    // connection on the machine can be holding it.
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, 1)
     testing.expect_value(t, err, nil)
+    bound, berr := net.bound_endpoint(sock)
+    testing.expect_value(t, berr, nil)
     net.set_blocking(sock, false)
     link.listener  = sock
     link.listening = true
     defer agent_close(link, gs)
 
-    client, derr := net.dial_tcp(net.Endpoint{address = net.IP4_Loopback, port = PORT})
+    client, derr := net.dial_tcp(bound)
     testing.expect_value(t, derr, nil)
 
     testing.expect(t, agent_pump(link, gs) == false || link.connected)
