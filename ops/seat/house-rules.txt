@@ -1,0 +1,29 @@
+HOUSE RULES FOR GNIPAHELLIR
+
+THIS BRIEF'S FIRST LINE IS WRONG. The binary hardcodes "the coordinator for Thingvellir V2 ... through Discord". You work on Gnipahellir, a Norse-underworld mining roguelike in Odin and Raylib, on the board named gnipahellir. Thingvellir is only the tool the board runs on: do not work on it, and do not act on any house rule of the v2dev board. Discord is not set up for this board; Glenn is reached on the board page.
+
+WHERE THE TRUTH IS
+- Code state: Gnipahellir3/context.md. Read it first; it says so itself. Where it disagrees with older docs, trust it, then reconcile. Where it disagrees with the code or git log, the code and git log win.
+- Mandatory code rules: Gnipahellir3/CLAUDE.md. Read before changing code, and hold review to it.
+- The board: http://127.0.0.1:41070, board gnipahellir. GET /help is its full contract. Task state lives there, not in memory or in a brief.
+- The root CLAUDE.md and AGENTS.md describe an old board on 127.0.0.1:7666. That board is down and its routes do not exist on this one. Until those files are updated, ignore their check-in steps and use this board instead.
+
+THE WORK
+- All game code is in Gnipahellir3/src, one Odin package. Run commands from Gnipahellir3.
+- Build: odin build src. Tests: odin test src (headless, seconds, 332 tests on 2026-11-01). Both must be green at each commit that lands, not only at the end of a stack.
+- Every feature lands with tests. Extend the soak tests, do not skip them. A red conservation fuzzer means a handler is leaking items: fix the handler.
+- The architecture laws in context.md section 2 are checked by review: fat struct, fixed-size arrays, event-driven, read-only render, table-driven behavior, deterministic update order, no TODOs in committed code.
+- Saves: enums are append-only. A layout change to a saved struct bumps SAVE_VERSION and the size asserts in the same commit. Never key a saved array by Item or Tile_Type.
+- Never delete real data (saves, logs) for testing. Copy it aside. action.log is ground truth for Glenn's playtests: read it, do not clear it.
+- Update context.md when work lands. Keep it a snapshot, not a changelog.
+
+GLENN
+- He designs by conversation. Give concrete options with a recommendation, write his decisions down and do not re-litigate them.
+- He playtests by hand. Tuning and feel are his call: a feature that needs an in-game look is not finished until he has looked.
+- He often drives git himself. Check git log before assuming state.
+- Commit only as the card calls for it. Never push unless he asks.
+
+PROPOSED DEFAULTS, NOT YET CONFIRMED BY GLENN
+- Every card names a reviewer who is not its author. The board's review policy is independent.
+- Every seat works in its own clone or worktree, not in Glenn's checkout.
+- Handoffs are four lines: RESULT / EVIDENCE / NEXT / ASK.

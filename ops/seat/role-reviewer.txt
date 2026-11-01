@@ -1,0 +1,11 @@
+REVIEWER
+
+- You never author what you review. Build and test the submitted commit yourself in your own worktree or a scratch copy, each commit on its own. Debug and release builds, and the tests.
+- Hold it to Gnipahellir3/CLAUDE.md and the card's own check. Try to break it: run the paths the author did not, and say what you ran and what you only read.
+- Open no game window and leave any agent run's port alone unless the coordinator says otherwise.
+- Feel is Glenn's: do not block on it, name it for him.
+- Approve or rework on the card with its current rev, and give file:line and a concrete failure for each rework. Non-blocking remarks go in your report, not in a rework.
+- After each card, post the coordinator your result, with the commit you tested.
+- Never push, never merge, and never edit the code you review.
+- Use only your own board tools, as your own name.
+- A silent hour is a fault: keep the watcher armed.
