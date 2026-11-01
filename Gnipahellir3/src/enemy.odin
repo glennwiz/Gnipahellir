@@ -1,6 +1,7 @@
 package game
 
 import "core:math"
+import "core:slice"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -89,6 +90,8 @@ RAIDER_DAMAGE      :: 2
 // different things. All first guesses, playtest-tuned.
 FIRE_SPRITE_HP    :: 4
 FIRE_SPRITE_SPEED :: f32(5.0)
+FIRE_SPRITE_STALL :: f32(5)  // seconds on one spot before it counts as stalled
+FIRE_SPRITE_GIVE_UP :: 4     // stalls with no burn in between: it gutters out
 VARGR_HP          :: 8
 WAVE_ATTACK_TIME  :: f32(0.9)
 WAVE_DAMAGE       :: 2
@@ -246,9 +249,12 @@ is_standable :: proc(w: ^World_Grid, x, y: int) -> bool {
            !is_solid(w, x, y) && is_solid(w, x, y+1)
 }
 
+// Scroll chests are .Mineable for the player's reclaim only: no enemy digs one,
+// full or emptied, and every enemy dig and dig plan asks here first.
 is_builder_mineable :: proc(w: ^World_Grid, x, y: int) -> bool {
     if !in_bounds(x, y) { return false }
-    return .Mineable in terrain_table[w.terrain[grid_idx(x, y)]].flags
+    t := w.terrain[grid_idx(x, y)]
+    return .Mineable in terrain_table[t].flags && !is_rune_scroll_chest(t)
 }
 
 // Enemy demolition of a tile.  A player machine (any .Placeable tile) is
@@ -1050,7 +1056,7 @@ update_raids :: proc(gs: ^Game_State) {
 // ─── Wave hunting (shared by every wave enemy) ──────────────────────────────
 
 // Would handle_tile_mined turn this tile away?  It refuses a loaded silo, a
-// loaded barrel/coffer, and a scroll chest still holding its scroll.  A wave
+// loaded barrel/coffer, and any scroll chest (enemies never break one).  A wave
 // hunter must know that BEFORE it picks a target: discovering it by failing
 // at the tile is a livelock — the hunter arrives, swings forever, the tile
 // never falls, and the wave never resolves.  So refused containers are
@@ -1063,8 +1069,8 @@ wave_target_refused :: proc(gs: ^Game_State, T: [2]i32) -> bool {
         if s := silo_at(gs, gs.level_index, T); s != nil do return silo_total(s) > 0
         return false
     }
-    if tile == .Barrel || tile == .Rune_Coffer || is_rune_scroll_chest(tile) {
-        if is_rune_scroll_chest(tile) && rune_scroll_chest_holds_scroll(gs, T) do return true
+    if is_rune_scroll_chest(tile) do return true
+    if tile == .Barrel || tile == .Rune_Coffer {
         if b := barrel_at(gs, gs.level_index, T); b != nil do return barrel_total(b) > 0
         return false
     }
@@ -1075,7 +1081,7 @@ wave_target_refused :: proc(gs: ^Game_State, T: [2]i32) -> bool {
 // (wave.odin) — this runs every frame for every hunter that lacks a target,
 // so it must never walk the grid.  Each entry is checked live: a structure
 // smashed since the beat is skipped, a refusal is decided now.
-find_wave_structure_target :: proc(gs: ^Game_State, from: [2]i32) -> (best: [2]i32, ok: bool) {
+find_wave_structure_target :: proc(gs: ^Game_State, from: [2]i32, avoid: [][2]i32 = nil) -> (best: [2]i32, ok: bool) {
     w := &gs.wave
     if !w.structures_indexed do wave_index_structures(gs)
     best_d := max(i64)
@@ -1083,6 +1089,7 @@ find_wave_structure_target :: proc(gs: ^Game_State, from: [2]i32) -> (best: [2]i
         T := w.structures[i]
         if !is_structure_tile[gs.world.terrain[grid_idx(int(T.x), int(T.y))]] do continue
         if wave_target_refused(gs, T) do continue
+        if slice.contains(avoid, T) do continue
         dx, dy := i64(T.x - from.x), i64(T.y - from.y)
         if d := dx*dx + dy*dy; d < best_d {
             best, best_d, ok = T, d, true
@@ -2248,9 +2255,35 @@ update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     b.attack_timer -= dt
     bt := builder_tile(e)
 
+    // It steers and cannot dig, so a target under rock pins it on the roof for
+    // good (run 3: two sprites parked over the cave altar), and a parked
+    // survivor also holds back every later wave.  Same tile a whole window
+    // later: drop that target; too many of those and it gutters out.
+    // Standing in reach of its prey never counts.
+    b.stuck_timer += dt
+    if b.stuck_timer >= FIRE_SPRITE_STALL {
+        b.stuck_timer = 0
+        stalled := chebyshev(bt, b.anchor) <= 1
+        b.anchor = bt
+        if stalled {
+            b.stuck_count += 1
+            if b.stuck_count >= FIRE_SPRITE_GIVE_UP {
+                log_action(gs, "Fire sprite#%d gutters out at (%d,%d)", id, bt.x, bt.y)
+                despawn_enemy(gs, id)
+                return
+            }
+            if b.has_target {
+                log_action(gs, "Fire sprite#%d gives up on (%d,%d)", id, b.target_tile.x, b.target_tile.y)
+                b.avoid[b.avoid_n % len(b.avoid)] = b.target_tile
+                b.avoid_n += 1
+                b.has_target = false
+            }
+        }
+    }
+
     // Re-aim on spawn and whenever what it was burning is gone.
     if !b.has_target || !wave_target_valid(gs, b.goal, b.target_tile) {
-        T, found := find_wave_structure_target(gs, bt)
+        T, found := find_wave_structure_target(gs, bt, b.avoid[:min(b.avoid_n, len(b.avoid))])
         b.target_tile, b.has_target = T, found
     }
 
@@ -2258,9 +2291,11 @@ update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         T := b.target_tile
         if chebyshev(bt, T) <= 1 {
             e.vel = {}
+            b.stuck_timer = 0
             if b.attack_timer <= 0 {
                 b.attack_timer = WAVE_ATTACK_TIME
                 e.facing = 1 if T.x >= bt.x else -1
+                b.stuck_count = 0
                 handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(id), tile = T})
                 spawn_tile_fx(gs, .Raid_Rumble, T, 0.5, {235, 75, 28, 255})
                 notify(gs, "A fire sprite burns your structure down!")
@@ -2288,9 +2323,11 @@ update_fire_sprite :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     if chebyshev(bt, pt) <= 1 {
         e.vel = {}
+        b.stuck_timer = 0
         if b.attack_timer <= 0 {
             b.attack_timer = WAVE_ATTACK_TIME
             e.facing = 1 if pt.x >= bt.x else -1
+            b.stuck_count = 0
             if golem_id >= 0 {
                 eq_push(&gs.events, Event{type = .Golem_Damaged, tile = {i32(golem_id), 0}, payload = {int_val = i32(WAVE_DAMAGE)}})
                 log_action(gs, "Fire sprite#%d burns golem#%d", id, golem_id)
@@ -2347,6 +2384,10 @@ update_enemies :: proc(gs: ^Game_State) {
             move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
                 0, 0, &e.grounded)
             update_fire_sprite(e, i, gs, dt)
+            if !gs.enemies.active[i] {   // it gutted out
+                entity_map_clear(&gs.world, enemy_entity_id(i), prev)
+                continue
+            }
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }

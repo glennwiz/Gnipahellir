@@ -4553,6 +4553,68 @@ garm_fight_soak :: proc(t: ^testing.T) {
         f32(frame_done) / 60.0, fireballs, player_hits)
 }
 
+// Run 3, f103091: the player stood still in a cage at (143,94) with Garm outside
+// it at (137.18,96.2).  Every stone he smashed from the x=139 wall came back
+// within 10 frames, 34 times over, and he never moved again.
+@(test)
+garm_breaks_into_his_own_cage_and_keeps_fighting :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    gi := garm_fixture(gs)
+    testing.expect(t, gi >= 0, "Garm should spawn in the fixture")
+    g := &gs.enemies.data[gi]
+
+    // An open room with a floor, so the only wall between them is the cage.
+    for y in 88 ..= 98 {
+        for x in 130 ..= 156 { set_tile(&gs.world, x, y, .Air) }
+    }
+    for x in 130 ..= 156 { set_tile(&gs.world, x, 98, .Stone) }
+
+    gs.player.pos = {143.17, 96 - PLAYER_H + 1}
+    g.pos   = {132, 98 - GARM_H}
+    g.hp    = GARM_PHASE3_HP
+    g.builder.den_built = true
+    g.garm.phase        = .Ring
+    gs.cage.anchor      = player_tile(&gs.player)
+    a := gs.cage.anchor
+    wall_x := int(a.x) - GARM_CAGE_HALF_W - 1
+    for y in int(a.y) - GARM_CAGE_HALF_H - 1 ..= int(a.y) + GARM_CAGE_HALF_H + 1 {
+        set_tile(&gs.world, wall_x, y, .Stone)
+    }
+
+    smashes, bites: int
+    for _ in 0 ..< 20 * 60 {
+        gs.player.hp = 1000
+        gs.player.vel = {}
+        update_enemies(gs)
+        update_projectiles(gs)
+        n  := gs.events.size
+        qi := gs.events.head
+        for _ in 0 ..< n {
+            ev := gs.events.events[qi]
+            if ev.type == .Builder_Mined && int(ev.tile.x) == wall_x { smashes += 1 }
+            if ev.type == .Damage_Dealt && ev.target == PLAYER_ID { bites += 1 }
+            qi = (qi + 1) % MAX_EVENTS
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+
+    testing.expect_value(t, gs.cage.anchor, a)
+    testing.expectf(t, smashes <= 8, "Garm should not chew one wall forever (%d smashes)", smashes)
+    testing.expect(t, f32(wall_x) < g.pos.x, "Garm should be through the wall")
+    testing.expect(t, chebyshev(builder_tile(g), player_tile(&gs.player)) <= GARM_BITE_REACH,
+        "Garm should stand in biting reach of the caged player")
+    testing.expect(t, bites >= 1, "Garm should keep fighting inside the cage")
+
+    // The breach closes behind him, and the cage goes on to flood.
+    for y in int(a.y) - GARM_CAGE_HALF_H - 1 ..= int(a.y) + GARM_CAGE_HALF_H + 1 {
+        testing.expectf(t, is_solid(&gs.world, wall_x, y), "breach cell y=%d should close behind him", y)
+    }
+    testing.expect_value(t, g.garm.phase, Garm_Phase.Flood)
+}
+
 // The exact geometry from Glenn's 2026-08-13 live save, replayed headlessly:
 // Garm stood at (146.7,99.2) with his 1.6-wide body's left toe resting on the
 // ledge corner (146,101), his waypoint (147,101) directly BELOW him.  dx ~ 0
@@ -6126,6 +6188,71 @@ smelter_input_pulls_back_out :: proc(t: ^testing.T) {
 
     // An empty input buffer has nothing to pull.
     testing.expect(t, !smelter_withdraw(gs, {i32(sx), i32(sy)}), "empty withdraw should no-op")
+}
+
+@(test)
+an_odd_ore_leftover_never_jams_the_smelter :: proc(t: ^testing.T) {
+    // Run 4: three silver at two a bar left one ore that could never cast, and
+    // it turned every other ore away.
+    gs := test_state()
+    defer free(gs)
+
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    T := [2]i32{i32(sx), i32(sy)}
+    set_tile(&gs.world, sx, sy, .Smelter)
+    gs.player.pos = {f32(sx - 2), f32(sy - 1)}  // within BENCH_RANGE
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.fuel_count = u8(FUEL_PER_BAR * 2)
+    inv := &gs.player.inventory
+
+    slot_of :: proc(inv: ^Inventory, it: Item) -> int {
+        for s, i in inv.slots do if s.item == it do return i
+        return -1
+    }
+    run :: proc(gs: ^Game_State) {
+        for _ in 0 ..< int(SMELT_TIME / gs.delta_time) + 4 {
+            update_sim(gs)
+            eq_clear(&gs.events)
+        }
+    }
+
+    inventory_insert(inv, .Silver_Ore, 3)
+    testing.expect(t, smelter_feed(gs, T, slot_of(inv, .Silver_Ore)), "silver feed rejected")
+    run(gs)
+    testing.expect_value(t, int(sd.store_count), 1)
+    testing.expect_value(t, int(sd.in_count), 1)  // the odd one, stuck
+    run(gs)
+    testing.expect_value(t, int(sd.in_count), 1)
+
+    // Gold goes in, and the stuck silver comes home to the bag.
+    inventory_insert(inv, .Gold_Ore, 2)
+    testing.expect(t, smelter_feed(gs, T, slot_of(inv, .Gold_Ore)), "the leftover must not block gold")
+    testing.expect_value(t, sd.in_item, Item.Gold_Ore)
+    testing.expect_value(t, int(sd.in_count), 2)
+    testing.expect_value(t, inventory_count(inv, .Silver_Ore), 1)
+    testing.expect_value(t, inventory_count(inv, .Gold_Ore), 0)
+
+    // The second ore really smelts once the silver bar is out of the tray.
+    testing.expect(t, smelter_collect(gs, T), "collect rejected")
+    run(gs)
+    testing.expect_value(t, sd.store_item, Item.Gold_Bar)
+    testing.expect_value(t, int(sd.store_count), 1)
+    testing.expect_value(t, int(sd.in_count), 0)
+
+    // A batch that can still cast keeps its place.
+    sd.in_item, sd.in_count = .Silver_Ore, 2
+    inventory_insert(inv, .Gold_Ore, 2)
+    testing.expect(t, !smelter_feed(gs, T, slot_of(inv, .Gold_Ore)), "a castable batch still refuses another ore")
+    testing.expect_value(t, int(sd.in_count), 2)
+
+    // A full bag keeps the leftover loaded rather than losing it.
+    sd.in_item, sd.in_count = .Silver_Ore, 1
+    for &s in inv.slots do s = {item = .Stone_Block, count = MAX_STACK}
+    inv.slots[0] = {item = .Gold_Ore, count = 2}
+    testing.expect(t, !smelter_feed(gs, T, 0), "no room for the leftover")
+    testing.expect_value(t, sd.in_item, Item.Silver_Ore)
+    testing.expect_value(t, int(sd.in_count), 1)
+    testing.expect_value(t, int(inv.slots[0].count), 2)
 }
 
 @(test)
@@ -8112,8 +8239,9 @@ a_golem_never_plans_a_dig_through_a_structure :: proc(t: ^testing.T) {
 	// astar_dig planned a dig straight through a structure that
 	// golem_mine_tile refuses — obstructed, unclearable, and every replan
 	// produced the same route.  The planner must honor the executor's law:
-	// a golem plan never digs a structure.  Enemy builders keep the dig —
-	// their executor (smash_tile) really can demolish machines.
+	// a golem plan never digs a structure.  Enemy builders keep the dig for
+	// other structures — their executor (smash_tile) really can demolish
+	// machines — but no enemy digs a scroll chest.
 	gs := test_state(); defer free(gs)
 
 	// A sealed two-room box high in the sky air, walls of Quick_Clay (solid,
@@ -8146,13 +8274,72 @@ a_golem_never_plans_a_dig_through_a_structure :: proc(t: ^testing.T) {
 			"a golem waypoint must never require mining a structure")
 	}
 
-	// The deliberate asymmetry: an enemy builder may still dig through — its
-	// executor really can smash the structure loose.
+	// No enemy plan digs a scroll chest either.
 	path = {}
 	complete = false
 	_ = astar_dig(gs,{62,44},{68,44},0,MAX_NAV_PATH,&path,
 		allow_mining=true,complete=&complete,protect_placed=false)
-	testing.expect(t,complete,"a builder plan may dig through the chest doorway")
+	testing.expect(t,!complete,"a builder plan must not dig through a scroll chest")
+
+	// The deliberate asymmetry: an enemy builder may still dig through another
+	// structure — its executor really can smash it loose.
+	set_tile(&gs.world,65,44,.Barrel)
+	path = {}
+	complete = false
+	_ = astar_dig(gs,{62,44},{68,44},0,MAX_NAV_PATH,&path,
+		allow_mining=true,complete=&complete,protect_placed=false)
+	testing.expect(t,complete,"a builder plan may dig through the barrel doorway")
+}
+
+@(test)
+no_enemy_dig_breaks_a_scroll_chest :: proc(t: ^testing.T) {
+	// Run 4 f27348: a Vargr broke the Scroll A chest at (141,94).  That one was
+	// already empty, but smash_tile and the builder carves never asked about a
+	// held scroll, so a digger could void it.  Glenn: enemies cannot dig it.
+	gs := test_state(); defer free(gs)
+	wave_clear_structures(gs)
+	gs.player.pos = {8, 8}
+	CX :: 70
+	CY :: SURFACE_Y - 1
+	for x in CX - 5 ..= CX + 5 {
+		for y in CY - 4 ..= CY do set_tile(&gs.world, x, y, .Air)
+		set_tile(&gs.world, x, CY + 1, .Stone)
+	}
+	testing.expect(t, place_rune_scroll_chest(&gs.world, CX, CY, .Rune_Scroll_A), "the fixture chest")
+	T := [2]i32{CX, CY}
+	expect_intact :: proc(t: ^testing.T, gs: ^Game_State, T: [2]i32, loc := #caller_location) {
+		testing.expect_value(t, get_tile(&gs.world, int(T.x), int(T.y)), Tile_Type.Rune_Scroll_Chest_A, loc)
+		testing.expect_value(t, rune_scroll_chest_holds_scroll(gs, T), true, loc)
+	}
+
+	// Every gate an enemy dig goes through refuses, sealed or emptied.
+	testing.expect(t, !is_builder_mineable(&gs.world, CX, CY), "no enemy dig may pick the chest")
+	testing.expect(t, wave_target_refused(gs, T), "no wave hunter may target the chest")
+	handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
+	expect_intact(t, gs, T)
+
+	// A wolf and a fire sprite beside it leave it alone, and do not livelock on it.
+	wi := wave_seed_hunter(gs, .Vargr, CX + 1, CY)
+	si := wave_seed_hunter(gs, .Fire_Sprite, CX - 1, CY)
+	testing.expect(t, wi >= 0 && si >= 0, "the hunters should have slots")
+	for _ in 0 ..< 600 {
+		update_enemies(gs)
+		process_events(gs)
+		eq_clear(&gs.events)
+	}
+	expect_intact(t, gs, T)
+
+	// A taken scroll changes nothing for enemies: that was the run 4 chest.
+	b := rune_scroll_chest_record(gs, T, .Rune_Scroll_Chest_A)
+	testing.expect(t, b != nil, "the chest should have a record")
+	b.slots[RUNE_SCROLL_CHEST_SLOT] = {}
+	testing.expect(t, wave_target_refused(gs, T), "an emptied chest is still refused")
+	handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
+	testing.expect_value(t, get_tile(&gs.world, CX, CY), Tile_Type.Rune_Scroll_Chest_A)
+
+	// The player's reclaim is untouched.
+	handle_tile_mined(gs, Event{type = .Tile_Mined, source = PLAYER_ID, tile = T})
+	testing.expect(t, get_tile(&gs.world, CX, CY) != .Rune_Scroll_Chest_A, "the player still reclaims an emptied chest")
 }
 
 @(test)
@@ -10122,6 +10309,65 @@ air_wave_flyers_hold_altitude_and_close_on_their_prey :: proc(t: ^testing.T) {
     for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && gs.enemies.data[i].kind == .Fire_Sprite do last = i
     testing.expect(t, gs.enemies.data[last].pos.y < f32(SURFACE_Y), "an air wave enters from above the surface")
     testing.expect_value(t, gs.enemies.data[last].builder.goal, Builder_Goal.Wave_Hunt)
+}
+
+// Run 3: two sprites parked over the cave altar (147,93) under solid rock, and
+// the survivors held back every later wave.  A flyer cannot dig.
+@(private = "file")
+sprite_sealed_fixture :: proc(gs: ^Game_State, Y: int) {
+    for x in 15 ..= 85 do for y in Y - 6 ..= Y + 8 do set_tile(&gs.world, x, y, .Stone)
+    for x in 15 ..= 85 do for y in Y - 5 ..= Y do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, 22, Y + 6, .Crafting_Bench)   // under the rock
+    gs.player.pos = {8, 8}
+}
+
+@(test)
+a_flyer_gives_up_on_a_target_under_rock_and_takes_the_next :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    Y :: 20
+    sprite_sealed_fixture(gs, Y)
+    set_tile(&gs.world, 60, Y, .Crafting_Bench)       // farther, in the open
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 22, Y - 2)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 40 * 60 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, 60, Y) != .Crafting_Bench do break
+    }
+    testing.expect(t, get_tile(&gs.world, 60, Y) != .Crafting_Bench, "it should give up and burn the open bench")
+    testing.expect_value(t, get_tile(&gs.world, 22, Y + 6), Tile_Type.Crafting_Bench)
+}
+
+@(test)
+a_flyer_with_nothing_it_can_reach_gutters_out :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+
+    Y :: 20
+    sprite_sealed_fixture(gs, Y)
+    // The player is sealed away as well, so nothing is reachable at all.
+    for x in 4 ..= 12 do for y in 4 ..= 12 do set_tile(&gs.world, x, y, .Stone)
+    set_tile(&gs.world, 8, 8, .Air)
+    set_tile(&gs.world, 8, 9, .Air)
+    fi := wave_seed_hunter(gs, .Fire_Sprite, 22, Y - 2)
+    testing.expect(t, fi >= 0, "the sprite should have a slot")
+
+    for _ in 0 ..< 90 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if !gs.enemies.active[fi] do break
+    }
+    testing.expect(t, !gs.enemies.active[fi], "a parked flyer must not hold back every later wave")
+    gone := enemy_entity_id(fi)
+    for id in gs.world.entity_map do testing.expect(t, id != gone, "a gutted sprite must leave the entity map")
 }
 
 @(test)
