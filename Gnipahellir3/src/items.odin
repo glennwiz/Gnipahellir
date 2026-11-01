@@ -247,18 +247,23 @@ jade_ring_active :: proc(p: ^Player) -> bool {
     return player_has_charm(p, .Jade_Ring)
 }
 
+// Why the ring cannot pull you home from here; "" when it can.
+warp_refusal :: proc(gs: ^Game_State) -> string {
+    if gs.level_index == LEVEL_SURFACE do return "Already on the surface"
+    if gs.level_index == LEVEL_DIMENSION && golem_deployed_count(gs, LEVEL_DIMENSION) > 0 && !dimension_world_anchored(gs) {
+        return "Recall the clay crew or build a World Anchor before leaving"
+    }
+    return ""
+}
+
 // The Jade Ring's effect: an early, cheap recall straight to the surface
 // spawn, usable as often as it's worn.  Refused when the ring isn't equipped,
 // when already home, or (matching the dimension gate's own rule) when
 // leaving an unanchored dimension would strand a deployed golem crew.
 player_warp_home :: proc(gs: ^Game_State) -> bool {
     if !jade_ring_active(&gs.player) do return false
-    if gs.level_index == LEVEL_SURFACE {
-        notify(gs, "Already on the surface")
-        return false
-    }
-    if gs.level_index == LEVEL_DIMENSION && golem_deployed_count(gs, LEVEL_DIMENSION) > 0 && !dimension_world_anchored(gs) {
-        notify(gs, "Recall the clay crew or build a World Anchor before leaving")
+    if why := warp_refusal(gs); why != "" {
+        notify(gs, why)
         return false
     }
     p := Portal{dest_level = LEVEL_SURFACE, dest_pos = SURFACE_HOME_POS, gate_tier = -1}

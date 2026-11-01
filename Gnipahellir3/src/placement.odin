@@ -126,11 +126,18 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
         idx = PLACE_SLOT
     }
     slot := &inv.slots[idx]
-    if slot.item == .None || slot.count <= 0 do return
+    if slot.item == .None || slot.count <= 0 {
+        gs.agent.place_refused = true
+        return
+    }
     place_tile := item_table[slot.item].place_tile
-    if place_tile == .Air do return  // the Place Slot holds a non-block
+    if place_tile == .Air {  // the Place Slot holds a non-block
+        gs.agent.place_refused = true
+        return
+    }
 
     if !placement_ok(gs, slot.item, x, y) {
+        gs.agent.place_refused = true
         // Explain the common templated-structure miss (the red ghost shows the rest).
         if tpl := structure_template_for(gs, slot.item); tpl != nil {
             if ok, want := structure_template_satisfied(&gs.world, tpl, x, y); !ok {
