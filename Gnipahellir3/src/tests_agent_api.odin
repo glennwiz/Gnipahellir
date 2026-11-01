@@ -711,6 +711,9 @@ agent_plan_is_all_or_nothing :: proc(t: ^testing.T) {
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"},{"frames":0}]}`)
     testing.expect(t, strings.contains(string(link.out[:link.out_len]), "step 1"))
     testing.expect_value(t, link.plan_len, 1)  // the good plan stands
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"cmd":"wait","frames":5}]}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), "only be an act"))
+    testing.expect_value(t, link.plan_len, 1)
 }
 
 // What a replay does with a recording must be what the plan did: this plays the

@@ -9,6 +9,15 @@ first, then read `action.log` and `fight.log` only where it points.
 `tools/agent_replay.py <run>` plays a run back in the window.
 Reuse and improve `tools/agent_bot/`: a fix there lasts, a fix in your head does not.
 
+## While you think
+
+The game no longer stops between acts. Between tool calls it plays your plan at
+about 15 ticks a second, then idles for 3 game seconds, then holds. So before a
+long think, end the script with `g.plan({...},{...})` sized to the think, and
+pick safe moves: a plan is blind, and only your next act overrides it. State has
+`plan_left`, and `plan_stopped` if a step could not start. Keep the watcher told
+with `g.goal("kill Garm", "perch at the east wall")`.
+
 ## How the bot plays
 - Hold one connection for the whole run through `bridge.py`. A disconnect lets the
   game run on in real time with the player standing there, and ends replay.

@@ -13,6 +13,15 @@ class G:
         return s.raw(o)
     def act(s,frames=1,**k):
         return s.raw({'cmd':'act','frames':frames,**k})
+    def plan(s,*acts):
+        # What the player does while you think. Send it last, about 15 ticks per second of thinking.
+        return s.raw({'cmd':'plan','acts':list(acts)})
+    def goal(s,goal=None,step=None,failed=False):
+        o={'cmd':'objective'}
+        if goal is not None: o['goal']=goal
+        if step is not None: o['step']=step
+        if failed: o['result']='failed'
+        return s.raw(o)
 def show(r):
     v=r['view']; print('v',v['x'],v['y'],v['w'],v['h'],v['legend'])
     for i,row in enumerate(v['rows']): print('%3d %s'%(v['y']+i,row))

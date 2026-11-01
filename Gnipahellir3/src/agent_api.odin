@@ -194,6 +194,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
             link.realtime  = false
             link.in_len    = 0
             link.panel     = {}
+            link.plan_stopped = {}
             link.idle_off  = false
             link.idle_step = 0
             link.idle_ticks = 0
@@ -475,13 +476,18 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
             agent_reply_error(link, fmt.tprintf("frames must be 1..%d", AGENT_MAX_FRAMES))
             return
         }
+        canonical := agent_canonical(value)
+        if len(canonical) > len(link.act_line) {
+            agent_reply_error(link, "wait too long to record")
+            return
+        }
         agent_plan_cut(link, gs)
         agent_record_idle(link, gs)
         link.cmd         = {}
         link.first       = false
         link.frames_left = frames
         link.out_len     = 0
-        link.act_len     = copy(link.act_line[:], agent_canonical(value))
+        link.act_len     = copy(link.act_line[:], canonical)
     case "realtime":
         on, ok := root["on"].(json.Boolean)
         if !ok {
@@ -512,6 +518,9 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
                 return
             }
             _, frames, problem := agent_parse_act(gs, o, false)
+            if step_cmd, named := o["cmd"]; named {
+                if s, is_text := step_cmd.(json.String); !is_text || s != "act" do problem = "a plan step can only be an act"
+            }
             canonical := agent_canonical(act)
             if problem == "" && len(canonical) > AGENT_PLAN_LINE do problem = "plan step too long to record"
             if problem != "" {
