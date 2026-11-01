@@ -560,8 +560,7 @@ UI_State :: struct {
     show_barrel:     bool,   // barrel window; barrel_tile says which barrel
     show_debug:      bool,
     show_menu:       bool,   // Resume / New Game / Save and Quit overlay
-    show_title:      bool,   // boot title screen; any key dismisses it into the character-select
-    show_charselect: bool,   // startup form picker; dismissed by choosing a look
+    show_title:      bool,   // boot title screen; any key dismisses it into the world
     show_settings:   bool,   // volume sliders + key rebinding screen
     show_snapshots:  bool,   // F3 snapshot save/load menu (full-screen modal)
     snap_exists:     [SNAP_SLOTS]bool,      // slot cache, refreshed by snapshot_scan
@@ -812,7 +811,7 @@ Game_State :: struct {
     zoom_anchor_screen: [2]f32, // virtual-screen cursor captured by an ALT wheel zoom; not saved
     zoom_cursor_active: bool,   // true while the live zoom is easing around that cursor anchor; not saved
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
-    player_form:  Player_Form,  // chosen sprite look (startup character-select); cosmetic, not saved
+    player_form:  Player_Form,  // sprite look; one form today, always zero; cosmetic, not saved
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown

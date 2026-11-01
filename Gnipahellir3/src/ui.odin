@@ -799,82 +799,6 @@ draw_title :: proc(gs: ^Game_State) {
 	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
 }
 
-// ─── Character Select (startup form picker) ───────────────────────────────────
-
-CSEL_CARD_W  :: 160
-CSEL_CARD_H  :: 240
-CSEL_GAP     :: 16
-CSEL_TOTAL_W :: PLAYER_FORM_COUNT * CSEL_CARD_W + (PLAYER_FORM_COUNT - 1) * CSEL_GAP
-CSEL_X0      :: (UI_W - CSEL_TOTAL_W) / 2
-CSEL_Y0      :: 230
-
-// Index of the card under the cursor, or -1.
-charselect_card_at_cursor :: proc(gs: ^Game_State) -> int {
-	mx := i32(gs.input.mouse_screen.x)
-	my := i32(gs.input.mouse_screen.y)
-	if my < CSEL_Y0 || my >= CSEL_Y0 + CSEL_CARD_H do return -1
-	for i in 0 ..< PLAYER_FORM_COUNT {
-		x := i32(CSEL_X0 + i * (CSEL_CARD_W + CSEL_GAP))
-		if mx >= x && mx < x + CSEL_CARD_W do return i
-	}
-	return -1
-}
-
-draw_charselect :: proc(gs: ^Game_State) {
-	t := f32(rl.GetTime())
-	rl.DrawRectangle(0, 0, UI_W, UI_H, rl.Color{12, 10, 14, 255})
-
-	center_text :: proc(text: cstring, y, size: i32, color: rl.Color) {
-		tw := rl.MeasureText(text, size)
-		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
-	}
-	center_text("CHOOSE YOUR FORM", 110, 48, rl.Color{240, 205, 130, 255})
-	center_text("click a form - or press its number - to begin", 168, 20, text_dim)
-
-	pulse := 0.6 + 0.4 * math.sin(t * 1.5)
-	hover := charselect_card_at_cursor(gs)
-	for i in 0 ..< PLAYER_FORM_COUNT {
-		form := Player_Form(i)
-		x := i32(CSEL_X0 + i * (CSEL_CARD_W + CSEL_GAP))
-		y := i32(CSEL_Y0)
-		hovered := i == hover
-
-		rl.DrawRectangle(x, y, CSEL_CARD_W, CSEL_CARD_H, hovered ? NORSE_ROW_HOT : NORSE_ROW)
-		rl.DrawRectangleLinesEx(
-			{f32(x), f32(y), CSEL_CARD_W, CSEL_CARD_H},
-			hovered ? 3 : 2,
-			hovered ? NORSE_GOLD_HOT : NORSE_BORDER,
-		)
-
-		// Sprite preview, centered in the card's upper area (uses the new-game
-		// default tints so it matches the in-world look).
-		ps := f32(6)  // 16×22 grid → 96×132 px preview, fits the 160×240 card
-		sw := f32(FRAME_WIDTH) * ps
-		sx := f32(x) + (CSEL_CARD_W - sw) / 2
-		sy := f32(y) + 36
-		if hovered do sy -= 4 * f32(pulse)  // a little lift on hover
-		draw_form_sprite(form, sx, sy, ps, rl.ORANGE, rl.BLUE)
-
-		// Name plate.
-		name := player_form_names[form]
-		tw := rl.MeasureText(name, 18)
-		rl.DrawText(
-			name,
-			x + (CSEL_CARD_W - tw) / 2,
-			y + CSEL_CARD_H - 44,
-			18,
-			hovered ? NORSE_GOLD_HOT : rl.Color{225, 215, 195, 255},
-		)
-
-		// Number hint under the name.
-		num_buf: [4]u8
-		num := fmt.bprintf(num_buf[:], "%d", i + 1)
-		nt := rl.MeasureText(cstring(raw_data(num_buf[:])), 16)
-		rl.DrawText(cstring(raw_data(num_buf[:])), x + (CSEL_CARD_W - nt) / 2, y + CSEL_CARD_H - 22, 16, text_dim)
-		_ = num
-	}
-}
-
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
 
 MENU_ROWS :: 4 // row 0: Resume; 1: Settings; 2: New Game; 3: Save and Quit
@@ -1712,7 +1636,7 @@ cursor_over_ui :: proc(gs: ^Game_State) -> bool {
 	   my >= GOLEM_CMD_Y && my < GOLEM_CMD_Y+GOLEM_CMD_H {
 		return true
 	}
-	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_charselect || gs.ui.show_settings ||
+	if gs.ui.show_menu || gs.ui.show_title || gs.ui.show_settings ||
 	   gs.ui.show_snapshots {
 		return true // full-screen modals — everything behind them is blocked
 	}
@@ -1875,7 +1799,6 @@ draw_ui :: proc(gs: ^Game_State) {
 		if gs.ui.show_pixel_editor do draw_pixel_editor(gs)
 	}
 	if gs.ui.show_menu do draw_menu(gs) // modal overlays — always drawn last, on top
-	if gs.ui.show_charselect do draw_charselect(gs)
 	if gs.ui.show_settings do draw_settings(gs)
 	if gs.ui.show_snapshots do draw_snapshots(gs)
 	if gs.ui.show_title do draw_title(gs) // title covers everything, menu included

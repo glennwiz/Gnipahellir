@@ -215,7 +215,6 @@ item_palette_maps_cursor_to_item :: proc(t: ^testing.T) {
     defer free(gs)
     gs.ui.show_menu       = false
     gs.ui.show_title      = false
-    gs.ui.show_charselect = false
     gs.ui.show_settings   = false
     gs.debug.item_palette = true
 

@@ -325,7 +325,6 @@ start_new_game :: proc(gs: ^Game_State) {
     camera_snap_y(gs)
     gs.ui.show_menu          = false
     gs.ui.show_title         = false  // game_state_init re-arms the boot title screen
-    gs.ui.show_charselect    = true   // pick a look before the fresh run begins
 }
 
 // Called once at shutdown: live runs persist; dead and won runs clear the

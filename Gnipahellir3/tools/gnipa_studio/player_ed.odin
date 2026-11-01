@@ -7,7 +7,7 @@ package gnipa_studio
 //
 // Clothing (h/H/L) and hair (y/Y) runes are player-tinted at runtime, so the
 // editor previews through game.player_pixel_color with a cycleable tint set —
-// exactly the char-select path (draw_form_sprite's tmp-Player trick).
+// with a tmp Player, the same way draw_player paints.
 
 import "core:fmt"
 import game "../../src"

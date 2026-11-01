@@ -2228,7 +2228,6 @@ draw_wand_target :: proc(gs: ^Game_State) {
 	   gs.game_won ||
 	   gs.ui.show_menu ||
 	   gs.ui.show_title ||
-	   gs.ui.show_charselect ||
 	   gs.ui.show_settings ||
 	   gs.ui.show_book ||
 	   gs.ui.show_snapshots ||
@@ -2889,13 +2888,11 @@ draw_draugr :: proc(e: ^Enemy) {
 
 // ─── Player (pixel-art forms) ───────────────────────────────────────────────
 
-// The sole player look.  Keep the enum-shaped API so the renderer, startup
-// card, and Gnipa Studio player editor share one table-driven path.
+// The sole player look.  Keep the enum-shaped API so the renderer and the
+// Gnipa Studio player editor share one table-driven path.
 Player_Form :: enum u8 {
 	Wizard,
 }
-
-PLAYER_FORM_COUNT :: len(Player_Form)
 
 player_form_names := [Player_Form]cstring {
 	.Wizard = "Wizard",
@@ -3064,26 +3061,6 @@ draw_player :: proc(p: ^Player, form: Player_Form, step_visual_y: f32 = 0) {
 		}
 		if p.facing < 0 {deg = -deg}
 		draw_held_item(held, hand, ps * 0.75, deg, p.facing < 0)
-	}
-}
-
-// Draws a form's idle sprite (frame 0) at a UI position for the character-
-// select cards. Same pixel loop as draw_player, minus animation/facing.
-draw_form_sprite :: proc(form: Player_Form, x, y, ps: f32, hair, clothing: rl.Color) {
-	tmp := Player {
-		hair_color     = hair,
-		clothing_color = clothing,
-	}
-	frame := player_form_frames[form][0]
-	for row in 0 ..< FRAME_HEIGHT {
-		for col in 0 ..< FRAME_WIDTH {
-			ch := frame[row][col]
-			if ch == ' ' {continue}
-			rl.DrawRectangleRec(
-				{x + f32(col) * ps, y + f32(row) * ps, ps, ps},
-				player_pixel_color(&tmp, ch),
-			)
-		}
 	}
 }
 

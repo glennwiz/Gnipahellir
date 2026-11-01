@@ -127,31 +127,11 @@ update_input :: proc(gs: ^Game_State) {
     }
     gs.ui.hover_tile = inp.mouse_tile
 
-    // Title screen: any key or click advances to the character-select.
+    // Title screen: any key or click drops into the world.
     if gs.ui.show_title {
         if rl.GetKeyPressed() != .KEY_NULL ||
            rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT) {
-            gs.ui.show_title      = false
-            gs.ui.show_charselect = true
-        }
-        return
-    }
-
-    // Character-select: click a form card or press its number (1..N) to choose
-    // a look and drop into the world. Nothing else runs while it's up.
-    if gs.ui.show_charselect {
-        chosen := -1
-        if rl.IsMouseButtonPressed(.LEFT) {
-            chosen = charselect_card_at_cursor(gs)
-        }
-        for n in 0 ..< PLAYER_FORM_COUNT {
-            if rl.IsKeyPressed(rl.KeyboardKey(i32(rl.KeyboardKey.ONE) + i32(n))) {
-                chosen = n
-            }
-        }
-        if chosen >= 0 {
-            gs.player_form        = Player_Form(chosen)
-            gs.ui.show_charselect = false
+            gs.ui.show_title = false
         }
         return
     }
