@@ -3179,12 +3179,51 @@ notifications_explain_ritual_state :: proc(t: ^testing.T) {
 }
 
 @(test)
+objective_line_opens_at_the_pickaxe :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs)  // production init — frame 0, empty-handed
+    buf: [128]u8
+    inv := &gs.player.inventory
+
+    s := current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "pickaxe"), "frame 0 points at the pickaxe")
+
+    test_hold(gs, .Pickaxe)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "wood"), "pick in hand: go get wood")
+
+    inventory_insert(inv, .Wood_Log, 1)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "planks"), "logs in the bag: craft planks")
+    inventory_remove(inv, .Wood_Log, 1)
+
+    inventory_insert(inv, .Plank, 3)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "wood"), "too few planks for a bench: more wood")
+    inventory_insert(inv, .Plank, 1)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Crafting Bench"), "enough planks: make the bench")
+
+    inventory_insert(inv, .Crafting_Bench, 1)
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Place"), "bench in the bag: place it")
+
+    // A bench standing on another level still counts, and the altar comes next.
+    inventory_remove(inv, .Crafting_Bench, 1)
+    gs.levels.worlds[LEVEL_CAVE2].terrain[grid_idx(10, 10)] = .Crafting_Bench
+    s = current_objective(gs, buf[:127])
+    testing.expect(t, strings.contains(s, "Sky Altar"), "bench placed: raise the altar")
+}
+
+@(test)
 objective_line_walks_the_loop :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
     buf: [128]u8
 
-    // Fresh run: raise the sky gate first (Rune Scroll A doesn't exist yet)
+    // Bench up: raise the sky gate next (Rune Scroll A doesn't exist yet)
+    set_tile(&gs.world, 90, 90, .Crafting_Bench)
     s := current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "Sky Altar"), "fresh run points at raising the sky altar")
 
