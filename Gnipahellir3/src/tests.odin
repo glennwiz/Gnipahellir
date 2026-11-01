@@ -5113,6 +5113,10 @@ garm_death_opens_the_hell_gate :: proc(t: ^testing.T) {
 
     testing.expect(t, gs.game_won, "breaking the Final Seal wins the game")
     testing.expect_value(t, gs.stats.runs_won, won_before + 1)
+    // The win screen names what was just done: the Seal, not the hound.
+    testing.expect_value(t, WIN_TITLE, "THE FINAL SEAL IS BROKEN")
+    testing.expect(t, !strings.contains(WIN_TITLE, "GARM"), "the win is not Garm's death")
+    testing.expect(t, !strings.contains(WIN_CODA, "hound"), "the coda is not about Garm either")
 
     pos_before := gs.player.pos
     gs.input.move_right = true

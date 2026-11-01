@@ -2341,6 +2341,11 @@ draw_death_screen :: proc(gs: ^Game_State) {
 	}
 }
 
+// What the win screen says.  The win is the Final Seal breaking (levels.odin),
+// not Garm's death: he only drops the key.
+WIN_TITLE :: "THE FINAL SEAL IS BROKEN"
+WIN_CODA  :: "Hel's last door stands open."
+
 // The game is beaten: dark overlay, title, run stats.  Quitting ends the
 // run (save cleared on exit); menus and restart flow land in Phase 6.
 draw_win_screen :: proc(gs: ^Game_State) {
@@ -2351,7 +2356,7 @@ draw_win_screen :: proc(gs: ^Game_State) {
 		rl.DrawText(text, (i32(UI_W) - tw) / 2, y, size, color)
 	}
 
-	center_text("GARM IS SLAIN", 380, 60, rl.Color{255, 200, 80, 255})
+	center_text(WIN_TITLE, 380, 60, rl.Color{255, 200, 80, 255})
 	center_text("Gnipahellir is conquered", 450, 30, rl.Color{255, 240, 180, 255})
 
 	mins := int(gs.elapsed_time) / 60
@@ -2368,7 +2373,7 @@ draw_win_screen :: proc(gs: ^Game_State) {
 	)
 	center_text(cstring(raw_data(buf[:])), 520, 20, rl.WHITE)
 
-	center_text("The hound guards the gate no more.", 580, 20, rl.Color{160, 160, 170, 255})
+	center_text(WIN_CODA, 580, 20, rl.Color{160, 160, 170, 255})
 }
 
 // The current objective — one dim line, top-center, always on so a new
