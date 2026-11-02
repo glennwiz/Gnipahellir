@@ -9,12 +9,14 @@ import "core:strconv"
 // ─── Save / Load ──────────────────────────────────────────────────────────────
 //
 //  Binary snapshot of the run, memcpy'd to disk (all state is POD, no pointers).
-//  Rejected on size or version mismatch — a bad save just starts a fresh run.
+//  Rejected on size or version mismatch — a bad save starts a fresh run, and
+//  the file is set aside first so the fresh run's autosave cannot eat it.
 //  Persistent stats live in their own file and survive across runs.
 
 SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
+SAVE_BAK_SLOTS :: 16     // rejected saves kept beside the autosave; none is ever overwritten
 SAVE_VERSION :: i32(28)  // v28: MAX_ENEMIES 256 (Glenn's Q5), down from 1024
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
@@ -232,7 +234,8 @@ save_data_read :: proc(data: []u8) -> ^Save_Data {
 }
 
 save_game :: proc(gs: ^Game_State) -> bool {
-    return save_game_to(gs, SAVE_FILE)
+    if len(gs.save_path) == 0 do return false
+    return save_game_to(gs, gs.save_path)
 }
 
 // Split out so snapshots (and tests) can write the same format anywhere.
@@ -256,11 +259,45 @@ save_game_to :: proc(gs: ^Game_State, path: string) -> bool {
     sd.risen        = gs.risen
     sd.world_seed   = gs.world_seed
 
-    return os.write_entire_file(path, mem.ptr_to_bytes(sd)) == nil
+    // Through a temp file, so a crash mid-write leaves the last good save whole.
+    // No fsync: this runs on the main thread every few seconds, and the rename
+    // covers a dead process, which is the crash a game has.
+    buf: [512]u8
+    tmp := fmt.bprintf(buf[:], "%s.tmp", path)
+    ok := os.write_entire_file(tmp, mem.ptr_to_bytes(sd)) == nil && os.rename(tmp, path) == nil
+    if !ok do os.remove(tmp)
+    return ok
 }
 
 load_game :: proc(gs: ^Game_State) -> bool {
-    return load_game_from(gs, SAVE_FILE)
+    if load_game_from(gs, gs.save_path) do return true
+    if os.exists(gs.save_path) do save_set_aside(gs)
+    return false
+}
+
+// The autosave exists and this build will not run it.  It moves to the first
+// free .bak slot, so a later rejection cannot replace it with a throwaway run.
+// If it cannot move, this run stops autosaving: losing a fresh run beats
+// overwriting the old one.
+@(private="file")
+save_set_aside :: proc(gs: ^Game_State) {
+    data, _ := os.read_entire_file_from_path(gs.save_path, context.allocator)
+    defer delete(data)
+    version := i32(-1)
+    if len(data) >= size_of(version) do mem.copy(&version, raw_data(data), size_of(version))
+
+    for slot in 0 ..< SAVE_BAK_SLOTS {
+        buf: [512]u8
+        bak := fmt.bprintf(buf[:], "%s.%d.bak", gs.save_path, slot)
+        if os.exists(bak) do continue
+        if os.rename(gs.save_path, bak) != nil do break
+        log_action(gs, "save rejected: %d bytes, version %d, this build reads version %d. Kept as %s",
+            len(data), version, SAVE_VERSION, bak)
+        return
+    }
+    log_action(gs, "save rejected: %d bytes, version %d, and it could not be set aside. Left at %s, autosave is off",
+        len(data), version, gs.save_path)
+    gs.save_path = ""
 }
 
 // Split out so tests can drive a synthetic save (a migration fixture) without
