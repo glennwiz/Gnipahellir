@@ -102,6 +102,11 @@ WAVE_DAMAGE       :: 2
 DEN_SHELL_LAYERS :: 2       // mineral layers placed around the den
 
 DEN_UNSET :: [2]i32{0, 0}   // anchor sentinel: no den site chosen yet
+DEN_FLOOR_OFFS :: [3][2]i32{{0, 0}, {-1, 0}, {1, 0}}   // hoard stacks, around the anchor
+
+// Rob a den and its owner comes back to your base with friends.  First guesses.
+DEN_REVENGE_DELAY :: f32(600)
+DEN_REVENGE_PARTY :: 3
 
 // ─── Build Templates ──────────────────────────────────────────────────────────
 //
@@ -1971,8 +1976,7 @@ builder_deposit_loot :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     b    := &e.builder
     drop := terrain_table[b.carry].drop_item
     if drop != .None {
-        FLOOR_OFFS :: [3][2]i32{{0, 0}, {-1, 0}, {1, 0}}
-        for off in FLOOR_OFFS {
+        for off in DEN_FLOOR_OFFS {
             T := b.anchor + off
             if !in_bounds(int(T.x), int(T.y)) { continue }
             idx      := grid_idx(int(T.x), int(T.y))
@@ -1992,6 +1996,59 @@ builder_deposit_loot :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
         }
     }
     b.carry = .Air
+}
+
+// What lies on a den's floor, the number over its door.
+den_hoard :: proc(gs: ^Game_State, b: ^Builder_State) -> (n: int) {
+    for off in DEN_FLOOR_OFFS {
+        T := b.anchor + off
+        if in_bounds(int(T.x), int(T.y)) do n += int(gs.world.item_counts[grid_idx(int(T.x), int(T.y))])
+    }
+    return
+}
+
+// The player lifted something off a tile: if that tile is a den's floor, the
+// owner shrieks now and comes for the base later.  One grudge at a time.
+den_check_robbed :: proc(gs: ^Game_State, T: [2]i32) {
+    for i in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[i] { continue }
+        e := &gs.enemies.data[i]
+        if e.kind != .Builder || !e.builder.den_built { continue }
+        for off in DEN_FLOOR_OFFS {
+            if T != e.builder.anchor + off { continue }
+            builder_alert(gs, i)
+            if !gs.den_revenge.active {
+                gs.den_revenge = {true, DEN_REVENGE_DELAY, i, gs.level_index, e.builder.anchor}
+                log_action(gs, "Builder#%d's den is robbed at (%d,%d)", i, T.x, T.y)
+            }
+            return
+        }
+    }
+}
+
+// Step 5b1z.  The grudge comes due on the surface, where the base is, through
+// the wave warning.  An owner who has died since, or who rose as a draugr, has
+// no friends to bring: killing him is how you settle it.
+update_den_revenge :: proc(gs: ^Game_State) {
+    r := &gs.den_revenge
+    if !r.active do return
+    r.timer -= gs.delta_time
+    if r.timer > 0 || gs.level_index != LEVEL_SURFACE || gs.wave.pending do return
+    r.active = false
+
+    here   := r.level == gs.level_index
+    store  := &gs.enemies if here else &gs.levels.enemies[r.level]
+    world  := &gs.world if here else &gs.levels.worlds[r.level]
+    owner  := &store.data[r.owner]
+    if !store.active[r.owner] || owner.kind != .Builder || owner.builder.anchor != r.anchor {
+        log_action(gs, "The robbed builder of (%d,%d) is gone - no revenge", r.anchor.x, r.anchor.y)
+        return
+    }
+    entity_map_clear(world, enemy_entity_id(r.owner), builder_tile(owner))
+    enemy_free(store, r.owner)   // bare: the store may be another level's, despawn_enemy only knows gs.enemies
+    wave_trigger(gs, .Underground, DEN_REVENGE_PARTY)
+    notify(gs, "The builder you robbed has found friends!")
+    log_action(gs, "Builder#%d leaves his den at (%d,%d) as a raider", r.owner, r.anchor.x, r.anchor.y)
 }
 
 builder_encase :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {

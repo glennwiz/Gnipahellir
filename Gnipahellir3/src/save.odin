@@ -300,6 +300,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
         migrate_hand_gear_to_bag(gs)
         clear_tile_fx_kind(gs, .Raid_Rumble)
         gs.raid = {}
+        gs.den_revenge = {}
         log_action(gs, "run migrated from save v23")
         gs.save_dirty = true
         return true
@@ -329,6 +330,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
     // outlive the director it announced.
     clear_tile_fx_kind(gs, .Raid_Rumble)
     gs.raid = {}
+    gs.den_revenge = {}
 
     // v21 previously stored progression rune scrolls as loose world items.
     // Seal both the active grid and every already-generated stashed grid.

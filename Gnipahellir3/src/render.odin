@@ -30,6 +30,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
 	draw_enemies(&gs.enemies, gs.elapsed_time)
 	draw_risen_mark(gs)
+	draw_den_hoards(gs)
 	draw_lasers(gs)
 	draw_golems(gs)
 	draw_projectiles(&gs.projectiles)

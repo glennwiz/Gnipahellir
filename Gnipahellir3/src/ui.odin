@@ -2783,6 +2783,22 @@ WAVE_GAUGE_Y :: 60
 WAVE_GAUGE_W :: 120
 WAVE_GAUGE_H :: 10
 
+// World space: the count over each den's door, tiles right of the anchor.
+draw_den_hoards :: proc(gs: ^Game_State) {
+	for i in 0 ..< MAX_ENEMIES {
+		if !gs.enemies.active[i] do continue
+		e := &gs.enemies.data[i]
+		if e.kind != .Builder || !e.builder.den_built do continue
+		n := den_hoard(gs, &e.builder)
+		if n == 0 do continue
+		x := (e.builder.anchor.x + 3 + DEN_SHELL_LAYERS) * CELL_SIZE
+		y := (e.builder.anchor.y - 2) * CELL_SIZE - FLOAT_TEXT_SIZE
+		c := fmt.ctprintf("%d", n)
+		rl.DrawText(c, x + 1, y + 1, FLOAT_TEXT_SIZE, {0, 0, 0, 180})
+		rl.DrawText(c, x, y, FLOAT_TEXT_SIZE, rl.GOLD)
+	}
+}
+
 draw_wave_gauge :: proc(gs: ^Game_State) {
 	value, show := wave_gauge(gs)
 	if !show do return

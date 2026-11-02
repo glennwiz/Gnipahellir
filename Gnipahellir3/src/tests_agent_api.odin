@@ -509,6 +509,43 @@ agent_refused_warp_says_so_and_plays_nothing :: proc(t: ^testing.T) {
 }
 
 @(test)
+agent_plan_judges_a_warp_when_its_step_starts :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    // Refused now, but a plan's world has not happened yet: the step decides.
+    gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
+    gs.level_index = LEVEL_SURFACE
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"warp":true}]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"steps":1`), agent_test_reply(link))
+    for _ in 0 ..< AGENT_IDLE_EVERY * 3 do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "warp refused"), agent_test_reply(link))
+}
+
+@(test)
+agent_place_with_nothing_to_place_is_reported :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    refused :: proc(link: ^Agent_Link, gs: ^Game_State) -> bool {
+        T := player_tile(&gs.player)
+        agent_test_run_act(link, gs, fmt.tprintf(`{{"cmd":"act","select":-1,"place":[%d,%d]}}`, T.x + 1, T.y))
+        agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+        return strings.contains(agent_test_reply(link), `"refused":"place"`)
+    }
+    gs.player.inventory.slots[PLACE_SLOT] = {}
+    testing.expect(t, refused(link, gs), "an empty Place Slot must say so")
+
+    agent_test_run_act(link, gs, `{"cmd":"act"}`)
+    gs.player.inventory.slots[PLACE_SLOT] = {item = .Pickaxe, count = 1}
+    testing.expect(t, refused(link, gs), "a non-block in the Place Slot must say so")
+    testing.expect_value(t, gs.player.inventory.slots[PLACE_SLOT].count, 1)
+}
+
+@(test)
 agent_failed_place_is_reported_and_reach_is_in_state :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
@@ -561,6 +598,7 @@ agent_withdraw_pulls_the_ore_through_the_key_handler :: proc(t: ^testing.T) {
     testing.expect_value(t, int(sd.in_count), 0)
     testing.expect_value(t, sd.in_item, Item.None)
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Silver_Ore), 1)
+    testing.expect(t, gs.ui.show_smelter, "withdraw works on the window, so it stays open")
 }
 
 @(test)
