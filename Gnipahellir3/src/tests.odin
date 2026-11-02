@@ -9591,6 +9591,193 @@ stats_only_reach_an_armed_path :: proc(t: ^testing.T) {
 }
 
 @(test)
+the_pick_works_a_walkable_tile_the_body_stands_in :: proc(t: ^testing.T) {
+	// Run 3 f58800: mining the Green Cave Mushroom at (83,49) from inside its
+	// cell did nothing, because the pick skips the body's own tiles.
+	gs := test_state(); defer free(gs)
+	test_hold(gs, .Pickaxe)
+	X, Y := 83, 49
+	gs.player.pos = {f32(X) + 0.13, f32(Y) - 0.8}
+	set_tile(&gs.world, X, Y, .Green_Cave_Mushroom)
+	gs.input.mine = true
+	gs.input.mouse_tile = {i32(X), i32(Y)}
+	gs.input.mouse_world = {(f32(X) + 0.5) * CELL_SIZE, (f32(Y) + 0.5) * CELL_SIZE}
+	for _ in 0 ..< 600 {
+		player_mine(gs, 1.0/60.0)
+		process_events(gs)
+		eq_clear(&gs.events)
+		if get_tile(&gs.world, X, Y) != .Green_Cave_Mushroom do break
+	}
+	testing.expect(t, get_tile(&gs.world, X, Y) != .Green_Cave_Mushroom, "the mushroom underfoot must come up")
+}
+
+@(test)
+the_pick_leaves_a_solid_tile_the_body_overlaps :: proc(t: ^testing.T) {
+	// Only a walkable tile underfoot is fair work: a solid one in the body's
+	// own cells stays skipped, cursor on it or not.
+	gs := test_state(); defer free(gs)
+	test_hold(gs, .Pickaxe)
+	X, Y := 83, 49
+	gs.player.pos = {f32(X) + 0.13, f32(Y) - 0.8}
+	set_tile(&gs.world, X, Y, .Stone)
+	gs.input.mine = true
+	gs.input.mouse_tile = {i32(X), i32(Y)}
+	gs.input.mouse_world = {(f32(X) + 0.5) * CELL_SIZE, (f32(Y) + 0.5) * CELL_SIZE}
+	for _ in 0 ..< 600 {
+		player_mine(gs, 1.0/60.0)
+		process_events(gs)
+		eq_clear(&gs.events)
+	}
+	testing.expect_value(t, get_tile(&gs.world, X, Y), Tile_Type.Stone)
+	testing.expect_value(t, gs.player.chip_hits, 0)
+}
+
+@(test)
+a_failed_place_gives_the_player_a_note :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	X, Y := 83, 49
+	for y in Y - 6 ..= Y + 2 do for x in X - 12 ..= X + 12 do set_tile(&gs.world, x, y, .Void)
+	set_tile(&gs.world, X, Y + 1, .Stone)
+	gs.player.pos = {f32(X) + 0.13, f32(Y) - 0.8}
+	inventory_insert(&gs.player.inventory, .Stone_Block, 3)
+	inventory_insert(&gs.player.inventory, .Flower_Bed, 1)
+	pick :: proc(gs: ^Game_State, it: Item) {
+		for s, i in gs.player.inventory.slots do if s.item == it do gs.player.inventory.selected = i
+	}
+	note_after :: proc(t: ^testing.T, gs: ^Game_State, x, y: int, want: string, loc := #caller_location) {
+		gs.notify.count = 0
+		handle_place_request(gs, Event{tile = {i32(x), i32(y)}})
+		testing.expect_value(t, gs.notify.count, 1, loc)
+		n := &gs.notify.items[0]
+		testing.expect_value(t, string(n.text[:n.len]), want, loc)
+	}
+	pick(gs, .Stone_Block)
+	note_after(t, gs, X, Y, "You are standing there")                   // a block in its own cell
+	note_after(t, gs, X, Y + 1, "Something is already there")
+	note_after(t, gs, X + 9, Y, "Out of reach")
+	pick(gs, .Flower_Bed)
+	note_after(t, gs, X + 4, Y - 3, "It needs something solid beside it")  // a bed in open air
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Flower_Bed), 1)
+
+	// A sweep over the same refusal shows it once.
+	gs.notify.count = 0
+	pick(gs, .Stone_Block)
+	handle_place_request(gs, Event{tile = {i32(X), i32(Y + 1)}})
+	handle_place_request(gs, Event{tile = {i32(X), i32(Y + 1)}})
+	testing.expect_value(t, gs.notify.count, 1)
+}
+
+@(test)
+hovering_in_flight_keeps_the_grounded_it_took_off_with :: proc(t: ^testing.T) {
+	// Run 3 f106100: "grounded on Void at (95,54)".  The flight blessing was
+	// on: move_body writes grounded only on vertical motion, so a hover keeps
+	// the last value.  Nothing holds the player up but the blessing.
+	gs := test_state(); defer free(gs)
+	X, Y := 95, 54
+	for y in Y - 4 ..= Y do set_tile(&gs.world, X, y, .Void)
+	gs.player.pos = {f32(X), f32(Y) - PLAYER_H}
+	gs.player.grounded = true
+	gs.flight_t = 10
+	y0 := gs.player.pos.y
+	for _ in 0 ..< 30 do update_player(gs)
+	testing.expect_value(t, gs.player.pos.y, y0)
+	testing.expect(t, gs.player.grounded, "a hover does not rewrite grounded")
+
+	gs.flight_t = 0
+	for _ in 0 ..< 30 do update_player(gs)
+	testing.expect(t, gs.player.pos.y > y0, "without the blessing the Void does not hold")
+}
+
+@(test)
+drops_fall_until_they_land_on_something_solid :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	w := &gs.world
+	X :: 60
+	for y in 20 ..= 40 do for x in X ..= X + 3 {
+		set_tile(w, x, y, .Void)
+		w.items[grid_idx(x, y)] = .None
+		w.item_counts[grid_idx(x, y)] = 0
+	}
+	for x in X ..= X + 3 do set_tile(w, x, 41, .Stone)
+	settle :: proc(gs: ^Game_State) {
+		for _ in 0 ..< ITEM_FALL_FRAMES * GRID_H {
+			update_item_fall(gs)
+			gs.frame += 1
+		}
+	}
+	pile :: proc(w: ^World_Grid, x, y: int) -> (Item, int) {
+		return w.items[grid_idx(x, y)], int(w.item_counts[grid_idx(x, y)])
+	}
+
+	// The run 3 stones: a hanging pile comes down onto the floor, whole.
+	spawn_ground_item(w, {X, 25}, .Stone_Block, 7)
+	settle(gs)
+	it, n := pile(w, X, 40)
+	testing.expect_value(t, it, Item.Stone_Block)
+	testing.expect_value(t, n, 7)
+	_, n = pile(w, X, 25)
+	testing.expect_value(t, n, 0)
+
+	// Same kind merges where it lands; the overflow rests on the full stack.
+	w.items[grid_idx(X + 1, 40)], w.item_counts[grid_idx(X + 1, 40)] = .Stone_Block, u8(MAX_STACK - 2)
+	w.items[grid_idx(X + 1, 30)], w.item_counts[grid_idx(X + 1, 30)] = .Stone_Block, 5
+	settle(gs)
+	_, n = pile(w, X + 1, 40)
+	testing.expect_value(t, n, MAX_STACK)
+	_, n = pile(w, X + 1, 39)
+	testing.expect_value(t, n, 3)
+
+	// A different kind holds it up, and both survive.
+	w.items[grid_idx(X + 2, 40)], w.item_counts[grid_idx(X + 2, 40)] = .Plank, 1
+	w.items[grid_idx(X + 2, 30)], w.item_counts[grid_idx(X + 2, 30)] = .Iron_Ore, 2
+	settle(gs)
+	it, n = pile(w, X + 2, 39)
+	testing.expect_value(t, it, Item.Iron_Ore)
+	testing.expect_value(t, n, 2)
+
+	// Mining the floor out from under a pile drops it again.
+	set_tile(w, X + 3, 38, .Stone)
+	w.items[grid_idx(X + 3, 37)], w.item_counts[grid_idx(X + 3, 37)] = .Iron_Ore, 1
+	settle(gs)
+	it, n = pile(w, X + 3, 37)
+	testing.expect_value(t, it, Item.Iron_Ore)
+	set_tile(w, X + 3, 38, .Void)
+	settle(gs)
+	it, n = pile(w, X + 3, 40)
+	testing.expect_value(t, it, Item.Iron_Ore)
+	testing.expect_value(t, n, 1)
+
+	// The bottom row of the world holds whatever reaches it.
+	w.items[grid_idx(X, GRID_H - 1)], w.item_counts[grid_idx(X, GRID_H - 1)] = .Plank, 1
+	update_item_fall(gs)
+	testing.expect_value(t, w.items[grid_idx(X, GRID_H - 1)], Item.Plank)
+}
+
+@(test)
+a_hanging_pile_falls_at_its_pace_in_the_real_update :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.ui.show_title = false
+	gs.player.pos = {8, 8}
+	w := &gs.world
+	X, Y0 :: 60, 20
+	N :: 5
+	for y in Y0 ..= Y0 + N + 2 {
+		set_tile(w, X, y, .Air)
+		w.items[grid_idx(X, y)], w.item_counts[grid_idx(X, y)] = .None, 0
+	}
+	src := grid_idx(X, Y0)
+	w.items[src], w.item_counts[src] = .Stone_Block, 3
+
+	for _ in 0 ..< ITEM_FALL_FRAMES * N do game_update(gs)
+
+	at := grid_idx(X, Y0 + N)
+	testing.expect_value(t, w.items[at], Item.Stone_Block)
+	testing.expect_value(t, int(w.item_counts[at]), 3)
+	testing.expect_value(t, w.items[src], Item.None)
+	testing.expect_value(t, int(w.item_counts[src]), 0)
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"
