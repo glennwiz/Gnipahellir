@@ -9556,6 +9556,30 @@ legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 }
 
 @(test)
+stats_only_reach_an_armed_path :: proc(t: ^testing.T) {
+	stats :: "gnipahellir_stats_arm_test.dat"
+	defer os.remove(stats)
+
+	gs := test_state()
+	defer free(gs)
+	testing.expect(t, len(gs.stats_path) == 0, "an unarmed state can never touch the real stats")
+	testing.expect(t, !save_stats(gs), "an unarmed save writes nothing")
+
+	// Death, the path that wrote the real file from every test run.
+	gs.stats.runs_played = 7
+	handle_entity_died(gs, Event{type = .Entity_Died, source = PLAYER_ID})
+	testing.expect_value(t, gs.stats.runs_played, 8)
+
+	gs.stats_path = stats
+	game_state_init(gs)
+	testing.expect_value(t, gs.stats_path, stats)  // a New Game keeps the arming
+	testing.expect(t, save_stats(gs), "an armed save writes")
+	data, err := os.read_entire_file_from_path(stats, context.allocator)
+	defer delete(data)
+	testing.expect(t, err == nil && len(data) == size_of(Persistent_Stats), "the armed file holds the stats")
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"

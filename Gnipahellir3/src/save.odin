@@ -342,7 +342,7 @@ save_on_quit :: proc(gs: ^Game_State) {
     } else {
         _ = save_game(gs)
     }
-    _ = save_stats(&gs.stats)
+    _ = save_stats(gs)
     _ = save_settings(gs)
 }
 
@@ -394,8 +394,9 @@ load_settings :: proc(gs: ^Game_State) -> bool {
 
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
-save_stats :: proc(stats: ^Persistent_Stats) -> bool {
-    return os.write_entire_file(STATS_FILE, mem.ptr_to_bytes(stats)) == nil
+save_stats :: proc(gs: ^Game_State) -> bool {
+    if len(gs.stats_path) == 0 do return false
+    return os.write_entire_file(gs.stats_path, mem.ptr_to_bytes(&gs.stats)) == nil
 }
 
 load_stats :: proc(stats: ^Persistent_Stats) -> bool {
