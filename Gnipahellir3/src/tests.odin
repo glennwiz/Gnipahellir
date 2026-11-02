@@ -240,7 +240,7 @@ item_palette_maps_cursor_to_item :: proc(t: ^testing.T) {
     testing.expect_value(t, item_palette_item_at_cursor(gs), Item.None)
 
     // While open, the palette blocks mining/placing behind it.
-    testing.expect(t, cursor_over_ui(gs), "open palette owns the cursor")
+    when GAME_DEBUG do testing.expect(t, cursor_over_ui(gs), "open palette owns the cursor")
 }
 
 @(test)
@@ -1017,6 +1017,7 @@ a_followed_body_does_not_bob_the_view :: proc(t: ^testing.T) {
 
 @(test)
 cam_log_records_frames_and_rings :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the logs this reads
     gs := test_state()
     defer free(gs)
 
@@ -1043,6 +1044,7 @@ cam_log_records_frames_and_rings :: proc(t: ^testing.T) {
 
 @(test)
 mouse_log_records_the_aimed_and_the_struck_tile :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the logs this reads
     gs := test_state()
     defer free(gs)
 
@@ -2732,6 +2734,7 @@ wand_tiers_extend_reach :: proc(t: ^testing.T) {
 
 @(test)
 ultra_wand_cheat_blasts_a_3x3 :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the debug cheats
     gs := test_state()
     defer free(gs)
 
@@ -4101,16 +4104,20 @@ world_damage_says_what_it_is :: proc(t: ^testing.T) {
     eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
         target = PLAYER_ID, payload = {int_val = 1}, cause = .Lava})
     process_events(gs)
-    log_text := string(gs.debug_log.buf[:gs.debug_log.pos])
-    testing.expect(t, strings.contains(log_text, "Player takes 1 damage from lava"), "the log names the lava")
+    when GAME_DEBUG {
+        log_text := string(gs.debug_log.buf[:gs.debug_log.pos])
+        testing.expect(t, strings.contains(log_text, "Player takes 1 damage from lava"), "the log names the lava")
+    }
     testing.expect_value(t, gs.floating_text.data[0].label, "lava")
     testing.expect_value(t, gs.floating_text.data[0].color, DAMAGE_COLOR)
 
     eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY,
         target = PLAYER_ID, payload = {int_val = 2}, cause = .Fall})
     process_events(gs)
-    log_text = string(gs.debug_log.buf[:gs.debug_log.pos])
-    testing.expect(t, strings.contains(log_text, "Player takes 2 damage from the fall"), "the log names the fall")
+    when GAME_DEBUG {
+        log_text = string(gs.debug_log.buf[:gs.debug_log.pos])
+        testing.expect(t, strings.contains(log_text, "Player takes 2 damage from the fall"), "the log names the fall")
+    }
     testing.expect_value(t, gs.floating_text.data[1].label, "the fall")
 
     // An enemy's hit stays a plain number: the body is right there.
@@ -11183,6 +11190,7 @@ the_f4_wave_menu_forces_and_clears_waves :: proc(t: ^testing.T) {
 
 @(test)
 the_action_log_streams_instead_of_dropping :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the logs this reads
     // The old log stopped writing once its 256 KB buffer filled, which is how
     // 63 s of a playtest went missing.  Flushing now APPENDS and empties, so a
     // run's record grows without bound and no line is ever lost.
@@ -11216,6 +11224,7 @@ the_action_log_streams_instead_of_dropping :: proc(t: ^testing.T) {
 
 @(test)
 a_smashed_bench_logs_its_killer :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the logs this reads
     // Demolition lines used to say what happened but never who did it, so an
     // enemy razing the base read exactly like the player tidying up.  Every
     // mine funnels through handle_tile_mined, which is why one line there
@@ -11250,6 +11259,7 @@ a_smashed_bench_logs_its_killer :: proc(t: ^testing.T) {
 
 @(test)
 the_event_trace_logs_what_the_queue_processed :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the logs this reads
     // The trace is the "all happenings" net: every event the queue processes
     // gets a line, including the types with no handler and no bespoke message.
     // Only pure audio/visual noise is excluded, by the rodata skip table.
