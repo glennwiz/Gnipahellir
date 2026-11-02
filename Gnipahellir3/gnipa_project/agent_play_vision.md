@@ -31,3 +31,17 @@ This is not an AI feature in the game. The game ships no models, calls no AI ser
 - The world waits. Models think in seconds, not frames. A step mode pauses the simulation between actions and advances a requested number of ticks. Real-time play is a later option, not the baseline.
 - Off by default, local only. Bound to 127.0.0.1, enabled explicitly in settings or via launch flag. Security posture: the API can do nothing a player with a keyboard can't.
 - Deterministic when asked. A fixed-seed mode makes runs reproducible, so agents and prompts can be compared fairly.
+
+## 3. The API
+
+As simple as possible.
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| /v1/meta | GET | Game version, protocol version, available actions and their parameters |
+| /v1/state | GET | Full observation snapshot |
+| /v1/state?diff=<id> | GET | Changes since snapshot <id> (token saver) |
+| /v1/actions | POST | One action or an ordered batch; returns per-action results (ok / failed + reason) |
+| /v1/wait | POST | Advance N ticks without acting |
+| /v1/new_game | POST | Fresh run; optional seed and scenario |
+| /v1/screenshot | GET | Optional, later: PNG of the current frame |
