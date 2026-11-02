@@ -161,6 +161,14 @@ sky_gate_portal :: proc(gs: ^Game_State) -> Portal {
     }
 }
 
+// The gate was raised and its altar is gone: smashed or reclaimed.  Only the
+// surface can tell, because the altar stands there.
+sky_gate_down :: proc(gs: ^Game_State) -> bool {
+    ap := gs.progression.sky_altar_pos
+    return gs.level_index == LEVEL_SURFACE && ap != {0, 0} &&
+           get_tile(&gs.world, int(ap.x), int(ap.y)) != .Sky_Altar
+}
+
 player_interact :: proc(gs: ^Game_State) {
     if portal := portal_at_player(gs); portal != nil {
         if portal.gate_tier >= 0 && !gs.progression.cave_unlocked[portal.gate_tier] {
@@ -393,6 +401,10 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
             }
         }
         return fmt.bprintf(buf, "Raise a Sky Altar on the Surface to open the way above")
+    }
+    if sky_gate_down(gs) {
+        return fmt.bprintf(buf, "The Sky Altar is down - raise it again on a %s foundation",
+            structure_templates[0].name)
     }
     if !p.rune_scroll_found[tier] {
         return fmt.bprintf(buf, "Find %s %s",

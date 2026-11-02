@@ -3550,9 +3550,11 @@ draw_rune_scroll :: proc(gs: ^Game_State) {
 	rl.DrawText("[B] close", x + RS_W - 92, y + 14, 12, text_dim)
 
 	// Opening objective: with the Sky Rune Scroll in hand and no gate raised yet,
-	// show how to build the surface Sky Altar that opens the way above.
-	if inventory_count(&gs.player.inventory, .Sky_Rune_Scroll) > 0 &&
-	   gs.progression.sky_altar_pos == {0, 0} {
+	// or a raised gate knocked down, show how to build the surface Sky Altar
+	// that opens the way above.
+	if (inventory_count(&gs.player.inventory, .Sky_Rune_Scroll) > 0 &&
+		   gs.progression.sky_altar_pos == {0, 0}) ||
+	   sky_gate_down(gs) {
 		draw_rune_scroll_title("THE SKY GATE", x + 96, y + 18, 24, accent, 0)
 		rl.DrawText(
 			"Raise a Sky Altar on the surface to open the way above.",
