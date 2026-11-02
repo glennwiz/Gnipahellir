@@ -53,3 +53,5 @@ As simple as possible.
 - Session flagging: saves and stats record "agent-assisted", keeping human leaderboards and achievements clean. Agent runs get their own board.
 - Spectator overlay: last action + an optional one-line "thought" the agent sends with each act call, drawn on screen. This is what makes runs watchable.
 - Run log: every observation and action appended to a JSONL file for replay, sharing and debugging.
+
+Decided 2026-11-02: "their own board" is a local board in the game, listing your own agent runs by seed, time and how far they got. Sharing is by posting the run file. No Steam leaderboard for agent runs.
