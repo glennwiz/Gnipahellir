@@ -827,7 +827,7 @@ Game_State :: struct {
     player_step_visual_y: f32, // downward render offset that eases out after an instant collision step; not saved
     player_form:  Player_Form,  // sprite look; one form today, always zero; cosmetic, not saved
     save_path:    string, // the run's autosave file; empty until main arms it, so tests never touch one
-    stats_path:   string, // the stats file, armed the same way
+    stats_path:   string, // the lifetime stats file; empty until main arms it, for the same reason
     save_dirty:   bool,   // a player action changed saved state; autosave at frame end
     save_cooldown: f32,   // debounce: seconds until the next autosave may fire; not saved
     quit_requested: bool, // "Save and Quit" clicked; main loop exits, save happens on shutdown

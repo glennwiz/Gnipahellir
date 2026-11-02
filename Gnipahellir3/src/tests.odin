@@ -5655,11 +5655,13 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     touched:   [GRID_W * GRID_H]u8    // 1 = last event mined, 2 = last placed
     last_flip: [GRID_W * GRID_H]int   // frame of the last reversal
     rapid_run: [GRID_W * GRID_H]u16   // consecutive reversals < RAPID frames apart
+    churn:     [GRID_W * GRID_H]u16   // every carve and place, slow ones too
     RAPID :: 20 * 60                  // reversals under 20 s apart = looping
 
     worst := u16(0)
     worst_idx := 0
     SOAK_MINUTES :: 15
+    MAX_TILE_CHURN :: 40
     for frame in 0 ..< SOAK_MINUTES * 3600 {
         update_enemies(gs)
         for k in 0 ..< gs.events.size {
@@ -5674,11 +5676,11 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
                     if rapid_run[idx] > worst { worst = rapid_run[idx]; worst_idx = idx }
                 }
                 touched[idx] = mark
+                churn[idx] += 1
             }
         }
         eq_clear(&gs.events)
     }
-
     // The trip clock bounds a doomed objective to ~60 s of churn and the
     // avoid list stops retries, so one cursed spot can rack up ~20 rapid
     // reversals before it is abandoned — but never the unbounded 146+ the
@@ -5686,6 +5688,15 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     log.infof("builder soak: worst rapid reversal run = %d at (%d,%d)",
         worst, worst_idx % GRID_W, worst_idx / GRID_W)
     testing.expect(t, worst < 32, "rapid carve/place cycling beyond one trip budget means a builder is looping again")
+
+    // Run 3: tiles carved and laid back 10-12 times each, because a climb in
+    // the plan needed support an earlier climb in that plan had carved.  This
+    // soak put 66 touches on (11,89) before that.  Slow commute flips are in
+    // this count on purpose: they never trip the rapid bound above.
+    top, top_idx := u16(0), 0
+    for c, i in churn do if c > top { top, top_idx = c, i }
+    log.infof("builder soak: most touched tile = %d at (%d,%d)", top, top_idx % GRID_W, top_idx / GRID_W)
+    testing.expect(t, top <= MAX_TILE_CHURN, "one tile carved and laid back this often means plans undo themselves")
 }
 
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
@@ -9556,6 +9567,30 @@ legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 }
 
 @(test)
+stats_only_reach_an_armed_path :: proc(t: ^testing.T) {
+	stats :: "gnipahellir_stats_arm_test.dat"
+	defer os.remove(stats)
+
+	gs := test_state()
+	defer free(gs)
+	testing.expect(t, len(gs.stats_path) == 0, "an unarmed state can never touch the real stats")
+	testing.expect(t, !save_stats(gs), "an unarmed save writes nothing")
+
+	// Death, the path that wrote the real file from every test run.
+	gs.stats.runs_played = 7
+	handle_entity_died(gs, Event{type = .Entity_Died, source = PLAYER_ID})
+	testing.expect_value(t, gs.stats.runs_played, 8)
+
+	gs.stats_path = stats
+	game_state_init(gs)
+	testing.expect_value(t, gs.stats_path, stats)  // a New Game keeps the arming
+	testing.expect(t, save_stats(gs), "an armed save writes")
+	data, err := os.read_entire_file_from_path(stats, context.allocator)
+	defer delete(data)
+	testing.expect(t, err == nil && len(data) == size_of(Persistent_Stats), "the armed file holds the stats")
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"
@@ -11100,12 +11135,6 @@ an_unreadable_stats_file_is_moved_aside_not_lost :: proc(t: ^testing.T) {
     testing.expect(t, os.exists(ASIDE), "kept")
 }
 
-@(test)
-tests_write_no_stats_file :: proc(t: ^testing.T) {
-    gs := test_state()
-    defer free(gs)
-    testing.expect(t, !save_stats(gs), "an unarmed state has no stats file")
-}
 
 // ─── The risen hero (board card 49) ───────────────────────────────────────────
 
