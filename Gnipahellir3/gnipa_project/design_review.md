@@ -319,5 +319,6 @@ than 64, and 1024 has only ever had a load test, not a frame-time one.
 - **2026-11-02, grave place and guardian:** the grave stone stands where the hero died, not by the shaft, and the risen hero is on, guarding it (Glenn, after seeing the stone and no guardian).
 - **2026-11-02, undermined structures:** a structure with nothing solid under it breaks into its item, which falls and lands. Altars, portals and scroll chests are exempt.
 - **2026-11-02, mined drops:** blocks the player mines go straight into the bag when in reach. Enemy drops still fall.
+- **2026-11-02, agent play vision:** the game ships a built-in, local, documented agent API that any tool able to make HTTP requests can use to observe and act, such as Claude Code, Codex, Copilot CLI or curl. The player's agent of choice becomes a new way to play.
 - **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
 - **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
