@@ -15,3 +15,10 @@ This is not an AI feature in the game. The game ships no models, calls no AI ser
 - Agent CLIs are everywhere now. Developers already live in Claude Code, Codex and Copilot CLI. A game they can point their daily tool at is a novelty with near-zero setup cost for exactly the audience most likely to buy an indie Odin game.
 - It's content. Agent runs are streamable, shareable, comparable. "My prompt beat your prompt" is a game mode nobody has to build a matchmaker for.
 - First-mover window. Games are being played by agents today through screen scraping and hacks. A game designed for it is still rare.
+
+## Non-goals
+
+- No bundled AI, no API keys in the game, no accounts, no telemetry of agent runs.
+- No cloud service. The API is local to the player's machine.
+- No vendor coupling. Nothing in the game knows or cares which agent is connected.
+- Not an anti-cheat problem: single-player focus; agent runs never touch human leaderboards or Steam economy features.
