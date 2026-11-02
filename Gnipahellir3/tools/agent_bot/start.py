@@ -11,9 +11,9 @@ def p1():
     trees=[x for x in range(W) if b.m[53][x]=='Wood' or b.m[52][x]=='Wood']; fl=[x for x in range(W) if b.m[53][x]=='Flower']
     wat=max([x for x in range(88) if b.m[54][x]=='Water' or b.m[55][x]=='Water'],default=0)
     log(trees,fl,'water',wat)
-    tw=sorted([q for q in trees if wat+3<q<88],reverse=True)
+    tw=sorted([q for q in trees if q<88],reverse=True)  # past the pond too: sparse seeds have nothing nearer
     for x in tw:
-        if b.count('Wood_Log')>=16 or abs(x-b.pos()[0])>45: break
+        if b.count('Wood_Log')>=16 or (b.count('Wood_Log')>=7 and abs(x-b.pos()[0])>45): break
         for f in [q for q in fl if x<q<b.pos()[0]]: b.walkx(f,limit=40)
         b.chop(x,x+2)
     for f in (84,):

@@ -2,7 +2,7 @@ import socket, json, os, time, sys
 HERE=os.path.dirname(os.path.abspath(__file__))
 class G:
     def __init__(s):
-        s.c=socket.create_connection(('127.0.0.1',7778)); s.f=s.c.makefile('rb')
+        s.c=socket.create_connection(('127.0.0.1',int(os.environ.get('GNIPA_BRIDGE_PORT',7778)))); s.f=s.c.makefile('rb')
     def raw(s,o):
         s.c.sendall((json.dumps(o)+'\n').encode()); r=s.f.readline()
         return json.loads(r)

@@ -100,7 +100,7 @@ main :: proc() {
             if !gs.player.dead && !gs.game_won do save_game(gs)
         }
 
-        draw_game(gs, target)
+        if agent_draw_due(agent) do draw_game(gs, target)
     }
 
     save_on_quit(gs)

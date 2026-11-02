@@ -58,6 +58,12 @@ package game
 // let wall time in, so they are recorded, and a replay stops at them.
 // tools/agent_replay.py plays a recording back.
 //
+// GNIPA_AGENT_TURBO=1 is for harness runs: the window draws about once a second, so
+// ticks stop waiting for the display.  The sim never sees that, but idle ticks and
+// plans follow wall time in any run, so only a run with idling off and no plans
+// stays the same; tools/agent_bot/pace.py runs that way, and tools/test_agent_turbo.py
+// checks it.
+//
 // An agent run writes a save and truncates action.log in the working directory,
 // so agent_open refuses to run anywhere that does not hold AGENT_SANDBOX_FILE.
 // tools/agent_play.sh builds such a folder.
@@ -72,6 +78,8 @@ import "core:strings"
 import "core:time"
 
 AGENT_PORT_ENV     :: "GNIPA_AGENT_PORT"
+AGENT_TURBO_ENV    :: "GNIPA_AGENT_TURBO"
+AGENT_TURBO_DRAW   :: 1 * time.Second // between draws of a turbo run
 AGENT_SANDBOX_FILE :: "agent_sandbox"
 AGENT_STEP         :: f32(1.0 / 60.0)
 AGENT_MAX_FRAMES   :: 600
@@ -104,6 +112,8 @@ Agent_Plan_Step :: struct {
 Agent_Link :: struct {
     listening:   bool,
     connected:   bool,
+    turbo:       bool,           // draw_game only every AGENT_TURBO_DRAW
+    last_draw:   time.Tick,
     realtime:    bool,
     idle_off:    bool,
     idle_step:   int,            // render frames since the last slow tick
@@ -158,6 +168,7 @@ agent_open :: proc(link: ^Agent_Link) {
     net.set_blocking(sock, false)
     link.listener  = sock
     link.listening = true
+    link.turbo     = os.get_env(AGENT_TURBO_ENV, context.temp_allocator) != ""
     if fd, ferr := os.open(AGENT_ACTS_FILE, os.O_WRONLY | os.O_CREATE | os.O_APPEND); ferr == nil {
         link.acts_file = fd
         link.recording = true
@@ -166,6 +177,16 @@ agent_open :: proc(link: ^Agent_Link) {
         link.fight_file = fd
     }
     fmt.printfln("agent api: listening on 127.0.0.1:%d", port)
+}
+
+// Whether this frame draws.  Only a connected turbo run skips: the keyboard's
+// game and a run nobody is driving always draw.
+agent_draw_due :: proc(link: ^Agent_Link, now := time.Tick{}) -> bool {
+    if !link.turbo || !link.connected do return true
+    t := now if now != (time.Tick{}) else time.tick_now()
+    if time.tick_diff(link.last_draw, t) < AGENT_TURBO_DRAW do return false
+    link.last_draw = t
+    return true
 }
 
 // The boot world: GNIPA_SEED when a run names one, so a replay starts in it.

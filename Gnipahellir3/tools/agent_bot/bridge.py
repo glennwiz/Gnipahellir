@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # Holds the one game connection; serves local clients over local TCP on 7778, one line in, one line out.
 import socket, socketserver, threading, os, sys, time
-HERE=os.path.dirname(os.path.abspath(__file__)); PORT=7778
+HERE=os.path.dirname(os.path.abspath(__file__))
+PORT=int(os.environ.get('GNIPA_BRIDGE_PORT',7778)); GAME_PORT=int(os.environ.get('GNIPA_AGENT_PORT',7777))
 for _ in range(120):
     try:
-        g=socket.create_connection(('127.0.0.1',7777)); break
+        g=socket.create_connection(('127.0.0.1',GAME_PORT)); break
     except OSError: time.sleep(1)
 else: sys.exit('no game')
 g.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY,1)
 gf=g.makefile('rb'); lock=threading.Lock()
+if os.environ.get('GNIPA_AGENT_TURBO'):
+    # A harness run: ticks between acts follow wall time, so there must be none.
+    g.sendall(b'{"cmd":"idle","on":false}\n'); gf.readline()
 print('connected',flush=True)
 stop=threading.Event()
 class H(socketserver.StreamRequestHandler):
