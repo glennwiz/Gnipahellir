@@ -304,5 +304,11 @@ than 64, and 1024 has only ever had a load test, not a frame-time one.
 - **2026-11-02, autosave:** dying deletes the autosave in debug builds too; keep.
 - **2026-11-02, Rainbow Laser:** gets a line-of-sight check.
 - **2026-11-02, waves:** smashing the bench and tree growers is intended; keep.
+- **2026-11-02, card 52 loot drop:** accepted; no retune.
+- **2026-11-02, Garm smashing lava (card 35):** left as it is for now; revisit with playtest data.
+- **2026-11-02, walls as defence (I6):** yes, as a card.
+- **2026-11-02, chest protection:** all four tiers and emptied chests; fine.
+- **2026-11-02, den grudges:** a reload drops a grudge, and hoard piles over a gap may leave the count; fine.
+- **2026-11-02, Boiler lure gate:** nothing from below before the first scroll and threat 40; kept.
 - **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
 - **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
