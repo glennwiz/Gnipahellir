@@ -310,5 +310,6 @@ than 64, and 1024 has only ever had a load test, not a frame-time one.
 - **2026-11-02, chest protection:** all four tiers and emptied chests; fine.
 - **2026-11-02, den grudges:** a reload drops a grudge, and hoard piles over a gap may leave the count; fine.
 - **2026-11-02, Boiler lure gate:** nothing from below before the first scroll and threat 40; kept.
+- **2026-11-02, turret patterns:** turrets are built in the world. Craft a Turret Pillar at the bench, place it, then place a bench-crafted head on top and they fuse. Two blocks for the weaker Flame, Water and Earth turrets; three for the Rainbow Laser, which also gets a much dearer price.
 - **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
 - **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
