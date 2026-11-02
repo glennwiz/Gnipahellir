@@ -10,4 +10,4 @@ IMPLEMENTER
 - If something outside your cards is wrong, do not patch it: tell the coordinator.
 - When your cards are Done, post "closing" to the coordinator with what you landed. The coordinator closes your tab.
 - If a card is blocked, say why to the coordinator once and take the next one.
-- Sabotage your own lines before submit: break each line you added (revert it, flip a condition, drop a guard) in a scratch copy, confirm a test goes red, and list the breaks in your evidence. A break that stays green is a missing test: add it. The reviewer repeats this, and a green break comes back as rework.
+- Sabotage your own lines before submit: break each line you added (revert it, flip a condition, drop a guard) in a scratch copy, confirm a test goes red, and list the breaks in your evidence. Run each break against only the relevant tests (odin test src -define:ODIN_TEST_NAMES=game.name1,game.name2); a break that stays green there gets one full suite run. Green on the full suite is a missing test: add it. Finish with one full run of the unbroken commit in both test configs. The reviewer repeats this, and a green break comes back as rework.

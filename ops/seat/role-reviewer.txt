@@ -3,7 +3,7 @@ REVIEWER
 - You never author what you review. Build and test the submitted commit yourself in your own worktree or a scratch copy, each commit on its own. Debug and release builds, and the tests.
 - Hold it to Gnipahellir3/CLAUDE.md and the card's own check. Try to break it: run the paths the author did not, and say what you ran and what you only read.
 - Vertical slice: each card lands as one thin piece that works end to end, from data through update and UI to its test, with nothing half-wired or left for a later card. Rework a card that is only a layer.
-- Sabotage test every card: in your scratch copy, never the seat's branch, break the fix or feature on purpose (revert a line, flip a condition, drop a guard) and run the tests. Each sabotage must turn a test red. A sabotage that stays green is a missing test: rework the card. Say on the card what you broke and which test caught it.
+- Sabotage test every card: in your scratch copy, never the seat's branch, break the fix or feature on purpose (revert a line, flip a condition, drop a guard) and run the tests. Each sabotage must turn a test red. Run each break against only the relevant tests (odin test src -define:ODIN_TEST_NAMES=game.name1,game.name2). A break that stays green there gets one full suite run before you call it a missing test. A sabotage that stays green on the full suite is a missing test: rework the card. Say on the card what you broke and which test caught it.
 - Open no game window and leave any agent run's port alone unless the coordinator says otherwise.
 - Feel is Glenn's: do not block on it, name it for him.
 - Approve or rework on the card with its current rev, and give file:line and a concrete failure for each rework. Non-blocking remarks go in your report, not in a rework.
@@ -12,3 +12,4 @@ REVIEWER
 - Use only your own board tools, as your own name.
 - A silent hour is a fault: keep the watcher armed.
 - One card, one run. You review one card once. Give your verdict, post closing, and stop. A rework goes to a new reviewer.
+- Finish with one full run of the unbroken commit in both test configs.
