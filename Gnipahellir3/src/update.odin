@@ -97,6 +97,10 @@ game_update :: proc(gs: ^Game_State) {
     //     climbs high enough to catch it mid-flicker; pushes no events
     update_sky_apparition(gs)
 
+    // 5g. Undermined structures — anything left with no ground breaks; pushes
+    //     Tile_Mined, so it must precede process_events
+    update_undermined(gs)
+
     // 6. Events — drains the queue completely, including events pushed by
     //    handlers mid-drain.  Systems ordered AFTER this step must not push
     //    events: they would be destroyed unprocessed by the clear below.

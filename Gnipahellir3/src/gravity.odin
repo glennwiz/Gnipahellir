@@ -112,6 +112,15 @@ gravity_check_removed :: proc(gs: ^Game_State, rx, ry: int) {
     }
 }
 
+// Does the stack at (x,y) come to rest on something solid outside comp?
+structure_rests_outside :: proc(w: ^World_Grid, x, y: int, comp: [][2]i32) -> bool {
+    rest := y
+    for needs_ground(get_tile(w, x, rest)) do rest += 1
+    if !is_solid(w, x, rest) do return false
+    for c in comp do if c == {i32(x), i32(rest)} do return false
+    return true
+}
+
 gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID_W * GRID_H]bool) {
     w := &gs.world
     if !in_bounds(sx, sy) do return
@@ -138,7 +147,8 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
         for d in dirs {
             nx := cx + d[0]
             ny := cy + d[1]
-            if is_anchor_cell(w, nx, ny) do supported = true
+            // A structure only counts once the whole piece is known, below.
+            if is_anchor_cell(w, nx, ny) && !needs_ground(get_tile(w, nx, ny)) do supported = true
             if !in_bounds(nx, ny) do continue
             ni := grid_idx(nx, ny)
             if visited[ni] do continue
@@ -147,6 +157,16 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
             if n >= MAX_FALLING { overflow = true; continue }
             comp[n] = {i32(nx), i32(ny)}; n += 1
             queue[qt] = ni; qt += 1
+        }
+    }
+
+    // A structure standing on this piece hangs with it, so it holds nothing up.
+    // One standing on anything else is an anchor, as a hung beam expects.
+    for i in 0 ..< n {
+        for d in dirs {
+            nx := int(comp[i].x) + d[0]
+            ny := int(comp[i].y) + d[1]
+            if structure_rests_outside(w, nx, ny, comp[:n]) do supported = true
         }
     }
 

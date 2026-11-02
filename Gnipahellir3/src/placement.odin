@@ -54,6 +54,9 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
     // A turret head only ever stands on its pillars.
     if !turret_pattern_ok(&gs.world, x, y, turret_table[place_tile]) do return false
 
+    // It would only break again on the next frame (undermine.odin).
+    if needs_ground(place_tile) && !is_solid(&gs.world, x, y + 1) do return false
+
     if tpl := structure_template_for(gs, item); tpl != nil {  // finished foundation
         if ok, _ := structure_template_satisfied(&gs.world, tpl, x, y); !ok do return false
     }
@@ -71,13 +74,14 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
 // Why a place fails on the ground itself; "" when the cell is fine and a
 // machine's own gate is the reason.  Same checks as placement_ok, for the note.
 place_refusal :: proc(gs: ^Game_State, place_tile: Tile_Type, x, y: int) -> string {
-    if place_tile == .Door do return "A door needs two open cells in reach, with something solid beside them"
+    if place_tile == .Door do return "A door needs two open cells in reach, with solid ground under them"
     if !in_bounds(x, y) do return "Out of reach"
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return "Out of reach"
     if t := get_tile(&gs.world, x, y); t != .Air && t != .Void do return "Something is already there"
     if rule := turret_table[place_tile]; !turret_pattern_ok(&gs.world, x, y, rule) do return rule.refusal
+    if needs_ground(place_tile) && !is_solid(&gs.world, x, y + 1) do return "It needs solid ground under it"
     if !is_solid(&gs.world, x-1, y) && !is_solid(&gs.world, x+1, y) &&
        !is_solid(&gs.world, x, y-1) && !is_solid(&gs.world, x, y+1) {
         return "It needs something solid beside it"
@@ -97,24 +101,20 @@ place_note :: proc(gs: ^Game_State, why: string) {
 }
 
 // A door needs two stacked open cells (clicked cell + the one above), both in
-// reach, plus a solid neighbour on some side to hang on.  No overlap check —
+// reach, standing on solid ground.  No overlap check —
 // the player phases through doors, so placing one on yourself can't trap you.
 door_placement_ok :: proc(gs: ^Game_State, x, y: int) -> bool {
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
-    has_anchor := false
+    if !is_solid(&gs.world, x, y + 1) do return false
     for c in door_cells(x, y) {
         cx, cy := c[0], c[1]
         if !in_bounds(cx, cy) do return false
         t := get_tile(&gs.world, cx, cy)
         if t != .Air && t != .Void do return false                     // must be open
         if abs(cx - pcx) > PLAYER_REACH || abs(cy - pcy) > PLAYER_REACH do return false
-        if is_solid(&gs.world, cx-1, cy) || is_solid(&gs.world, cx+1, cy) ||
-           is_solid(&gs.world, cx, cy-1) || is_solid(&gs.world, cx, cy+1) {
-            has_anchor = true
-        }
     }
-    return has_anchor
+    return true
 }
 
 handle_place_request :: proc(gs: ^Game_State, e: Event) {
