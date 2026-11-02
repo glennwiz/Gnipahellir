@@ -10,7 +10,7 @@ WHERE THE TRUTH IS
 
 THE WORK
 - All game code is in Gnipahellir3/src, one Odin package. Run commands from Gnipahellir3.
-- Build: odin build src. Tests: odin test src (headless, seconds, 332 tests on 2026-11-01). Both must be green at each commit that lands, not only at the end of a stack.
+- Build: odin build src. Tests: odin test src and odin test src -define:GAME_DEBUG=false (headless, seconds, 332 tests on 2026-11-01). A test that needs logs or debug tools carries a when GAME_DEBUG guard. All must be green at each commit that lands, not only at the end of a stack.
 - Every feature lands with tests. Extend the soak tests, do not skip them. A red conservation fuzzer means a handler is leaking items: fix the handler.
 - The architecture laws in context.md section 2 are checked by review: fat struct, fixed-size arrays, event-driven, read-only render, table-driven behavior, deterministic update order, no TODOs in committed code.
 - Saves: enums are append-only. A layout change to a saved struct bumps SAVE_VERSION and the size asserts in the same commit. Never key a saved array by Item or Tile_Type.

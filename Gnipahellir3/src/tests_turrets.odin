@@ -303,6 +303,7 @@ a_burn_tick_carries_its_remainder :: proc(t: ^testing.T) {
 // action.log is how a playtest is read: a shot and a loosened part are in it.
 @(test)
 the_log_names_a_shot_and_a_loosened_part :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }  // release strips the logs this reads
     gs := turret_test_state()
     defer free(gs)
     head_y := tt_build(gs, turret_heads[0])

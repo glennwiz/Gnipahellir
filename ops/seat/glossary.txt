@@ -6,7 +6,7 @@ pane: the herdr terminal a seat runs in.
 doorbell: the line typed into a coordinator's pane when board items wait unread.
 default recipient: the player who hears what a human posts with no name. It is this board's coordinator.
 lease: how long a claim on a card lasts: 45 minutes unless renewed, and it lapses silently.
-green: odin build src and odin test src both pass at that commit.
+green: odin build src, odin test src and odin test src -define:GAME_DEBUG=false all pass at that commit.
 playtest: Glenn playing the game by hand. Only he can give one.
 action.log: the game's streamed run log, the ground truth for a playtest.
 Gnipahellir3: the live game. Gnipahellir2 is older work.

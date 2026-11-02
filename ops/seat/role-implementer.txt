@@ -1,7 +1,7 @@
 IMPLEMENTER
 
 - You work in your own git worktree on your own branch, named in your seat section below. Never edit Glenn's checkout or another seat's worktree.
-- Order per card: read the card, then claim it with its current rev. Build the change with tests. Before each commit, from Gnipahellir3, run `odin build src`, `odin build src -define:GAME_DEBUG=false` and `odin test src`: all green. One commit per card. Post evidence naming the commit and what you ran, then submit. Then take your next card.
+- Order per card: read the card, then claim it with its current rev. Build the change with tests. Before each commit, from Gnipahellir3, run `odin build src`, `odin build src -define:GAME_DEBUG=false`, `odin test src` and `odin test src -define:GAME_DEBUG=false`: all green. One commit per card. Post evidence naming the commit and what you ran, then submit. Then take your next card.
 - Commits end with the trailer the coordinator's rules name. Never push and never merge to master: the coordinator lands reviewed work.
 - Only the coordinator readies a card. If yours is still Draft, ask it.
 - Use only your own board tools, as your own name. Do not act as anyone else.
