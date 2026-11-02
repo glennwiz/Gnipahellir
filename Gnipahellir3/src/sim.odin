@@ -689,8 +689,9 @@ smelter_autopull :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data) {
 
 // Hand-feeding via the furnace window: the dragged bag stack loads the
 // smelter — ore into the input buffer (one kind at a time), wood into the fuel
-// buffer.  A partial move (buffer near full) leaves the rest in the bag.
-smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int) -> bool {
+// buffer.  A partial move (buffer near full) leaves the rest in the bag, and
+// limit, when set, is the most this feed moves.
+smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int, limit := 0) -> bool {
     if gs.player.dead do return false
     if slot < 0 || slot >= MAX_INVENTORY do return false
     if !in_bounds(int(tile.x), int(tile.y)) do return false
@@ -715,6 +716,7 @@ smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int) -> bool {
 
     if is_fuel {
         take := min(s.count, SMELTER_FUEL_CAP - int(sd.fuel_count))
+        if limit > 0 do take = min(take, limit)
         if take <= 0 {
             notify(gs, "The furnace is stocked with fuel")
             return false
@@ -739,6 +741,7 @@ smelter_feed :: proc(gs: ^Game_State, tile: [2]i32, slot: int) -> bool {
     }
     have := sd.in_item == s.item ? int(sd.in_count) : 0
     take := min(s.count, SMELTER_IN_CAP - have)
+    if limit > 0 do take = min(take, limit)
     if take <= 0 {
         notify(gs, "The furnace is full")
         return false
@@ -779,6 +782,34 @@ smelter_withdraw :: proc(gs: ^Game_State, tile: [2]i32) -> bool {
     if taken > 0 {
         audio_play(&gs.audio, .Pickup)
         log_action(gs, "Player pulls %v x%d back out of smelter at (%d,%d)", item, taken, tile.x, tile.y)
+    }
+    return taken > 0
+}
+
+// Pull the unburnt wood back out (drag the FUEL slot onto the inventory).
+// Whatever the bag can't hold stays in the fire box.
+smelter_withdraw_fuel :: proc(gs: ^Game_State, tile: [2]i32) -> bool {
+    if gs.player.dead do return false
+    if !in_bounds(int(tile.x), int(tile.y)) do return false
+    sd := &gs.world.sim_data[grid_idx(int(tile.x), int(tile.y))]
+    if sd.fuel_count == 0 do return false
+
+    px := i32(gs.player.pos.x + PLAYER_W*0.5)
+    py := i32(gs.player.pos.y + PLAYER_H*0.5)
+    if max(abs(tile.x - px), abs(tile.y - py)) > BENCH_RANGE {
+        notify(gs, "Too far from the furnace")
+        return false
+    }
+
+    inv    := &gs.player.inventory
+    before := inventory_count(inv, FUEL_ITEM)
+    inventory_insert(inv, FUEL_ITEM, int(sd.fuel_count))
+    taken  := inventory_count(inv, FUEL_ITEM) - before
+    sd.fuel_count -= u8(taken)
+    if taken == 0 do notify(gs, "The bag is full")
+    if taken > 0 {
+        audio_play(&gs.audio, .Pickup)
+        log_action(gs, "Player pulls %d wood back out of smelter at (%d,%d)", taken, tile.x, tile.y)
     }
     return taken > 0
 }

@@ -45,12 +45,14 @@ STEP_HEIGHT :: f32(1.0)
 // is_solid, so a door or structure is always a stable anchor like rock.
 @(private = "file")
 blocks_body :: proc(w: ^World_Grid, x, y: int, is_player, horizontal: bool) -> bool {
-    if is_player {
-        t := get_tile(w, x, y)
-        if t == .Door do return false
-        if horizontal && (is_structure_tile[t] || is_rune_scroll_chest(t)) do return false
-    }
+    if is_player do return tile_blocks_player(get_tile(w, x, y), horizontal)
     return is_solid(w, x, y)
+}
+
+tile_blocks_player :: proc(t: Tile_Type, horizontal: bool) -> bool {
+    if t == .Door do return false
+    if horizontal && (is_structure_tile[t] || is_rune_scroll_chest(t)) do return false
+    return .Solid in terrain_table[t].flags
 }
 
 // True if a body of `size` at `pos` would overlap any tile that blocks it.

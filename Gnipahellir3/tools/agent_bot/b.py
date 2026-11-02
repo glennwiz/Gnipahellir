@@ -21,9 +21,9 @@ class B:
         for j,row in enumerate(v['rows']):
             for i,c in enumerate(row):
                 s.m[v['y']+j][v['x']+i]=L[c]
-        if 'solid' in v:  # the game says which legend chars block: trust it over tiles.py
+        if 'floor' in v:  # the game says which legend chars hold a body up: trust it over tiles.py
             for c,name in L.items():
-                (SOLID.add if c in v['solid'] else SOLID.discard)(name)
+                (SOLID.add if c in v['floor'] else SOLID.discard)(name)
         s.items_view=r['items']
         if r['screen']=='dead' and not getattr(s,'allowdead',False): raise Dead()
     def scan(s):

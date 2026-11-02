@@ -589,6 +589,7 @@ Event_Type :: enum u8 {
 	// The death screen (appended so existing event values stay stable)
 	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
 	Title_Start, // the title closed on no saved run: start the world it chose
+	Smelter_Withdraw_Fuel, // tile = furnace; pulls the unburnt wood back into the bag
 }
 
 Event_Payload :: struct #raw_union {
@@ -614,6 +615,7 @@ Event :: struct {
 	tile:    [2]i32,
 	payload: Event_Payload,
 	cause:   Damage_Cause,  // Damage_Dealt from the world: which part of it
+	count:   i32,           // Smelter_Feed: the most to load, 0 for the whole stack
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────

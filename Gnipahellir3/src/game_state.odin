@@ -519,7 +519,7 @@ Input_State :: struct {
 
 // ─── Agent drive (agent_api.odin) ─────────────────────────────────────────────
 
-Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw }
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe }
 
 // One act: held input for its frames, one-shots on the first.  Tiles are only
 // meaningful under their has_ flag.
@@ -540,6 +540,7 @@ Agent_Command :: struct {
     reclaim:   [2]i32,
     verb:      Agent_Verb,
     verb_arg:  i32,
+    feed_count: i32,  // 0: the whole stack
 }
 
 AGENT_TEXT_MAX :: 96
@@ -600,6 +601,7 @@ UI_State :: struct {
     drag_slot:       int,     // bag slot the drag started from (smelter feed takes from it)
     drag_tray:       bool,    // the drag holds the smelter tray, not a bag stack
     drag_input:      bool,    // the drag holds the smelter's loaded ore (pulling it back out)
+    drag_fuel:       bool,    // the drag holds the smelter's unburnt wood
     title_fresh:     bool,   // no run to resume: the title offers a seed and starts a world
     title_seed:      [TITLE_SEED_DIGITS]u8, // digits typed on the title
     title_seed_len:  int,

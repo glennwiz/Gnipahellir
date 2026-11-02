@@ -3399,6 +3399,7 @@ draw_smelter :: proc(gs: ^Game_State) {
 		cnt_buf: [8]u8
 		fmt.bprintf(cnt_buf[:7], "%d", sd.fuel_count)
 		rl.DrawText(cstring(raw_data(cnt_buf[:])), fux + 6, fuy + SLOT_PX - 14, 10, rl.WHITE)
+		rl.DrawText("drag out to unload", fux + SLOT_PX + 10, fuy + 17, 10, text_dim)
 	} else {
 		rl.DrawText("out of wood", fux + SLOT_PX + 10, fuy + 17, 10, text_dim)
 	}

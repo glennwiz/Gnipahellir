@@ -11,7 +11,13 @@ package game
 //                                                   nothing; a place the game turned away
 //                                                   leaves "refused":"place" in the state,
 //                                                   the reason, if any, in notes;
-//                                                   withdraw:true pulls an open smelter's ore
+//                                                   withdraw:true pulls an open smelter's ore,
+//                                                   withdraw_fuel:true its wood; feed takes
+//                                                   the whole stack unless count says less;
+//                                                   tithe:slot, on the death screen, picks
+//                                                   the item to send on, and again to take
+//                                                   it back: state lists "tithe":{chosen,
+//                                                   offerable}.  Dismiss then moves on
 //   {"cmd":"plan","acts":[{"move":"left","frames":30},...]}
 //                                                   what to do while you think: played
 //                                                   at quarter speed, no reply per step;
@@ -20,6 +26,10 @@ package game
 //                                                   judged when the step starts, and one
 //                                                   that fails ends the plan: state then
 //                                                   carries plan_stopped
+//                                                   a view's "solid" chars stop the body from
+//                                                   every side, "floor" ones hold it up: the
+//                                                   body walks through structures and stands
+//                                                   on them, and passes doors both ways
 //   {"cmd":"wait","frames":30}                      play ticks with no act, as an idle wait
 //   {"cmd":"realtime","on":true}                    keep ticking between acts
 //   {"cmd":"idle","on":false}                       hold between acts, no idle ticks
@@ -716,6 +726,8 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
     if p := agent_slot_verb(&c, o, "take", .Take);   p != "" { problem = p; return }
     if agent_flag(o, "collect") do c.verb = .Collect
     if agent_flag(o, "withdraw") do c.verb = .Withdraw
+    if agent_flag(o, "withdraw_fuel") do c.verb = .Withdraw_Fuel
+    if p := agent_slot_verb(&c, o, "tithe", .Tithe); p != "" { problem = p; return }
 
     if "craft" in o {
         name, _ := o["craft"].(json.String)
@@ -728,18 +740,40 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
         c.verb_arg = i32(idx)
     }
 
+    if "count" in o {
+        n, _ := agent_int(o, "count")
+        if c.verb != .Feed {
+            problem = "count goes with feed"
+            return
+        }
+        if n < 1 || n > MAX_STACK {
+            problem = fmt.tprintf("count must be 1..%d", MAX_STACK)
+            return
+        }
+        c.feed_count = i32(n)
+    }
+
     if !live do return  // a plan's later steps run in a world not yet played
 
     // The smelter and barrel verbs act on the window a `use` opened, as the
     // drag-and-drop they stand in for does.
     #partial switch c.verb {
-    case .Feed, .Collect, .Withdraw:
+    case .Feed, .Collect, .Withdraw, .Withdraw_Fuel:
         t := get_tile(&gs.world, int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))
         if !gs.ui.show_smelter || t != .Smelter {
             problem = "no smelter window open: use the smelter first"
         }
     case .Store, .Take:
         if !gs.ui.show_barrel do problem = "no barrel window open: use the barrel first"
+    case .Tithe:
+        switch {
+        case !gs.player.dead:
+            problem = "tithe needs the death screen"
+        case gs.player.death_timer <= DEATH_INPUT_DELAY:
+            problem = "the death screen is not ready yet"
+        case !tithe_offerable(gs.player.inventory.slots[c.verb_arg]):
+            problem = "nothing in that slot can be sent on"
+        }
     }
     return
 }
@@ -780,6 +814,8 @@ agent_input :: proc(gs: ^Game_State) {
     inp.fly_up     = false
     inp.fly_down   = false
 
+    // Ahead of the dismiss: an act that does both sends the item, then moves on.
+    if first && c.verb == .Tithe do eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = c.verb_arg}})
     if first && c.dismiss do agent_dismiss(gs)
     if gs.ui.show_title || gs.ui.show_settings ||
        gs.ui.show_snapshots || gs.ui.show_menu || gs.player.dead || gs.ui.show_book {
@@ -798,7 +834,7 @@ agent_input :: proc(gs: ^Game_State) {
 
     // Windows are only open for the verbs that work on them.  Anything else
     // sweeps them shut, so the view stays clear for whoever is watching.
-    if first && !c.has_use && c.verb != .Feed && c.verb != .Collect && c.verb != .Withdraw && c.verb != .Store && c.verb != .Take {
+    if first && !c.has_use && c.verb != .Feed && c.verb != .Collect && c.verb != .Withdraw && c.verb != .Withdraw_Fuel && c.verb != .Store && c.verb != .Take {
         agent_close_windows(gs)
     }
 
@@ -847,13 +883,14 @@ agent_input :: proc(gs: ^Game_State) {
 
     arg := c.verb_arg
     switch c.verb {
-    case .None:
+    case .None, .Tithe:  // a tithe went out above, ahead of the death screen's return
     case .Select:  gs.player.inventory.selected = int(arg)
     case .Craft:   eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = arg}})
     case .Equip:   eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = arg}})
-    case .Feed:    eq_push(&gs.events, Event{type = .Smelter_Feed, tile = gs.ui.smelter_tile, payload = {int_val = arg}})
+    case .Feed:    eq_push(&gs.events, Event{type = .Smelter_Feed, tile = gs.ui.smelter_tile, payload = {int_val = arg}, count = c.feed_count})
     case .Collect: eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
     case .Withdraw: eq_push(&gs.events, Event{type = .Smelter_Withdraw, tile = gs.ui.smelter_tile})
+    case .Withdraw_Fuel: eq_push(&gs.events, Event{type = .Smelter_Withdraw_Fuel, tile = gs.ui.smelter_tile})
     case .Store:   eq_push(&gs.events, Event{type = .Barrel_Store, tile = gs.ui.barrel_tile, payload = {int_val = arg}})
     case .Take:    eq_push(&gs.events, Event{type = .Barrel_Take, tile = gs.ui.barrel_tile, payload = {int_val = arg}})
     }
@@ -929,8 +966,8 @@ json_write_string :: proc(b: ^strings.Builder, text: string) {
     strings.write_quoted_string(b, text)
 }
 
-// The whole reply fits link.out: the view is clamped to the map, enemies are
-// bounded by MAX_ENEMIES and piles by AGENT_ITEMS_MAX.  "items" lists the first
+// The whole reply fits link.out: the view is clamped to the map, enemies and
+// dens are bounded by MAX_ENEMIES and piles by AGENT_ITEMS_MAX.  "items" lists the first
 // piles in row order, so a whole-map view of a littered world can come up short.
 agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View) {
     v := view^ if view != nil else agent_default_view(gs)
@@ -945,7 +982,9 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
     fmt.sbprintf(&b, `"player":{{"x":%.2f,"y":%.2f,"vx":%.2f,"vy":%.2f,"hp":%d,"hp_max":%d,"mana":%.1f,"grounded":%v,"facing":%d,"dead":%v}},`,
         p.pos.x, p.pos.y, p.vel.x, p.vel.y, p.hp, p.hp_max, p.mana, p.grounded, p.facing, p.dead)
 
-    fmt.sbprintf(&b, `"place_reach":%d,`, PLAYER_REACH)
+    fmt.sbprintf(&b, `"place_reach":%d,"fall_warning":%.2f,`, PLAYER_REACH, fall_warning(p))
+    agent_write_death(&b, gs)
+    agent_write_wave(&b, gs)
     if gs.agent.place_refused do strings.write_string(&b, `"refused":"place",`)
     fmt.sbprintf(&b, `"plan_left":%d,`, link.plan_len - link.plan_next)
     if link.plan_stopped.len > 0 {
@@ -1012,8 +1051,48 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
         comma = true
         fmt.sbprintf(&b, `{{"slot":%d,"kind":"%v","x":%.2f,"y":%.2f,"hp":%d}}`, i, e.kind, e.pos.x, e.pos.y, e.hp)
     }
+    strings.write_string(&b, `],"dens":[`)
+    comma = false
+    for i in 0 ..< MAX_ENEMIES {
+        if !gs.enemies.active[i] do continue
+        e := &gs.enemies.data[i]
+        if e.kind != .Builder || !e.builder.den_built do continue
+        a := e.builder.anchor
+        if int(a.x) < v.x || int(a.x) >= v.x + v.w || int(a.y) < v.y || int(a.y) >= v.y + v.h do continue
+        if comma do strings.write_byte(&b, ',')
+        comma = true
+        fmt.sbprintf(&b, `{{"owner":%d,"x":%d,"y":%d,"hoard":%d}}`, i, a.x, a.y, den_hoard(gs, &e.builder))
+    }
     strings.write_string(&b, "]}\n")
     link.out_len = strings.builder_len(b)
+}
+
+// What the death screen says: the blow, and what can still be sent on.
+@(private="file")
+agent_write_death :: proc(b: ^strings.Builder, gs: ^Game_State) {
+    if !gs.player.dead do return
+    if len(gs.death_by) > 0 {
+        strings.write_string(b, `"death_by":`)
+        json_write_string(b, gs.death_by)
+        strings.write_byte(b, ',')
+    }
+    fmt.sbprintf(b, `"tithe":{{"chosen":%d,"offerable":[`, gs.ui.tithe_slot)
+    comma := false
+    for s, i in gs.player.inventory.slots {
+        if !tithe_offerable(s) do continue
+        if comma do strings.write_byte(b, ',')
+        comma = true
+        fmt.sbprintf(b, "%d", i)
+    }
+    strings.write_string(b, "]},")
+}
+
+// The gauge and warning a player sees, and the threat behind them.
+@(private="file")
+agent_write_wave :: proc(b: ^strings.Builder, gs: ^Game_State) {
+    gauge, _ := wave_gauge(gs)
+    fmt.sbprintf(b, `"wave":{{"threat":%.1f,"gauge":%.2f,"warning_s":%.1f}},`,
+        gs.wave.threat, gauge, gs.wave.warning_timer if gs.wave.warning_active else 0)
 }
 
 // The contents of an open smelter or barrel window.
@@ -1021,8 +1100,8 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
 agent_write_window :: proc(b: ^strings.Builder, gs: ^Game_State) {
     if gs.ui.show_smelter {
         sd := gs.world.sim_data[grid_idx(int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))]
-        fmt.sbprintf(b, `"smelter":{{"input":"%v","input_count":%d,"tray":"%v","tray_count":%d}},`,
-            sd.in_item, sd.in_count, sd.store_item, sd.store_count)
+        fmt.sbprintf(b, `"smelter":{{"input":"%v","input_count":%d,"fuel":%d,"tray":"%v","tray_count":%d}},`,
+            sd.in_item, sd.in_count, sd.fuel_count, sd.store_item, sd.store_count)
     }
     if gs.ui.show_barrel {
         if barrel := barrel_at(gs, gs.level_index, gs.ui.barrel_tile); barrel != nil {
@@ -1061,7 +1140,9 @@ agent_write_view :: proc(b: ^strings.Builder, gs: ^Game_State, v: Agent_View) {
         strings.write_byte(b, '"')
     }
     strings.write_string(b, `],"solid":"`)
-    for ch, t in chars do if ch != 0 && .Solid in terrain_table[t].flags do strings.write_byte(b, ch)
+    for ch, t in chars do if ch != 0 && tile_blocks_player(t, true) do strings.write_byte(b, ch)
+    strings.write_string(b, `","floor":"`)
+    for ch, t in chars do if ch != 0 && tile_blocks_player(t, false) do strings.write_byte(b, ch)
     strings.write_string(b, `","legend":{`)
     comma := false
     for ch, t in chars {

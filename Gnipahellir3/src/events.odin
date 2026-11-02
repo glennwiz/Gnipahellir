@@ -60,7 +60,7 @@ process_events :: proc(gs: ^Game_State) {
         // Autosave trigger: meaningful player actions mark the run dirty (movement
         // never does).  One save is written at frame end (main loop).
         #partial switch e.type {
-        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Rune_Scroll_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark, .Golem_Set_Mode, .Golem_Pickup:
+        case .Tile_Placed, .Item_Pickup, .Item_Drop, .Tile_Mined, .Craft_Complete, .Rune_Scroll_Found, .Structure_Complete, .Smelter_Feed, .Smelter_Collect, .Smelter_Withdraw, .Smelter_Withdraw_Fuel, .Barrel_Store, .Barrel_Take, .Golem_Load, .Golem_Deploy, .Golem_Toggle, .Golem_Recall, .Golem_Crew_Toggle, .Golem_Zone, .Golem_Project, .Golem_Hearth_Use, .Golem_Damaged, .Golem_Mark, .Golem_Unmark, .Golem_Set_Mode, .Golem_Pickup:
             gs.save_dirty = true
         }
 
@@ -228,13 +228,16 @@ process_events :: proc(gs: ^Game_State) {
             log_action(gs, "Player opens smelter at (%d,%d)", e.tile.x, e.tile.y)
 
         case .Smelter_Feed:
-            smelter_feed(gs, e.tile, int(e.payload.int_val))
+            smelter_feed(gs, e.tile, int(e.payload.int_val), int(e.count))
 
         case .Smelter_Collect:
             smelter_collect(gs, e.tile)
 
         case .Smelter_Withdraw:
             smelter_withdraw(gs, e.tile)
+
+        case .Smelter_Withdraw_Fuel:
+            smelter_withdraw_fuel(gs, e.tile)
 
         case .Barrel_Interact:
             if is_rune_scroll_chest(get_tile(&gs.world, int(e.tile.x), int(e.tile.y))) {

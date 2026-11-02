@@ -1054,3 +1054,469 @@ a_flame_turret_burns_through_the_real_game_update :: proc(t: ^testing.T) {
     }
     testing.expect(t, gs.enemies.data[id].hp < 50, "game_update ticks the burn")
 }
+
+// ─── Run 5 gaps (card 91) ─────────────────────────────────────────────────────
+
+// Plays one request through the whole frame a real client gets.
+@(private="file")
+agent_test_play :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
+    agent_handle_line(link, gs, line)
+    for link.frames_left > 0 {
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    link.reply_due = false
+}
+
+@(private="file")
+agent_test_state :: proc(link: ^Agent_Link, gs: ^Game_State, line := `{"cmd":"state"}`) -> json.Object {
+    agent_handle_line(link, gs, line)
+    value, err := json.parse_string(agent_test_reply(link), allocator = context.temp_allocator)
+    assert(err == .None)
+    return value.(json.Object)
+}
+
+@(private="file")
+agent_test_refused :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State, line: string, loc := #caller_location) {
+    agent_handle_line(link, gs, line)
+    testing.expectf(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), "%s -> %s", line, agent_test_reply(link), loc = loc)
+    testing.expect_value(t, link.frames_left, 0, loc = loc)
+}
+
+// The furnace beside the player, its window open as a `use` leaves it.
+@(private="file")
+agent_test_smelter :: proc(gs: ^Game_State) -> ^Sim_Tile_Data {
+    T := player_tile(&gs.player)
+    set_tile(&gs.world, int(T.x) + 1, int(T.y), .Smelter)
+    gs.ui.show_smelter = true
+    gs.ui.smelter_tile = {T.x + 1, T.y}
+    return &gs.world.sim_data[grid_idx(int(T.x) + 1, int(T.y))]
+}
+
+@(test)
+agent_tithe_sends_an_item_on_from_the_death_screen :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    inventory_insert(&gs.player.inventory, .Potion_Health, 5)
+    inventory_insert(&gs.player.inventory, .Dirt, 2)
+    inventory_insert(&gs.player.inventory, .Hell_Key, 1)
+    slot, key := -1, -1
+    for s, i in gs.player.inventory.slots {
+        if s.item == .Potion_Health do slot = i
+        if s.item == .Hell_Key do key = i
+    }
+
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, slot))
+    testing.expect(t, strings.contains(agent_test_reply(link), "needs the death screen"), "the living are told why")
+
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID,
+        payload = {int_val = 100}, cause = .Lava})
+    agent_test_play(link, gs, `{"cmd":"act","frames":2}`)
+    testing.expect(t, gs.player.dead, "the blow lands through the real update")
+
+    root := agent_test_state(link, gs)
+    testing.expect_value(t, root["screen"].(json.String), "dead")
+    testing.expect_value(t, root["death_by"].(json.String), "lava")
+    tithe := root["tithe"].(json.Object)
+    testing.expect_value(t, tithe["chosen"].(json.Float), -1)
+    offered := tithe["offerable"].(json.Array)
+    found := false
+    for v in offered {
+        testing.expect(t, int(v.(json.Float)) != key, "a key is the run's own")
+        found ||= int(v.(json.Float)) == slot
+    }
+    testing.expect(t, found, "the potions are on offer")
+    testing.expect(t, len(offered) >= 2)
+    testing.expect(t, strings.contains(agent_test_reply(link), fmt.tprintf(`%v,%v`, int(offered[0].(json.Float)), int(offered[1].(json.Float)))), "strict JSON, the lenient parser hides a missing comma")
+
+    // A click does nothing until the screen has settled, and neither does this.
+    testing.expect(t, gs.player.death_timer <= DEATH_INPUT_DELAY)
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, slot))
+    for gs.player.death_timer <= DEATH_INPUT_DELAY do agent_test_play(link, gs, `{"cmd":"act","frames":30}`)
+
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, key))
+    agent_test_refused(t, link, gs, `{"cmd":"act","tithe":99}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","tithe":"potion"}`)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.None)
+
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, slot))
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Potion_Health)
+    testing.expect_value(t, gs.ui.tithe_slot, slot)
+    testing.expect_value(t, agent_test_state(link, gs)["tithe"].(json.Object)["chosen"].(json.Float), f64(slot))
+}
+
+@(test)
+agent_tithe_and_dismiss_in_one_act_send_the_item_first :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    inventory_insert(&gs.player.inventory, .Potion_Health, 1)
+    slot := 0
+    for s, i in gs.player.inventory.slots do if s.item == .Potion_Health do slot = i
+    gs.player.dead = true
+    gs.player.death_timer = DEATH_INPUT_DELAY + 1
+    gs.stats.grave.active = true
+
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d,"dismiss":true}}`, slot))
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect_value(t, gs.events.size, 2)
+    testing.expect_value(t, gs.events.events[gs.events.head].type, Event_Type.Tithe_Choose)
+}
+
+@(test)
+agent_tithe_fires_once_however_long_the_act :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    inventory_insert(&gs.player.inventory, .Potion_Health, 1)
+    slot := 0
+    for s, i in gs.player.inventory.slots do if s.item == .Potion_Health do slot = i
+    gs.player.dead = true
+    gs.player.death_timer = DEATH_INPUT_DELAY + 1
+    gs.stats.grave.active = true
+
+    // A second firing would toggle it back off.
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d,"frames":4}}`, slot))
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Potion_Health)
+    // The window sweep and the rest of the verbs do not touch a dead hero's choice.
+    testing.expect_value(t, gs.ui.tithe_slot, slot)
+
+    root := agent_test_state(link, gs)
+    testing.expect(t, "death_by" not_in root, "a death with no blow names none")
+    testing.expect(t, "tithe" in root)
+}
+
+@(test)
+agent_state_is_silent_about_death_while_alive :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.death_by = "lava"  // a stale cause must not read as a death
+    root := agent_test_state(link, gs)
+    testing.expect(t, "death_by" not_in root)
+    testing.expect(t, "tithe" not_in root)
+}
+
+@(test)
+agent_feed_count_loads_only_that_many :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    sd := agent_test_smelter(gs)
+    inventory_insert(&gs.player.inventory, .Iron_Ore, 20)
+    inventory_insert(&gs.player.inventory, .Wood_Log, 9)
+    ore, wood := 0, 0
+    for s, i in gs.player.inventory.slots {
+        if s.item == .Iron_Ore do ore = i
+        if s.item == .Wood_Log do wood = i
+    }
+
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","feed":%d,"count":4}}`, ore))
+    testing.expect_value(t, int(sd.in_count), 4)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 16)
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","feed":%d,"count":3}}`, wood))
+    testing.expect_value(t, int(sd.fuel_count), 3)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 6)
+
+    // More than the stack is the stack; no count is still the whole of it.
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","feed":%d,"count":50}}`, wood))
+    testing.expect_value(t, int(sd.fuel_count), 9)
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","feed":%d}}`, ore))
+    testing.expect_value(t, int(sd.in_count), 20)
+    inventory_insert(&gs.player.inventory, .Wood_Log, 5)
+    for s, i in gs.player.inventory.slots do if s.item == .Wood_Log do wood = i
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","feed":%d}}`, wood))
+    testing.expect_value(t, int(sd.fuel_count), 14)
+
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","feed":0,"count":%d}}`, MAX_STACK + 1))
+    agent_test_refused(t, link, gs, `{"cmd":"act","count":3}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","take":0,"count":3}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","feed":0,"count":0}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","feed":0,"count":"all"}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","feed":0,"count":100000000000}`)
+    agent_test_refused(t, link, gs, `{"cmd":"plan","acts":[{"count":3}]}`)
+}
+
+@(test)
+agent_smelter_window_shows_the_fuel_and_gives_it_back :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    agent_test_refused(t, link, gs, `{"cmd":"act","withdraw_fuel":true}`)
+
+    sd := agent_test_smelter(gs)
+    sd.fuel_count = 7
+    testing.expect_value(t, agent_test_state(link, gs)["smelter"].(json.Object)["fuel"].(json.Float), 7)
+
+    agent_test_play(link, gs, `{"cmd":"act","withdraw_fuel":true}`)
+    testing.expect_value(t, int(sd.fuel_count), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 7)
+    testing.expect(t, gs.ui.show_smelter, "a window verb keeps it open")
+}
+
+@(test)
+agent_feed_of_exactly_a_full_stack_is_a_count :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    sd := agent_test_smelter(gs)
+    inventory_insert(&gs.player.inventory, .Wood_Log, MAX_STACK)
+    slot := 0
+    for s, i in gs.player.inventory.slots do if s.item == .Wood_Log do slot = i
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","feed":%d,"count":%d}}`, slot, MAX_STACK))
+    testing.expect_value(t, int(sd.fuel_count), MAX_STACK)
+}
+
+@(test)
+smelter_fuel_withdraw_keeps_every_log_and_every_rule :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    sd := agent_test_smelter(gs)
+    tile := gs.ui.smelter_tile
+
+    testing.expect(t, !smelter_withdraw_fuel(gs, tile), "an empty box gives nothing")
+    testing.expect_value(t, gs.notify.count, 0)
+
+    // A bag with room for 5: the rest stays in the furnace.
+    sd.fuel_count = 8
+    inv := &gs.player.inventory
+    for &s in inv.slots do s = {.Stone_Block, MAX_STACK}
+    inv.slots[3] = {.Wood_Log, MAX_STACK - 5}
+    testing.expect(t, smelter_withdraw_fuel(gs, tile))
+    testing.expect_value(t, int(sd.fuel_count), 3)
+    testing.expect_value(t, inventory_count(inv, .Wood_Log), MAX_STACK)
+    log_len := gs.debug_log.pos
+    when GAME_DEBUG {  // a release build keeps no action.log
+        testing.expect(t, strings.contains(string(gs.debug_log.buf[:log_len]), "pulls 5 wood back out"), "action.log is the playtest's truth")
+    }
+    gs.notify.count = 0
+    testing.expect(t, !smelter_withdraw_fuel(gs, tile), "the bag is full")
+    testing.expect_value(t, int(sd.fuel_count), 3)
+    testing.expect_value(t, gs.notify.count, 1)
+    when GAME_DEBUG do testing.expect_value(t, gs.debug_log.pos, log_len)
+
+    inv.slots = {}
+    gs.player.pos.x += (BENCH_RANGE + 2) * 1
+    gs.notify.count = 0
+    testing.expect(t, !smelter_withdraw_fuel(gs, tile), "out of reach")
+    testing.expect_value(t, gs.notify.count, 1)
+    testing.expect_value(t, int(sd.fuel_count), 3)
+    gs.player.pos = SURFACE_HOME_POS
+
+    gs.player.dead = true
+    testing.expect(t, !smelter_withdraw_fuel(gs, tile), "the dead do not stoke")
+    gs.player.dead = false
+
+    eq_push(&gs.events, Event{type = .Smelter_Withdraw_Fuel, tile = tile})
+    gs.save_dirty = false
+    process_events(gs)
+    testing.expect_value(t, int(sd.fuel_count), 0)
+    testing.expect(t, gs.save_dirty, "moving logs is worth an autosave")
+
+    testing.expect(t, !smelter_withdraw_fuel(gs, {-1, 0}), "off the map")
+}
+
+// The player's way to the same verb: API law, nothing a keyboard cannot do.
+@(test)
+smelter_fuel_slot_drags_back_to_the_bag :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    sd := agent_test_smelter(gs)
+    fx, fy := smelter_fuel_rect(gs)
+    gs.input.mouse_screen = {f32(fx) + 2, f32(fy) + 2}
+
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "nothing to lift")
+
+    sd.fuel_count = 4
+    gs.input.mouse_screen = {f32(fx) - 2, f32(fy) + 2}
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "a miss on the left of the slot")
+    gs.input.mouse_screen = {f32(fx) + SLOT_PX, f32(fy) + 2}
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "a miss on the right of the slot")
+    gs.input.mouse_screen = {f32(fx) + 2, f32(fy) - 2}
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "a miss above the slot")
+    gs.input.mouse_screen = {f32(fx) + 2, f32(fy) + SLOT_PX}
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "a miss below the slot")
+
+    gs.input.mouse_screen = {f32(fx) + 2, f32(fy) + 2}
+    gs.ui.drag_item = .Dirt
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "the hand is already full")
+    gs.ui.drag_item = .None
+
+    gs.ui.show_smelter = false
+    smelter_fuel_grab(gs)
+    testing.expect(t, !gs.ui.drag_fuel, "no window, no slot")
+    gs.ui.show_smelter = true
+
+    smelter_fuel_grab(gs)
+    testing.expect(t, gs.ui.drag_fuel)
+    testing.expect_value(t, gs.ui.drag_item, FUEL_ITEM)
+
+    // Dropped over the open world it stays in the furnace.
+    gs.ui.show_inventory = false
+    gs.input.mouse_screen = {-100, -100}
+    smelter_fuel_drop(gs)
+    testing.expect(t, !gs.ui.drag_fuel)
+    testing.expect_value(t, gs.events.size, 0)
+
+    smelter_fuel_grab(gs)  // misses: the cursor is off in the world
+    gs.input.mouse_screen = {f32(fx) + 2, f32(fy) + 2}
+    smelter_fuel_grab(gs)
+    smelter_fuel_drop(gs)  // back on the window is a click in place
+    testing.expect_value(t, gs.events.size, 1)
+    process_events(gs)
+    testing.expect_value(t, int(sd.fuel_count), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 4)
+
+    gs.ui.show_inventory = true
+    x, y, _, _, _ := window_rect(gs, .Inventory)
+    gs.input.mouse_screen = {f32(x) + 2, f32(y) + 2}
+    eq_clear(&gs.events)
+    gs.ui.drag_fuel = true
+    smelter_fuel_drop(gs)
+    testing.expect_value(t, gs.events.size, 1)
+
+    gs.ui.drag_item, gs.ui.drag_tray, gs.ui.drag_input, gs.ui.drag_fuel = .Dirt, true, true, true
+    gs.ui.drag_barrel, gs.ui.drag_void = 2, true
+    drag_cancel(gs)
+    testing.expect_value(t, gs.ui.drag_item, Item.None)
+    testing.expect(t, !gs.ui.drag_tray && !gs.ui.drag_input && !gs.ui.drag_fuel && !gs.ui.drag_void)
+    testing.expect_value(t, gs.ui.drag_barrel, -1)
+}
+
+// Run 5: `solid` named the bench the body had just walked through.
+@(test)
+agent_solid_says_what_stops_the_body :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    for _ in 0 ..< 30 do agent_test_play(link, gs, `{"cmd":"act","frames":1}`)
+    T := player_tile(&gs.player)
+    x, y := int(T.x), int(T.y)
+    for dx in 1 ..< 8 do for dy in -2 ..= 0 do set_tile(&gs.world, x + dx, y + dy, .Air)
+    // Two tall: the body steps up a single tile, so one would prove nothing.
+    for dy in -1 ..= 0 {
+        set_tile(&gs.world, x + 2, y + dy, .Smelter)
+        set_tile(&gs.world, x + 3, y + dy, .Door)
+        set_tile(&gs.world, x + 4, y + dy, .Rune_Scroll_Chest_B)
+        set_tile(&gs.world, x + 6, y + dy, .Stone)
+    }
+
+    root := agent_test_state(link, gs)
+    view := root["view"].(json.Object)
+    solid := view["solid"].(json.String)
+    floor := view["floor"].(json.String)
+    legend := view["legend"].(json.Object)
+    char_of :: proc(legend: json.Object, name: string) -> string {
+        for ch, v in legend do if v.(json.String) == name do return ch
+        return "?"
+    }
+    testing.expect(t, strings.contains(solid, char_of(legend, "Stone")))
+    testing.expect(t, strings.contains(floor, char_of(legend, "Stone")))
+    testing.expect(t, !strings.contains(solid, char_of(legend, "Smelter")), "the body walks through a structure")
+    testing.expect(t, strings.contains(floor, char_of(legend, "Smelter")), "and stands on top of one")
+    testing.expect(t, !strings.contains(solid, char_of(legend, "Rune_Scroll_Chest_B")))
+    testing.expect(t, strings.contains(floor, char_of(legend, "Rune_Scroll_Chest_B")))
+    testing.expect(t, !strings.contains(solid, char_of(legend, "Door")), "and any way through a door")
+    testing.expect(t, !strings.contains(floor, char_of(legend, "Door")))
+    testing.expect(t, !strings.contains(floor, char_of(legend, "Air")))
+
+    // What the view says is what the real update does.
+    agent_test_play(link, gs, `{"cmd":"act","move":"right","frames":120}`)
+    body := player_tile(&gs.player)
+    testing.expect(t, int(body.x) >= x + 4, "past the structures and the door")
+    testing.expect(t, int(body.x) < x + 6, "stopped by the stone")
+}
+
+@(test)
+agent_state_carries_what_the_screen_warns_of :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    testing.expect_value(t, agent_test_state(link, gs)["fall_warning"].(json.Float), 0)
+    gs.player.grounded = false
+    gs.player.fall_peak_y = gs.player.pos.y - SAFE_FALL_TILES - FALL_WARN_RAMP_TILES
+    testing.expect_value(t, agent_test_state(link, gs)["fall_warning"].(json.Float), 1)
+    gs.player.fall_peak_y = gs.player.pos.y
+
+    wave := agent_test_state(link, gs)["wave"].(json.Object)
+    testing.expect_value(t, wave["threat"].(json.Float), 0)
+    testing.expect_value(t, wave["gauge"].(json.Float), 0)
+    testing.expect_value(t, wave["warning_s"].(json.Float), 0)
+
+    gs.wave.threat = 37
+    gs.wave.pressure = WAVE_PRESSURE_TARGET / 2
+    gs.wave.warning_active = true
+    gs.wave.warning_timer = 12.5
+    wave = agent_test_state(link, gs)["wave"].(json.Object)
+    testing.expect_value(t, wave["threat"].(json.Float), 37)
+    testing.expect_value(t, wave["gauge"].(json.Float), 0.5)
+    testing.expect_value(t, wave["warning_s"].(json.Float), 12.5)
+
+    // A spent timer does not read as a warning.
+    gs.wave.warning_active = false
+    testing.expect_value(t, agent_test_state(link, gs)["wave"].(json.Object)["warning_s"].(json.Float), 0)
+}
+
+@(test)
+agent_state_lists_dens_and_their_hoards :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    den :: proc(gs: ^Game_State, kind: Enemy_Kind, anchor: [2]i32, built: bool) -> int {
+        id, _ := enemy_alloc(&gs.enemies)
+        e := &gs.enemies.data[id]
+        e.kind = kind
+        e.pos = {5, 5}  // the owner is out robbing: the den still stands
+        e.builder.anchor = anchor
+        e.builder.den_built = built
+        return id
+    }
+    built := den(gs, .Builder, {30, 60}, true)
+    den(gs, .Builder, {40, 60}, false)
+    den(gs, .Builder, {150, 20}, true)
+    den(gs, .Garm, {50, 60}, true)
+    gs.world.items[grid_idx(30, 60)], gs.world.item_counts[grid_idx(30, 60)] = .Iron_Ore, 4
+    gs.world.items[grid_idx(31, 60)], gs.world.item_counts[grid_idx(31, 60)] = .Gold_Ore, 2
+
+    dens := agent_test_state(link, gs, `{"cmd":"state","x":20,"y":50,"w":40,"h":20}`)["dens"].(json.Array)
+    testing.expect_value(t, len(dens), 1)
+    d := dens[0].(json.Object)
+    testing.expect_value(t, int(d["owner"].(json.Float)), built)
+    testing.expect_value(t, d["x"].(json.Float), 30)
+    testing.expect_value(t, d["y"].(json.Float), 60)
+    testing.expect_value(t, d["hoard"].(json.Float), 6)
+
+    dens = agent_test_state(link, gs, `{"cmd":"state","x":0,"y":0,"w":192,"h":108}`)["dens"].(json.Array)
+    testing.expect_value(t, len(dens), 2)
+    testing.expect(t, strings.contains(agent_test_reply(link), `},{"owner"`), "strict JSON, the lenient parser hides a missing comma")
+    dens = agent_test_state(link, gs, `{"cmd":"state","x":31,"y":61,"w":3,"h":3}`)["dens"].(json.Array)
+    testing.expect_value(t, len(dens), 0)
+
+    // The view's edges, each way: the anchor is at (30,60).
+    edges := [?]struct{ line: string, n: int }{
+        {`{"cmd":"state","x":30,"y":60,"w":1,"h":1}`, 1},
+        {`{"cmd":"state","x":29,"y":60,"w":1,"h":1}`, 0},
+        {`{"cmd":"state","x":30,"y":59,"w":1,"h":1}`, 0},
+        {`{"cmd":"state","x":31,"y":60,"w":1,"h":1}`, 0},
+        {`{"cmd":"state","x":30,"y":61,"w":1,"h":1}`, 0},
+    }
+    for e in edges {
+        testing.expectf(t, len(agent_test_state(link, gs, e.line)["dens"].(json.Array)) == e.n, "%s", e.line)
+    }
+}
