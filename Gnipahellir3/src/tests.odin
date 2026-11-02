@@ -9937,6 +9937,188 @@ a_hanging_pile_falls_at_its_pace_in_the_real_update :: proc(t: ^testing.T) {
 }
 
 @(test)
+rejected_save_survives_the_fresh_runs_autosave :: proc(t: ^testing.T) {
+	save :: "gnipahellir_save_reject_test.dat"
+	bak0 :: "gnipahellir_save_reject_test.dat.0.bak"
+	bak1 :: "gnipahellir_save_reject_test.dat.1.bak"
+	defer os.remove(save)
+	defer os.remove(bak0)
+	defer os.remove(bak1)
+	old_run := "a run from another build"
+	testing.expect(t, os.write_entire_file(save, transmute([]u8)old_run) == nil)
+
+	gs := test_state()
+	defer free(gs)
+	gs.save_path = save
+	testing.expect(t, !load_game(gs), "the file is rejected")
+	testing.expect(t, !os.exists(save), "moved, not copied")
+	logged := string(gs.debug_log.buf[:gs.debug_log.pos])
+	when GAME_DEBUG {
+		testing.expect(t, strings.contains(logged, "save rejected"), "the rejection is logged")
+		testing.expect(t, strings.contains(logged, bak0), "the log names the kept file")
+	}
+	testing.expect_value(t, gs.save_path, save)
+
+	// The fresh run's autosave lands on the real path, the old run stays put.
+	testing.expect(t, save_game(gs), "the fresh run autosaves")
+	kept, err := os.read_entire_file_from_path(bak0, context.allocator)
+	defer delete(kept)
+	testing.expect(t, err == nil, "the .bak is there")
+	testing.expect_value(t, string(kept), old_run)
+	testing.expect(t, load_game(gs), "the fresh run's save loads")
+
+	// A second rejection takes the next slot: the first .bak is the real run.
+	next_run := "a throwaway run"
+	testing.expect(t, os.write_entire_file(save, transmute([]u8)next_run) == nil)
+	testing.expect(t, !load_game(gs), "rejected again")
+	kept2, err2 := os.read_entire_file_from_path(bak0, context.allocator)
+	defer delete(kept2)
+	testing.expect(t, err2 == nil)
+	testing.expect_value(t, string(kept2), old_run)
+	kept3, err3 := os.read_entire_file_from_path(bak1, context.allocator)
+	defer delete(kept3)
+	testing.expect(t, err3 == nil)
+	testing.expect_value(t, string(kept3), next_run)
+}
+
+@(test)
+rejected_save_with_no_free_slot_turns_autosave_off :: proc(t: ^testing.T) {
+	save :: "gnipahellir_save_full_test.dat"
+	defer os.remove(save)
+	old_run := "a run with nowhere to go"
+	testing.expect(t, os.write_entire_file(save, transmute([]u8)old_run) == nil)
+	for slot in 0 ..< SAVE_BAK_SLOTS - 1 {
+		bak := fmt.tprintf("%s.%d.bak", save, slot)
+		testing.expect(t, os.write_entire_file(bak, transmute([]u8)bak) == nil)
+	}
+	defer for slot in 0 ..< SAVE_BAK_SLOTS do os.remove(fmt.tprintf("%s.%d.bak", save, slot))
+
+	gs := test_state()
+	defer free(gs)
+	gs.save_path = save
+	testing.expect(t, !load_game(gs), "the last slot takes it")
+	testing.expect(t, !os.exists(save), "every slot is used before giving up")
+	testing.expect(t, os.write_entire_file(save, transmute([]u8)old_run) == nil)
+	testing.expect(t, !load_game(gs), "the file is rejected")
+	testing.expect(t, !save_game(gs), "no autosave may land on it")
+	kept, err := os.read_entire_file_from_path(save, context.allocator)
+	defer delete(kept)
+	testing.expect(t, err == nil)
+	testing.expect_value(t, string(kept), old_run)
+	when GAME_DEBUG {
+		testing.expect(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]), "could not be set aside"), "logged")
+	}
+}
+
+// The file stays put when it cannot be renamed: the folder refuses it.
+@(test)
+rejected_save_that_cannot_move_turns_autosave_off :: proc(t: ^testing.T) {
+	when ODIN_OS == .Windows { return }
+	dir :: "gnipahellir_save_readonly_test"
+	save :: "gnipahellir_save_readonly_test/run.dat"
+	testing.expect(t, os.make_directory(dir) == nil)
+	defer os.remove(dir)
+	defer os.remove(save)
+	old_run := "a run in a locked folder"
+	testing.expect(t, os.write_entire_file(save, transmute([]u8)old_run) == nil)
+	testing.expect(t, os.chmod(dir, {.Read_User, .Execute_User}) == nil)
+	defer os.chmod(dir, {.Read_User, .Write_User, .Execute_User})
+
+	gs := test_state()
+	defer free(gs)
+	gs.save_path = save
+	testing.expect(t, !load_game(gs), "the file is rejected")
+	testing.expect_value(t, gs.save_path, "")
+	testing.expect(t, os.exists(save), "still there")
+}
+
+@(test)
+rejection_log_reads_the_files_version :: proc(t: ^testing.T) {
+	when !GAME_DEBUG { return }
+	save :: "gnipahellir_save_version_test.dat"
+	defer os.remove(save)
+	defer os.remove(save + ".0.bak")
+	defer os.remove(save + ".1.bak")
+
+	gs := test_state()
+	defer free(gs)
+	gs.save_path = save
+	versioned := [5]u8{27, 0, 0, 0, 9}
+	testing.expect(t, os.write_entire_file(save, versioned[:]) == nil)
+	testing.expect(t, !load_game(gs))
+	logged := string(gs.debug_log.buf[:gs.debug_log.pos])
+	testing.expect(t, strings.contains(logged, "5 bytes, version 27,"), "size and version")
+
+	stub := [2]u8{1, 2}
+	testing.expect(t, os.write_entire_file(save, stub[:]) == nil)
+	testing.expect(t, !load_game(gs))
+	logged = string(gs.debug_log.buf[:gs.debug_log.pos])
+	testing.expect(t, strings.contains(logged, "2 bytes, version -1,"), "too short to hold a version")
+}
+
+// Unarmed means no disk at all, not a write that fails at the end.
+@(test)
+unarmed_save_game_writes_nothing :: proc(t: ^testing.T) {
+	tmp :: ".tmp"
+	marker := "in the way"
+	testing.expect(t, os.write_entire_file(tmp, transmute([]u8)marker) == nil)
+	defer os.remove(tmp)
+
+	gs := test_state()
+	defer free(gs)
+	testing.expect(t, !save_game(gs), "no path, no save")
+	kept, err := os.read_entire_file_from_path(tmp, context.allocator)
+	defer delete(kept)
+	testing.expect(t, err == nil, "nothing wrote or removed the temp path")
+	testing.expect_value(t, string(kept), marker)
+}
+
+@(test)
+missing_or_good_save_sets_nothing_aside :: proc(t: ^testing.T) {
+	save :: "gnipahellir_save_quiet_test.dat"
+	bak0 :: "gnipahellir_save_quiet_test.dat.0.bak"
+	defer os.remove(save)
+	defer os.remove(bak0)
+
+	gs := test_state()
+	defer free(gs)
+	testing.expect(t, !load_game(gs), "an unarmed state has no save")
+	gs.save_path = save
+	testing.expect(t, !load_game(gs), "no file, no run")
+	testing.expect_value(t, gs.save_path, save)
+	testing.expect(t, !os.exists(bak0), "a missing file is not a rejection")
+
+	testing.expect(t, save_game(gs), "written")
+	testing.expect(t, load_game(gs), "a good save loads")
+	testing.expect(t, os.exists(save), "and stays where it is")
+	testing.expect(t, !os.exists(bak0), "nothing set aside")
+}
+
+@(test)
+failed_save_write_leaves_the_last_good_file_whole :: proc(t: ^testing.T) {
+	save :: "gnipahellir_save_atomic_test.dat"
+	tmp :: "gnipahellir_save_atomic_test.dat.tmp"
+	defer os.remove(save)
+	defer os.remove(tmp)
+
+	gs := test_state()
+	defer free(gs)
+	gs.frame = 111
+	testing.expect(t, save_game_to(gs, save), "written")
+	testing.expect(t, !os.exists(tmp), "the temp file is gone after a good save")
+
+	// A directory at the temp path makes the write fail the way a full disk does.
+	testing.expect(t, os.make_directory(tmp) == nil)
+	gs.frame = 222
+	testing.expect(t, !save_game_to(gs, save), "the write fails and says so")
+	testing.expect(t, !os.exists(tmp), "a failed save leaves no temp file behind")
+
+	gs.frame = 0
+	testing.expect(t, load_game_from(gs, save), "the old save still loads")
+	testing.expect_value(t, gs.frame, u64(111))
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"
