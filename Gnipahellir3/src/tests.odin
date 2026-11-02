@@ -11875,3 +11875,43 @@ a_full_enemy_store_holds_its_budgets_and_scales :: proc(t: ^testing.T) {
         MAX_ENEMIES, f64(b) / 1e6, MAX_ENEMIES / 4, f64(s) / 1e6, ratio, f64(CAP_SCALE_LIMIT))
     testing.expect(t, ratio <= CAP_SCALE_LIMIT, "the frame must not grow faster than the swarm does")
 }
+
+// Card 53 makes drops fall: the hero's kit lands whole, and the tithe stays put.
+@(test)
+a_kit_dropped_in_the_air_lands_whole_and_the_tithe_stays_in_its_coffer :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.inventory = {}
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    coffer := [2]i32{gs.grave.tile.x + 1, gs.grave.tile.y}
+
+    fluid_carve_box(gs, 40, 44, 60, 70)
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "a slot")
+    gs.enemies.data[id].pos = {42, 61}
+    gs.risen = {has_kit = true, walking = true, slot = id}
+    gs.risen.kit[0] = {item = .Plank, count = 300}
+    gs.risen.kit[1] = {item = .Sword, count = 1}
+    gs.risen.kit[2] = {item = .Iron_Helm, count = 1}
+    planks := risen_ground_count(gs, .Plank)
+    despawn_enemy(gs, id)
+
+    for f in 0 ..< 600 {
+        gs.frame = u64(f)
+        gs.delta_time = 1.0 / 60.0
+        update_item_fall(gs)
+    }
+    testing.expect_value(t, risen_ground_count(gs, .Plank) - planks, 300)
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+    for y in 60 ..< 69 do for x in 40 ..= 44 {
+        idx := grid_idx(x, y)
+        below := grid_idx(x, y + 1)
+        if gs.world.items[idx] != .None && gs.world.items[below] == .None {
+            testing.expect(t, false, "a pile still hangs in the air")
+        }
+    }
+    b := barrel_at(gs, LEVEL_SURFACE, coffer)
+    testing.expect(t, b != nil && b.slots[0].item == .Sword, "the tithe is not a ground item")
+    testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
+}
