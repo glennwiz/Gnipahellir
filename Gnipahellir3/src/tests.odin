@@ -14294,7 +14294,7 @@ a_den_with_a_hole_in_its_floor_mends_it_before_it_hoards :: proc(t: ^testing.T) 
     e := &gs.enemies.data[id]
     F := DD_ANCHOR + {0, 1}
     set_tile(&gs.world, int(F.x), int(F.y), .Void)
-    T, found := den_next_build_tile(e, gs)
+    T, found, _ := den_next_build_tile(e, gs)
     testing.expect(t, found, "the hole is an open slot")
     testing.expect_value(t, T, F)
 }
