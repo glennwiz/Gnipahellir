@@ -51,6 +51,15 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - `sel` returns False if the item is missing; a place after it uses whatever is held
   (a log landed where the altar should be). Check the craft worked.
 - Read `notes` after a place or craft that did nothing: it is the only reason given.
+- Drops fall now. Stone mined over a void falls away, so `harvest` on chamber islands nets
+  zero and strands you with no blocks. Mine the ceiling above your floor, or `quarry` row 105.
+  Check block count before a long `goto`: 50 rows up is 50 blocks.
+- Do not stand a bench on (141,94): Scroll A needs that tile free, and also free of drops.
+- Structures do not block the body sideways, though `solid` in state lists them.
+- `guard` kills Builders by default. To keep an owner alive for a den test, set
+  `sparebuilder`, but keep away: he bites 1 a second, and if he dies beside you he rises as
+  a Draugr that claws 3 on the next frame (ended life 2 of run 5).
+- Do not let flight lapse over an island: 21 tiles is 9 damage. Over void you fall to L0 free.
 
 ## How the game goes
 - 10 HP, no regeneration. Falls kill. Pillar and bridge instead of jumping over voids.
@@ -99,9 +108,16 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Player stopped at (143,93) beside a Green_Cave_Mushroom with no solid tile there.
 - `mine` on a mushroom does nothing, and a block placed in its cell fails silently.
 - Player stood grounded on Void at (88-96,54) on the surface.
-- Drops float where the tile was; a hanging one cannot be reached.
+- Sky drops over a void fall to row 106, reachable only by flight: that Cloud Stone is lost.
 - Bed and other `place` failures can give no note.
 - Vargr digging a Rune_Scroll_Chest_A leaves a `Rune_Coffer` drop (run 4 f27348).
 - Fire Sprites parked 90 s above the altar in Wave_Hunt.
 - A sky tree cut at the base leaves its trunk floating.
 - A surface trunk sat on rock and its base could not be cut, world seed unknown.
+- Builder dens never hold a hoard: he encases a tile, then mines it again 25 frames later, so
+  `stockpiles` never logs (run 5: 0 in about 145k frames). To test a rob, make a pile on the
+  floor yourself. Dens over a void have no floor, so build one first.
+- A smashed altar re-raises at the current tier: after ritual A it needs the Gold foundation.
+- Scroll A does not spawn if (141,94) holds a tile or a pile, and says nothing.
+- A Builder can dig through the pond bed and drain it by frame 4000 (run 5 life 3).
+- Den grudges hold one at a time, so a second rob before the first is due starts no timer.

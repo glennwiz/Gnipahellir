@@ -13,10 +13,12 @@ def p1():
     log(trees,fl,'water',wat)
     tw=sorted([q for q in trees if wat+3<q<88],reverse=True)
     for x in tw:
-        if b.count('Wood_Log')>=30: break
+        if b.count('Wood_Log')>=16 or abs(x-b.pos()[0])>45: break
         for f in [q for q in fl if x<q<b.pos()[0]]: b.walkx(f,limit=40)
         b.chop(x,x+2)
-    if b.count('Wood_Log')<10: raise Exception('logs')
+    for f in (84,):
+        pass
+    if b.count('Wood_Log')<7: raise Exception('logs')
     b.st()
     for i in range(40):
         if b.walkx(95,limit=60): break
@@ -35,6 +37,6 @@ def p1():
     assert b.t(98,61)=='Crafting_Bench'
     b.a(2); b.craft('Fire_Wand'); b.craft('Potion_Health'); b.a(2,craft='Plank'); b.st()
     assert b.count('Fire_Wand')==1
-    b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.craft('Tree_Grower',6); b.st()
+    b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.craft('Tree_Grower',3); b.st()
 if __name__=='__main__':
     newgame(); p1()

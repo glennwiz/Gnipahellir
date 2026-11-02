@@ -274,7 +274,7 @@ class B:
         col,y=s.pos()
         it=s.stack()
         if it is None or s.count(it)<n: log('no blocks'); return False
-        for r in range(y-2,y-3-n,-1):
+        for r in range(y-2,y-2-n,-1):
             if s.solid(col,r) and not s.dig(col,r): log('pillar head',col,r,s.t(col,r)); return False
         if s.solid(col,y-3-n): n=1 if not s.solid(col,y-3) else 0
         if n==0: log('pillar blocked'); return False
@@ -376,6 +376,11 @@ class B:
             for ty in (y,y+1):
                 if s.path(x,ty,True,True) is not None:
                     ok=s.goto(x,ty,maxrepl=6); break
+            if ok and s.t(x,y)!=nm and s.count(drop.get(nm,nm))<=before:
+                # drops fall now: follow the pile down the column
+                s.a(int(3*12)); s.ingest(s.g.st(max(0,x-2),y,5,24))
+                pile=[i for i in s.r['items'] if i['item']==drop.get(nm,nm) and i['x']==x and i['y']>=y]
+                if pile: s.goto(x,pile[0]['y'],maxrepl=4); s.a(3)
             if not ok or s.t(x,y)==nm or (nm not in('Cloud',) and s.count(drop.get(nm,nm))<=before):
                 # dropped item might be above: try once
                 bad.add((x,y)); log('harvest miss',nm,(x,y),s.pos())
