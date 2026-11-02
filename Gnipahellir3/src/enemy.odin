@@ -2042,7 +2042,7 @@ update_den_revenge :: proc(gs: ^Game_State) {
         return
     }
     entity_map_clear(world, enemy_entity_id(r.owner), builder_tile(owner))
-    enemy_free(store, r.owner)
+    enemy_free(store, r.owner)   // bare: the store may be another level's, despawn_enemy only knows gs.enemies
     wave_trigger(gs, .Underground, DEN_REVENGE_PARTY)
     notify(gs, "The builder you robbed has found friends!")
     log_action(gs, "Builder#%d leaves his den at (%d,%d) as a raider", r.owner, r.anchor.x, r.anchor.y)

@@ -3668,7 +3668,9 @@ loading_a_save_resets_the_transient_raid_director :: proc(t: ^testing.T) {
     gs.raid = {warning_active = true, target = T, warning_timer = 5, pressure = 12}
     spawn_tile_fx(gs, .Raid_Rumble, T, RAID_WARNING_TIME, {205, 55, 24, 255})
 
+    gs.den_revenge = {active = true, timer = 5}
     testing.expect(t, load_game_from(gs, path), "save loads")
+    testing.expect(t, !gs.den_revenge.active, "a grudge belongs to the session that made it")
     testing.expect_value(t, gs.raid, Raid_State{})
     for f in gs.tile_fx.data do if f.active && f.kind == .Raid_Rumble {
         testing.expect(t, false, "no rumble telegraph may outlive its director across a load")
@@ -9386,7 +9388,9 @@ a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
 	testing.expect(t, os.write_entire_file(path, buf) == nil, "wrote a synthetic v23 save")
 
 	gs := test_state(); defer free(gs)
+	gs.den_revenge = {active = true, timer = 5}
 	testing.expect(t, load_game_from(gs, path), "a v23 save should still load")
+	testing.expect(t, !gs.den_revenge.active, "a grudge belongs to the session that made it")
 
 	testing.expect_value(t, gs.level_index, LEVEL_CAVE2)
 	testing.expect_value(t, gs.player.hp, 7)
@@ -10813,6 +10817,7 @@ den_robbery_fixture :: proc(gs: ^Game_State) -> (oi: int, a: [2]i32) {
     gs.enemies = {}
     gs.wave    = {}
     gs.level_index = LEVEL_SURFACE
+    for &c in gs.world.entity_map do c = INVALID_ENTITY   // test_state's builders leave marks
     spawn_builder(gs, 60)
     oi = 0
     a = {60, 96}
@@ -10908,6 +10913,7 @@ a_grudge_from_a_deep_cave_waits_for_the_surface_and_clears_his_slot :: proc(t: ^
     // He lives in a level that is stashed by the time it comes due.
     gs.den_revenge.level = LEVEL_CAVE2
     gs.levels.enemies[LEVEL_CAVE2] = gs.enemies
+    gs.levels.worlds[LEVEL_CAVE2].entity_map = gs.world.entity_map
     gs.enemies = {}
     gs.den_revenge.timer = 0
 
@@ -10918,7 +10924,65 @@ a_grudge_from_a_deep_cave_waits_for_the_surface_and_clears_his_slot :: proc(t: ^
     gs.level_index = LEVEL_SURFACE
     den_tick_directors(gs, 1)
     testing.expect(t, !gs.levels.enemies[LEVEL_CAVE2].active[oi], "the stashed owner has left")
+    gone := enemy_entity_id(oi)
+    for id in gs.levels.worlds[LEVEL_CAVE2].entity_map do testing.expect(t, id != gone, "no stale mark in his level's map")
     testing.expect(t, gs.wave.warning_active, "and the wave is on its way")
+}
+
+@(test)
+a_second_robbery_never_resets_the_first_grudge :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+
+    spawn_builder(gs, 120)
+    b2 := &gs.enemies.data[1].builder
+    b2.anchor, b2.den_built, b2.goal = {120, 96}, true, .Fetch_Mineral
+
+    den_rob(gs, a)
+    den_tick_directors(gs, 100)
+    timer := gs.den_revenge.timer
+    den_rob(gs, b2.anchor)
+
+    testing.expect_value(t, gs.den_revenge.owner, oi)
+    testing.expect_value(t, gs.den_revenge.anchor, a)
+    testing.expect_value(t, gs.den_revenge.timer, timer)
+}
+
+@(test)
+a_due_grudge_waits_behind_a_pending_scripted_wave :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+    den_rob(gs, a)
+    gs.den_revenge.timer = 0
+
+    wave_trigger(gs, .Air)
+    update_den_revenge(gs)
+    testing.expect_value(t, gs.wave.pending_kind, Wave_Kind.Air)
+    testing.expect_value(t, gs.wave.pending_party, 0)
+    testing.expect(t, gs.den_revenge.active, "the grudge keeps waiting")
+    testing.expect(t, gs.enemies.active[oi], "and the owner stays home meanwhile")
+}
+
+@(test)
+a_new_builder_in_the_slot_is_not_the_one_you_robbed :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+    den_rob(gs, a)
+
+    gs.enemies.data[oi].builder.anchor = {120, 96}
+    gs.den_revenge.timer = 0
+    den_tick_directors(gs, int(WAVE_WARNING_TIME) + 2)
+
+    testing.expect(t, gs.enemies.active[oi], "an innocent builder stays")
+    testing.expect_value(t, gs.enemies.data[oi].kind, Enemy_Kind.Builder)
+    testing.expect(t, !gs.wave.warning_active && !gs.wave.pending, "and no wave comes")
+    testing.expect_value(t, wave_count_kind(gs, .Raider), 0)
 }
 
 // The whole loop in the real game order on the real world: robbed, due, and the
