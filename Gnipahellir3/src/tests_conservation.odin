@@ -69,6 +69,7 @@ fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     for sd in gs.world.sim_data {
         if sd.store_count > 0 do tot[sd.store_item] += int(sd.store_count)
         if sd.in_count > 0 do tot[sd.in_item] += int(sd.in_count)
+        tot[FUEL_ITEM] += int(sd.fuel_count)
     }
     for s in gs.player.inventory.slots {
         if s.item != .None && s.count > 0 do tot[s.item] += s.count
@@ -142,8 +143,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [7]int
-    action_names := [7]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls"}
+    viol_by: [9]int
+    action_names := [9]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back"}
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -195,8 +196,10 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         before: [Item]int
         placed_at:  [2]int
         placed_old: Tile_Type
+        furnace_at:  [2]int  // the furnace a smelter action borrows, and what stood there
+        furnace_old: Tile_Type
 
-        action := fz_range(&rng, 0, 6)
+        action := fz_range(&rng, 0, 8)
         switch action {
         case 0:
             name = "pickup"
@@ -294,6 +297,26 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             }
             before = fuzz_ledger(gs)
             despawn_enemy(gs, id)
+
+        case 7, 8:
+            // Moves between the bag and the furnace: only ever nothing lost.
+            name = action_names[action]
+            furnace_at  = {px + fz_range(&rng, -2, 2), py + fz_range(&rng, -2, 2)}
+            furnace_old = get_tile(&gs.world, furnace_at.x, furnace_at.y)
+            if !in_bounds(furnace_at.x, furnace_at.y) do continue
+            set_tile(&gs.world, furnace_at.x, furnace_at.y, .Smelter)
+            gs.world.sim_data[grid_idx(furnace_at.x, furnace_at.y)] = {fuel_count = u8(fz_range(&rng, 0, MAX_STACK))}
+            T := [2]i32{i32(furnace_at.x), i32(furnace_at.y)}
+            before = fuzz_ledger(gs)
+            if action == 7 {
+                eq_push(&gs.events, Event{
+                    type = .Smelter_Feed, tile = T,
+                    payload = {int_val = i32(fz_range(&rng, 0, MAX_INVENTORY - 1))},
+                    count = i32(fz_range(&rng, 0, MAX_STACK)),
+                })
+            } else {
+                eq_push(&gs.events, Event{type = .Smelter_Withdraw_Fuel, tile = T})
+            }
         }
 
         process_events(gs)
@@ -302,6 +325,10 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             gs.frame += 1
         }
         after := fuzz_ledger(gs)
+        if action >= 7 {  // the arena gets its tile back; totals may move freely here
+            set_tile(&gs.world, furnace_at.x, furnace_at.y, furnace_old)
+            gs.world.sim_data[grid_idx(furnace_at.x, furnace_at.y)] = {}
+        }
 
         ok: bool
         if action == 3 {

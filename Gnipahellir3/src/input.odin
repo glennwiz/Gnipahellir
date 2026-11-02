@@ -430,11 +430,7 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.show_smelter   = false
             gs.ui.show_barrel    = false
             gs.ui.show_golem_roster = false
-            gs.ui.drag_item      = .None
-            gs.ui.drag_tray      = false
-            gs.ui.drag_input     = false
-            gs.ui.drag_barrel    = -1
-            gs.ui.drag_void      = false
+            drag_cancel(gs)
         } else {
             // Standing at a station? Its recipes fill the panel; otherwise hand
             // crafting. Scanned fresh here — input runs before station-focus.
@@ -473,11 +469,7 @@ update_input :: proc(gs: ^Game_State) {
             gs.ui.show_golem_roster = false
             gs.ui.show_pixel_editor = false
             gs.debug.item_palette   = false
-            gs.ui.drag_item      = .None
-            gs.ui.drag_tray      = false
-            gs.ui.drag_input     = false
-            gs.ui.drag_barrel    = -1
-            gs.ui.drag_void      = false
+            drag_cancel(gs)
         } else {
             gs.ui.show_menu = true
         }
@@ -582,6 +574,7 @@ update_input :: proc(gs: ^Game_State) {
                 }
             }
         }
+        smelter_fuel_grab(gs)
         if gs.ui.show_crafting {
             // Click the CRAFT button to forge the shown recipe; else click a
             // recipe card to select it.
@@ -621,6 +614,8 @@ update_input :: proc(gs: ^Game_State) {
                 eq_push(&gs.events, Event{type = .Smelter_Withdraw, tile = gs.ui.smelter_tile})
             }
             gs.ui.drag_input = false
+        } else if gs.ui.drag_fuel {
+            smelter_fuel_drop(gs)
         } else if gs.ui.drag_barrel >= 0 {
             // Dragging a container item out — drop it on the bag to withdraw it.
             if cursor_in_window(gs, .Inventory) {
@@ -977,4 +972,35 @@ update_snapshots_input :: proc(gs: ^Game_State) {
             }
         }
     }
+}
+
+// Lets go of whatever the hand is dragging, back where it came from.
+drag_cancel :: proc(gs: ^Game_State) {
+    gs.ui.drag_item   = .None
+    gs.ui.drag_tray   = false
+    gs.ui.drag_input  = false
+    gs.ui.drag_fuel   = false
+    gs.ui.drag_barrel = -1
+    gs.ui.drag_void   = false
+}
+
+// Grabbing the smelter FUEL slot starts a drag to pull the wood back out.
+smelter_fuel_grab :: proc(gs: ^Game_State) {
+    if !gs.ui.show_smelter || gs.ui.drag_item != .None do return
+    fx, fy := smelter_fuel_rect(gs)
+    mx := i32(gs.input.mouse_screen.x)
+    my := i32(gs.input.mouse_screen.y)
+    if mx < fx || mx >= fx + SLOT_PX || my < fy || my >= fy + SLOT_PX do return
+    if gs.world.sim_data[grid_idx(int(gs.ui.smelter_tile.x), int(gs.ui.smelter_tile.y))].fuel_count > 0 {
+        gs.ui.drag_item = FUEL_ITEM
+        gs.ui.drag_fuel = true
+    }
+}
+
+// Dropped on the bag, or clicked in place, the wood comes out.
+smelter_fuel_drop :: proc(gs: ^Game_State) {
+    if cursor_in_window(gs, .Inventory) || cursor_in_window(gs, .Smelter) {
+        eq_push(&gs.events, Event{type = .Smelter_Withdraw_Fuel, tile = gs.ui.smelter_tile})
+    }
+    gs.ui.drag_fuel = false
 }

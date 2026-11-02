@@ -34,7 +34,8 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Do not path through your own altar, bench or floor.
 - Before a fight, check line of sight: fire orbs into stone do nothing while a
   Builder bites round the corner.
-- `feed` takes the whole stack and cannot be undone: 20 iron jammed a smelter for gold.
+- `feed` takes the whole stack unless `count` says less: 20 iron jammed a smelter for gold.
+  `withdraw` and `withdraw_fuel` undo it; `smelter.fuel` in the window shows the wood.
 - `enemies` lists only what is inside the requested view, so ask for a wide view.
 - Warp does nothing on level 0, chamber included ("Already on the surface"). Check it
   moved you before relying on it: life 1 of run 4 walked into the shaft and fell 21 tiles.
@@ -55,7 +56,8 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
   zero and strands you with no blocks. Mine the ceiling above your floor, or `quarry` row 105.
   Check block count before a long `goto`: 50 rows up is 50 blocks.
 - Do not stand a bench on (141,94): Scroll A needs that tile free, and also free of drops.
-- Structures do not block the body sideways, though `solid` in state lists them.
+- A view's `solid` chars stop the body from every side, `floor` ones hold it up. Structures
+  are floor but not solid; doors are neither.
 - `guard` kills Builders by default. To keep an owner alive for a den test, set
   `sparebuilder`, but keep away: he bites 1 a second, and if he dies beside you he rises as
   a Draugr that claws 3 on the next frame (ended life 2 of run 5).
@@ -83,8 +85,7 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Tree farm: Tree_Grower is 2 planks + 4 leaves, known once you hold planks. Needs Air
   above, so surface or sky, never a Void cave. Set in the grass the walk stays flat.
   Untested for yield: run 4 ended before a harvest, and a Vargr wave smashed 5 growers.
-- An odd ore count jams a smelter on one ore, and the API has no withdraw. Bring even
-  stacks, or a second smelter. Mine frames of `Wood` in cave 2 are spare logs.
+- An odd ore count jams a smelter on one ore. `withdraw` clears it, or feed even stacks. Mine frames of `Wood` in cave 2 are spare logs.
 - Waves on L0 demolish the bench, altar and Scroll A chest while you are away. Altar and
   bench drop at their tile, and the altar must be set back on its base.
 - Potions: bed = 1 Dirt + 1 Plank + 5 seeds, placed on solid; gives 5-6 flowers, then
