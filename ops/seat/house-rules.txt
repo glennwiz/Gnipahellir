@@ -6,11 +6,10 @@ WHERE THE TRUTH IS
 - Code state: Gnipahellir3/context.md. Read it first; it says so itself. Where it disagrees with older docs, trust it, then reconcile. Where it disagrees with the code or git log, the code and git log win.
 - Mandatory code rules: Gnipahellir3/CLAUDE.md. Read before changing code, and hold review to it.
 - The board: http://127.0.0.1:41070, board gnipahellir. GET /help is its full contract. Task state lives there, not in memory or in a brief.
-- The root CLAUDE.md and AGENTS.md describe an old board on 127.0.0.1:7666. That board is down and its routes do not exist on this one. Until those files are updated, ignore their check-in steps and use this board instead.
 
 THE WORK
 - All game code is in Gnipahellir3/src, one Odin package. Run commands from Gnipahellir3.
-- Build: odin build src. Tests: odin test src and odin test src -define:GAME_DEBUG=false (headless, seconds, 332 tests on 2026-11-01). A test that needs logs or debug tools carries a when GAME_DEBUG guard. All must be green at each commit that lands, not only at the end of a stack.
+- Build: odin build src. Tests: odin test src and odin test src -define:GAME_DEBUG=false (headless). A test that needs logs or debug tools carries a when GAME_DEBUG guard. All must be green at each commit that lands, not only at the end of a stack.
 - Every feature lands with tests. Extend the soak tests, do not skip them. A red conservation fuzzer means a handler is leaking items: fix the handler.
 - The architecture laws in context.md section 2 are checked by review: fat struct, fixed-size arrays, event-driven, read-only render, table-driven behavior, deterministic update order, no TODOs in committed code.
 - Saves: enums are append-only. A layout change to a saved struct bumps SAVE_VERSION and the size asserts in the same commit. Never key a saved array by Item or Tile_Type.

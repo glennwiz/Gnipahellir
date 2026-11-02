@@ -51,7 +51,6 @@ Note: 9-15 are Done but on `cards`, not on master.
 - Frame time in a late world is unmeasured; run 3 replay ran about 31-40 fps.
 - Thingvellir: `seat start` needs a working board choice and Linux paths. That
   is a v2dev matter; do not work on it here.
-- root CLAUDE.md, AGENTS.md and the board-monitor skill still describe 7666.
   Register glenn on this board.
 
 ## Run 4

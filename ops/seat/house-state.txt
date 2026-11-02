@@ -1,7 +1,7 @@
 STATE_DATE: 2026-11-01 23:56
 
 State of the house. A dated snapshot: check the board and git log before relying on it.
-- Board gnipahellir on 127.0.0.1:41070. The 7666 board in the root CLAUDE.md is gone; ignore its check-in steps.
+- Board gnipahellir on 127.0.0.1:41070.
 - Code: master at 5624aae. Tests are green. Branch cards holds cards 9-16, not yet merged. Work there lands through the coordinator.
 - Machine: Arch Linux with Odin dev-2026-10. Nothing has been tried on Windows lately.
 - Decisions are in Gnipahellir3/gnipa_project/design_review.md section 6.
