@@ -123,6 +123,5 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Builder dens can hoard, but late: run 6 soaks saw 345 stockpiles in caves (first at minute 8-47,
   3 of 4 seeds) and almost none on the surface, since a haul only lands once the shell is full.
   The 25-frame re-mine is the builder leaving by his own wall, not a Fetch harvest.
-- Scroll A does not spawn if (141,94) holds a tile or a pile, and says nothing.
 - A Builder can dig through the pond bed and drain it by frame 4000 (run 5 life 3).
 - Den grudges hold one at a time, so a second rob before the first is due starts no timer.
