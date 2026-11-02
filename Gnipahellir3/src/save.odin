@@ -24,8 +24,14 @@ SAVE_VERSION :: i32(28)  // v28: MAX_ENEMIES 256 (Glenn's Q5), down from 1024
 // size and silently invalidates old saves.  When this assert fires: bump
 // SAVE_VERSION and update the expected size in the same commit.
 // (save_data_size_probe logs the real number, plus len(Item).)
+// save_data_from_v28 then refuses to compile on the field that changed: replace
+// that one line with a converter from the old bytes, so v28 runs keep loading.
 SAVE_DATA_EXPECTED_SIZE :: 4_048_864
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
+
+// FROZEN: v28 as written to disk, with no live type in it.  Never edit a number.
+SAVE_V28_SIZE      :: 4_048_864
+SAVE_V28_PLAYER_AT :: 3_835_712
 
 // Every older save was written at MAX_ENEMIES 1024, so those files are read
 // through the frozen Save_Data_1024 below, then shrunk (save_data_shrink).  v24,
@@ -208,13 +214,51 @@ save_data_shrink :: proc(old: ^Save_Data_1024) -> ^Save_Data {
     return sd
 }
 
+// One field of a v28 file.  `size` is the frozen byte count, so a live type that
+// grows or shrinks stops this compiling at the line for that field.
+@(private="file")
+v28_take :: proc(to: ^$T, data: []u8, at: int, $size: int) where size_of(T) == size {
+    mem.copy(to, &data[at], size)
+}
+
+// A v28 file by frozen offsets, whatever the live structs have become.
+@(private="file")
+save_data_from_v28 :: proc(data: []u8) -> ^Save_Data {
+    sd := new(Save_Data)
+    sd.version = SAVE_VERSION
+    v28_take(&sd.level_index,  data, 8,                  8)
+    v28_take(&sd.world,        data, 16,                 476_928)
+    v28_take(&sd.levels,       data, 476_944,            3_358_768)
+    v28_take(&sd.player,       data, SAVE_V28_PLAYER_AT, 536)
+    v28_take(&sd.enemies,      data, 3_836_248,          194_824)
+    v28_take(&sd.golems,       data, 4_031_072,          10_944)
+    v28_take(&sd.sim,          data, 4_042_016,          5_896)
+    v28_take(&sd.progression,  data, 4_047_912,          148)
+    v28_take(&sd.dimension,    data, 4_048_064,          104)
+    v28_take(&sd.elapsed_time, data, 4_048_168,          4)
+    v28_take(&sd.frame,        data, 4_048_176,          8)
+    v28_take(&sd.grave,        data, 4_048_184,          96)
+    v28_take(&sd.risen,        data, 4_048_280,          576)
+    v28_take(&sd.world_seed,   data, 4_048_856,          4)
+    return sd
+}
+
 // The bytes as a Save_Data if they are a run that can resume, else nil.  Older
-// files are shorter; the caller frees the result.
-save_data_read :: proc(data: []u8) -> ^Save_Data {
-    if len(data) == size_of(Save_Data) {
+// files are shorter; the caller frees the result.  `current` is SAVE_VERSION
+// but for tests, which use it to read a file as the next build will.
+save_data_read :: proc(data: []u8, current := SAVE_VERSION) -> ^Save_Data {
+    file_version: i32
+    if len(data) >= size_of(file_version) do mem.copy(&file_version, raw_data(data), size_of(file_version))
+    if file_version == current && len(data) == size_of(Save_Data) {
         sd := new(Save_Data)
         mem.copy(sd, raw_data(data), len(data))
-        if sd.version == SAVE_VERSION && !sd.player.dead do return sd  // dead runs don't resume
+        if !sd.player.dead do return sd  // dead runs don't resume
+        free(sd)
+        return nil
+    }
+    if file_version == 28 && len(data) == SAVE_V28_SIZE {
+        sd := save_data_from_v28(data)
+        if !sd.player.dead do return sd
         free(sd)
         return nil
     }
