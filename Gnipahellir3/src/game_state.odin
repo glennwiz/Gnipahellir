@@ -397,11 +397,13 @@ Particle :: struct {
     // — the "flew into your inventory" read.  Off = straight ballistic drift.
     homing:   bool,
     target:   [2]f32,
+    shed:     bool,   // a turret's shed pixel, counted in Particle_Store.shed_count
 }
 
 Particle_Store :: struct {
     data:  [MAX_PARTICLES]Particle,
     count: int,
+    shed_count: int,   // of those, live turret shed pixels
 }
 
 // ─── Floating Combat Text ─────────────────────────────────────────────────────

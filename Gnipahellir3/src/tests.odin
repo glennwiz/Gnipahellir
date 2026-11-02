@@ -10661,6 +10661,10 @@ the_rainbow_laser_beam_is_made_of_motes :: proc(t: ^testing.T) {
     LY :: SURFACE_Y - 1
     laser_test_lane(gs, LX, LY)
     set_tile(&gs.world, LX, LY, .Rainbow_Laser)
+    for _ in 0 ..< TURRET_SHED_EVERY {   // count the beam alone
+        if !turret_shed_due(gs, LX, LY) do break
+        gs.frame += 1
+    }
 
     // Nothing in range: a dark turret throws no sparks at all.
     update_sim(gs)

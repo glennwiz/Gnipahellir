@@ -663,3 +663,191 @@ a_builder_digging_free_takes_a_whole_door :: proc(t: ^testing.T) {
     testing.expect_value(t, turret_ground_count(gs, .Door), 1)
     testing.expect_value(t, e.builder.pocket, 0)
 }
+
+// Card 83: on target a turret sheds pixels of its element, one on its beat, and
+// idle it sheds none.  The jet and the beam spawn every frame, so the beat shows
+// as one mote more than an off-beat frame.
+@(test)
+an_active_turret_sheds_its_colour_and_an_idle_one_none :: proc(t: ^testing.T) {
+    for c in turret_heads {
+        gs := turret_test_state()
+        defer free(gs)
+        head_y := tt_build(gs, c)
+        rule   := turret_table[c.tile]
+        for !turret_shed_due(gs, TT_X, head_y) do gs.frame += 1
+        on_beat := gs.frame
+
+        turret_test_run(gs, gs.delta_time)
+        testing.expectf(t, gs.particles.count == 0, "idle %v sheds nothing, got %d", c.tile, gs.particles.count)
+
+        turret_test_enemy(gs, TT_X + 2.5, f32(head_y) + 0.5)
+        gs.frame = on_beat + 1
+        update_sim(gs)
+        off_beat := gs.particles.count
+        // Off the beat only the jet or beam spawns, and neither wears these colours.
+        if !rule.shed.spectrum {
+            for p in gs.particles.data do if p.active {
+                worn := p.color == rule.shed.colors[0] || p.color == rule.shed.colors[1]
+                testing.expectf(t, !worn, "%v's jet wears its shed colour", c.tile)
+            }
+        }
+        gs.particles = {}
+        gs.frame = on_beat
+        update_sim(gs)
+        testing.expectf(t, gs.particles.count == off_beat + 1, "%v on target: one pixel on the beat, got %d after %d",
+            c.tile, gs.particles.count, off_beat)
+
+        if !rule.shed.spectrum {
+            found := false
+            for p in gs.particles.data do if p.active {
+                found = found || p.color == rule.shed.colors[0] || p.color == rule.shed.colors[1]
+            }
+            testing.expectf(t, found, "%v sheds its own colour", c.tile)
+        }
+    }
+}
+
+// Each row reads as its element: embers rise, droplets and grit fall.
+@(test)
+each_turret_sheds_its_element :: proc(t: ^testing.T) {
+    testing.expect(t, turret_table[.Flame_Turret].shed.vel.y < 0, "embers rise")
+    testing.expect(t, turret_table[.Water_Turret].shed.vel.y > 0, "droplets fall")
+    testing.expect(t, turret_table[.Earth_Turret].shed.vel.y > 0, "grit falls")
+    testing.expect(t, turret_table[.Rainbow_Laser].shed.vel.y < 0, "spectrum motes rise")
+
+    gs := turret_test_state()
+    defer free(gs)
+    head := [2]f32{TT_X + 0.5, TT_Y + 0.5}
+    for c in turret_heads {
+        row := turret_table[c.tile].shed
+        first: Particle
+        hues, spots, drifts := false, false, false
+        for frame in 0 ..< 10 * TURRET_SHED_EVERY {
+            gs.frame = u64(frame)
+            gs.particles = {}
+            spawn_turret_shed(gs, TT_X, TT_Y, row)
+            if gs.particles.count == 0 do continue
+            p := gs.particles.data[0]
+            testing.expect_value(t, p.lifetime, row.lifetime)
+            near := abs(p.pos.x - head.x) <= row.spread && abs(p.pos.y - head.y) <= row.spread
+            testing.expectf(t, near, "%v sheds around the head, got %v", c.tile, p.pos)
+            drift := abs(p.vel.x - row.vel.x) <= row.spread && abs(p.vel.y - row.vel.y) <= row.spread
+            testing.expectf(t, drift, "%v sheds at its row's velocity, got %v", c.tile, p.vel)
+            if first.lifetime == 0 do first = p
+            hues  = hues || p.color != first.color
+            spots = spots || p.pos != first.pos
+            drifts = drifts || p.vel != first.vel
+        }
+        testing.expectf(t, hues, "%v sheds more than one colour", c.tile)
+        testing.expectf(t, spots, "%v does not shed from one spot", c.tile)
+        testing.expectf(t, drifts, "%v's pixels stray from one another", c.tile)
+    }
+}
+
+// Each row wears its element, by family, so Glenn can retune the shades: embers
+// are red over green over blue, water is blue on top, earth is a dull brown.
+@(test)
+each_turret_sheds_its_elements_colours :: proc(t: ^testing.T) {
+    flame := turret_table[.Flame_Turret].shed
+    water := turret_table[.Water_Turret].shed
+    earth := turret_table[.Earth_Turret].shed
+    testing.expect(t, !flame.spectrum && !water.spectrum && !earth.spectrum, "only the laser is any hue")
+    for c in flame.colors {
+        testing.expectf(t, c.r > c.g && c.g > c.b, "flame %v is an ember", c)
+    }
+    for c in water.colors {
+        testing.expectf(t, c.b > c.r && c.b > c.g, "water %v is blue", c)
+    }
+    for c in earth.colors {
+        hi := max(c.r, c.g, c.b)
+        lo := min(c.r, c.g, c.b)
+        testing.expectf(t, c.r >= c.g && c.g >= c.b && hi - lo <= 80, "earth %v is a dull brown", c)
+    }
+
+    laser := turret_table[.Rainbow_Laser].shed
+    testing.expect(t, laser.spectrum, "the laser sheds the spectrum")
+    gs := turret_test_state()
+    defer free(gs)
+    red, green, blue := false, false, false
+    for frame in 0 ..< 200 * TURRET_SHED_EVERY {
+        gs.frame = u64(frame)
+        gs.particles = {}
+        spawn_turret_shed(gs, TT_X, TT_Y, laser)
+        if gs.particles.count == 0 do continue
+        c := gs.particles.data[0].color
+        red   = red   || (c.r > c.g && c.r > c.b)
+        green = green || (c.g > c.r && c.g > c.b)
+        blue  = blue  || (c.b > c.r && c.b > c.g)
+    }
+    testing.expect(t, red && green && blue, "the motes run across the spectrum")
+}
+
+// A row of turrets takes turns, so it flickers and does not pulse.
+@(test)
+a_row_of_turrets_sheds_in_turn :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    due := 0
+    for x in 0 ..< TURRET_SHED_EVERY do if turret_shed_due(gs, x, 10) do due += 1
+    testing.expect_value(t, due, 1)
+    other_row := false
+    for y in 0 ..< TURRET_SHED_EVERY {
+        other_row = other_row || turret_shed_due(gs, 0, y) != turret_shed_due(gs, 0, 0)
+    }
+    testing.expect(t, other_row, "a stacked turret keeps its own beat")
+}
+
+// Many turrets never fill the store: past the ceiling a shot still finds a
+// real free slot, and the pixels free their count as they die.
+@(test)
+many_turrets_never_starve_the_particle_store :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    gs.delta_time = 1.0/60.0
+    peak := 0
+    for frame in 0 ..< 600 {
+        gs.frame = u64(frame)
+        for x in 0 ..< 180 do spawn_turret_shed(gs, x, 10, turret_table[.Flame_Turret].shed)
+        update_particles(gs)
+        peak = max(peak, gs.particles.shed_count)
+    }
+    testing.expectf(t, peak >= TURRET_SHED_CEILING - 1, "enough turrets reach the ceiling, peak %d", peak)
+
+    // Not the constant: the store itself must have room.  Shots are what the
+    // ceiling protects, so a third of it held by pixels leaves them the rest.
+    free_slots := 0
+    for p in gs.particles.data do if !p.active do free_slots += 1
+    testing.expectf(t, free_slots >= MAX_PARTICLES / 2, "shots keep the store, %d slots free", free_slots)
+    before := gs.particles.count
+    spawn_flame_jet(gs, {10, 10}, {12, 10})
+    testing.expect_value(t, gs.particles.count, before + TURRET_JET_MOTES)
+
+    for _ in 0 ..< 120 do update_particles(gs)
+    testing.expect_value(t, gs.particles.shed_count, 0)
+    testing.expect_value(t, gs.particles.count, 0)
+}
+
+// Jets hold far more of the store than pixels do, and must not silence them:
+// a pair of turrets on one target keeps shedding, frame after frame.
+@(test)
+turrets_side_by_side_keep_shedding :: proc(t: ^testing.T) {
+    for tile in ([]Tile_Type{.Water_Turret, .Flame_Turret}) {
+        gs := turret_test_state()
+        defer free(gs)
+        gs.delta_time = 1.0/60.0
+        turret_test_site(gs, TT_X, TT_Y)
+        for dx in 0 ..< 3 do set_tile(&gs.world, TT_X + dx, TT_Y, tile)
+        turret_test_enemy(gs, TT_X + 1.5, TT_Y - 2 + 0.5)
+
+        lowest := max(int)
+        for frame in 0 ..< 480 {
+            gs.frame = u64(frame)
+            update_sim(gs)
+            update_particles(gs)
+            eq_clear(&gs.events)
+            if frame >= 120 do lowest = min(lowest, gs.particles.shed_count)
+        }
+        testing.expectf(t, gs.particles.count > 2 * TURRET_SHED_EVERY, "%v jets are running", tile)
+        testing.expectf(t, lowest > 0, "%v keeps shedding beside its neighbours, lowest %d", tile, lowest)
+    }
+}

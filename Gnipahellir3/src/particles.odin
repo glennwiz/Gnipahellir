@@ -10,12 +10,13 @@ import "core:math"
 //  waits invisibly, which is what turns a wand burst into a stream.
 //  Deterministic jitter comes from whash, not the raylib RNG.
 
-spawn_particle :: proc(ps: ^Particle_Store, pos, vel: [2]f32, color: rl.Color, lifetime: f32, delay: f32 = 0, homing := false, target: [2]f32 = {}) {
+spawn_particle :: proc(ps: ^Particle_Store, pos, vel: [2]f32, color: rl.Color, lifetime: f32, delay: f32 = 0, homing := false, target: [2]f32 = {}, shed := false) {
     for i in 0 ..< MAX_PARTICLES {
         p := &ps.data[i]
         if p.active { continue }
-        p^ = {pos = pos, vel = vel, color = color, lifetime = lifetime, age = -delay, active = true, homing = homing, target = target}
+        p^ = {pos = pos, vel = vel, color = color, lifetime = lifetime, age = -delay, active = true, homing = homing, target = target, shed = shed}
         ps.count += 1
+        if shed do ps.shed_count += 1
         return
     }
     // Store full: the spark is lost, nobody mourns it.
@@ -356,6 +357,39 @@ spawn_water_jet :: proc(gs: ^Game_State, from, to: [2]f32) {
     spawn_turret_jet(gs, from, to, {70, 150, 240, 255}, {190, 230, 255, 255})
 }
 
+// A turret on target sheds pixels of its element around the head, slowly enough
+// to read as a loose pixel and not a spray.  One row per turret, in turret_table.
+// Called from the turret's tick (sim), never from render.  First guesses for
+// Glenn to tune.  CEILING is what keeps many turrets from starving the store:
+// it counts shed pixels alone, so the room above it stays for shots and blood,
+// and a pair of jets cannot use it up and silence the shed.
+TURRET_SHED_EVERY   :: 6                   // frames between pixels, per turret
+TURRET_SHED_CEILING :: MAX_PARTICLES / 3   // live shed pixels, all turrets together
+
+Turret_Shed :: struct {
+    colors:   [2]rl.Color,
+    spectrum: bool,        // any hue, in place of colors
+    vel:      [2]f32,      // tiles/s: embers rise, droplets fall
+    spread:   f32,         // how far from the head a pixel starts, and how much vel strays
+    lifetime: f32,
+}
+
+// Turrets take turns by position, so a row of them flickers and does not pulse.
+turret_shed_due :: proc(gs: ^Game_State, x, y: int) -> bool {
+    return (u32(gs.frame) + u32(x)*5 + u32(y)*3) % TURRET_SHED_EVERY == 0
+}
+
+spawn_turret_shed :: proc(gs: ^Game_State, x, y: int, s: Turret_Shed) {
+    if !turret_shed_due(gs, x, y) || gs.particles.shed_count >= TURRET_SHED_CEILING do return
+    seed := u32(gs.frame)*47 + u32(x)*911 + u32(y)*131
+    pick := whash(seed + 4) >> 16   // the low bits only echo the seed's parity
+    col  := s.colors[pick % 2]
+    if s.spectrum do col = rl.ColorFromHSV(f32(pick % 360), 0.85, 1.0)
+    pos  := [2]f32{f32(x) + 0.5 + jitter(seed, s.spread), f32(y) + 0.5 + jitter(seed + 1, s.spread)}
+    vel  := s.vel + {jitter(seed + 2, s.spread), jitter(seed + 3, s.spread)}
+    spawn_particle(&gs.particles, pos, vel, col, s.lifetime, shed = true)
+}
+
 // An Earth Turret's blow lands: a burst of grit that drops, heavy where the
 // laser's ring is light.
 spawn_earth_impact :: proc(gs: ^Game_State, at: [2]f32) {
@@ -436,6 +470,7 @@ update_particles :: proc(gs: ^Game_State) {
         if p.age >= p.lifetime {
             p.active = false
             gs.particles.count = max(0, gs.particles.count - 1)
+            if p.shed do gs.particles.shed_count = max(0, gs.particles.shed_count - 1)
             continue
         }
         if p.age >= 0 {
