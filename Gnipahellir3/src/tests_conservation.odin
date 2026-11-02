@@ -36,7 +36,7 @@ fuzz_pool := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Iron_Ore, .Silver_Ore, .Fl
 // The subset the place action wields on purpose (the rest of the pool still
 // reaches placement through the random-hand path).
 @(rodata)
-fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Turret_Pillar, .Flame_Head, .Water_Head}
+fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Turret_Pillar, .Flame_Head, .Water_Head, .Earth_Head}
 
 // Own xorshift so the stream never entangles with gs.loot_rng.
 @(private = "file")

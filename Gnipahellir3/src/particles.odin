@@ -356,6 +356,17 @@ spawn_water_jet :: proc(gs: ^Game_State, from, to: [2]f32) {
     spawn_turret_jet(gs, from, to, {70, 150, 240, 255}, {190, 230, 255, 255})
 }
 
+// An Earth Turret's blow lands: a burst of grit that drops, heavy where the
+// laser's ring is light.
+spawn_earth_impact :: proc(gs: ^Game_State, at: [2]f32) {
+    for i in 0 ..< 10 {
+        seed := u32(gs.frame)*29 + u32(i)*613
+        vel  := [2]f32{jitter(seed, 5), -2 + jitter(seed + 1, 4)}
+        col  := i % 2 == 0 ? rl.Color{130, 100, 70, 255} : rl.Color{176, 144, 106, 255}
+        spawn_particle(&gs.particles, at, vel, col, 0.4 + jitter(seed + 2, 0.1))
+    }
+}
+
 // A worker's temporary Quick Clay foothold dissolving after use: a few damp
 // motes sag downward and fade, reading as melting away rather than breaking.
 spawn_clay_drip :: proc(gs: ^Game_State, T: [2]i32) {

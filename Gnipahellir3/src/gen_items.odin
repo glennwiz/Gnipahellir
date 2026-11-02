@@ -115,6 +115,7 @@ item_table := [Item]Item_Info{
 	.Turret_Pillar = { "Turret Pillar", {120, 124, 138, 255}, .Turret_Pillar, "The stand every turret is built on. Set it down, then place a turret head on top and the two fuse. Reclaiming either part takes the whole turret apart and returns every piece." },
 	.Flame_Head = { "Flame Head", {235, 110, 30, 255}, .Flame_Turret, "Place it on top of a Turret Pillar and they fuse into a Flame Turret: a short jet that sets the nearest enemy it can see alight, no fuel and no aiming. Turrets fire past other turrets, never through walls." },
 	.Water_Head = { "Water Head", {50, 120, 200, 255}, .Water_Turret, "Place it on top of a Turret Pillar and they fuse into a Water Turret: a hard jet that slows the nearest enemy it can see and does it little harm. Turrets fire past other turrets, never through walls." },
+	.Earth_Head = { "Earth Head", {130, 100, 70, 255}, .Earth_Turret, "Place it on top of a Turret Pillar and they fuse into an Earth Turret: one slow, heavy blow on the nearest enemy it can see. Turrets fire past other turrets, never through walls." },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.

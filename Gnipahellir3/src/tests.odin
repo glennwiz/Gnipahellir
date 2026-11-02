@@ -13206,3 +13206,38 @@ a_water_head_fuses_like_a_flame_head :: proc(t: ^testing.T) {
     testing.expect_value(t, turret_ground_count(gs, .Water_Head), 1)
     testing.expect_value(t, turret_ground_count(gs, .Turret_Pillar), 1)
 }
+
+@(test)
+an_earth_turret_lands_one_slow_heavy_blow :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = 1.0 / 60.0
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    HY :: PY - 1
+    turret_test_site(gs, PX, PY)
+    turret_test_place(gs, .Earth_Head, PX, PY)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY), Tile_Type.Air)
+    turret_test_place(gs, .Turret_Pillar, PX, PY)
+    turret_test_place(gs, .Earth_Head, PX, HY)
+    testing.expect_value(t, get_tile(&gs.world, PX, HY), Tile_Type.Earth_Turret)
+
+    // Charged: one blow at once, nothing more until the long cooldown is up.
+    gs.world.sim_data[grid_idx(PX, HY)].growth_timer = EARTH_COOLDOWN
+    id := turret_test_enemy(gs, PX + 3.5, f32(HY) + 0.5)
+    turret_test_run(gs, EARTH_COOLDOWN - 0.1)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50 - EARTH_DAMAGE)
+    testing.expect_value(t, gs.enemy_status[id], Enemy_Status{})  // no fire, no slow
+    turret_test_run(gs, 0.2)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50 - 2*EARTH_DAMAGE)
+
+    // Heaviest single hit of the turrets, and still under the laser over time.
+    testing.expect(t, EARTH_DAMAGE > LASER_DAMAGE, "a heavy hit")
+    testing.expect(t, f32(EARTH_DAMAGE) / EARTH_COOLDOWN < f32(LASER_DAMAGE) / LASER_COOLDOWN, "under the laser")
+
+    // Walled off, it holds the blow.
+    set_tile(&gs.world, PX + 2, HY, .Stone)
+    hp := gs.enemies.data[id].hp
+    turret_test_run(gs, EARTH_COOLDOWN + 0.5)
+    testing.expect_value(t, gs.enemies.data[id].hp, hp)
+}

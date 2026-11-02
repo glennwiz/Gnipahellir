@@ -20,6 +20,7 @@ Turret_Head_Case :: struct {
 turret_heads := [?]Turret_Head_Case{
     {.Flame_Turret, .Flame_Head, .Iron_Bar, 1},
     {.Water_Turret, .Water_Head, .Iron_Bar, 1},
+    {.Earth_Turret, .Earth_Head, .Iron_Bar, 1},
     // <turret-heads>
 }
 
@@ -407,6 +408,12 @@ water_hits_once_a_cooldown_and_stays_weak :: proc(t: ^testing.T) {
     testing.expect(t, WATER_RANGE < LASER_RANGE, "under the laser's reach")
     testing.expect(t, WATER_SLOW > 0 && WATER_SLOW < 1, "a slow, not a stop")
     testing.expect(t, WATER_SLOW_TIME > WATER_COOLDOWN, "a jet keeps its target slowed")
+}
+
+@(test)
+earth_keeps_its_place_in_the_line :: proc(t: ^testing.T) {
+    testing.expect(t, EARTH_RANGE < LASER_RANGE, "under the laser's reach")
+    testing.expect(t, EARTH_RANGE > FLAME_RANGE, "a thrower, not a jet")
 }
 
 // <turret-tests>

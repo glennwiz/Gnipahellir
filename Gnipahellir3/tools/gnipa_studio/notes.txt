@@ -200,3 +200,5 @@ glow	Turret_Pillar	cold iron until a head wakes it
 glow	Flame_Turret	banked coals
 icon	Water_Head	Water Head - the same iron cup, brimming.
 glow	Water_Turret	deep pool
+icon	Earth_Head	Earth Head - the same iron cup, a boulder sitting in it.
+glow	Earth_Turret	warm clay

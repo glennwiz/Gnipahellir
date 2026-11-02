@@ -109,6 +109,7 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Turret_Pillar = { "Turret Pillar", {.Solid, .Mineable, .Placeable}, {120, 124, 138, 255}, 0, 0, .Turret_Pillar, 0 },
 	.Flame_Turret = { "Flame Turret", {.Solid, .Mineable, .Placeable}, {200, 90, 40, 255}, 0, 0, .Flame_Head, 0 },
 	.Water_Turret = { "Water Turret", {.Solid, .Mineable, .Placeable}, {50, 120, 200, 255}, 0, 0, .Water_Head, 0 },
+	.Earth_Turret = { "Earth Turret", {.Solid, .Mineable, .Placeable}, {130, 100, 70, 255}, 0, 0, .Earth_Head, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -198,6 +199,7 @@ is_structure_tile := #partial [Tile_Type]bool{
 	.Turret_Pillar = true,
 	.Flame_Turret = true,
 	.Water_Turret = true,
+	.Earth_Turret = true,
 }
 
 // Stations read as magical in-world: a dark base, a breathing glow in the
@@ -250,4 +252,6 @@ station_glow := #partial [Tile_Type]rl.Color{
 	.Flame_Turret = {255, 120, 40, 255},
 	// deep pool
 	.Water_Turret = {60, 150, 255, 255},
+	// warm clay
+	.Earth_Turret = {190, 140, 90, 255},
 }

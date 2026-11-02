@@ -42,6 +42,12 @@ WATER_DAMAGE    :: 1
 WATER_SLOW_TIME :: f32(1.5)
 WATER_SLOW      :: f32(0.5)
 
+// Earth, first guesses for Glenn to tune: the hardest single blow of any
+// turret, far apart, so its 1.7 a second stays under the laser's 4.
+EARTH_RANGE    :: f32(7)
+EARTH_COOLDOWN :: f32(3)
+EARTH_DAMAGE   :: 5
+
 // One row per turret head.  pillars is the pattern: how many Turret_Pillar
 // tiles the head must stand on (0 = placed bare, the old laser).  A new turret
 // is a row here, a tile, a head item and a recipe.  Applied on the cooldown:
@@ -53,7 +59,8 @@ Turret_Rule :: struct {
     damage:    int,
     burn_time: f32,
     slow_time: f32,
-    jet:       proc(gs: ^Game_State, from, to: [2]f32),  // the look, every frame on target
+    jet:       proc(gs: ^Game_State, from, to: [2]f32),  // the look, every frame on target (optional)
+    impact:    proc(gs: ^Game_State, at: [2]f32),        // the look of a shot landing (optional)
     refusal:   string,                                   // the note when the pattern is wrong
 }
 
@@ -68,6 +75,10 @@ turret_table := #partial [Tile_Type]Turret_Rule{
         pillars = 1, range = WATER_RANGE, cooldown = WATER_COOLDOWN, damage = WATER_DAMAGE,
         slow_time = WATER_SLOW_TIME,
         jet = spawn_water_jet, refusal = "A Water Head goes on top of a Turret Pillar",
+    },
+    .Earth_Turret  = {
+        pillars = 1, range = EARTH_RANGE, cooldown = EARTH_COOLDOWN, damage = EARTH_DAMAGE,
+        impact = spawn_earth_impact, refusal = "An Earth Head goes on top of a Turret Pillar",
     },
 }
 
@@ -311,10 +322,12 @@ tick_turret :: proc(gs: ^Game_State, x, y: int) {
 
     e    := &gs.enemies.data[ei]
     size := enemy_body_size(e.kind)
-    rule.jet(gs, {f32(x) + 0.5, f32(y) + 0.5}, {e.pos.x + size.x*0.5, e.pos.y + size.y*0.5})
+    hit  := [2]f32{e.pos.x + size.x*0.5, e.pos.y + size.y*0.5}
+    if rule.jet != nil do rule.jet(gs, {f32(x) + 0.5, f32(y) + 0.5}, hit)
 
     if sd.growth_timer < rule.cooldown do return
     sd.growth_timer = 0
+    if rule.impact != nil do rule.impact(gs, hit)
     log_action(gs, "%v at (%d,%d) fires on Enemy#%d", gs.world.terrain[grid_idx(x, y)], x, y, ei)
     if rule.burn_time > 0 {
         gs.enemy_status[ei].burn = rule.burn_time
@@ -381,6 +394,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Rainbow_Laser = tick_rainbow_laser,
     .Flame_Turret  = tick_turret,
     .Water_Turret  = tick_turret,
+    .Earth_Turret  = tick_turret,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
