@@ -5644,11 +5644,13 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     touched:   [GRID_W * GRID_H]u8    // 1 = last event mined, 2 = last placed
     last_flip: [GRID_W * GRID_H]int   // frame of the last reversal
     rapid_run: [GRID_W * GRID_H]u16   // consecutive reversals < RAPID frames apart
+    churn:     [GRID_W * GRID_H]u16   // every carve and place, slow ones too
     RAPID :: 20 * 60                  // reversals under 20 s apart = looping
 
     worst := u16(0)
     worst_idx := 0
     SOAK_MINUTES :: 15
+    MAX_TILE_CHURN :: 40
     for frame in 0 ..< SOAK_MINUTES * 3600 {
         update_enemies(gs)
         for k in 0 ..< gs.events.size {
@@ -5663,11 +5665,11 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
                     if rapid_run[idx] > worst { worst = rapid_run[idx]; worst_idx = idx }
                 }
                 touched[idx] = mark
+                churn[idx] += 1
             }
         }
         eq_clear(&gs.events)
     }
-
     // The trip clock bounds a doomed objective to ~60 s of churn and the
     // avoid list stops retries, so one cursed spot can rack up ~20 rapid
     // reversals before it is abandoned — but never the unbounded 146+ the
@@ -5675,6 +5677,15 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     log.infof("builder soak: worst rapid reversal run = %d at (%d,%d)",
         worst, worst_idx % GRID_W, worst_idx / GRID_W)
     testing.expect(t, worst < 32, "rapid carve/place cycling beyond one trip budget means a builder is looping again")
+
+    // Run 3: tiles carved and laid back 10-12 times each, because a climb in
+    // the plan needed support an earlier climb in that plan had carved.  This
+    // soak put 66 touches on (11,89) before that.  Slow commute flips are in
+    // this count on purpose: they never trip the rapid bound above.
+    top, top_idx := u16(0), 0
+    for c, i in churn do if c > top { top, top_idx = c, i }
+    log.infof("builder soak: most touched tile = %d at (%d,%d)", top, top_idx % GRID_W, top_idx / GRID_W)
+    testing.expect(t, top <= MAX_TILE_CHURN, "one tile carved and laid back this often means plans undo themselves")
 }
 
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
