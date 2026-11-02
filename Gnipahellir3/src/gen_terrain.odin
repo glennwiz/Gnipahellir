@@ -106,6 +106,8 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Rainbow_Laser = { "Rainbow Laser", {.Solid, .Mineable, .Placeable}, {170, 150, 210, 255}, 0, 0, .Rainbow_Laser, 0 },
 	.Rune_Stone = { "Rune Stone", {.Solid}, {112, 116, 130, 255}, 0, 0, .None, 0 },
 	.Scoria = { "Scoria", {.Solid, .Mineable}, {74, 62, 60, 255}, 0, 0, .None, 0 },
+	.Turret_Pillar = { "Turret Pillar", {.Solid, .Mineable, .Placeable}, {120, 124, 138, 255}, 0, 0, .Turret_Pillar, 0 },
+	.Flame_Turret = { "Flame Turret", {.Solid, .Mineable, .Placeable}, {200, 90, 40, 255}, 0, 0, .Flame_Head, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -192,6 +194,8 @@ is_structure_tile := #partial [Tile_Type]bool{
 	// A turret is equipment, not scenery: the pick reclaims it, and the wave
 	// hunters count it among the structures worth smashing.
 	.Rainbow_Laser = true,
+	.Turret_Pillar = true,
+	.Flame_Turret = true,
 }
 
 // Stations read as magical in-world: a dark base, a breathing glow in the
@@ -238,4 +242,8 @@ station_glow := #partial [Tile_Type]rl.Color{
 	.Final_Seal = {200, 40, 80, 255},
 	// prismatic rose - the lens between shots
 	.Rainbow_Laser = {255, 150, 220, 255},
+	// cold iron until a head wakes it
+	.Turret_Pillar = {120, 130, 150, 255},
+	// banked coals
+	.Flame_Turret = {255, 120, 40, 255},
 }

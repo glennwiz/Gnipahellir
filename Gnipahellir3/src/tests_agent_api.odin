@@ -1032,3 +1032,25 @@ agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.agent.cmd, Agent_Command{})
     testing.expect(t, !gs.agent.first)
 }
+
+// The burn only exists if game_update runs its step: the whole frame, not the
+// two procs by hand.
+@(test)
+a_flame_turret_burns_through_the_real_game_update :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.agent.driving = true
+    X :: 60
+    Y :: SURFACE_Y - 1
+    turret_test_site(gs, X, Y)
+    set_tile(&gs.world, X, Y, .Turret_Pillar)
+    set_tile(&gs.world, X, Y - 1, .Flame_Turret)
+    id := turret_test_enemy(gs, X + 2.5, f32(Y) - 0.5)
+    for _ in 0 ..< 90 {
+        gs.delta_time = AGENT_STEP
+        gs.enemies.data[id].pos = {X + 2, f32(Y) - 1}  // held in the jet
+        game_update(gs)
+    }
+    testing.expect(t, gs.enemies.data[id].hp < 50, "game_update ticks the burn")
+}

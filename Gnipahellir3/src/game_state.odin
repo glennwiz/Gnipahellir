@@ -123,6 +123,14 @@ Enemy :: struct {
     garm:     Garm_State,
 }
 
+// What turrets leave on an enemy, indexed by enemy slot.  Transient like the
+// directors: a reload or a level change puts every fire out, and Enemy's saved
+// layout stays as it is.
+Enemy_Status :: struct {
+    burn:        f32,  // seconds still alight
+    burn_charge: f32,  // toward the next FLAME_BURN_TICK
+}
+
 Enemy_Store :: struct {
     data:   [MAX_ENEMIES]Enemy,
     active: [MAX_ENEMIES]bool,   // enemy_alloc scans this linearly
@@ -766,6 +774,7 @@ Game_State :: struct {
     enemies:     Enemy_Store,
     raid:        Raid_State, // transient industry-pressure director (enemy.odin)
     wave:        Wave_State, // transient wave director (wave.odin)
+    enemy_status: [MAX_ENEMIES]Enemy_Status, // transient, indexed like gs.enemies (sim.odin)
     den_revenge: Den_Revenge, // transient robbed-den grudge (enemy.odin)
     nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
                              // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME

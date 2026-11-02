@@ -315,6 +315,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
     gs.levels       = sd.levels
     gs.player       = sd.player
     gs.enemies      = sd.enemies
+    gs.enemy_status = {}
     gs.golems       = sd.golems
     gs.sim          = sd.sim
     gs.progression  = sd.progression

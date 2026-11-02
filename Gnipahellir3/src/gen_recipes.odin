@@ -116,6 +116,10 @@ recipe_table := [?]Recipe{
 	// calls the waves in, and no unlock row - a turret you cannot build yet is
 	// a turret that arrives after the base is already gone.
 	{ .Rainbow_Laser, 1, .Bench, {{.Wood_Log, 1}, {.Stone_Block, 1}, {}} },
+	// Built turrets, first guess at the price: the pillar is stone and iron,
+	// each head its own element on top.
+	{ .Turret_Pillar, 1, .Bench, {{.Stone_Block, 6}, {.Iron_Bar, 2}, {}} },
+	{ .Flame_Head, 1, .Bench, {{.Iron_Bar, 3}, {.Wood_Log, 5}, {}} },
 }
 
 // Recipe unlock tree: a recipe stays hidden until the player first holds its
@@ -194,6 +198,9 @@ recipe_unlock := #partial [Item]Item{
 	.Magic_Kettle = .Emerald,
 	.Mana_Wheel = .Magic_Kettle,
 	.Mana_Pipe = .Mana_Wheel,
+	// Iron is what a pillar needs, so the cards open with the first bar.
+	.Turret_Pillar = .Iron_Bar,
+	.Flame_Head = .Iron_Bar,
 }
 
 // What a smelter eats and what it casts.  New smeltable = new row.
