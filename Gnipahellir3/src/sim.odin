@@ -62,6 +62,7 @@ Turret_Rule :: struct {
     slow_time: f32,
     jet:       proc(gs: ^Game_State, from, to: [2]f32),  // the look, every frame on target (optional)
     impact:    proc(gs: ^Game_State, at: [2]f32),        // the look of a shot landing (optional)
+    shed:      Turret_Shed,                              // the pixels it sheds on target
     refusal:   string,                                   // the note when the pattern is wrong
 }
 
@@ -69,19 +70,23 @@ Turret_Rule :: struct {
 turret_table := #partial [Tile_Type]Turret_Rule{
     .Rainbow_Laser = {
         pillars = 2, range = LASER_RANGE, cooldown = LASER_COOLDOWN, damage = LASER_DAMAGE,
+        shed = {spectrum = true, vel = {0, -1}, spread = 0.7, lifetime = 0.8},
         refusal = "A Rainbow Laser goes on top of two Turret Pillars",
     },
     .Flame_Turret  = {
         pillars = 1, range = FLAME_RANGE, cooldown = FLAME_COOLDOWN, burn_time = FLAME_BURN_TIME,
+        shed = {colors = {{255, 90, 30, 255}, {255, 180, 60, 255}}, vel = {0, -2.4}, spread = 0.5, lifetime = 0.8},
         jet = spawn_flame_jet, refusal = "A Flame Head goes on top of a Turret Pillar",
     },
     .Water_Turret  = {
         pillars = 1, range = WATER_RANGE, cooldown = WATER_COOLDOWN, damage = WATER_DAMAGE,
         slow_time = WATER_SLOW_TIME,
+        shed = {colors = {{120, 190, 255, 255}, {40, 110, 220, 255}}, vel = {0, 2.4}, spread = 0.5, lifetime = 0.6},
         jet = spawn_water_jet, refusal = "A Water Head goes on top of a Turret Pillar",
     },
     .Earth_Turret  = {
         pillars = 1, range = EARTH_RANGE, cooldown = EARTH_COOLDOWN, damage = EARTH_DAMAGE,
+        shed = {colors = {{110, 84, 58, 255}, {196, 174, 140, 200}}, vel = {0, 0.8}, spread = 0.7, lifetime = 0.9},
         impact = spawn_earth_impact, refusal = "An Earth Head goes on top of a Turret Pillar",
     },
 }
@@ -293,6 +298,7 @@ tick_rainbow_laser :: proc(gs: ^Game_State, x, y: int) {
 
     ei, ok := laser_target(gs, x, y)
     if !ok do return
+    spawn_turret_shed(gs, x, y, turret_table[.Rainbow_Laser].shed)
 
     // The beam is lit the whole time a target holds range: a spectrum mote
     // stream rides it every frame (particles.odin), aimed at the same body
@@ -327,6 +333,7 @@ tick_turret :: proc(gs: ^Game_State, x, y: int) {
 
     ei, ok := turret_target(gs, x, y, rule.range)
     if !ok do return
+    spawn_turret_shed(gs, x, y, rule.shed)
 
     e    := &gs.enemies.data[ei]
     size := enemy_body_size(e.kind)
