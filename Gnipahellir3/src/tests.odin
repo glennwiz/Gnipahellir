@@ -11377,6 +11377,22 @@ only_every_other_wave_follows_the_lure :: proc(t: ^testing.T) {
 }
 
 @(test)
+with_nothing_burning_a_lure_turn_stays_the_plain_cycle :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+    th := wave_threat(gs)
+    testing.expect_value(t, gs.wave.lure, [Wave_Kind]f32{})
+
+    // Every lure turn: all three kinds are open, order Air, Ground, Underground.
+    want := [3]Wave_Kind{.Air, .Ground, .Underground}
+    for c := WAVE_LURE_EVERY - 1; c < 12; c += WAVE_LURE_EVERY {
+        gs.wave.cycle = c
+        testing.expect_value(t, wave_pick_kind(gs, th), want[c %% 3])
+    }
+}
+
+@(test)
 the_director_sends_what_the_kettle_drew :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)

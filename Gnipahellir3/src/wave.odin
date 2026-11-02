@@ -160,6 +160,7 @@ wave_pick_kind :: proc(gs: ^Game_State, threat: f32) -> Wave_Kind {
 
     // Every other wave answers the industry, so a steam base still meets the
     // rest of the cycle.  A tie between tracks falls through to the cycle.
+    // Resetting tied on a new best only matters once three kinds carry a lure.
     if (gs.wave.cycle + 1) % WAVE_LURE_EVERY == 0 {
         best, best_w, tied := Wave_Kind.Ground, f32(0), false
         for k in unlocked[:n] {
