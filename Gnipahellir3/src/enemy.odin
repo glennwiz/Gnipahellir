@@ -1551,11 +1551,21 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     bot   := int(e.pos.y + size.y - BODY_EPS)
     for y in top ..= bot {
         for x in left ..= right {
-            if is_builder_mineable(gs, x, y) {
-                set_tile(&gs.world, x, y, .Void)
-                eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
-                e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
+            if !is_builder_mineable(gs, x, y) do continue
+            // A machine, turret part or door goes the den carve's way: it spills
+            // whole, and no pocket block is minted on top of the item.
+            t := get_tile(&gs.world, x, y)
+            if .Placeable in terrain_table[t].flags || t == .Door {
+                handle_tile_mined(gs, Event{
+                    type   = .Tile_Mined,
+                    source = enemy_entity_id(id),
+                    tile   = {i32(x), i32(y)},
+                })
+                continue
             }
+            set_tile(&gs.world, x, y, .Void)
+            eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
+            e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         }
     }
     log_action(gs, "Builder#%d digs itself free at (%.1f,%.1f)", id, e.pos.x, e.pos.y)
