@@ -59,7 +59,8 @@ main :: proc() {
     load_pixel_art(gs) // missing/invalid file leaves every sprite's has_data false (procedural fallback)
     action_log_begin_run(gs) // truncate action.log + header; arms the log for disk (tests never do)
 
-    if !load_game(gs) {
+    resumed := load_game(gs)
+    if !resumed {
         // Fresh run: spawn player on the surface, a few tiles left of the cave entrance
         gs.player.pos            = SURFACE_HOME_POS
         gs.player.clothing_color = rl.BLUE
@@ -68,7 +69,15 @@ main :: proc() {
         golem_sweep_orphan_quick_clay(gs) // the pool isn't saved; clear any Quick Clay it left orphaned
     }
     camera_snap_y(gs)  // start the view centered on the player, wherever they spawned/loaded
-    load_stats(&gs.stats)
+    load_stats(&gs.stats, gs.stats_path)
+    // The boot world is only the title's backdrop.  A run starts when the title
+    // closes, with the world it chose; under an agent the boot world is the run.
+    if !resumed {
+        gs.ui.title_fresh = !agent.listening
+        if agent.listening do grave_raise(gs)  // needs the stats: the last hero's grave is in them
+    }
+    // A world from the title logs its own seed when it starts.
+    if !gs.ui.title_fresh do log_action(gs, "World seed %d", gs.world_seed)
     load_settings(gs)  // after audio_init: overrides its default volumes
 
     for !rl.WindowShouldClose() && !gs.quit_requested {

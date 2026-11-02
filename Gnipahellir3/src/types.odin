@@ -11,7 +11,7 @@ GAME_DEBUG :: #config(GAME_DEBUG, true)
 GRID_W :: 192
 GRID_H :: 108
 CELL_SIZE :: 10
-MAX_ENEMIES :: 1024
+MAX_ENEMIES :: 256
 MAX_PARTICLES :: 256
 MAX_PROJECTILES :: 32
 MAX_FALLING :: 256 // structural blocks in mid-fall at once (gravity.odin)
@@ -216,6 +216,13 @@ Tile_Type :: enum u8 {
 	// inside LASER_RANGE on its own cooldown, no fuel and no aiming.
 	// (appended: terrain ordinals are serialized)
 	Rainbow_Laser,
+	// A fallen hero's grave by the shaft: E reads it and opens the coffer
+	// beside it (grave.odin).  Never mined, never placed.  (appended: terrain
+	// ordinals are serialized)
+	Rune_Stone,
+	// What water leaves of lava: footing over a hazard, not a quarry.  Mining
+	// it pays nothing.  (appended: terrain ordinals are serialized)
+	Scoria,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -379,6 +386,7 @@ Item :: enum u8 {
 Book_Page :: enum u8 {
 	Seal,
 	Waters,
+	Saga, // the run's account, opened by breaking the Final Seal
 }
 
 // ─── Stats & Equipment ────────────────────────────────────────────────────────
@@ -559,6 +567,9 @@ Event_Type :: enum u8 {
 	Golem_Pickup, // int_val = golem slot; recall in reach, else come-then-recall
 	// (appended so existing event values stay stable)
 	Mushroom_Grew, // tile = the sprouted mushroom; sound + spore glow burst
+	// The death screen (appended so existing event values stay stable)
+	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
+	Title_Start, // the title closed on no saved run: start the world it chose
 }
 
 Event_Payload :: struct #raw_union {

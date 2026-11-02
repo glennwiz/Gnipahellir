@@ -129,9 +129,16 @@ update_input :: proc(gs: ^Game_State) {
 
     // Title screen: any key or click drops into the world.
     if gs.ui.show_title {
-        if rl.GetKeyPressed() != .KEY_NULL ||
-           rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT) {
-            gs.ui.show_title = false
+        start := rl.IsMouseButtonPressed(.LEFT) || rl.IsMouseButtonPressed(.RIGHT)
+        for k := rl.GetKeyPressed(); k != .KEY_NULL; k = rl.GetKeyPressed() {
+            if title_key(gs, k) do start = true
+        }
+        if start {
+            if gs.ui.title_fresh {
+                eq_push(&gs.events, Event{type = .Title_Start})
+            } else {
+                gs.ui.show_title = false
+            }
         }
         return
     }
@@ -185,9 +192,16 @@ update_input :: proc(gs: ^Game_State) {
         }
         if rl.IsKeyPressed(.ESCAPE) {
             gs.ui.show_menu = true
-        } else if gs.player.death_timer > DEATH_INPUT_DELAY &&
-           (rl.IsKeyPressed(.ENTER) || rl.IsMouseButtonPressed(.LEFT)) {
-            eq_push(&gs.events, Event{type = .New_Game_Request})
+        } else if gs.player.death_timer > DEATH_INPUT_DELAY {
+            // With something to offer a click chooses the tithe, so a stray one
+            // cannot end the choice; only ENTER moves on.
+            clicked := rl.IsMouseButtonPressed(.LEFT)
+            offering := any_tithe_offerable(&gs.player.inventory)
+            if slot := tithe_cell_at(gs, gs.input.mouse_screen); clicked && slot >= 0 {
+                eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = i32(slot)}})
+            } else if rl.IsKeyPressed(.ENTER) || (clicked && !offering) {
+                eq_push(&gs.events, Event{type = .New_Game_Request})
+            }
         }
         return
     }
@@ -790,6 +804,9 @@ update_input :: proc(gs: ^Game_State) {
             case 14:
                 gs.debug.item_palette = !gs.debug.item_palette
                 gs.debug.menu_open    = false
+            case 15:
+                if !risen_hero_rise(gs) do notify(gs, "Debug: no kit to raise, or not on the Surface")
+                gs.debug.menu_open = false
             }
         }
 

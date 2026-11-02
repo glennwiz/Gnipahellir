@@ -1,7 +1,10 @@
 package game
 
 import "core:testing"
+import "core:mem"
 import "core:time"
+import "core:slice"
+import rl "vendor:raylib"
 import "core:strings"
 import "core:fmt"
 import "core:log"
@@ -5352,10 +5355,17 @@ garm_death_opens_the_hell_gate :: proc(t: ^testing.T) {
     won_before := gs.stats.runs_won
     gs.player.pos = {f32(seal_x - 1), f32(seal_y + 1) - PLAYER_H}
     player_interact(gs)
+    testing.expect(t, gs.ritual.active && gs.ritual.seal, "the key starts the ceremony")
+    process_events(gs)
+    testing.expect(t, !gs.game_won, "the Seal holds until the ceremony ends")
+    gs.ritual.timer = RITUAL_DURATION
+    update_ritual(gs)
     process_events(gs)
     eq_clear(&gs.events)
 
     testing.expect(t, gs.game_won, "breaking the Final Seal wins the game")
+    testing.expect(t, gs.ui.show_book, "the tome opens on the saga")
+    testing.expect_value(t, gs.ui.book_page, Book_Page.Saga)
     testing.expect_value(t, gs.stats.runs_won, won_before + 1)
     // The win screen names what was just done: the Seal, not the hound.
     testing.expect_value(t, WIN_TITLE, "THE FINAL SEAL IS BROKEN")
@@ -8322,7 +8332,7 @@ no_enemy_dig_breaks_a_scroll_chest :: proc(t: ^testing.T) {
 	}
 
 	// Every gate an enemy dig goes through refuses, sealed or emptied.
-	testing.expect(t, !is_builder_mineable(&gs.world, CX, CY), "no enemy dig may pick the chest")
+	testing.expect(t, !is_builder_mineable(gs, CX, CY), "no enemy dig may pick the chest")
 	testing.expect(t, wave_target_refused(gs, T), "no wave hunter may target the chest")
 	handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
 	expect_intact(t, gs, T)
@@ -11094,6 +11104,903 @@ the_event_trace_logs_what_the_queue_processed :: proc(t: ^testing.T) {
         "pure audio noise stays out of the trace")
 }
 
+// ─── Grave stone (board card 42) ──────────────────────────────────────────────
+
+@(private="file")
+grave_die :: proc(gs: ^Game_State, cause: string, seconds: f32) {
+    gs.death_by = cause
+    gs.elapsed_time = seconds
+    eq_push(&gs.events, Event{type = .Entity_Died, source = PLAYER_ID})
+    process_events(gs)
+    process_events(gs)
+}
+
+@(private="file")
+grave_count_item :: proc(gs: ^Game_State, it: Item) -> (n: int) {
+    for b in gs.sim.barrels do if b.active do for s in b.slots do if s.item == it do n += s.count
+    n += inventory_count(&gs.player.inventory, it)
+    return
+}
+
+@(test)
+a_tithe_crosses_to_the_next_world_exactly_once :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE2
+    inventory_insert(&gs.player.inventory, .Potion_Health, 5)
+    slot := -1
+    for s, i in gs.player.inventory.slots do if s.item == .Potion_Health do slot = i
+    gs.stats.runs_played = 6
+    grave_die(gs, "lava", 100)
+    testing.expect(t, gs.player.dead, "the hero fell")
+
+    eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = i32(slot)}})
+    process_events(gs)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Potion_Health)
+
+    start_new_game(gs)
+    testing.expect_value(t, grave_count_item(gs, .Potion_Health), 1)
+    testing.expect(t, !gs.stats.grave.active, "the stats file let go of the grave")
+    testing.expect(t, gs.grave.active, "the run took it")
+
+    tile := gs.grave.tile
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Rune_Stone)
+    testing.expect(t, abs(int(tile.x) - GRID_W/2) < GRAVE_SHAFT_OFFSET + GRAVE_SEARCH, "the stone stands by the shaft")
+    coffer := [2]i32{tile.x + 1, tile.y}
+    testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
+
+    buf: [128]u8
+    testing.expect_value(t, grave_inscription(&gs.grave, buf[:]),
+        "Here fell the 7th hero, to lava, in Deep Cave, after 1:40.")
+
+    // E beside the stone opens the coffer, and the tithe comes out once.
+    gs.player.pos = {f32(tile.x) - 2, f32(tile.y) - PLAYER_H + 1}
+    player_interact(gs)
+    process_events(gs)
+    testing.expect(t, gs.ui.show_barrel, "E opens the coffer")
+    testing.expect_value(t, gs.ui.barrel_tile, coffer)
+    barrel_take(gs, barrel_at(gs, LEVEL_SURFACE, coffer), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Potion_Health), 1)
+    testing.expect_value(t, grave_count_item(gs, .Potion_Health), 1)
+
+    // A second new game raises nothing: the grave was this world's.
+    start_new_game(gs)
+    testing.expect(t, !gs.grave.active, "one death, one stone")
+}
+
+@(test)
+a_tithe_refuses_scrolls_and_keys :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    refused := [?]Item{.Rune_Scroll_A, .Rune_Scroll_B, .Rune_Scroll_C, .Sky_Rune_Scroll, .Scroll_Of_Waters, .Hell_Key}
+    gs.player.inventory = {}
+    for it, i in refused do gs.player.inventory.slots[i] = {item = it, count = 1}
+    grave_die(gs, "lava", 10)
+    testing.expect(t, !any_tithe_offerable(&gs.player.inventory), "nothing here may go")
+    for _, i in refused {
+        eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = i32(i)}})
+        process_events(gs)
+        testing.expect_value(t, gs.stats.grave.tithe, Item.None)
+        x, y := tithe_cell_rect(i)
+        testing.expect_value(t, tithe_cell_at(gs, {f32(x + 1), f32(y + 1)}), -1)
+    }
+    // No tithe still leaves the stone, and no coffer stands with it.
+    start_new_game(gs)
+    tile := gs.grave.tile
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Rune_Stone)
+    testing.expect(t, get_tile(&gs.world, int(tile.x) + 1, int(tile.y)) != .Rune_Coffer, "nothing to hold")
+}
+
+@(test)
+a_tithe_can_be_changed_and_taken_back :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.inventory = {}
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.player.inventory.slots[13] = {item = .Plank, count = 40}
+    grave_die(gs, "lava", 10)
+    x, y := tithe_cell_rect(13)
+    testing.expect_value(t, tithe_cell_at(gs, {f32(x + 1), f32(y + 1)}), 13)
+
+    grave_choose_tithe(gs, 0)
+    grave_choose_tithe(gs, 13)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Plank)
+    grave_choose_tithe(gs, 13)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.None)
+    grave_choose_tithe(gs, 13)
+    start_new_game(gs)
+    testing.expect_value(t, grave_count_item(gs, .Plank), 1)  // one item, not the stack
+}
+
+@(test)
+every_world_has_room_for_the_stone :: proc(t: ^testing.T) {
+    // Every seed must find room, and on nothing the world put there.
+    for seed in 1 ..= 40 {
+        gs := test_state()
+        defer free(gs)
+        game_state_init(gs, u32(seed) * 2654435761)
+        items_before := 0
+        for it in gs.world.items do if it != .None do items_before += 1
+        gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+        grave_raise(gs)
+        testing.expect(t, gs.grave.active, "the stone found a place")
+        testing.expect_value(t, get_tile(&gs.world, GRID_W/2 - 12, SURFACE_Y - 1), Tile_Type.Sky_Rune_Scroll_Chest)
+        items_after := 0
+        for it in gs.world.items do if it != .None do items_after += 1
+        testing.expect_value(t, items_after, items_before)
+    }
+}
+
+@(test)
+a_full_world_leaves_the_grave_waiting :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    for x in 0 ..< GRID_W do set_tile(&gs.world, x, SURFACE_Y - 1, .Stone)
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    testing.expect(t, gs.stats.grave.active, "the item stays in the stats file")
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Sword)
+}
+
+@(test)
+a_saved_run_keeps_its_stone_and_a_v24_save_still_loads :: proc(t: ^testing.T) {
+    PATH := "test_grave_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 3, seconds = 61, tithe = .Sword}
+    fmt.bprintf(gs.stats.grave.cause[:GRAVE_TEXT - 1], "a Vargr")
+    fmt.bprintf(gs.stats.grave.place[:GRAVE_TEXT - 1], "Hell")
+    grave_raise(gs)
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "v25 loads")
+    buf: [128]u8
+    testing.expect_value(t, grave_inscription(&back.grave, buf[:]),
+        "Here fell the 3rd hero, to a Vargr, in Hell, after 1:01.")
+    testing.expect_value(t, grave_count_item(back, .Sword), 1)
+
+    // An older file: the same run at the old cap, cut short with the old number.
+    old_run := save_1024_fixture(gs)
+    defer free(old_run)
+    for c in ([3]struct{version: i32, size: int}{{26, SAVE_V26_SIZE}, {25, SAVE_V25_SIZE}, {24, SAVE_V24_SIZE}}) {
+        old_run.version = c.version
+        whole := mem.ptr_to_bytes(old_run)
+        testing.expect(t, os.write_entire_file(PATH, whole[:c.size]) == nil, "wrote")
+        was := test_state()
+        defer free(was)
+        testing.expect(t, load_game_from(was, PATH), "an older save loads")
+        testing.expect_value(t, was.player.hp, gs.player.hp)
+        testing.expect_value(t, was.grave.active, c.version >= 25)
+        testing.expect(t, !was.risen.has_kit, "older worlds have no kit")
+        testing.expect(t, snapshot_restore_from(was, PATH), "and restores as a snapshot")
+    }
+}
+
+@(private="file")
+save_1024_fixture :: proc(gs: ^Game_State) -> ^Save_Data_1024 {
+    old := new(Save_Data_1024)
+    old.version     = 27
+    old.level_index = gs.level_index
+    old.world       = gs.world
+    old.player      = gs.player
+    old.golems      = gs.golems
+    old.sim         = gs.sim
+    old.progression = gs.progression
+    old.dimension   = gs.dimension
+    old.elapsed_time = gs.elapsed_time
+    old.frame       = gs.frame
+    old.grave       = gs.grave
+    old.risen       = gs.risen
+    old.world_seed  = gs.world_seed
+    old.levels.worlds    = gs.levels.worlds
+    old.levels.generated = gs.levels.generated
+    for i in 0 ..< MAX_ENEMIES {
+        old.enemies.data[i]   = gs.enemies.data[i]
+        old.enemies.active[i] = gs.enemies.active[i]
+    }
+    old.enemies.count = gs.enemies.count
+    return old
+}
+
+@(test)
+a_1024_save_shrinks_to_the_cap_and_keeps_its_bodies :: proc(t: ^testing.T) {
+    PATH := "test_shrink_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    old := save_1024_fixture(gs)
+    defer free(old)
+
+    // A body high above the new cap, marked on the map.
+    HIGH :: 700
+    old.enemies.data[HIGH] = Enemy{kind = .Raider, hp = 3, hp_max = 3, pos = {50, 40}}
+    old.enemies.active[HIGH] = true
+    old.enemies.count += 1
+    idx := grid_idx(50, 40)
+    old.world.entity_map[idx] = enemy_entity_id(HIGH)
+    old.risen = {has_kit = true, walking = true, slot = HIGH}
+    old.risen.kit[0] = {item = .Sword, count = 1}
+    count_before := old.enemies.count
+
+    old.version = 27
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "a v27 save at 1024 loads")
+    testing.expect_value(t, back.enemies.count, count_before)
+    slot := back.risen.slot
+    testing.expect(t, slot < MAX_ENEMIES && back.enemies.active[slot], "the hero's body came down with them")
+    testing.expect_value(t, back.enemies.data[slot].kind, Enemy_Kind.Raider)
+    testing.expect_value(t, back.world.entity_map[idx], enemy_entity_id(slot))
+
+    // A store past the new cap loses the overflow, and the map marks with it,
+    // but a kit on a lost body stays in the record.
+    full := new(Enemy_Store_1024)
+    defer free(full)
+    for i in 0 ..< MAX_ENEMIES + 2 {
+        full.active[i] = true
+        full.data[i].kind = .Raider
+        full.count += 1
+    }
+    w := new(World_Grid)
+    defer free(w)
+    w.entity_map[5] = enemy_entity_id(MAX_ENEMIES + 1)
+    out := new(Enemy_Store)
+    defer free(out)
+    moved := enemy_store_shrink(full, out, w)
+    testing.expect_value(t, out.count, MAX_ENEMIES)
+    testing.expect_value(t, moved[MAX_ENEMIES + 1], -1)
+    testing.expect_value(t, w.entity_map[5], INVALID_ENTITY)
+    old.enemies = full^
+    old.risen.slot = MAX_ENEMIES + 1
+    shrunk := save_data_shrink(old)
+    defer free(shrunk)
+    testing.expect(t, !shrunk.risen.walking, "no body")
+    testing.expect(t, shrunk.risen.has_kit, "but the kit is whole")
+}
+
+@(test)
+a_v1_stats_file_migrates_with_every_count :: proc(t: ^testing.T) {
+    PATH := "test_stats_v1.dat"
+    defer os.remove(PATH)
+    old := Persistent_Stats_v1{runs_played = 9, runs_won = 2, deepest_cave = 3, total_kills = 411}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)) == nil, "wrote")
+
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, PATH), "v1 loads")
+    testing.expect_value(t, stats.runs_played, 9)
+    testing.expect_value(t, stats.runs_won, 2)
+    testing.expect_value(t, stats.deepest_cave, 3)
+    testing.expect_value(t, stats.total_kills, 411)
+    testing.expect(t, !stats.grave.active, "v1 knew no grave")
+
+    // Back out in the new format, with the version on it.
+    stats.grave = {active = true, tithe = .Sword}
+    testing.expect(t, save_stats_to(&stats, PATH), "wrote v2")
+    again: Persistent_Stats
+    testing.expect(t, load_stats(&again, PATH), "v2 loads")
+    testing.expect_value(t, again.version, STATS_VERSION)
+    testing.expect_value(t, again.total_kills, 411)
+    testing.expect_value(t, again.grave.tithe, Item.Sword)
+}
+
+@(test)
+an_unreadable_stats_file_is_moved_aside_not_lost :: proc(t: ^testing.T) {
+    PATH := "test_stats_bad.dat"
+    ASIDE := "test_stats_bad.dat.unread"
+    defer os.remove(PATH)
+    defer os.remove(ASIDE)
+    junk := [5]u8{1, 2, 3, 4, 5}
+    testing.expect(t, os.write_entire_file(PATH, junk[:]) == nil, "wrote")
+    stats: Persistent_Stats
+    testing.expect(t, !load_stats(&stats, PATH), "refused")
+    testing.expect(t, os.exists(ASIDE), "kept")
+}
+
+
+// ─── The risen hero (board card 49) ───────────────────────────────────────────
+
+@(private="file")
+risen_ground_count :: proc(gs: ^Game_State, it: Item) -> (n: int) {
+    for i in 0 ..< GRID_W * GRID_H do if gs.world.items[i] == it do n += int(gs.world.item_counts[i])
+    return
+}
+
+@(private="file")
+risen_setup :: proc(gs: ^Game_State) {
+    gs.player.inventory = {}
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.player.inventory.slots[1] = {item = .Plank, count = 30}
+    gs.player.inventory.slots[2] = {item = .Rune_Scroll_A, count = 1}
+    gs.player.inventory.slots[3] = {item = .Hell_Key, count = 1}
+    gs.player.inventory.slots[4] = {item = .Scroll_Of_Waters, count = 1}
+    gs.player.equipment[.Head] = .Iron_Helm
+    grave_die(gs, "lava", 90)
+}
+
+@(test)
+the_risen_hero_carries_all_but_the_tithe_and_gives_it_back :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    grave_choose_tithe(gs, 1)  // one Plank stays at the grave
+    start_new_game(gs)
+    planks_in_world := risen_ground_count(gs, .Plank)
+    swords_in_world := risen_ground_count(gs, .Sword)
+    waters_in_world := risen_ground_count(gs, .Scroll_Of_Waters)  // the pond's own
+
+    testing.expect(t, gs.risen.has_kit, "the run holds the kit")
+    testing.expect(t, risen_hero_rise(gs), "the hero rises")
+    i := gs.risen.slot
+    testing.expect_value(t, gs.enemies.data[i].kind, Enemy_Kind.Undead)
+    testing.expect_value(t, gs.enemies.data[i].hp, RISEN_HERO_HP)
+    testing.expect(t, !risen_hero_rise(gs), "one body at a time")
+
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(i)})
+    process_events(gs)
+    process_events(gs)
+    testing.expect(t, !gs.enemies.active[i], "the body fell")
+    testing.expect(t, !gs.risen.has_kit, "the kit left the record")
+
+    testing.expect_value(t, risen_ground_count(gs, .Plank) - planks_in_world, 29)
+    testing.expect_value(t, grave_count_item(gs, .Plank), 1)  // the tithe, in its coffer
+    testing.expect_value(t, risen_ground_count(gs, .Sword) - swords_in_world, 1)
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+    testing.expect_value(t, risen_ground_count(gs, .Rune_Scroll_A), 0)
+    testing.expect_value(t, risen_ground_count(gs, .Hell_Key), 0)
+    testing.expect_value(t, risen_ground_count(gs, .Scroll_Of_Waters), waters_in_world)
+}
+
+@(test)
+a_tithe_of_a_single_item_leaves_no_ghost_stack_on_the_hero :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    grave_choose_tithe(gs, 0)  // the only Sword
+    start_new_game(gs)
+    for s in gs.risen.kit do testing.expect(t, s.item != .Sword, "the sword stayed at the grave")
+    testing.expect_value(t, grave_count_item(gs, .Sword), 1)
+}
+
+@(test)
+the_risen_hero_stays_on_the_surface_while_the_player_is_away :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    risen_hero_rise(gs)
+    i := gs.risen.slot
+
+    // Another level has its own pool: the same slot number there is not them.
+    gs.level_index = LEVEL_CAVE2
+    gs.enemies.active[i] = true
+    despawn_enemy(gs, i)
+    testing.expect(t, gs.risen.walking, "still on the surface, kit and all")
+    gs.level_index = LEVEL_SURFACE
+    gs.enemies.active[i] = true
+    despawn_enemy(gs, i)
+    testing.expect(t, !gs.risen.has_kit, "a despawn drops the kit too")
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+}
+
+@(test)
+a_saved_run_keeps_the_hero_and_the_kit :: proc(t: ^testing.T) {
+    PATH := "test_risen_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    risen_hero_rise(gs)
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "loads")
+    testing.expect(t, back.risen.walking, "still walking")
+    testing.expect_value(t, back.risen.kit, gs.risen.kit)
+    testing.expect_value(t, back.enemies.data[back.risen.slot].kind, Enemy_Kind.Undead)
+}
+
+@(test)
+a_v2_stats_file_migrates_and_keeps_the_grave :: proc(t: ^testing.T) {
+    PATH := "test_stats_v2.dat"
+    defer os.remove(PATH)
+    old := Persistent_Stats{version = 2, runs_played = 4, total_kills = 12}
+    old.grave = {active = true, hero = 4, tithe = .Sword}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)[:STATS_V2_SIZE]) == nil, "wrote")
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, PATH), "v2 loads")
+    testing.expect_value(t, stats.version, STATS_VERSION)
+    testing.expect_value(t, stats.total_kills, 12)
+    testing.expect_value(t, stats.grave.tithe, Item.Sword)
+}
+
+// ─── The Seal ceremony (board card 41) ────────────────────────────────────────
+
+@(test)
+the_saga_tells_the_run :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.elapsed_time = 3725
+    gs.stats = {runs_played = 7, runs_won = 1, total_kills = 411, deepest_cave = 2}
+    bufs: [4][64]u8
+    l := saga_lines(gs, &bufs)
+    testing.expect_value(t, l[0], "This saga lasted 1:02:05")
+    testing.expect_value(t, l[1], "Heroes fallen before you: 6")
+    testing.expect_value(t, l[2], "Foes slain by all of them: 411")
+    testing.expect_value(t, l[3], "Deepest reached: Gnipahellir")
+}
+
+@(test)
+entering_a_level_marks_the_deepest :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    eq_push(&gs.events, Event{type = .Level_Enter, payload = {int_val = i32(LEVEL_CAVE3)}})
+    eq_push(&gs.events, Event{type = .Level_Enter, payload = {int_val = i32(LEVEL_CAVE2)}})
+    process_events(gs)
+    testing.expect_value(t, gs.stats.deepest_cave, 2)
+    gs.dimension.kind = .Hell
+    testing.expect_value(t, deepest_rank(gs, LEVEL_DIMENSION), 3)
+    gs.dimension.kind = Dimension_Kind(0)
+    if gs.dimension.kind != .Hell do testing.expect_value(t, deepest_rank(gs, LEVEL_DIMENSION), 0)
+}
+
+@(test)
+a_hero_killed_mid_ceremony_does_not_win :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    start_seal_ceremony(gs, {10, 10})
+    gs.player.dead = true
+    gs.ritual.timer = RITUAL_DURATION
+    update_ritual(gs)
+    process_events(gs)
+    testing.expect(t, !gs.game_won, "the Seal holds")
+    testing.expect(t, !gs.ritual.active, "the ceremony ended")
+    testing.expect(t, !gs.ui.show_book, "no saga for the dead")
+}
+
+// ─── Grave stone rework (board card 42) ───────────────────────────────────────
+
+@(test)
+the_stone_gives_way_to_what_stands_near_it :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 1}
+    grave_raise(gs)
+    x := int(gs.grave.tile.x)
+    y := int(gs.grave.tile.y)
+    set_tile(&gs.world, x + 3, y, .Sky_Altar)
+    gs.progression.sky_altar_pos = {i32(x + 3), i32(y)}
+    gs.player.pos = {f32(x + 2), f32(y) - PLAYER_H + 1}
+    player_interact(gs)
+    testing.expect_value(t, gs.level_index, LEVEL_SKY)
+}
+
+@(test)
+an_enemy_cannot_dig_the_tithe_away :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    gs.player.inventory = {}
+    coffer := [2]i32{gs.grave.tile.x + 1, gs.grave.tile.y}
+
+    smash_tile(gs, int(coffer.x), int(coffer.y))
+    testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
+
+    // Reach it the way the player does: E, then take from the open window.
+    gs.player.pos = {f32(coffer.x) + 2, f32(coffer.y) - PLAYER_H + 1}
+    player_interact(gs)
+    process_events(gs)
+    testing.expect(t, gs.ui.show_barrel, "the coffer opens")
+    barrel_take(gs, barrel_at(gs, LEVEL_SURFACE, gs.ui.barrel_tile), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Sword), 1)
+
+    // Empty, it is ordinary furniture again, and no record outlives it.
+    smash_tile(gs, int(coffer.x), int(coffer.y))
+    testing.expect(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)) != .Rune_Coffer, "it falls")
+    testing.expect(t, barrel_at(gs, LEVEL_SURFACE, coffer) == nil, "no orphan record")
+}
+
+@(test)
+tithe_choose_is_appended_to_the_event_enum :: proc(t: ^testing.T) {
+    testing.expect(t, int(Event_Type.Tithe_Choose) > int(Event_Type.Void_Take), "after every older value")
+    testing.expect(t, int(Event_Type.Title_Start) > int(Event_Type.Tithe_Choose), "and so on down the enum")
+}
+
+// ─── Seed field and Yesterday's world (board card 43) ─────────────────────────
+
+@(private="file")
+seed_type :: proc(gs: ^Game_State, keys: ..rl.KeyboardKey) -> bool {
+    for k in keys do if title_key(gs, k) do return true
+    return false
+}
+
+@(test)
+the_same_typed_seed_gives_the_same_world :: proc(t: ^testing.T) {
+    a := test_state()
+    defer free(a)
+    b := test_state()
+    defer free(b)
+    for gs in ([2]^Game_State{a, b}) {
+        gs.ui.title_fresh = true
+        testing.expect(t, !seed_type(gs, .ONE, .TWO, .THREE, .FOUR, .NINE, .BACKSPACE, .FIVE), "digits do not start")
+        testing.expect(t, title_key(gs, .ENTER), "any other key does")
+        eq_push(&gs.events, Event{type = .Title_Start})
+        process_events(gs)
+    }
+    testing.expect_value(t, a.world_seed, u32(12345))
+    testing.expect(t, !a.ui.show_title, "in the world")
+    same := true
+    for i in 0 ..< GRID_W * GRID_H do if a.world.terrain[i] != b.world.terrain[i] do same = false
+    testing.expect(t, same, "the same seed, the same world")
+    testing.expect_value(t, a.stats.last_seed, u32(12345))
+    testing.expect(t, a.stats.has_last_seed, "remembered")
+}
+
+@(test)
+no_seed_means_a_new_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.title_fresh = true
+    eq_push(&gs.events, Event{type = .Title_Start})
+    process_events(gs)
+    testing.expect(t, gs.world_seed != DEFAULT_WORLD_SEED, "not the boot world")
+}
+
+@(test)
+y_brings_back_yesterdays_world :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.title_fresh = true
+    testing.expect(t, title_key(gs, .Y), "with no yesterday Y is any other key")
+    gs.stats.last_seed = 4000000000
+    gs.stats.has_last_seed = true
+    testing.expect(t, !title_key(gs, .Y), "Y fills the field")
+    start_title_game(gs)
+    testing.expect_value(t, gs.world_seed, u32(4000000000))
+}
+
+@(test)
+a_resumable_run_offers_no_seed :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    testing.expect(t, title_key(gs, .ONE), "any key resumes")
+    start_title_game(gs)
+    testing.expect_value(t, gs.world_seed, DEFAULT_WORLD_SEED)  // no new world over the saved run
+}
+
+@(test)
+a_saved_run_keeps_its_seed_for_the_levels_to_come :: proc(t: ^testing.T) {
+    PATH := "test_seed_save.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.world_seed = 777
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "loads")
+    testing.expect_value(t, back.world_seed, u32(777))
+}
+
+@(test)
+the_agent_harness_plays_the_typed_seed :: proc(t: ^testing.T) {
+    // GNIPA_SEED is how tools/agent_play.sh passes its seed.
+    os.set_env("GNIPA_SEED", "12345")
+    defer os.unset_env("GNIPA_SEED")
+    testing.expect_value(t, new_game_world_seed(), u32(12345))
+}
+
+@(test)
+a_v3_stats_file_migrates :: proc(t: ^testing.T) {
+    PATH := "test_stats_v3.dat"
+    defer os.remove(PATH)
+    old := Persistent_Stats{version = 3, total_kills = 12}
+    old.kit[0] = {item = .Sword, count = 1}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)[:STATS_V3_SIZE]) == nil, "wrote")
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, PATH), "v3 loads")
+    testing.expect_value(t, stats.version, STATS_VERSION)
+    testing.expect_value(t, stats.kit[0].item, Item.Sword)
+    testing.expect(t, !stats.has_last_seed, "v3 knew no seed")
+}
+
+// A loaded chest in a hunter's only way: the reviewer's box, card 42 rework 2.
+@(private="file")
+sealed_box_run :: proc(gs: ^Game_State, loaded: bool) -> (hits, pocket, tile_x: int, stands: bool) {
+    wave_clear_structures(gs)
+    Y :: SURFACE_Y - 1
+    L, DOOR, R :: 60, 66, 72
+    for x in L - 1 ..= R + 1 do for y in Y - 4 ..= Y + 1 do set_tile(&gs.world, x, y, .Quick_Clay)
+    for x in L ..= R do for y in Y - 2 ..= Y do if x != DOOR do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, DOOR, Y - 2, .Quick_Clay)
+    set_tile(&gs.world, DOOR, Y - 1, .Barrel)
+    set_tile(&gs.world, DOOR, Y, .Barrel)
+    barrel_on_placed(gs, {DOOR, Y - 1})
+    barrel_on_placed(gs, {DOOR, Y})
+    if loaded {
+        barrel_deposit(barrel_at(gs, gs.level_index, {DOOR, Y - 1}), .Plank, 5)
+        barrel_deposit(barrel_at(gs, gs.level_index, {DOOR, Y}), .Plank, 5)
+    }
+    gs.player.pos = {R - 1, f32(Y) - PLAYER_H + 1}
+    gs.player.hp = 100000
+    gs.player.hp_max = 100000
+    wi := wave_seed_hunter(gs, .Vargr, L + 2, Y)
+    for _ in 0 ..< 60 * 60 {
+        gs.frame += 1
+        update_enemies(gs)
+        for i in 0 ..< gs.events.size {
+            ev := gs.events.events[(gs.events.head + i) % MAX_EVENTS]
+            // The world's own builders dig far from here all the while.
+            if ev.type == .Builder_Mined && ev.tile.x >= L && ev.tile.x <= R && ev.tile.y <= Y do hits += 1
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    e := &gs.enemies.data[wi]
+    return hits, int(e.builder.pocket), int(e.pos.x), get_tile(&gs.world, DOOR, Y) == .Barrel
+}
+
+@(test)
+a_hunter_does_not_hammer_a_loaded_barrel_in_its_only_path :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    hits, pocket, _, stands := sealed_box_run(gs, true)
+    testing.expect(t, stands, "the hoard holds")
+    testing.expect_value(t, hits, 0)
+    testing.expect_value(t, pocket, 0)
+
+    // The control: an empty barrel is no obstacle, so the test can fail.
+    open := test_state()
+    defer free(open)
+    _, _, x, gone := sealed_box_run(open, false)
+    testing.expect(t, !gone || x > 66, "an empty barrel does not stop it")
+}
+
+@(test)
+a_loaded_silo_or_barrel_is_rock_to_a_digger :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    set_tile(&gs.world, 10, 10, .Barrel)
+    barrel_on_placed(gs, {10, 10})
+    testing.expect(t, is_builder_mineable(gs, 10, 10), "an empty barrel can be dug")
+    barrel_deposit(barrel_at(gs, gs.level_index, {10, 10}), .Plank, 1)
+    testing.expect(t, !is_builder_mineable(gs, 10, 10), "a loaded one cannot")
+    set_tile(&gs.world, 11, 10, .Silo)
+    silo_on_placed(gs, {11, 10})
+    testing.expect(t, is_builder_mineable(gs, 11, 10), "an empty silo can be dug")
+    s := silo_at(gs, gs.level_index, {11, 10})
+    testing.expect(t, s != nil, "the silo has a record")
+    if s != nil {
+        s.slots[0] = {item = .Stone_Block, count = 3}
+        testing.expect(t, !is_builder_mineable(gs, 11, 10), "a loaded one cannot")
+    }
+}
+
+// ─── Quench (board card 44) ───────────────────────────────────────────────────
+
+@(private="file")
+quench_steps :: proc(gs: ^Game_State, n: int) {
+    for _ in 0 ..< n {
+        fluid_step(gs, fluid_rules[0], gs.frame % 2 == 0)
+        fluid_step(gs, fluid_rules[1], gs.frame % 2 == 0)
+        fluid_step(gs, fluid_rules[2], gs.frame % 2 == 0)
+        gs.frame += 1
+    }
+}
+
+@(test)
+water_on_lava_leaves_scoria_and_spends_the_water :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    for lava in ([2]Tile_Type{.Lava, .Magic_Lava}) {
+        set_tile(&gs.world, 45, 70, lava)
+        set_tile(&gs.world, 45, 69, .Water)
+        quench_steps(gs, 1)
+        testing.expect_value(t, get_tile(&gs.world, 45, 70), Tile_Type.Scoria)
+        testing.expect(t, get_tile(&gs.world, 45, 69) != .Water, "the water is spent")
+        set_tile(&gs.world, 45, 70, .Void)
+    }
+}
+
+@(test)
+scoria_is_footing_and_pays_nothing :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    testing.expect(t, .Solid in terrain_table[.Scoria].flags, "it bears weight")
+    testing.expect(t, .Mineable in terrain_table[.Scoria].flags, "it can be cleared")
+    testing.expect_value(t, terrain_table[.Scoria].drop_item, Item.None)
+    testing.expect(t, .Falls not_in terrain_table[.Scoria].flags, "a bridge stays up")
+    testing.expect(t, .Falls_Placed not_in terrain_table[.Scoria].flags, "a bridge stays up")
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    set_tile(&gs.world, 45, 70, .Scoria)
+    before := inventory_count(&gs.player.inventory, .Stone_Block)
+    eq_push(&gs.events, Event{type = .Tile_Mined, tile = {45, 70}})
+    process_events(gs)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), before)
+    testing.expect_value(t, gs.world.items[grid_idx(45, 70)], Item.None)
+}
+
+@(test)
+lava_past_the_water_burns_on :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    for x in 41 ..= 49 do set_tile(&gs.world, x, 70, .Lava)
+    set_tile(&gs.world, 45, 69, .Water)   // one bucket's worth
+    quench_steps(gs, 40)
+    testing.expect_value(t, fluid_count_in(gs, .Lava, 40, 50, 60, 70), 8)
+    testing.expect_value(t, get_tile(&gs.world, 45, 70), Tile_Type.Scoria)
+}
+
+@(test)
+a_scoria_plug_stops_a_drip :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    fluid_carve_box(gs, 40, 50, 60, 70)
+    set_tile(&gs.world, 45, 62, .Lava)
+    set_tile(&gs.world, 45, 63, .Scoria)
+    quench_steps(gs, 10)
+    testing.expect_value(t, get_tile(&gs.world, 45, 64) == .Lava, false)
+}
+
+// Water, lava and open cells at random: every Scoria was paid for by one water,
+// water never touches lava once it has settled, and the box goes still.
+@(test)
+quench_soak_pays_one_water_per_stone :: proc(t: ^testing.T) {
+    for seed in u32(1) ..= 8 {
+        gs := test_state()
+        defer free(gs)
+        X0, X1, Y0, Y1 :: 40, 70, 58, 72
+        fluid_carve_box(gs, X0, X1, Y0, Y1)
+        for y in Y0 + 1 ..= Y1 - 1 do for x in X0 + 1 ..= X1 - 1 {
+            switch whash(u32(x) * 73 + u32(y) * 179 + seed * 7919) % 8 {
+            case 0:    set_tile(&gs.world, x, y, .Water)
+            case 1:    set_tile(&gs.world, x, y, .Stone)
+            case 2:    if y > Y1 - 4 do set_tile(&gs.world, x, y, .Lava)
+            }
+        }
+        water := fluid_count_in(gs, .Water, X0, X1, Y0, Y1)
+        quench_steps(gs, 300)
+        left := fluid_count_in(gs, .Water, X0, X1, Y0, Y1)
+        scoria := 0
+        for y in Y0 ..= Y1 do for x in X0 ..= X1 do if get_tile(&gs.world, x, y) == .Scoria do scoria += 1
+        testing.expect_value(t, water - left, scoria)
+        for y in Y0 ..= Y1 do for x in X0 ..= X1 {
+            if get_tile(&gs.world, x, y) != .Water do continue
+            for n in ([4][2]int{{x, y + 1}, {x + 1, y}, {x - 1, y}, {x, y - 1}}) {
+                testing.expect(t, get_tile(&gs.world, n.x, n.y) != .Lava, "settled water touches no lava")
+            }
+        }
+    }
+}
+
+// ─── Enemy cap (board card 45) ────────────────────────────────────────────────
+
+CAP_TEST_FRAMES :: 240
+CAP_TEST_BLOCK  :: 20
+CAP_TEST_ATTEMPTS :: 3
+CAP_SCALE_LIMIT :: 8.0   // four times the bodies may cost at most this many times the frame
+
+@(private="file")
+cap_fill :: proc(gs: ^Game_State, n: int) {
+    gs.enemies = {}
+    gs.player.hp = 1 << 30
+    gs.player.hp_max = 1 << 30
+    for i in 0 ..< n {
+        x := 8 + (i * 7) % (GRID_W - 16)
+        y := 5 + (i * 3) % (SURFACE_Y - 8)
+        kind: Enemy_Kind = i % 2 == 0 ? .Vargr : .Fire_Sprite
+        wave_seed_hunter(gs, kind, x, y)
+    }
+}
+
+// The lower quartile.
+@(private="file")
+cap_quick :: proc(ns: []i64) -> i64 {
+    slice.sort(ns)
+    return ns[len(ns) / 4]
+}
+
+// The counts decide this test, not a clock.  Two things are asserted: the budgets
+// that keep a frame bounded hold at the cap, and the cap's frame scales with the
+// small swarm's.  The two swarms run in alternating blocks on the same machine at
+// the same moment, so load inflates both and the ratio survives it.  Wall times
+// are logged for a reader; no absolute time can fail the test.
+@(test)
+a_full_enemy_store_holds_its_budgets_and_scales :: proc(t: ^testing.T) {
+    big := test_state()
+    defer free(big)
+    small := test_state()
+    defer free(small)
+    cap_fill(big, MAX_ENEMIES)
+    cap_fill(small, MAX_ENEMIES / 4)
+    testing.expect_value(t, big.enemies.count, MAX_ENEMIES)
+    _, more := enemy_alloc(&big.enemies)
+    testing.expect(t, !more, "the store is full at the cap")
+
+    worst_searches := 0
+    ratio: f64
+    // A stolen timeslice only ever adds time, so the quick end of each swarm's
+    // frames is what load moves least, and a real slowdown fails every attempt.
+    for attempt in 0 ..< CAP_TEST_ATTEMPTS {
+    big_ns: [CAP_TEST_FRAMES]i64
+    small_ns: [CAP_TEST_FRAMES]i64
+    for f in 0 ..< CAP_TEST_FRAMES {
+        // Blocks, so neither swarm owns the quiet moments.
+        order := [2]^Game_State{big, small}
+        if (f / CAP_TEST_BLOCK) % 2 == 1 do order = {small, big}
+        for gs in order {
+            gs.frame += 1
+            start := time.tick_now()
+            update_enemies(gs)
+            spent := i64(time.tick_since(start))
+            if gs == big {
+                big_ns[f] = spent
+                worst_searches = max(worst_searches, gs.nav_searches)
+            } else {
+                small_ns[f] = spent
+            }
+            process_events(gs)
+            eq_clear(&gs.events)
+        }
+    }
+    b, s := cap_quick(big_ns[:]), cap_quick(small_ns[:])
+    ratio = f64(b) / f64(max(s, 1))
+    log.infof("enemy cap: %d bodies %.2f ms, %d bodies %.2f ms, ratio %.2f (limit %.1f), attempt %d",
+        MAX_ENEMIES, f64(b) / 1e6, MAX_ENEMIES / 4, f64(s) / 1e6, ratio, f64(CAP_SCALE_LIMIT), attempt + 1)
+    if ratio <= CAP_SCALE_LIMIT do break
+    }
+    testing.expect(t, worst_searches <= MAX_NAV_SEARCHES_PER_FRAME, "the nav budget holds at the cap")
+    testing.expect_value(t, big.events.dropped, 0)
+    testing.expect(t, ratio <= CAP_SCALE_LIMIT, "the frame must not grow faster than the swarm does")
+}
+
+// Card 53 makes drops fall: the hero's kit lands whole, and the tithe stays put.
+@(test)
+a_kit_dropped_in_the_air_lands_whole_and_the_tithe_stays_in_its_coffer :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.inventory = {}
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    coffer := [2]i32{gs.grave.tile.x + 1, gs.grave.tile.y}
+
+    fluid_carve_box(gs, 40, 44, 60, 70)
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok, "a slot")
+    gs.enemies.data[id].pos = {42, 61}
+    gs.risen = {has_kit = true, walking = true, slot = id}
+    gs.risen.kit[0] = {item = .Plank, count = 300}
+    gs.risen.kit[1] = {item = .Sword, count = 1}
+    gs.risen.kit[2] = {item = .Iron_Helm, count = 1}
+    planks := risen_ground_count(gs, .Plank)
+    despawn_enemy(gs, id)
+
+    for f in 0 ..< 600 {
+        gs.frame = u64(f)
+        gs.delta_time = 1.0 / 60.0
+        update_item_fall(gs)
+    }
+    testing.expect_value(t, risen_ground_count(gs, .Plank) - planks, 300)
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+    for y in 60 ..< 69 do for x in 40 ..= 44 {
+        idx := grid_idx(x, y)
+        below := grid_idx(x, y + 1)
+        if gs.world.items[idx] != .None && gs.world.items[below] == .None {
+            testing.expect(t, false, "a pile still hangs in the air")
+        }
+    }
+    b := barrel_at(gs, LEVEL_SURFACE, coffer)
+    testing.expect(t, b != nil && b.slots[0].item == .Sword, "the tithe is not a ground item")
+    testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
+}
+
 // ─── Dens are the dungeon ─────────────────────────────────────────────────────
 
 // A builder with a finished den on the surface level, its hoard on the floor.
@@ -11479,4 +12386,374 @@ the_director_sends_what_the_kettle_drew :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.wave.warning_kind, Wave_Kind.Air)
     wave_step(gs, int(WAVE_WARNING_TIME) + 1)
     testing.expect(t, wave_count_kind(gs, .Fire_Sprite) > 0, "the sky answers the mist")
+}
+
+// ─── Sabotage survivors, review of the stack ──────────────────────────────────
+
+@(test)
+an_emptied_silo_dug_by_an_enemy_leaves_no_record :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    set_tile(&gs.world, 11, 10, .Silo)
+    silo_on_placed(gs, {11, 10})
+    smash_tile(gs, 11, 10)
+    testing.expect(t, silo_at(gs, gs.level_index, {11, 10}) == nil, "no live record on a Void tile")
+}
+
+@(test)
+a_live_player_cannot_choose_a_tithe :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.stats.grave = {active = true}
+    grave_choose_tithe(gs, 0)
+    testing.expect_value(t, gs.stats.grave.tithe, Item.None)
+}
+
+@(test)
+a_chosen_tithe_survives_a_kill_on_the_death_screen :: proc(t: ^testing.T) {
+    PATH := "test_tithe_stats.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.stats_path = PATH
+    gs.player.inventory = {}
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    grave_die(gs, "lava", 10)
+    grave_choose_tithe(gs, 0)
+    // Only what reached the disk counts: the process dies here.
+    back: Persistent_Stats
+    testing.expect(t, load_stats(&back, PATH), "the file is there")
+    testing.expect(t, back.grave.active, "the grave is in it")
+    testing.expect_value(t, back.grave.tithe, Item.Sword)
+}
+
+@(test)
+a_raise_writes_the_run_and_lets_go_of_the_stats :: proc(t: ^testing.T) {
+    SAVE := "test_raise_save.dat"
+    STATS := "test_raise_stats.dat"
+    defer os.remove(SAVE)
+    defer os.remove(STATS)
+    gs := test_state()
+    defer free(gs)
+    gs.save_path = SAVE
+    gs.stats_path = STATS
+    gs.stats.grave = {active = true, hero = 2, tithe = .Sword}
+    grave_raise(gs)
+
+    run := test_state()
+    defer free(run)
+    testing.expect(t, load_game_from(run, SAVE), "the run reached the disk")
+    testing.expect(t, run.grave.active, "with its stone")
+    testing.expect_value(t, grave_count_item(run, .Sword), 1)
+    stats: Persistent_Stats
+    testing.expect(t, load_stats(&stats, STATS), "the stats reached the disk")
+    testing.expect(t, !stats.grave.active, "and let go of the grave")
+}
+
+@(test)
+the_stone_does_not_bury_a_pile :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    first := GRID_W/2 + GRAVE_SHAFT_OFFSET
+    idx := grid_idx(first, SURFACE_Y - 1)
+    gs.world.items[idx] = .Plank
+    gs.world.item_counts[idx] = 4
+    gs.stats.grave = {active = true, hero = 1}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active, "it found another place")
+    testing.expect(t, int(gs.grave.tile.x) != first, "not on the pile")
+    testing.expect_value(t, get_tile(&gs.world, first, SURFACE_Y - 1), Tile_Type.Air)
+}
+
+@(test)
+the_inscription_counts_its_heroes :: proc(t: ^testing.T) {
+    cases := [?]struct{hero: int, word: string}{
+        {1, "1st"}, {2, "2nd"}, {3, "3rd"}, {4, "4th"}, {11, "11th"}, {12, "12th"},
+        {13, "13th"}, {21, "21st"}, {22, "22nd"}, {111, "111th"}, {112, "112th"},
+    }
+    for c in cases {
+        g := Grave_Record{hero = c.hero}
+        buf: [128]u8
+        line := grave_inscription(&g, buf[:])
+        testing.expect(t, strings.contains(line, fmt.tprintf("the %s hero", c.word)), line)
+    }
+}
+
+@(test)
+the_stone_answers_only_beside_it_on_the_surface :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    tile := gs.grave.tile
+    gs.notify = {}
+
+    grave_interact(gs, int(tile.x) + BENCH_RANGE + 1, int(tile.y))
+    testing.expect_value(t, gs.notify.count, 0)
+    testing.expect_value(t, gs.events.size, 0)
+
+    gs.level_index = LEVEL_CAVE2
+    grave_interact(gs, int(tile.x), int(tile.y))
+    testing.expect_value(t, gs.notify.count, 0)
+    testing.expect_value(t, gs.events.size, 0)
+
+    gs.level_index = LEVEL_SURFACE
+    grave_interact(gs, int(tile.x), int(tile.y))
+    testing.expect_value(t, gs.notify.count, 1)
+    testing.expect_value(t, gs.events.size, 1)
+}
+
+@(test)
+another_enemys_end_leaves_the_kit_on_the_hero :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    testing.expect(t, risen_hero_rise(gs), "rises")
+    other := -1
+    for active, i in gs.enemies.active do if active && i != gs.risen.slot { other = i; break }
+    testing.expect(t, other >= 0, "the world has other enemies")
+    helms := risen_ground_count(gs, .Iron_Helm)
+    despawn_enemy(gs, other)
+    testing.expect(t, gs.risen.walking && gs.risen.has_kit, "the hero keeps it")
+    testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), helms)
+}
+
+@(test)
+the_stats_let_go_of_the_kit_with_the_grave :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    for s in gs.stats.kit do testing.expect_value(t, s.count, 0)
+    // No duplicate in the next world: it has no grave and no kit to take up.
+    start_new_game(gs)
+    testing.expect(t, !gs.risen.has_kit, "the old kit stayed with the old world")
+}
+
+@(test)
+a_tithe_costs_one_item_from_split_stacks :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.inventory = {}
+    gs.player.inventory.slots[0] = {item = .Plank, count = 5}
+    gs.player.inventory.slots[1] = {item = .Plank, count = 5}
+    grave_die(gs, "lava", 10)
+    grave_choose_tithe(gs, 1)
+    start_new_game(gs)
+    n := 0
+    for s in gs.risen.kit do if s.item == .Plank do n += s.count
+    testing.expect_value(t, n, 9)
+}
+
+@(test)
+the_hero_rises_only_on_the_surface :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    gs.level_index = LEVEL_CAVE2
+    testing.expect(t, !risen_hero_rise(gs), "the record's slots are the surface's")
+    testing.expect(t, !gs.risen.walking, "nothing rose")
+}
+
+@(test)
+pressing_e_through_the_ceremony_does_not_restart_it :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_DIMENSION
+    gs.dimension.kind = .Hell
+    inventory_insert(&gs.player.inventory, .Hell_Key, 1)
+    set_tile(&gs.world, 60, 40, .Final_Seal)
+    gs.player.pos = {59, 41 - PLAYER_H}
+    player_interact(gs)
+    testing.expect(t, gs.ritual.active && gs.ritual.seal, "it began")
+    gs.delta_time = 1.0 / 60.0
+    frames := int(RITUAL_DURATION * 60) + 2
+    for _ in 0 ..< frames {
+        player_interact(gs)
+        update_ritual(gs)
+    }
+    process_events(gs)
+    testing.expect(t, gs.game_won, "the Seal breaks on the first RITUAL_DURATION")
+}
+
+@(test)
+yesterdays_world_reaches_the_stats_file :: proc(t: ^testing.T) {
+    PATH := "test_seed_stats.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.stats_path = PATH
+    start_new_game_with(gs, 4242)
+    back: Persistent_Stats
+    testing.expect(t, load_stats(&back, PATH), "the file is there")
+    testing.expect(t, back.has_last_seed, "the seed is in it")
+    testing.expect_value(t, back.last_seed, u32(4242))
+}
+
+@(test)
+one_water_between_two_lavas_takes_each_side_on_its_flip :: proc(t: ^testing.T) {
+    for flip in ([2]bool{true, false}) {
+        gs := test_state()
+        defer free(gs)
+        fluid_carve_box(gs, 40, 50, 60, 70)
+        for x in 40 ..= 50 do set_tile(&gs.world, x, 70, .Stone)
+        set_tile(&gs.world, 44, 69, .Lava)
+        set_tile(&gs.world, 45, 69, .Water)
+        set_tile(&gs.world, 46, 69, .Lava)
+        fluid_step(gs, fluid_rules[0], flip)
+        taken, kept := 46, 44
+        if !flip do taken, kept = 44, 46
+        testing.expect_value(t, get_tile(&gs.world, taken, 69), Tile_Type.Scoria)
+        testing.expect_value(t, get_tile(&gs.world, kept, 69), Tile_Type.Lava)
+    }
+}
+
+@(test)
+the_seed_field_stops_at_its_last_digit :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.title_fresh = true
+    for _ in 0 ..= TITLE_SEED_DIGITS do testing.expect(t, !title_key(gs, .SEVEN), "a digit never starts")
+    testing.expect_value(t, gs.ui.title_seed_len, TITLE_SEED_DIGITS)
+}
+
+// ─── Old saves field by field (board card 45 rework) ──────────────────────────
+
+@(private="file")
+byte_fill :: proc(p: ^$T, v: u8) { mem.set(p, v, size_of(T)) }
+
+@(private="file")
+same_bytes :: proc(a, b: ^$T) -> bool { return mem.compare_ptrs(a, b, size_of(T)) == 0 }
+
+@(test)
+save_data_shrink_carries_every_field :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    old := save_1024_fixture(gs)
+    defer free(old)
+    old.level_index  = LEVEL_CAVE3
+    old.elapsed_time = 991
+    old.frame        = 12345
+    old.world_seed   = 777
+    byte_fill(&old.player, 0x11)
+    byte_fill(&old.golems, 0x12)
+    byte_fill(&old.sim, 0x13)
+    byte_fill(&old.progression, 0x14)
+    byte_fill(&old.dimension, 0x15)
+    byte_fill(&old.grave, 0x16)
+    byte_fill(&old.risen.kit, 0x17)
+    old.risen.has_kit = true
+    old.world.terrain[9] = .Clay
+    for i in 0 ..< NUM_LEVELS {
+        old.levels.worlds[i].terrain[30 + i] = .Clay
+        old.levels.worlds[i].items[40 + i]   = .Plank
+        old.levels.generated[i] = i % 2 == 0
+        old.levels.enemies[i].active[i] = true
+        old.levels.enemies[i].data[i].hp = 50 + i
+        old.levels.enemies[i].count = 1
+    }
+    sd := save_data_shrink(old)
+    defer free(sd)
+    testing.expect_value(t, sd.version, SAVE_VERSION)
+    testing.expect_value(t, sd.level_index, LEVEL_CAVE3)
+    testing.expect_value(t, sd.elapsed_time, f32(991))
+    testing.expect_value(t, sd.frame, u64(12345))
+    testing.expect_value(t, sd.world_seed, u32(777))
+    testing.expect(t, same_bytes(&sd.player, &old.player), "player")
+    testing.expect(t, same_bytes(&sd.golems, &old.golems), "golems")
+    testing.expect(t, same_bytes(&sd.sim, &old.sim), "sim")
+    testing.expect(t, same_bytes(&sd.progression, &old.progression), "progression")
+    testing.expect(t, same_bytes(&sd.dimension, &old.dimension), "dimension")
+    testing.expect(t, same_bytes(&sd.grave, &old.grave), "grave")
+    testing.expect(t, same_bytes(&sd.risen.kit, &old.risen.kit), "kit")
+    testing.expect_value(t, sd.world.terrain[9], Tile_Type.Clay)
+    for i in 0 ..< NUM_LEVELS {
+        testing.expect_value(t, sd.levels.worlds[i].terrain[30 + i], Tile_Type.Clay)
+        testing.expect_value(t, sd.levels.worlds[i].items[40 + i], Item.Plank)
+        testing.expect_value(t, sd.levels.generated[i], i % 2 == 0)
+        testing.expect(t, sd.levels.enemies[i].active[i], "a stashed body")
+        testing.expect_value(t, sd.levels.enemies[i].data[i].hp, 50 + i)
+        testing.expect_value(t, sd.levels.enemies[i].count, 1)
+    }
+}
+
+@(test)
+a_hero_on_the_stashed_surface_maps_through_the_surface_store :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    old := save_1024_fixture(gs)
+    defer free(old)
+    HIGH :: 700
+    old.level_index = LEVEL_CAVE2
+    old.enemies = {}
+    old.levels.enemies[LEVEL_SURFACE] = {}
+    old.levels.enemies[LEVEL_SURFACE].active[HIGH] = true
+    old.levels.enemies[LEVEL_SURFACE].data[HIGH].hp = 44
+    old.levels.enemies[LEVEL_SURFACE].count = 1
+    old.risen = {has_kit = true, walking = true, slot = HIGH}
+    sd := save_data_shrink(old)
+    defer free(sd)
+    testing.expect(t, sd.risen.walking, "the surface store holds the body")
+    testing.expect_value(t, sd.levels.enemies[LEVEL_SURFACE].data[sd.risen.slot].hp, 44)
+}
+
+@(test)
+an_old_file_with_a_dead_hero_or_a_wrong_number_does_not_resume :: proc(t: ^testing.T) {
+    PATH := "test_old_dead.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    old := save_1024_fixture(gs)
+    defer free(old)
+    old.player.dead = true
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, !load_game_from(back, PATH), "a dead old run stays dead")
+    old.player.dead = false
+    old.version = 19
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    testing.expect(t, !load_game_from(back, PATH), "a wrong number is refused")
+}
+
+@(test)
+a_v23_save_keeps_its_enemies_and_stashed_levels :: proc(t: ^testing.T) {
+    PATH := "test_v23_enemies.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    old := new(Save_Data_v23)
+    defer free(old)
+    old.version = 23
+    old.world   = gs.world
+    old.player  = gs.player
+    old.levels.worlds    = gs.levels.worlds
+    old.levels.generated = gs.levels.generated
+    old.levels.worlds[LEVEL_CAVE2].terrain[30] = .Clay
+    old.levels.generated[LEVEL_CAVE2] = true
+    old.levels.enemies[LEVEL_CAVE2].active[2] = true
+    old.levels.enemies[LEVEL_CAVE2].data[2].hp = 61
+    old.levels.enemies[LEVEL_CAVE2].count = 1
+    old.enemies.active[3] = true
+    old.enemies.data[3].hp = 62
+    old.enemies.count = 1
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "v23 loads")
+    testing.expect_value(t, back.enemies.data[3].hp, 62)
+    testing.expect_value(t, back.levels.enemies[LEVEL_CAVE2].data[2].hp, 61)
+    testing.expect_value(t, back.levels.worlds[LEVEL_CAVE2].terrain[30], Tile_Type.Clay)
+    testing.expect(t, back.levels.generated[LEVEL_CAVE2], "generated stays")
+
+    old.player.dead = true
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    testing.expect(t, !load_game_from(back, PATH), "a dead v23 run stays dead")
+    old.player.dead = false
+    old.version = 22
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
+    testing.expect(t, !load_game_from(back, PATH), "a wrong number at this size is refused")
 }

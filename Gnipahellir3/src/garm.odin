@@ -541,7 +541,7 @@ garm_smash :: proc(e: ^Enemy, gs: ^Game_State) -> bool {
     for i in 0 ..< n {
         cx := check[i].x
         cy := check[i].y
-        if is_solid(&gs.world, cx, cy) && is_builder_mineable(&gs.world, cx, cy) &&
+        if is_solid(&gs.world, cx, cy) && is_builder_mineable(gs, cx, cy) &&
            !den_protected(gs, cx, cy) {
             smash_tile(gs, cx, cy)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(cx), i32(cy)}})

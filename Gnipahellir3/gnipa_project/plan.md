@@ -223,7 +223,7 @@ Indexing: `terrain[y * GRID_W + x]`
 ## Entity Storage
 
 ```odin
-MAX_ENEMIES   :: 64
+MAX_ENEMIES   :: 256
 PLAYER_ID     :: Entity_ID(0)
 INVALID_ENTITY :: max(Entity_ID)
 

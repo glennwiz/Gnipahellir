@@ -797,6 +797,45 @@ draw_title :: proc(gs: ^Game_State) {
 	draw_stepped_panel_shape(PROMPT_X + 6, PROMPT_Y + 6, PROMPT_W - 12, PROMPT_H - 12, rl.Color{19, 15, 17, 255})
 	prompt_col := (tick / 5) % 4 == 0 ? rl.Color{165, 118, 54, 255} : rl.Color{255, 218, 132, 255}
 	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
+
+	if !gs.ui.title_fresh do return
+	seed_line: [64]u8
+	if gs.ui.title_seed_len > 0 {
+		fmt.bprintf(seed_line[:63], "World seed: %s", string(gs.ui.title_seed[:gs.ui.title_seed_len]))
+	} else {
+		fmt.bprintf(seed_line[:63], "Type a world seed, or leave it for a new world")
+	}
+	center_text(cstring(raw_data(seed_line[:])), PROMPT_Y + PROMPT_H + 18, 18, rl.Color{215, 164, 79, 255})
+	if gs.stats.has_last_seed {
+		last_line: [64]u8
+		fmt.bprintf(last_line[:63], "[Y] Yesterday's world: %d", gs.stats.last_seed)
+		center_text(cstring(raw_data(last_line[:])), PROMPT_Y + PROMPT_H + 44, 18, rl.Color{157, 144, 134, 255})
+	}
+}
+
+// One key on the title; true when it closes the screen.  With a world to choose,
+// digits and Backspace edit the seed and Y recalls the last world's.
+TITLE_SEED_DIGITS :: 10 // every u32 fits
+title_key :: proc(gs: ^Game_State, key: rl.KeyboardKey) -> bool {
+	if !gs.ui.title_fresh do return true
+	ui := &gs.ui
+	#partial switch key {
+	case .ZERO ..= .NINE:
+		if ui.title_seed_len < TITLE_SEED_DIGITS {
+			ui.title_seed[ui.title_seed_len] = '0' + u8(key - .ZERO)
+			ui.title_seed_len += 1
+		}
+		return false
+	case .BACKSPACE:
+		if ui.title_seed_len > 0 do ui.title_seed_len -= 1
+		return false
+	case .Y:
+		if !gs.stats.has_last_seed do return true
+		digits := fmt.bprintf(ui.title_seed[:], "%d", gs.stats.last_seed)
+		ui.title_seed_len = len(digits)
+		return false
+	}
+	return true
 }
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
@@ -895,6 +934,9 @@ draw_menu :: proc(gs: ^Game_State) {
 		18,
 		rl.Color{150, 130, 110, 255},
 	)
+	seed_buf: [40]u8
+	fmt.bprintf(seed_buf[:39], "World seed %d", gs.world_seed)
+	center_text(cstring(raw_data(seed_buf[:])), MENU_Y + MENU_ROWS * MENU_ROW_H + 66, 16, rl.Color{120, 104, 90, 255})
 }
 
 // ─── Settings Screen (volumes + key binds) ────────────────────────────────────
@@ -1089,7 +1131,7 @@ DBG_MENU_X :: 24
 DBG_MENU_Y :: 80
 DBG_MENU_W :: 200
 DBG_MENU_ROW_H :: 24
-DBG_MENU_ROWS :: 15 // 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor; 14:item palette
+DBG_MENU_ROWS :: 16 // 15:raise the last hero; 0:fly; 1:wand; 2:portals; 3:structures; 4:resources; 5:full hp; 6:max mana; 7/8:stamp spawners; 9:miner; 10:wand; 11:golem; 12:life; 13:pixel art editor; 14:item palette
 
 // Menu row under the cursor, or -1.
 debug_menu_row_at_cursor :: proc(gs: ^Game_State) -> int {
@@ -1214,6 +1256,14 @@ draw_debug_menu :: proc(gs: ^Game_State) {
 		DBG_MENU_Y + 14 * DBG_MENU_ROW_H + 7,
 		10,
 		ip_col,
+	)
+
+	rl.DrawText(
+		"Raise the last hero >",
+		DBG_MENU_X,
+		DBG_MENU_Y + 15 * DBG_MENU_ROW_H + 7,
+		10,
+		rl.YELLOW,
 	)
 
 	if r := debug_menu_row_at_cursor(gs); r >= 0 {
@@ -1789,7 +1839,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	}
 	if gs.ui.show_rune_scroll do draw_rune_scroll(gs)
 	if gs.ui.show_book do draw_book(gs)
-	if gs.game_won do draw_win_screen(gs)
+	if gs.game_won && !gs.ui.show_book do draw_win_screen(gs)
 	if gs.player.dead do draw_death_screen(gs)
 	when GAME_DEBUG {
 		if gs.debug.menu_open do draw_debug_menu(gs)
@@ -2084,6 +2134,7 @@ draw_book :: proc(gs: ^Game_State) {
 	draw_rune_strip(f32(bx + bw / 2), f32(by + 34), 12, NORSE_GOLD)
 	title := book_title(gs.ui.book_tier)
 	if gs.ui.book_page == .Waters do title = "Of Water and Fire"
+	if gs.ui.book_page == .Saga do title = "The Saga"
 	tw := rl.MeasureText(title, 40)
 	rl.DrawText(title, bx + (bw - tw) / 2, by + 60, 40, ink)
 	rl.DrawLine(bx + 60, by + 112, bx + bw - 60, by + 112, faint)
@@ -2102,6 +2153,15 @@ draw_book :: proc(gs: ^Game_State) {
 		}
 	case .Waters:
 		draw_book_waters(gs, bx, by, bw, ink, faint)
+	case .Saga:
+		bufs: [4][64]u8
+		ty := by + 156
+		saga_lines(gs, &bufs)
+		for &line in bufs {
+			text := cstring(raw_data(line[:]))
+			rl.DrawText(text, bx + (bw - rl.MeasureText(text, 20)) / 2, ty, 20, ink)
+			ty += 40
+		}
 	}
 
 	hint: cstring = "[E] close the tome"
@@ -2208,6 +2268,49 @@ death_cause_line :: proc(gs: ^Game_State, buf: []u8) -> string {
 
 DEATH_INPUT_DELAY :: f32(1.2) // seconds before restart input is accepted
 
+TITHE_COLS :: 12
+TITHE_CELL :: i32(44)
+TITHE_GAP  :: i32(6)
+TITHE_TOP  :: i32(555)
+
+// One grid for the draw and the click, so they can never disagree.
+tithe_cell_rect :: proc(slot: int) -> (x, y: i32) {
+	row_w := TITHE_COLS * (TITHE_CELL + TITHE_GAP) - TITHE_GAP
+	x = (UI_W - row_w) / 2 + i32(slot % TITHE_COLS) * (TITHE_CELL + TITHE_GAP)
+	y = TITHE_TOP + i32(slot / TITHE_COLS) * (TITHE_CELL + TITHE_GAP)
+	return
+}
+
+// The offerable bag slot under the mouse, in UI pixels, or -1.
+tithe_cell_at :: proc(gs: ^Game_State, mouse: [2]f32) -> int {
+	mx, my := i32(mouse.x), i32(mouse.y)
+	for slot in 0 ..< MAX_INVENTORY {
+		if !tithe_offerable(gs.player.inventory.slots[slot]) do continue
+		x, y := tithe_cell_rect(slot)
+		if mx >= x && mx < x + TITHE_CELL && my >= y && my < y + TITHE_CELL do return slot
+	}
+	return -1
+}
+
+// The bag laid out for the choice; a scroll or key is shown dim and takes no click.
+draw_tithe_choice :: proc(gs: ^Game_State, fade: f32) {
+	_, top := tithe_cell_rect(0)
+	line := cstring("Choose one thing to send on to the next hero")
+	rl.DrawText(line, (UI_W - rl.MeasureText(line, 20)) / 2, top - 30, 20, rl.Color{255, 220, 140, u8(255 * fade)})
+	for slot in 0 ..< MAX_INVENTORY {
+		s := gs.player.inventory.slots[slot]
+		x, y := tithe_cell_rect(slot)
+		chosen := gs.ui.tithe_slot == slot
+		offerable := tithe_offerable(s)
+		border := chosen ? rl.Color{255, 220, 140, 255} : rl.Color{120, 70, 60, u8(255 * fade)}
+		rl.DrawRectangle(x, y, TITHE_CELL, TITHE_CELL, rl.Color{20, 8, 8, u8(220 * fade)})
+		rl.DrawRectangleLines(x, y, TITHE_CELL, TITHE_CELL, border)
+		if s.item == .None || s.count <= 0 do continue
+		draw_item_icon(s.item, x + 8, y + 8, TITHE_CELL - 16)
+		if !offerable do rl.DrawRectangle(x, y, TITHE_CELL, TITHE_CELL, rl.Color{20, 0, 0, 170})
+	}
+}
+
 draw_death_screen :: proc(gs: ^Game_State) {
 	t := f32(rl.GetTime())
 	fade := clamp(gs.player.death_timer, 0, 1)
@@ -2267,11 +2370,15 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		rl.Color{160, 130, 120, u8(255 * fade)},
 	)
 
+	if any_tithe_offerable(&gs.player.inventory) {
+		draw_tithe_choice(gs, fade)
+	}
+
 	if gs.player.death_timer > DEATH_INPUT_DELAY {
 		pulse := u8(120 + 135 * (0.5 + 0.5 * math.sin(t * 2.5)))
 		center_text(
 			"PRESS [ENTER] - CARVE A NEW HERO",
-			UI_H - 150,
+			UI_H - 54,
 			26,
 			rl.Color{255, 220, 140, pulse},
 		)

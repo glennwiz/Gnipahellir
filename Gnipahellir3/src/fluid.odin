@@ -67,13 +67,14 @@ Fluid_Rule :: struct {
 	springs:     bool, // may the spring stencil fire for this fluid?
 	lifetime:    f32, // 0 = forever; >0 = seconds before a cell fades back to open
 	static_drip: bool, // never moves; every cell drips a copy straight down instead
+	quenches:    bool, // spends itself on touching lava, leaving Scoria (fluid_quench)
 }
 
 // Do not reorder existing rows: Fluid_State.timers/flip are indexed by rule
 // position (transient, but tests index them too).
 @(rodata)
 fluid_rules := [?]Fluid_Rule {
-	{tile = .Water, period = 1.0, springs = true},
+	{tile = .Water, period = 1.0, springs = true, quenches = true},
 	// Lava is STATIC (Glenn's law, 2026-08-15): a level's lava is permanent
 	// scenery and an endless hazard — it sits where the world (or Garm, or a
 	// poured bucket) put it and drips copies straight down into open space,
@@ -281,6 +282,8 @@ fluid_step :: proc(gs: ^Game_State, rule: Fluid_Rule, flip: bool) {
 				}
 			}
 
+			if rule.quenches && fluid_quench(gs, x, y, dir) do continue
+
 			// A static fluid's cell IS a downward source: it drips a copy
 			// into open space below, one tile per step (rows run bottom-up,
 			// so the newborn in the already-settled row y+1 waits for the
@@ -366,6 +369,23 @@ fluid_step :: proc(gs: ^Game_State, rule: Fluid_Rule, flip: bool) {
 			}
 		}
 	}
+}
+
+// Glenn's quench (2026-11-02): any lava goes out where water touches it, but the
+// rule limits the stone.  One water buys one Scoria, which pays nothing when
+// mined, so endless lava cannot become endless stone, and a pour only bridges
+// what it reaches: the lava around it burns on.  Below first, then the sides,
+// flipped with the flow so a pool has no lean, then above.
+fluid_quench :: proc(gs: ^Game_State, x, y, dir: int) -> bool {
+	w := &gs.world
+	for n in ([4][2]int{{x, y + 1}, {x + dir, y}, {x - dir, y}, {x, y - 1}}) {
+		t := get_tile(w, n.x, n.y)
+		if t != .Lava && t != .Magic_Lava do continue
+		set_tile(w, n.x, n.y, .Scoria)
+		set_tile(w, x, y, gravity_open_tile(gs, y))
+		return true
+	}
+	return false
 }
 
 // The vacated cell opens exactly as a mined one does (air above the surface

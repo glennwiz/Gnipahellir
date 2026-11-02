@@ -242,7 +242,7 @@ spawn_mushroom_glow :: proc(gs: ^Game_State, T: [2]i32) {
 // from a ring toward the point above the altar — reads as the gift being drawn
 // together.  Hue rides the ritual clock so the whole swirl cycles the spectrum.
 RITUAL_SWIRL_R :: f32(3.5)  // tiles — the ring the motes spiral in from
-spawn_ritual_swirl :: proc(gs: ^Game_State, altar: [2]i32, t: f32) {
+spawn_ritual_swirl :: proc(gs: ^Game_State, altar: [2]i32, t: f32, reverse := false) {
     center := [2]f32{f32(altar.x) + 0.5, f32(altar.y) - 1.5}  // float above the capstone
     for i in 0 ..< 3 {
         seed := u32(gs.frame)*47 + u32(i)*733
@@ -252,6 +252,10 @@ spawn_ritual_swirl :: proc(gs: ^Game_State, altar: [2]i32, t: f32) {
         inward := center - pos
         tang   := [2]f32{-inward.y, inward.x} * 0.6           // swirl as it falls in
         vel    := inward * 1.6 + tang
+        if reverse {  // out from the center, unwinding the other way
+            pos = center
+            vel = -inward * 1.6 - tang
+        }
         hue    := f32(math.mod(f64(t*140 + f32(i)*47 + ang*57.3), 360))
         spawn_particle(&gs.particles, pos, vel, rl.ColorFromHSV(hue, 0.8, 1.0),
             0.5 + jitter(seed + 3, 0.15))

@@ -145,7 +145,7 @@ boundaries — these are call-discipline rules, checked by review:
 GRID_W          :: 192
 GRID_H          :: 108
 CELL_SIZE       :: 10
-MAX_ENEMIES     :: 64
+MAX_ENEMIES     :: 256
 MAX_PARTICLES   :: 256
 MAX_PROJECTILES :: 32
 MAX_EVENTS      :: 512

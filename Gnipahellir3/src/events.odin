@@ -286,6 +286,7 @@ process_events :: proc(gs: ^Game_State) {
         case .Level_Enter:
             // transition already performed by level_transition
             lvl := int(e.payload.int_val)
+            gs.stats.deepest_cave = max(gs.stats.deepest_cave, deepest_rank(gs, lvl))
             if lvl == LEVEL_DIMENSION {
                 notify(gs, "- %s -", dimension_table[gs.dimension.kind].name)
             } else if lvl >= 0 && lvl < NUM_LEVELS {
@@ -396,6 +397,12 @@ process_events :: proc(gs: ^Game_State) {
 
         case .New_Game_Request:
             start_new_game(gs)
+
+        case .Title_Start:
+            start_title_game(gs)
+
+        case .Tithe_Choose:
+            grave_choose_tithe(gs, int(e.payload.int_val))
 
         case .Quit_Request:
             gs.quit_requested = true
@@ -529,6 +536,7 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
         eq_push(&gs.events, Event{type = .Player_Died})
         audio_play(&gs.audio, .Death)
         gs.stats.runs_played += 1
+        grave_record_death(gs)
         _ = save_stats(gs)  // persist immediately — a crash after death shouldn't lose the run
     } else {
         i := entity_id_to_enemy_index(e.source)

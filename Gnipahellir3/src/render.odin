@@ -29,6 +29,7 @@ draw_game :: proc(gs: ^Game_State, target: rl.RenderTexture2D) {
 	draw_golem_orders(gs)
 	draw_player(&gs.player, gs.player_form, gs.player_step_visual_y)
 	draw_enemies(&gs.enemies, gs.elapsed_time)
+	draw_risen_mark(gs)
 	draw_den_hoards(gs)
 	draw_lasers(gs)
 	draw_golems(gs)
@@ -670,6 +671,7 @@ draw_ritual :: proc(gs: ^Game_State) {
 	r := &gs.ritual
 	t := r.timer
 	prog := clamp(t / RITUAL_DURATION, 0, 1)
+	if r.seal do prog = 1 - prog  // the bloom collapses: the ritual undone
 	cx := i32(r.altar.x * CELL_SIZE) + CELL_SIZE / 2
 	cy := i32((r.altar.y - 2) * CELL_SIZE)
 	tick := int(t * 12)
@@ -1121,8 +1123,10 @@ draw_rune_scroll_chests :: proc(gs: ^Game_State) {
 	for y in 0 ..< GRID_H {
 		for x in 0 ..< GRID_W {
 			t := get_tile(&gs.world, x, y)
-			if is_rune_scroll_chest(t) || t == .Rune_Coffer {
-				bx, by := i32(x * CELL_SIZE), i32(y * CELL_SIZE)
+			bx, by := i32(x * CELL_SIZE), i32(y * CELL_SIZE)
+			if t == .Rune_Stone {
+				draw_rune_stone(bx, by)
+			} else if is_rune_scroll_chest(t) || t == .Rune_Coffer {
 				if gs.pixel_art.sprites[.Rune_Scroll_Chest].has_data {
 					draw_pixel_grid_sprite(gs, .Rune_Scroll_Chest, bx, by)
 				} else {
@@ -1131,6 +1135,16 @@ draw_rune_scroll_chests :: proc(gs: ^Game_State) {
 			}
 		}
 	}
+}
+
+// A slab a little taller than its cell; collision stays one cell.
+draw_rune_stone :: proc(bx, by: i32) {
+	rl.DrawRectangle(bx + 1, by - 6, CELL_SIZE - 2, CELL_SIZE + 6, rl.Color{112, 116, 130, 255})
+	rl.DrawRectangleLines(bx + 1, by - 6, CELL_SIZE - 2, CELL_SIZE + 6, rl.Color{62, 64, 76, 255})
+	rune := rl.Color{190, 210, 255, 255}
+	rl.DrawLine(bx + 5, by - 3, bx + 5, by + 7, rune)
+	rl.DrawLine(bx + 3, by - 1, bx + 5, by + 2, rune)
+	rl.DrawLine(bx + 7, by - 1, bx + 5, by + 2, rune)
 }
 
 draw_pixel_rune_scroll_chest :: proc(gs: ^Game_State, bx, by: i32, t: Tile_Type, x, y: int) {
@@ -2341,6 +2355,15 @@ draw_enemies :: proc(es: ^Enemy_Store, t: f32) {
 		if !es.active[i] {continue}
 		draw_enemy(&es.data[i], t)
 	}
+}
+
+// The last hero wears a gold band, so they read as someone, not a draugr.
+draw_risen_mark :: proc(gs: ^Game_State) {
+	if !gs.risen.walking || gs.level_index != LEVEL_SURFACE do return
+	e := &gs.enemies.data[gs.risen.slot]
+	x := i32(e.pos.x * CELL_SIZE)
+	y := i32(e.pos.y * CELL_SIZE)
+	rl.DrawRectangle(x, y - 2, i32(BUILDER_W * CELL_SIZE), 2, rl.Color{235, 195, 60, 255})
 }
 
 draw_enemy :: proc(e: ^Enemy, t: f32) {
