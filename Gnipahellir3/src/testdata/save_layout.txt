@@ -1,4 +1,4 @@
-version 28
+version 29
 Save_Data.version 0 4 i32
 Save_Data.level_index 8 8 int
 Save_Data.world 16 476928 World_Grid
@@ -180,11 +180,13 @@ Miner_State.last_time 28 4 f32
 Miner_State.haul 32 48 [6]Miner_Haul
 Grave_Record.active 0 1 bool
 Grave_Record.tithe 1 1 Item
+Grave_Record.pending 2 1 bool
 Grave_Record.hero 8 8 int
 Grave_Record.seconds 16 4 f32
 Grave_Record.cause 20 32 [32]u8
 Grave_Record.place 52 32 [32]u8
 Grave_Record.tile 84 8 [2]i32
+Grave_Record.level 92 4 i32
 Risen_Hero.has_kit 0 1 bool
 Risen_Hero.walking 1 1 bool
 Risen_Hero.slot 8 8 int

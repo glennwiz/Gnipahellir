@@ -2359,7 +2359,7 @@ draw_enemies :: proc(es: ^Enemy_Store, t: f32) {
 
 // The last hero wears a gold band, so they read as someone, not a draugr.
 draw_risen_mark :: proc(gs: ^Game_State) {
-	if !gs.risen.walking || gs.level_index != LEVEL_SURFACE do return
+	if !risen_hero_here(gs, gs.risen.slot) do return
 	e := &gs.enemies.data[gs.risen.slot]
 	x := i32(e.pos.x * CELL_SIZE)
 	y := i32(e.pos.y * CELL_SIZE)

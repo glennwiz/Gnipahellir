@@ -6,7 +6,10 @@ import "core:fmt"
 //
 //  Glenn's permadeath (design review Q1): death is final, but the fallen may
 //  send one thing on.  The death screen offers the bag; the next world raises a
-//  rune stone by the shaft that names the hero, and a coffer holding the tithe.
+//  rune stone where the hero fell that names them, and a coffer holding the tithe.
+//  The next world is a new one, so that is the same level and coordinates, on
+//  the nearest open cell.  A cave or the sky does not exist until it is entered:
+//  until then the grave is `pending` in gs.grave, and it stands on the way in.
 //
 //  A Grave_Record lives in two places, one at a time.  Between worlds it is
 //  gs.stats.grave, in the stats file, because that is the one file death does
@@ -14,17 +17,19 @@ import "core:fmt"
 //  belongs to, and the tithe moves into an ordinary coffer record.
 
 GRAVE_TEXT         :: 32   // bytes kept of a cause or place name
-GRAVE_SHAFT_OFFSET :: 3    // tiles right of the shaft mouth the search for a spot begins
-GRAVE_SEARCH       :: 24   // tiles searched to each side of that
+GRAVE_SHAFT_OFFSET :: 3    // tiles right of the shaft mouth: where a grave with no tile looks first
+GRAVE_SPAWN_CLEAR  :: 4    // tiles a surface grave keeps from where a new player appears
 
 Grave_Record :: struct {
     active:  bool,              // holds a fallen hero (stats) / the stone stands (run)
     tithe:   Item,              // .None: the hero sent nothing on
+    pending: bool,              // the run holds it, its level is not generated yet
     hero:    int,               // which run this was, counted from the first
     seconds: f32,               // how long the saga lasted
     cause:   [GRAVE_TEXT]u8,    // "lava", NUL-terminated
     place:   [GRAVE_TEXT]u8,    // "Deep Cave", NUL-terminated
-    tile:    [2]i32,            // where the stone stands (run only)
+    tile:    [2]i32,            // where the hero fell, then where the stone stands
+    level:   i32,               // and on which level.  {0,0}, level 0: by the shaft
 }
 
 // Scrolls and keys are the run's own progress, so they cannot be carried out
@@ -57,6 +62,12 @@ grave_record_death :: proc(gs: ^Game_State) {
     g := Grave_Record{active = true, hero = gs.stats.runs_played, seconds = gs.elapsed_time}
     fmt.bprintf(g.cause[:GRAVE_TEXT - 1], "%s", cause)
     fmt.bprintf(g.place[:GRAVE_TEXT - 1], "%s", place)
+    // A Dimension does not come back with the next world, so a hero lost there
+    // gets the stone by the shaft.  The inscription still says where they fell.
+    if gs.level_index != LEVEL_DIMENSION {
+        g.level = i32(gs.level_index)
+        g.tile  = player_tile(&gs.player)
+    }
     gs.stats.grave = g
     kit_collect(gs)
 }
@@ -79,22 +90,86 @@ grave_choose_tithe :: proc(gs: ^Game_State, slot: int) {
     _ = save_stats(gs)
 }
 
-// The two open cells beside each other, on solid ground, nearest the shaft.
+// What a grave must not crowd: the way on, and the run's own progress.
+@(private="file", rodata)
+grave_keep_clear := #partial [Tile_Type]bool{
+    .Cave_Entrance         = true,
+    .Sky_Altar             = true,
+    .Rune_Altar            = true,
+    .Sky_Rune_Scroll_Chest = true,
+    .Rune_Scroll_Chest_A   = true,
+    .Rune_Scroll_Chest_B   = true,
+    .Rune_Scroll_Chest_C   = true,
+}
+
+// Void is the open air of a cave.
 @(private="file")
-grave_spot :: proc(w: ^World_Grid) -> (x: int, ok: bool) {
-    start := GRID_W/2 + GRAVE_SHAFT_OFFSET
-    open :: proc(w: ^World_Grid, x: int) -> bool {
-        if !in_bounds(x, SURFACE_Y - 1) || !in_bounds(x, SURFACE_Y) do return false
-        idx := grid_idx(x, SURFACE_Y - 1)
-        return w.terrain[idx] == .Air && w.items[idx] == .None &&
-               .Solid in terrain_table[w.terrain[grid_idx(x, SURFACE_Y)]].flags
+grave_tile_open :: proc(tile: Tile_Type) -> bool {
+    return tile == .Air || tile == .Void
+}
+
+// Open air, a head of it, ground under it, no pile, nothing to crowd.
+@(private="file")
+grave_cell_open :: proc(w: ^World_Grid, level, x, y: int) -> bool {
+    if !in_bounds(x, y - 1) || !in_bounds(x, y + 1) do return false
+    idx := grid_idx(x, y)
+    if !grave_tile_open(w.terrain[idx]) || w.items[idx] != .None do return false
+    if !grave_tile_open(w.terrain[grid_idx(x, y - 1)]) do return false
+    if .Solid not_in terrain_table[w.terrain[grid_idx(x, y + 1)]].flags do return false
+    for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+        if !in_bounds(x + dx, y + dy) do continue
+        near := grid_idx(x + dx, y + dy)
+        if grave_keep_clear[w.terrain[near]] || tithe_refused[w.items[near]] do return false
     }
-    for d in 0 ..< GRAVE_SEARCH {
-        for cand in ([2]int{start + d, start - d}) {
-            if open(w, cand) && open(w, cand + 1) do return cand, true
+    if level == LEVEL_SURFACE {
+        home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
+        spawn := [2]i32{i32(home.x), i32(home.y)}
+        if chebyshev({i32(x), i32(y)}, spawn) <= GRAVE_SPAWN_CLEAR do return false
+    }
+    for p in level_portals[level] {
+        for t in p.tiles {
+            if abs(int(t.x) - x) <= 1 && abs(int(t.y) - y) <= 1 do return false
         }
     }
-    return 0, false
+    return true
+}
+
+// The nearest three open cells in a row: stone, coffer, and where the hero rises.
+@(private="file")
+grave_spot :: proc(w: ^World_Grid, level: int, from: [2]i32) -> (tile: [2]i32, ok: bool) {
+    for r in 0 ..< GRID_W {
+        for dy in -r ..= r do for dx in -r ..= r {
+            if max(abs(dx), abs(dy)) != r do continue  // this ring only
+            x, y := int(from.x) + dx, int(from.y) + dy
+            if grave_cell_open(w, level, x, y) && grave_cell_open(w, level, x + 1, y) &&
+               grave_cell_open(w, level, x + 2, y) {
+                return {i32(x), i32(y)}, true
+            }
+        }
+    }
+    return {}, false
+}
+
+// Stands the stone and coffer in the live world, the level the player is on.
+@(private="file")
+grave_stand :: proc(gs: ^Game_State, g: ^Grave_Record) -> bool {
+    from := g.tile
+    if from == {} do from = {GRID_W/2 + GRAVE_SHAFT_OFFSET, SURFACE_Y - 1}
+    tile, ok := grave_spot(&gs.world, gs.level_index, from)
+    if !ok do return false
+    g.tile = tile
+    set_tile(&gs.world, int(tile.x), int(tile.y), .Rune_Stone)
+    if g.tithe != .None {
+        coffer := tile + {1, 0}
+        if barrel_slot_free(gs) {
+            set_tile(&gs.world, int(coffer.x), int(coffer.y), .Rune_Coffer)
+            barrel_on_placed(gs, coffer)
+            if b := barrel_at(gs, gs.level_index, coffer); b != nil do barrel_deposit(b, g.tithe, 1)
+        } else {
+            spawn_ground_item(&gs.world, coffer, g.tithe, 1)
+        }
+    }
+    return true
 }
 
 // A new world takes the last hero's grave, and the stats file lets go of it.
@@ -103,19 +178,14 @@ grave_spot :: proc(w: ^World_Grid) -> (x: int, ok: bool) {
 // world.  Call with the player's level on the surface: a new run always is.
 grave_raise :: proc(gs: ^Game_State) {
     if !gs.stats.grave.active do return
-    x, ok := grave_spot(&gs.world)
-    if !ok {
-        log_action(gs, "No room for the grave stone")
-        return
-    }
     g := gs.stats.grave
-    g.tile = {i32(x), SURFACE_Y - 1}
-    set_tile(&gs.world, x, SURFACE_Y - 1, .Rune_Stone)
-    if g.tithe != .None {
-        coffer := [2]i32{i32(x + 1), SURFACE_Y - 1}
-        set_tile(&gs.world, x + 1, SURFACE_Y - 1, .Rune_Coffer)
-        barrel_on_placed(gs, coffer)
-        if b := barrel_at(gs, LEVEL_SURFACE, coffer); b != nil do barrel_deposit(b, g.tithe, 1)
+    if int(g.level) == gs.level_index {
+        if !grave_stand(gs, &g) {
+            log_action(gs, "No room for the grave stone")
+            return
+        }
+    } else {
+        g.pending = true
     }
     gs.grave = g
     gs.stats.grave = {}
@@ -123,29 +193,42 @@ grave_raise :: proc(gs: ^Game_State) {
     if RISEN_HERO_WALKS do risen_hero_rise(gs)
     if len(gs.save_path) > 0 do _ = save_game_to(gs, gs.save_path)
     _ = save_stats(gs)
-    log_action(gs, "Grave stone raised at (%d,%d), tithe %v", x, SURFACE_Y - 1, g.tithe)
+    log_action(gs, "Grave stone for level %d at (%d,%d), tithe %v, pending %v", g.level, g.tile.x, g.tile.y, g.tithe, g.pending)
+}
+
+// The level a grave was waiting for exists now.
+grave_on_level_enter :: proc(gs: ^Game_State, level: int) {
+    if !gs.grave.pending || int(gs.grave.level) != level do return
+    if !grave_stand(gs, &gs.grave) {
+        log_action(gs, "No room for the grave stone")
+        return
+    }
+    gs.grave.pending = false
+    if RISEN_HERO_WALKS do risen_hero_rise(gs)
+    gs.save_dirty = true
+    log_action(gs, "Grave stone raised at (%d,%d) on level %d", gs.grave.tile.x, gs.grave.tile.y, level)
 }
 
 // ─── The risen hero (design review I2, Glenn 2026-11-02) ──────────────────────
 //
-//  The last hero walks the new world as a draugr with everything they carried
+//  The last hero guards their grave as a draugr with everything they carried
 //  but the tithe, and scrolls and keys burn with the run.  Kill them to get it
 //  back.  The kit travels with the grave: gs.stats.kit between worlds, then
 //  gs.risen, saved with the run, until the body falls and it lands on the ground.
-//
-//  Still a prototype: F1 raises the hero by hand, and RISEN_HERO_WALKS keeps
-//  them out of a new world until Glenn has looked.  Without the flag the kit
-//  burns with the old run, as it always did.
+//  They rise beside the coffer when the stone stands, and hold that post until
+//  the player comes within RISEN_GUARD_RANGE of the stone.  Their body stays on
+//  the grave's level while the player is away.
 
-RISEN_HERO_WALKS :: false
-RISEN_HERO_HP    :: 12
-RISEN_HERO_X     :: GRID_W - 40   // where they start, far from the shaft
-RISEN_KIT        :: MAX_INVENTORY + len(Equip_Slot)
+RISEN_HERO_WALKS  :: true
+RISEN_HERO_HP     :: 12
+RISEN_GUARD_RANGE :: 12   // tiles from the stone: a modest first guess, Glenn's to feel
+RISEN_FIRST_CLAW  :: f32(2)  // seconds after rising before the first claw: a modest guess too
+RISEN_KIT         :: MAX_INVENTORY + len(Equip_Slot)
 
 Risen_Hero :: struct {
     has_kit: bool,
     walking: bool,                         // kit is on the body in enemy slot `slot`
-    slot:    int,                          // gs.levels.enemies[LEVEL_SURFACE] when away
+    slot:    int,                          // in gs.levels.enemies[gs.grave.level] when away
     kit:     [RISEN_KIT]Inventory_Slot,
 }
 
@@ -184,30 +267,44 @@ kit_take_up :: proc(gs: ^Game_State, tithe: Item) {
     for s in gs.risen.kit do if s.count > 0 do gs.risen.has_kit = true
 }
 
-// The last hero claws up on the surface.  With no floor to stand on, or no
-// free enemy slot, they stay in the ground and the attempt changes nothing.
+// The last hero claws up beside their stone.  With no stone here, or no free
+// enemy slot, they stay in the ground and the attempt changes nothing.
 risen_hero_rise :: proc(gs: ^Game_State) -> bool {
-    if !gs.risen.has_kit || gs.risen.walking || gs.level_index != LEVEL_SURFACE do return false
-    before := gs.enemies.active
-    spawn_builder(gs, RISEN_HERO_X)
-    for active, i in gs.enemies.active {
-        if !active || before[i] do continue
-        rise_draugr(gs, i)
-        gs.enemies.data[i].hp     = RISEN_HERO_HP
-        gs.enemies.data[i].hp_max = RISEN_HERO_HP
-        gs.risen.walking = true
-        gs.risen.slot    = i
-        notify(gs, "The %d%s hero walks again", gs.grave.hero, ordinal_suffix(gs.grave.hero))
-        log_action(gs, "Risen hero walks, enemy slot %d", i)
-        return true
-    }
-    return false
+    if !gs.risen.has_kit || gs.risen.walking || !gs.grave.active do return false
+    if int(gs.grave.level) != gs.level_index do return false
+    i, ok := enemy_alloc(&gs.enemies)
+    if !ok do return false
+    post := risen_hero_post(gs)
+    e := &gs.enemies.data[i]
+    e.kind   = .Undead
+    e.hp     = RISEN_HERO_HP
+    e.hp_max = RISEN_HERO_HP
+    e.pos    = {f32(post.x) + (1 - BUILDER_W)*0.5, f32(post.y) - BUILDER_H + 1}
+    e.builder.goal = .Hunt
+    e.builder.attack_timer = RISEN_FIRST_CLAW
+    entity_map_move(&gs.world, enemy_entity_id(i), builder_tile(e), builder_tile(e))
+    gs.risen.walking = true
+    gs.risen.slot    = i
+    notify(gs, "The %d%s hero walks again", gs.grave.hero, ordinal_suffix(gs.grave.hero))
+    log_action(gs, "Risen hero walks, enemy slot %d", i)
+    return true
 }
 
-// Called as enemy slot i leaves the pool, however it left: the kit lands
-// where the body stood.  Enemy slots are per level and the hero's is the surface.
+// The cell past the coffer.
+risen_hero_post :: proc(gs: ^Game_State) -> [2]i32 {
+    return gs.grave.tile + {2, 0}
+}
+
+// The hero's slot means this level's store only: the same number elsewhere is
+// another body.
+risen_hero_here :: proc(gs: ^Game_State, i: int) -> bool {
+    return gs.risen.walking && int(gs.grave.level) == gs.level_index && i == gs.risen.slot
+}
+
+// Called as enemy slot i leaves the pool, however it left: the kit lands where
+// the body stood.
 risen_hero_on_despawn :: proc(gs: ^Game_State, i: int, tile: [2]i32) {
-    if !gs.risen.walking || gs.level_index != LEVEL_SURFACE || i != gs.risen.slot do return
+    if !risen_hero_here(gs, i) do return
     for s in gs.risen.kit {
         if s.count > 0 do spawn_ground_item(&gs.world, tile, s.item, s.count)
     }
@@ -241,7 +338,7 @@ grave_inscription :: proc(g: ^Grave_Record, buf: []u8) -> string {
 
 // E beside the stone reads it and opens the coffer that stands with it.
 grave_interact :: proc(gs: ^Game_State, cx, cy: int) {
-    if !gs.grave.active || gs.level_index != LEVEL_SURFACE do return
+    if !gs.grave.active || int(gs.grave.level) != gs.level_index do return
     t := gs.grave.tile
     if abs(int(t.x) - cx) > BENCH_RANGE || abs(int(t.y) - cy) > BENCH_RANGE do return
     buf: [128]u8
