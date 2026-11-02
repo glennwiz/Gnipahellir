@@ -55,3 +55,5 @@ As simple as possible.
 - Run log: every observation and action appended to a JSONL file for replay, sharing and debugging.
 
 Decided 2026-11-02: "their own board" is a local board in the game, listing your own agent runs by seed, time and how far they got. Sharing is by posting the run file. No Steam leaderboard for agent runs.
+
+Decided 2026-11-02: agents see the full world, as a player does fully zoomed out. That is not a map reveal.
