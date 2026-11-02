@@ -301,5 +301,8 @@ than 64, and 1024 has only ever had a load test, not a frame-time one.
 - **2026-11-02, risen hero (card 27):** carries everything but the tithe; the tithe stays at the grave; scrolls and keys excluded.
 - **2026-11-02, floating drops (card 32):** drops fall until they land on something solid.
 - **2026-11-02, Scroll A chest (card 38):** enemies cannot dig it.
+- **2026-11-02, autosave:** dying deletes the autosave in debug builds too; keep.
+- **2026-11-02, Rainbow Laser:** gets a line-of-sight check.
+- **2026-11-02, waves:** smashing the bench and tree growers is intended; keep.
 - **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
 - **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
