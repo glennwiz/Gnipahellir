@@ -340,13 +340,14 @@ rune_scroll_places := [MAX_PROGRESSION_TIERS]string{
 // Raising the Sky Altar reveals Rune Scroll A in the sealed portal chamber
 // (carved by carve_level0_portals) — one goal at a time for new players.
 // Idempotent: no respawn once found or while it already lies anywhere.  A tile
-// or pile on its cell moves the chest to the nearest clear one, because nothing
-// else would ever raise it.
+// or pile on its cell moves the chest to the nearest clear one with footing,
+// because nothing else would ever raise it.
 spawn_deep_rune_scroll :: proc(gs: ^Game_State) {
     if gs.progression.rune_scroll_found[0] do return
     for t in gs.world.terrain do if t == .Rune_Scroll_Chest_A do return
     for r in 0 ..< GRID_W {
         for dy in -r ..= r do for dx in -r ..= r {
+            if !is_solid(&gs.world, 141 + dx, 95 + dy) do continue  // never in mid-air
             if place_rune_scroll_chest(&gs.world, 141 + dx, 94 + dy, .Rune_Scroll_A) {
                 notify(gs, "Something stirs deep below - seek the sealed chamber")
                 return

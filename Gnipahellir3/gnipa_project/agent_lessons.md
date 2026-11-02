@@ -54,7 +54,7 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Drops fall now. Stone mined over a void falls away, so `harvest` on chamber islands nets
   zero and strands you with no blocks. Mine the ceiling above your floor, or `quarry` row 105.
   Check block count before a long `goto`: 50 rows up is 50 blocks.
-- Do not stand a bench on (141,94): Scroll A needs that tile free, and also free of drops.
+- Scroll A takes (141,94), or the nearest clear cell with footing if a tile or pile holds it.
 - Structures do not block the body sideways, though `solid` in state lists them.
 - `guard` kills Builders by default. To keep an owner alive for a den test, set
   `sparebuilder`, but keep away: he bites 1 a second, and if he dies beside you he rises as
@@ -118,6 +118,5 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
   `stockpiles` never logs (run 5: 0 in about 145k frames). To test a rob, make a pile on the
   floor yourself. Dens over a void have no floor, so build one first.
 - A smashed altar re-raises at the current tier: after ritual A it needs the Gold foundation.
-- Scroll A does not spawn if (141,94) holds a tile or a pile, and says nothing.
 - A Builder can dig through the pond bed and drain it by frame 4000 (run 5 life 3).
 - Den grudges hold one at a time, so a second rob before the first is due starts no timer.

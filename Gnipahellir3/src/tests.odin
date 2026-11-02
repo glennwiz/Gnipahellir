@@ -3479,6 +3479,17 @@ deep_rune_scroll_finds_a_cell_when_its_own_is_taken :: proc(t: ^testing.T) {
 
         testing.expect_value(t, get_tile(&gs.world, ax, ay), Tile_Type.Sky_Altar)
         testing.expect_value(t, chests(gs), 1)
+        // The blocker survives, and the chest takes the nearest clear cell.
+        if b == .Stone || b == .Full_Chamber {
+            testing.expect_value(t, get_tile(&gs.world, 141, 94), Tile_Type.Stone)
+        }
+        dist := 0
+        for c, i in gs.world.terrain {
+            if c != .Rune_Scroll_Chest_A do continue
+            dist = max(abs(i % GRID_W - 141), abs(i / GRID_W - 94))
+            testing.expect(t, is_solid(&gs.world, i % GRID_W, i / GRID_W + 1), "the chest has footing")
+        }
+        testing.expect_value(t, dist, b == .Full_Chamber ? 11 : 1)
         stirs := false
         for i in 0 ..< gs.notify.count {
             if strings.contains(string(gs.notify.items[i].text[:gs.notify.items[i].len]), "stirs deep below") do stirs = true
