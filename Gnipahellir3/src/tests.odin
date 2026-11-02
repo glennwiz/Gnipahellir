@@ -9590,6 +9590,27 @@ the_pick_works_a_walkable_tile_the_body_stands_in :: proc(t: ^testing.T) {
 }
 
 @(test)
+the_pick_leaves_a_solid_tile_the_body_overlaps :: proc(t: ^testing.T) {
+	// Only a walkable tile underfoot is fair work: a solid one in the body's
+	// own cells stays skipped, cursor on it or not.
+	gs := test_state(); defer free(gs)
+	test_hold(gs, .Pickaxe)
+	X, Y := 83, 49
+	gs.player.pos = {f32(X) + 0.13, f32(Y) - 0.8}
+	set_tile(&gs.world, X, Y, .Stone)
+	gs.input.mine = true
+	gs.input.mouse_tile = {i32(X), i32(Y)}
+	gs.input.mouse_world = {(f32(X) + 0.5) * CELL_SIZE, (f32(Y) + 0.5) * CELL_SIZE}
+	for _ in 0 ..< 600 {
+		player_mine(gs, 1.0/60.0)
+		process_events(gs)
+		eq_clear(&gs.events)
+	}
+	testing.expect_value(t, get_tile(&gs.world, X, Y), Tile_Type.Stone)
+	testing.expect_value(t, gs.player.chip_hits, 0)
+}
+
+@(test)
 a_failed_place_gives_the_player_a_note :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	X, Y := 83, 49
