@@ -1923,6 +1923,75 @@ building_surface_altar_opens_the_sky_gate :: proc(t: ^testing.T) {
     testing.expect(t, gs.progression.sky_altar_pos == {i32(ax), i32(ay)}, "gate opened at the altar")
 }
 
+// Run 5: a Vargr smashed the gate altar after ritual A and the re-raise asked
+// for tier B's gold foundation.  Every tier must get the gate back on tier A's.
+@(test)
+a_smashed_gate_altar_comes_back_on_its_tier_a_foundation :: proc(t: ^testing.T) {
+    for tier in 0 ..= 3 {  // 3 = every ritual done, no scroll active
+        gs := test_state()
+        defer free(gs)
+        gs.level_index = LEVEL_SURFACE
+        gs.ui.show_title = false
+        for i in 0 ..< tier do gs.progression.sky_structure_complete[i] = true
+        if tier < MAX_PROGRESSION_TIERS do gs.progression.rune_scroll_found[tier] = true
+
+        ax, ay := 70, 30
+        for dx in -2 ..= 2 { set_tile(&gs.world, ax + dx, ay + 2, .Stone) }
+        for dx in -1 ..= 1 { set_tile(&gs.world, ax + dx, ay + 1, .Wood) }
+        set_tile(&gs.world, ax, ay, .Sky_Altar)
+        gs.progression.sky_altar_pos = {i32(ax), i32(ay)}
+        gs.player.pos = {f32(ax + 3), f32(ay)}
+
+        smash_tile(gs, ax, ay)
+        testing.expect(t, sky_gate_down(gs), "the gate reads as down")
+        testing.expect_value(t, ground_count(&gs.world, .Sky_Altar), 1)
+        if tier < MAX_PROGRESSION_TIERS {
+            buf: [128]u8
+            s := current_objective(gs, buf[:127])
+            testing.expect(t, strings.contains(s, "Stone Altar"), "the objective names the way back")
+        }
+
+        // The smashed altar is the one the player sets back: lift it off the
+        // ground and go through the real update.
+        pile := grid_idx(ax, ay)
+        for i in 0 ..< len(gs.world.items) {
+            if gs.world.items[i] == .Sky_Altar do pile = i
+        }
+        gs.world.items[pile] = .None
+        gs.world.item_counts[pile] = 0
+        inv := &gs.player.inventory
+        inv.slots[TEST_HAND] = {.Sky_Altar, 1}
+        inv.selected = TEST_HAND
+        eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(ax), i32(ay)}})
+        game_update(gs)
+
+        testing.expect_value(t, get_tile(&gs.world, ax, ay), Tile_Type.Sky_Altar)
+        testing.expect(t, !sky_gate_down(gs), "the gate is back up")
+    }
+}
+
+// The gate is the exception: a ritual altar away from the surface still answers
+// to the active tier.
+@(test)
+a_ritual_altar_still_needs_its_tier_foundation :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.progression.sky_structure_complete[0] = true
+    gs.progression.rune_scroll_found[1] = true
+
+    gs.level_index = LEVEL_SKY
+    testing.expect(t, structure_template_for(gs, .Sky_Altar) == &structure_templates[1], "sky: tier B")
+    gs.level_index = LEVEL_CAVE2
+    testing.expect(t, structure_template_for(gs, .Sky_Altar) == &structure_templates[1], "cave: tier B")
+
+    // No altar stands here to miss, and a gate never raised is not down.
+    gs.progression.sky_altar_pos = {40, 52}
+    testing.expect(t, !sky_gate_down(gs), "only the surface can tell")
+    gs.level_index = LEVEL_SURFACE
+    gs.progression.sky_altar_pos = {}
+    testing.expect(t, !sky_gate_down(gs), "never raised")
+}
+
 // Logs the real save size so bumping SAVE_DATA_EXPECTED_SIZE is a copy-paste,
 // never a guess.  Grep the test log for "size_of(Save_Data)".
 @(test)
@@ -3233,6 +3302,7 @@ objective_line_walks_the_loop :: proc(t: ^testing.T) {
 
     // Gate up: hunt the deep rune scroll
     gs.progression.sky_altar_pos = {90, 90}
+    set_tile(&gs.world, 90, 90, .Sky_Altar)
     s = current_objective(gs, buf[:127])
     testing.expect(t, strings.contains(s, "Rune Scroll A"), "next step is finding Rune Scroll A")
 

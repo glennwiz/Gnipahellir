@@ -68,10 +68,13 @@ structure_templates := [MAX_PROGRESSION_TIERS]Structure_Template{
 }
 
 // The template the player must build to place `item` right now: the Sky Altar is
-// gated by the active tier's foundation (defaulting to tier A's).  nil if the
-// item isn't a templated structure.
+// gated by the active tier's foundation (defaulting to tier A's).  The surface
+// altar is the sky gate, not a ritual stage, and always stands on tier A's: a
+// wave that smashes it must never ask for a grander altar to get back up.  nil
+// if the item isn't a templated structure.
 structure_template_for :: proc(gs: ^Game_State, item: Item) -> ^Structure_Template {
     if item != .Sky_Altar do return nil
+    if gs.level_index == LEVEL_SURFACE do return &structure_templates[0]
     tier := rune_scroll_active_tier(gs)
     if tier < 0 do tier = 0
     return &structure_templates[tier]
