@@ -3433,6 +3433,69 @@ deep_rune_scroll_waits_for_the_altar :: proc(t: ^testing.T) {
     testing.expect(t, !is_rune_scroll_chest(gs.world.terrain[idx]), "found rune scroll chest must not respawn")
 }
 
+// Run 5: stone (f24602) or a bench pile (f25854) on (141,94) and raising the
+// altar raised no scroll.  Each blocker through the real place and update.
+@(test)
+deep_rune_scroll_finds_a_cell_when_its_own_is_taken :: proc(t: ^testing.T) {
+    chests :: proc(gs: ^Game_State) -> (n: int) {
+        for c in gs.world.terrain do if c == .Rune_Scroll_Chest_A do n += 1
+        return
+    }
+    raise :: proc(gs: ^Game_State, ax, ay: int) {
+        inv := &gs.player.inventory
+        inv.slots[TEST_HAND] = {.Sky_Altar, 1}
+        inv.selected = TEST_HAND
+        eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(ax), i32(ay)}})
+        game_update(gs)
+    }
+    Blocker :: enum { Stone, Pile, Smashed_Bench, Full_Chamber }
+    for b in Blocker {
+        gs := test_state()
+        defer free(gs)
+        gs.level_index = LEVEL_SURFACE
+        gs.ui.show_title = false
+
+        switch b {
+        case .Stone:
+            set_tile(&gs.world, 141, 94, .Stone)
+        case .Pile:
+            spawn_ground_item(&gs.world, {141, 94}, .Stone_Block, 3)
+        case .Smashed_Bench:
+            set_tile(&gs.world, 141, 94, .Crafting_Bench)
+            smash_tile(gs, 141, 94)
+        case .Full_Chamber:
+            for y in 84 ..= 104 do for x in 131 ..= 151 {
+                if get_tile(&gs.world, x, y) != .Cave_Entrance do set_tile(&gs.world, x, y, .Stone)
+            }
+        }
+        before := gs.world.items[grid_idx(141, 94)]
+        count  := gs.world.item_counts[grid_idx(141, 94)]
+
+        ax, ay := 70, 30
+        for dx in -2 ..= 2 { set_tile(&gs.world, ax + dx, ay + 2, .Stone) }
+        for dx in -1 ..= 1 { set_tile(&gs.world, ax + dx, ay + 1, .Wood) }
+        gs.player.pos = {f32(ax + 3), f32(ay)}
+        raise(gs, ax, ay)
+
+        testing.expect_value(t, get_tile(&gs.world, ax, ay), Tile_Type.Sky_Altar)
+        testing.expect_value(t, chests(gs), 1)
+        stirs := false
+        for i in 0 ..< gs.notify.count {
+            if strings.contains(string(gs.notify.items[i].text[:gs.notify.items[i].len]), "stirs deep below") do stirs = true
+        }
+        testing.expect(t, stirs, "the player is told the scroll is out there")
+        testing.expect_value(t, gs.world.items[grid_idx(141, 94)], before)
+        testing.expect_value(t, gs.world.item_counts[grid_idx(141, 94)], count)
+        testing.expect_value(t, get_tile(&gs.world, 143, 94), Tile_Type.Cave_Entrance)
+        testing.expect_value(t, get_tile(&gs.world, 144, 94), Tile_Type.Cave_Entrance)
+
+        // Raising the gate again keeps the one chest wherever it landed.
+        smash_tile(gs, ax, ay)
+        raise(gs, ax, ay)
+        testing.expect_value(t, chests(gs), 1)
+    }
+}
+
 @(test)
 builders_do_not_freeze :: proc(t: ^testing.T) {
     gs := test_state()
