@@ -143,7 +143,9 @@ tick_engine :: proc(gs: ^Game_State, x, y: int) {
 }
 
 // The turret's aim: the nearest live enemy whose body center lies inside
-// LASER_RANGE of this tile's center, or ok=false.  PURE — render re-runs it
+// LASER_RANGE of this tile's center with no solid tile between them, or
+// ok=false.  A walled-off enemy is not a target at all, so the turret passes
+// it over for a farther one it can see, and beam and motes follow.  PURE — render re-runs it
 // every frame to draw the beam, so it must never touch Game_State.  Squared
 // distances only, so sim.odin still needs no math import.
 laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
@@ -156,7 +158,8 @@ laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
         size := enemy_body_size(e.kind)
         dx   := e.pos.x + size.x*0.5 - cx
         dy   := e.pos.y + size.y*0.5 - cy
-        if d := dx*dx + dy*dy; d <= best_d {
+        if d := dx*dx + dy*dy; d <= best_d &&
+           sight_line_clear(&gs.world, {cx, cy}, {cx + dx, cy + dy}, skip_ends = true) {
             best, best_d, ok = ei, d, true
         }
     }

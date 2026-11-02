@@ -10266,6 +10266,13 @@ the_fire_wand_testing_recipe_is_open_from_the_start :: proc(t: ^testing.T) {
     testing.expect_value(t, r.ingredients[2], Ingredient{})
 }
 
+// The generated surface is not flat: open a clear firing lane around a test
+// turret, which now needs line of sight.
+laser_test_lane :: proc(gs: ^Game_State, x, y: int) {
+    for dx in -LASER_LANE ..= LASER_LANE do for dy in -2 ..= 0 do set_tile(&gs.world, x + dx, y + dy, .Air)
+}
+LASER_LANE :: 14
+
 @(test)
 the_rainbow_laser_zaps_the_nearest_enemy_in_range :: proc(t: ^testing.T) {
     seed :: proc(gs: ^Game_State, x, y: f32) -> int {
@@ -10286,6 +10293,7 @@ the_rainbow_laser_zaps_the_nearest_enemy_in_range :: proc(t: ^testing.T) {
 
     LX :: 60
     LY :: SURFACE_Y - 1
+    laser_test_lane(gs, LX, LY)
     set_tile(&gs.world, LX, LY, .Rainbow_Laser)
 
     // Twelve tiles out is beyond LASER_RANGE: the turret holds its fire no
@@ -10317,6 +10325,7 @@ the_rainbow_laser_beam_is_made_of_motes :: proc(t: ^testing.T) {
 
     LX :: 60
     LY :: SURFACE_Y - 1
+    laser_test_lane(gs, LX, LY)
     set_tile(&gs.world, LX, LY, .Rainbow_Laser)
 
     // Nothing in range: a dark turret throws no sparks at all.
@@ -10341,6 +10350,67 @@ the_rainbow_laser_beam_is_made_of_motes :: proc(t: ^testing.T) {
         "a landed zap must burst more than the stream alone")
     process_events(gs)
     testing.expect_value(t, gs.enemies.data[id].hp, 50 - LASER_DAMAGE)
+}
+
+@(test)
+the_rainbow_laser_needs_line_of_sight :: proc(t: ^testing.T) {
+    seed :: proc(gs: ^Game_State, x, y: f32) -> int {
+        id, ok := enemy_alloc(&gs.enemies)
+        if !ok do return -1
+        gs.enemies.data[id] = Enemy{pos = {x, y}, kind = .Raider, hp = 50, hp_max = 50}
+        return id
+    }
+    fire :: proc(gs: ^Game_State) {
+        update_sim(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    wall :: proc(gs: ^Game_State, x, y: int, tile: Tile_Type) {
+        for dy in -3 ..= 0 do set_tile(&gs.world, x, y + dy, tile)
+    }
+
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = LASER_COOLDOWN   // one tick = one full charge
+
+    LX :: 60
+    LY :: SURFACE_Y - 1
+    laser_test_lane(gs, LX, LY)
+    set_tile(&gs.world, LX, LY, .Rainbow_Laser)
+
+    // A wall between them: in range, but no target, no zap and no motes.
+    enemy := seed(gs, LX + 4, LY)
+    testing.expect(t, enemy >= 0, "the enemy should have a slot")
+    wall(gs, LX + 2, LY, .Stone)
+    for _ in 0 ..< 4 do fire(gs)
+    testing.expect_value(t, gs.enemies.data[enemy].hp, 50)
+    testing.expect_value(t, gs.particles.count, 0)
+    _, aimed := laser_target(gs, LX, LY)
+    testing.expect(t, !aimed, "the beam pass must not aim through a wall")
+
+    // A farther enemy in the open is the one it takes, not the walled nearer one.
+    open := seed(gs, LX - 6, LY)
+    testing.expect(t, open >= 0, "the open enemy should have a slot")
+    fire(gs)
+    testing.expect_value(t, gs.enemies.data[open].hp, 50 - LASER_DAMAGE)
+    testing.expect_value(t, gs.enemies.data[enemy].hp, 50)
+    enemy_free(&gs.enemies, open)
+
+    // The same shot with the wall gone zaps, and the beam lights.
+    wall(gs, LX + 2, LY, .Air)
+    before := gs.particles.count
+    fire(gs)
+    testing.expect_value(t, gs.enemies.data[enemy].hp, 50 - LASER_DAMAGE)
+    testing.expect(t, gs.particles.count > before, "a clear line must throw motes")
+
+    // Only what lies BETWEEN blocks: the tile the enemy has dug into does not.
+    // Placed so the last half-tile sample lands inside that tile.
+    gs.enemies.data[enemy].pos = {LX + 4.4, LY}
+    size := enemy_body_size(.Raider)
+    set_tile(&gs.world, int(f32(LX) + 4.4 + size.x*0.5), int(f32(LY) + size.y*0.5), .Stone)
+    hp := gs.enemies.data[enemy].hp
+    fire(gs)
+    testing.expect_value(t, gs.enemies.data[enemy].hp, hp - LASER_DAMAGE)
 }
 
 @(test)
