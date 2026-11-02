@@ -6674,7 +6674,7 @@ smashed_machines_drop_their_item :: proc(t: ^testing.T) {
     x, y := 40, SURFACE_Y - 1
     set_tile(&gs.world, x, y, .Rune_Altar)
     smash_tile(gs, x, y)
-    testing.expect_value(t, get_tile(&gs.world, x, y), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, x, y), Tile_Type.Air)
     testing.expect(t, has_drop_near(gs, x, y, .Rune_Altar), "a smashed station must drop its item")
 
     // Plain terrain smashes stay silent — demolition mints no free blocks.
