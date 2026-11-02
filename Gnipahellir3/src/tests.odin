@@ -13140,3 +13140,69 @@ a_burn_leaves_with_its_enemy_and_its_level :: proc(t: ^testing.T) {
     // Enemy_Status stays out of the save: the layout must not move.
     testing.expect_value(t, size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE)
 }
+
+@(test)
+a_water_turret_slows_what_it_hits_and_barely_hurts :: proc(t: ^testing.T) {
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    HY :: PY - 1
+
+    // The same flyer on the same line, with the real enemy update moving it,
+    // once past a Water Turret and once past a bare pillar.
+    fly :: proc(head: Tile_Type) -> (travelled: f32, hp: int, slowed: bool) {
+        gs := test_state()
+        defer free(gs)
+        gs.delta_time = 1.0 / 60.0
+        turret_test_site(gs, PX, PY)
+        gs.player.pos = {PX - 12, f32(HY) - 1}
+        set_tile(&gs.world, PX, PY, .Turret_Pillar)
+        set_tile(&gs.world, PX, HY, head)
+        gs.world.sim_data[grid_idx(PX, HY)].growth_timer = WATER_COOLDOWN  // charged: first frame fires
+        id := turret_test_enemy(gs, PX + 5.5, f32(HY) + 0.5)
+        gs.enemies.data[id].kind = .Fire_Sprite
+        start := gs.enemies.data[id].pos.x
+        for _ in 0 ..< 20 {  // still on its way in
+            update_enemies(gs)
+            update_sim(gs)
+            update_enemy_status(gs)
+            process_events(gs)
+            eq_clear(&gs.events)
+        }
+        return abs(gs.enemies.data[id].pos.x - start), gs.enemies.data[id].hp, gs.enemy_status[id].slow > 0
+    }
+    dry, dry_hp, dry_slow := fly(.Turret_Pillar)
+    wet, wet_hp, wet_slow := fly(.Water_Turret)
+    testing.expect(t, dry > 0, "the flyer moves")
+    testing.expect(t, !dry_slow, "a bare pillar slows nothing")
+    testing.expect(t, wet_slow, "the jet slows it")
+    testing.expectf(t, wet < dry * 0.75, "slowed flyer went %v, free one %v", wet, dry)
+    testing.expect_value(t, dry_hp - wet_hp, WATER_DAMAGE)  // one hit in a third of a second
+
+    // Weak damage: well under the laser, and the slow runs out on its own.
+    testing.expect(t, f32(WATER_DAMAGE) / WATER_COOLDOWN < f32(LASER_DAMAGE) / LASER_COOLDOWN / 3, "water barely hurts")
+    gs := test_state()
+    defer free(gs)
+    id := turret_test_enemy(gs, 60, 40)
+    gs.enemy_status[id].slow = WATER_SLOW_TIME
+    testing.expect_value(t, enemy_move_dt(gs, id), gs.delta_time * WATER_SLOW)
+    for _ in 0 ..< int(WATER_SLOW_TIME / gs.delta_time) + 2 do update_enemy_status(gs)
+    testing.expect_value(t, enemy_move_dt(gs, id), gs.delta_time)
+}
+
+@(test)
+a_water_head_fuses_like_a_flame_head :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    turret_test_site(gs, PX, PY)
+    turret_test_place(gs, .Water_Head, PX, PY)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY), Tile_Type.Air)
+    turret_test_place(gs, .Turret_Pillar, PX, PY)
+    turret_test_place(gs, .Water_Head, PX, PY - 1)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY - 1), Tile_Type.Water_Turret)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {PX, PY - 1}})
+    process_events(gs)
+    testing.expect_value(t, turret_ground_count(gs, .Water_Head), 1)
+    testing.expect_value(t, turret_ground_count(gs, .Turret_Pillar), 1)
+}

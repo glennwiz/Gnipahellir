@@ -335,18 +335,25 @@ spawn_laser_impact :: proc(gs: ^Game_State, at: [2]f32) {
     }
 }
 
-// Flame Turret: while a target holds range a few embers leave the head and
-// spread on their way to it, short lived, so it reads as a jet and not a beam.
+// A turret's jet: while a target holds range a few motes leave the head and
+// spread on their way to it, short lived, so it reads as a spray and not a beam.
 // Called from the turret's tick (sim), never from render.
-FLAME_JET_MOTES :: 2
-spawn_flame_jet :: proc(gs: ^Game_State, from, to: [2]f32) {
+TURRET_JET_MOTES :: 2
+spawn_turret_jet :: proc(gs: ^Game_State, from, to: [2]f32, a, b: rl.Color) {
     d := to - from
-    for i in 0 ..< FLAME_JET_MOTES {
+    for i in 0 ..< TURRET_JET_MOTES {
         seed := u32(gs.frame)*61 + u32(i)*701
         vel  := d*2 + {jitter(seed, 1.5), jitter(seed + 1, 1.5)}
-        col  := i % 2 == 0 ? rl.Color{255, 140, 40, 255} : rl.Color{255, 220, 110, 255}
-        spawn_particle(&gs.particles, from, vel, col, 0.4 + jitter(seed + 2, 0.1))
+        spawn_particle(&gs.particles, from, vel, i % 2 == 0 ? a : b, 0.4 + jitter(seed + 2, 0.1))
     }
+}
+
+spawn_flame_jet :: proc(gs: ^Game_State, from, to: [2]f32) {
+    spawn_turret_jet(gs, from, to, {255, 140, 40, 255}, {255, 220, 110, 255})
+}
+
+spawn_water_jet :: proc(gs: ^Game_State, from, to: [2]f32) {
+    spawn_turret_jet(gs, from, to, {70, 150, 240, 255}, {190, 230, 255, 255})
 }
 
 // A worker's temporary Quick Clay foothold dissolving after use: a few damp

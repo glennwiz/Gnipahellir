@@ -230,6 +230,9 @@ Tile_Type :: enum u8 {
 	// A Flame Head fused onto a pillar: short reach, sets what it sees alight.
 	// (appended: terrain ordinals are serialized)
 	Flame_Turret,
+	// A Water Head on a pillar: slows what it sees.  (appended: terrain
+	// ordinals are serialized)
+	Water_Turret,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -388,6 +391,7 @@ Item :: enum u8 {
 	// item ordinals are serialized)
 	Turret_Pillar,
 	Flame_Head,
+	Water_Head,
 	// <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

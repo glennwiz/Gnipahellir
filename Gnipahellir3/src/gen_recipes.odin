@@ -120,6 +120,7 @@ recipe_table := [?]Recipe{
 	// each head its own element on top.
 	{ .Turret_Pillar, 1, .Bench, {{.Stone_Block, 6}, {.Iron_Bar, 2}, {}} },
 	{ .Flame_Head, 1, .Bench, {{.Iron_Bar, 3}, {.Wood_Log, 5}, {}} },
+	{ .Water_Head, 1, .Bench, {{.Iron_Bar, 3}, {.Water_Bucket, 1}, {}} },
 }
 
 // Recipe unlock tree: a recipe stays hidden until the player first holds its
@@ -201,6 +202,7 @@ recipe_unlock := #partial [Item]Item{
 	// Iron is what a pillar needs, so the cards open with the first bar.
 	.Turret_Pillar = .Iron_Bar,
 	.Flame_Head = .Iron_Bar,
+	.Water_Head = .Iron_Bar,
 }
 
 // What a smelter eats and what it casts.  New smeltable = new row.

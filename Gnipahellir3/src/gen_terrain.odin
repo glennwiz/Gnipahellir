@@ -108,6 +108,7 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Scoria = { "Scoria", {.Solid, .Mineable}, {74, 62, 60, 255}, 0, 0, .None, 0 },
 	.Turret_Pillar = { "Turret Pillar", {.Solid, .Mineable, .Placeable}, {120, 124, 138, 255}, 0, 0, .Turret_Pillar, 0 },
 	.Flame_Turret = { "Flame Turret", {.Solid, .Mineable, .Placeable}, {200, 90, 40, 255}, 0, 0, .Flame_Head, 0 },
+	.Water_Turret = { "Water Turret", {.Solid, .Mineable, .Placeable}, {50, 120, 200, 255}, 0, 0, .Water_Head, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -196,6 +197,7 @@ is_structure_tile := #partial [Tile_Type]bool{
 	.Rainbow_Laser = true,
 	.Turret_Pillar = true,
 	.Flame_Turret = true,
+	.Water_Turret = true,
 }
 
 // Stations read as magical in-world: a dark base, a breathing glow in the
@@ -246,4 +248,6 @@ station_glow := #partial [Tile_Type]rl.Color{
 	.Turret_Pillar = {120, 130, 150, 255},
 	// banked coals
 	.Flame_Turret = {255, 120, 40, 255},
+	// deep pool
+	.Water_Turret = {60, 150, 255, 255},
 }
