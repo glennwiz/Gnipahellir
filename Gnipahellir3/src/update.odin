@@ -103,6 +103,10 @@ game_update :: proc(gs: ^Game_State) {
     //     above) down until they land.  Mutates the grid, pushes no events.
     update_gravity(gs)
 
+    // 6b2. Drops — piles left hanging fall a cell.  After gravity, so a block
+    //      that just crumbled to a pile falls with the rest.  Pushes no events.
+    update_item_fall(gs)
+
     // 6c. Fluids — water and lava flow downhill through the grid gravity just
     //     rearranged.  Mutates the grid, pushes no events.
     update_fluid(gs)

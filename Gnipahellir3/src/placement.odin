@@ -65,6 +65,33 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
     return true
 }
 
+// Why a place fails on the ground itself; "" when the cell is fine and a
+// machine's own gate is the reason.  Same checks as placement_ok, for the note.
+place_refusal :: proc(gs: ^Game_State, place_tile: Tile_Type, x, y: int) -> string {
+    if place_tile == .Door do return "A door needs two open cells in reach, with something solid beside them"
+    if !in_bounds(x, y) do return "Out of reach"
+    pcx := int(gs.player.pos.x + PLAYER_W*0.5)
+    pcy := int(gs.player.pos.y + PLAYER_H*0.5)
+    if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return "Out of reach"
+    if t := get_tile(&gs.world, x, y); t != .Air && t != .Void do return "Something is already there"
+    if !is_solid(&gs.world, x-1, y) && !is_solid(&gs.world, x+1, y) &&
+       !is_solid(&gs.world, x, y-1) && !is_solid(&gs.world, x, y+1) {
+        return "It needs something solid beside it"
+    }
+    if .Solid in terrain_table[place_tile].flags && tile_overlaps_player(gs, x, y) do return "You are standing there"
+    return ""
+}
+
+// A held right-click sweeps tiles, so the same refusal shows once, not per tile.
+place_note :: proc(gs: ^Game_State, why: string) {
+    ns := &gs.notify
+    if ns.count > 0 {
+        n := &ns.items[ns.count - 1]
+        if string(n.text[:n.len]) == why do return
+    }
+    notify(gs, "%s", why)
+}
+
 // A door needs two stacked open cells (clicked cell + the one above), both in
 // reach, plus a solid neighbour on some side to hang on.  No overlap check —
 // the player phases through doors, so placing one on yourself can't trap you.
@@ -138,6 +165,10 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
 
     if !placement_ok(gs, slot.item, x, y) {
         gs.agent.place_refused = true
+        if why := place_refusal(gs, place_tile, x, y); why != "" {
+            place_note(gs, why)
+            return
+        }
         // Explain the common templated-structure miss (the red ghost shows the rest).
         if tpl := structure_template_for(gs, slot.item); tpl != nil {
             if ok, want := structure_template_satisfied(&gs.world, tpl, x, y); !ok {

@@ -564,6 +564,25 @@ agent_withdraw_pulls_the_ore_through_the_key_handler :: proc(t: ^testing.T) {
 }
 
 @(test)
+an_agent_act_without_a_window_verb_shuts_the_smelter_window :: proc(t: ^testing.T) {
+    // Run 3 f30120: the smelter window "closed itself".  It was this sweep: the
+    // act after the one that opened it carried no window verb.
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    T := player_tile(&gs.player)
+    set_tile(&gs.world, int(T.x) + 1, int(T.y), .Smelter)
+    gs.ui.show_smelter = true
+    gs.ui.smelter_tile = {T.x + 1, T.y}
+
+    agent_test_run_act(link, gs, `{"cmd":"act","collect":true}`)
+    testing.expect(t, gs.ui.show_smelter, "a window verb keeps it open")
+    agent_test_run_act(link, gs, `{"cmd":"act","frames":2}`)
+    testing.expect(t, !gs.ui.show_smelter, "any other act sweeps it shut")
+}
+
+@(test)
 agent_fight_log_names_enemies_near_the_player_only :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)

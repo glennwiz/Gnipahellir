@@ -238,6 +238,13 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	// BARE_HAND_MULT× the hits — nothing else yields to fists.
 	has_pick := held == .Pickaxe
 	C, have_target := pick_target(p, gs.input.mouse_world)
+	// The body's own cells are skipped because a solid one would be under your
+	// feet, but a walkable tile you stand in (run 3: a mushroom) is fair work.
+	T = gs.input.mouse_tile
+	if in_bounds(int(T.x), int(T.y)) && !is_solid(&gs.world, int(T.x), int(T.y)) &&
+	   tile_overlaps_player(gs, int(T.x), int(T.y)) && pick_workable(gs, T, has_pick) {
+		C, have_target = T, true
+	}
 	if !have_target {return} 	// cursor on the player's own body: no swing to make
 
 	cx := i32(p.pos.x + PLAYER_W * 0.5)
