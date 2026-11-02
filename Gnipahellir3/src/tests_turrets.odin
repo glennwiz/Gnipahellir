@@ -444,14 +444,25 @@ a_bare_laser_leaves_the_turret_beneath_it_alone :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, TT_X, TT_Y), Tile_Type.Turret_Pillar)
 }
 
+// The fall step of game_update, long enough for a pile to cross the map.
+tt_let_fall :: proc(gs: ^Game_State) {
+    for _ in 0 ..< GRID_H * ITEM_FALL_FRAMES {
+        gs.frame += 1
+        update_item_fall(gs)
+    }
+}
+
 // Every part stands on solid ground and none hangs where the turret stood.
 tt_expect_landed :: proc(t: ^testing.T, gs: ^Game_State, c: Turret_Head_Case, loc := #caller_location) {
+    tt_let_fall(gs)
     testing.expect_value(t, turret_ground_count(gs, c.item), 1, loc = loc)
     testing.expect_value(t, turret_ground_count(gs, .Turret_Pillar), c.pillars, loc = loc)
-    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+    for y in 0 ..< GRID_H - 1 do for x in 0 ..< GRID_W {
         idx := grid_idx(x, y)
         if gs.world.items[idx] != c.item && gs.world.items[idx] != .Turret_Pillar do continue
-        testing.expectf(t, is_solid(&gs.world, x, y + 1), "%v at (%d,%d) hangs in the air", gs.world.items[idx], x, y, loc = loc)
+        // A pile holds up a different pile, so a head may rest on the pillars.
+        rests := is_solid(&gs.world, x, y + 1) || gs.world.items[grid_idx(x, y + 1)] != .None
+        testing.expectf(t, rests, "%v at (%d,%d) hangs in the air", gs.world.items[idx], x, y, loc = loc)
     }
     for dy in 0 ..= c.pillars {
         testing.expect(t, !is_turret_tile(get_tile(&gs.world, TT_X, TT_Y - dy)), "no part stands", loc = loc)
@@ -583,8 +594,8 @@ a_fire_sprite_takes_a_turret_apart_whole :: proc(t: ^testing.T) {
     }
 }
 
-// The pick and the reclaim land the parts too, and a spare pillar under the
-// pattern stays: the parts rest on it.
+// The pick lands the parts too, and a spare pillar under the pattern stays: the
+// parts rest on it.
 @(test)
 parts_land_on_the_ground_or_on_a_spare_pillar :: proc(t: ^testing.T) {
     for c in turret_heads do for at in 0 ..= c.pillars {
@@ -604,9 +615,10 @@ parts_land_on_the_ground_or_on_a_spare_pillar :: proc(t: ^testing.T) {
     set_tile(&gs.world, TT_X, TT_Y - 1, .Turret_Pillar)
     set_tile(&gs.world, TT_X, TT_Y - 2, c.tile)
     smash_tile(gs, TT_X, TT_Y - 2)
+    tt_let_fall(gs)
     testing.expect_value(t, get_tile(&gs.world, TT_X, TT_Y), Tile_Type.Turret_Pillar)
-    testing.expect_value(t, gs.world.items[grid_idx(TT_X, TT_Y - 1)], c.item)
-    testing.expect_value(t, gs.world.items[grid_idx(TT_X, TT_Y - 2)], Item.None)
+    testing.expect_value(t, gs.world.items[grid_idx(TT_X, TT_Y - 1)], Item.Turret_Pillar)
+    testing.expect_value(t, gs.world.items[grid_idx(TT_X, TT_Y - 2)], c.item)
 }
 
 // Only a lone pillar taken: nothing else is touched and it pays once.
@@ -622,15 +634,6 @@ a_spare_pillar_taken_pays_only_itself :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, TT_X, TT_Y - 1), Tile_Type.Stone)
 }
 
-// No floor down the column: the part stays where it came off.
-@(test)
-a_part_with_no_floor_stays_where_it_came_off :: proc(t: ^testing.T) {
-    gs := turret_test_state()
-    defer free(gs)
-    for y in TT_Y ..< GRID_H do set_tile(&gs.world, TT_X, y, .Void)
-    testing.expect_value(t, turret_landing(&gs.world, TT_X, TT_Y), [2]i32{TT_X, TT_Y})
-}
-
 // The rescue digs only what a digger may: rock it cannot mine stays.
 @(test)
 a_builder_digging_free_leaves_unmineable_rock :: proc(t: ^testing.T) {
@@ -643,26 +646,19 @@ a_builder_digging_free_leaves_unmineable_rock :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, TT_X, TT_Y), Tile_Type.Rune_Stone)
 }
 
-// A part joins a pile of its own kind where it lands.
+// A door is one item on two tiles: the rescue takes both and pays one door.
 @(test)
-a_part_stacks_on_its_own_kind :: proc(t: ^testing.T) {
+a_builder_digging_free_takes_a_whole_door :: proc(t: ^testing.T) {
     gs := turret_test_state()
     defer free(gs)
-    head_y := tt_build(gs, turret_heads[0])
-    spawn_ground_item(&gs.world, {TT_X - 1, TT_Y}, .Turret_Pillar, 1)
-    smash_tile(gs, TT_X, head_y)
-    testing.expect_value(t, gs.world.items[grid_idx(TT_X, TT_Y)], turret_heads[0].item)
-    testing.expect_value(t, gs.world.item_counts[grid_idx(TT_X - 1, TT_Y)], u8(2))
-}
-
-// A wall beside the turret is passed over, not landed in.
-@(test)
-a_part_skips_a_wall_beside_the_turret :: proc(t: ^testing.T) {
-    gs := turret_test_state()
-    defer free(gs)
-    head_y := tt_build(gs, turret_heads[0])
-    set_tile(&gs.world, TT_X - 1, TT_Y, .Stone)
-    set_tile(&gs.world, TT_X - 1, head_y, .Stone)
-    smash_tile(gs, TT_X, head_y)
-    testing.expect_value(t, gs.world.items[grid_idx(TT_X + 1, TT_Y)], Item.Turret_Pillar)
+    turret_test_site(gs, TT_X, TT_Y)
+    set_tile(&gs.world, TT_X, TT_Y, .Door)
+    set_tile(&gs.world, TT_X, TT_Y - 1, .Door)
+    id := tt_embed(gs, .Builder, TT_Y)
+    e := &gs.enemies.data[id]
+    builder_dig_free(e, id, gs)
+    testing.expect(t, get_tile(&gs.world, TT_X, TT_Y) != .Door, "the foot is gone")
+    testing.expect(t, get_tile(&gs.world, TT_X, TT_Y - 1) != .Door, "the top is gone")
+    testing.expect_value(t, turret_ground_count(gs, .Door), 1)
+    testing.expect_value(t, e.builder.pocket, 0)
 }

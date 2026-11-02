@@ -693,9 +693,14 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     // whatever just lost its last link to the ground.
     gravity_check_removed(gs, x, y)
 
-    // A turret comes apart on the ground, Glenn 2026-11-02: its parts fall, and
-    // turret_come_apart below lays them down, this one with them.
-    if drop != .None && !is_turret_tile(old_tile) do give_mined_drop(gs, e, drop)
+    if drop != .None {
+        // A turret comes apart on the ground, Glenn 2026-11-02: its parts fall.
+        if is_turret_tile(old_tile) {
+            spawn_ground_item(&gs.world, e.tile, drop, 1)
+        } else {
+            give_mined_drop(gs, e, drop)
+        }
+    }
 
     // The dirt half of the payout flies straight into the bag with a collect
     // mote; a full bag falls back to a ground drop so nothing is silently lost.

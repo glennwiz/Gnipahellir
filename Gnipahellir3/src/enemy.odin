@@ -276,7 +276,7 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) {
     }
     if old == .Barrel || old == .Rune_Coffer do barrel_on_mined(gs, {i32(x), i32(y)})
     set_tile(&gs.world, x, y, .Void)
-    if .Placeable in terrain_table[old].flags && !is_turret_tile(old) {
+    if .Placeable in terrain_table[old].flags {
         if drop := terrain_table[old].drop_item; drop != .None {
             spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
         }
@@ -1552,9 +1552,10 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
     for y in top ..= bot {
         for x in left ..= right {
             if !is_builder_mineable(gs, x, y) do continue
-            // A machine or turret part goes the den carve's way: it spills
+            // A machine, turret part or door goes the den carve's way: it spills
             // whole, and no pocket block is minted on top of the item.
-            if .Placeable in terrain_table[get_tile(&gs.world, x, y)].flags {
+            t := get_tile(&gs.world, x, y)
+            if .Placeable in terrain_table[t].flags || t == .Door {
                 handle_tile_mined(gs, Event{
                     type   = .Tile_Mined,
                     source = enemy_entity_id(id),

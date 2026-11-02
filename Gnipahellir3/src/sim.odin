@@ -98,28 +98,18 @@ turret_pattern_ok :: proc(w: ^World_Grid, x, y: int, rule: Turret_Rule) -> bool 
 }
 
 // A fused turret is one machine: whatever takes a part of it, a pick or a
-// raider, every part comes off, the one taken included, and falls to the ground
-// together, so no part is lost and no head is left in the air.  `old` is what
-// (x,y) held, already gone from the grid.  A pillar under the pattern is not
-// part of it and stays.
+// raider, the rest comes loose where it stands, so no part is lost and no head
+// is left in the air.  `old` is what (x,y) held, already gone from the grid.
+// A pillar under the pattern is not part of it and stays.
 turret_come_apart :: proc(gs: ^Game_State, x, y: int, old: Tile_Type) {
-    if !is_turret_tile(old) do return
-    head_y  := y
-    rule    := turret_table[old]
-    head    := terrain_table[old].drop_item
-    pillars := 0
+    head_y := y
+    rule   := turret_table[old]
     if old == .Turret_Pillar {
         head_y -= 1
         for get_tile(&gs.world, x, head_y) == .Turret_Pillar do head_y -= 1
-        head_tile := get_tile(&gs.world, x, head_y)
-        rule = turret_table[head_tile]
-        pillars, head = 1, .None
-        if rule.pillars < y - head_y {
-            rule.pillars = 0        // a spare pillar: only itself comes off
-        } else {
-            head = terrain_table[head_tile].drop_item
-            turret_loosen(gs, x, head_y)
-        }
+        rule = turret_table[get_tile(&gs.world, x, head_y)]
+        if rule.pillars < y - head_y do return
+        turret_loosen(gs, x, head_y)
     }
     // The column stops at the first tile that is no pillar: an old save's bare
     // laser can stand on another turret.  The cell just taken is already gone.
@@ -127,41 +117,10 @@ turret_come_apart :: proc(gs: ^Game_State, x, y: int, old: Tile_Type) {
         if head_y + i == y do continue
         if get_tile(&gs.world, x, head_y + i) != .Turret_Pillar do break
         turret_loosen(gs, x, head_y + i)
-        pillars += 1
     }
-    turret_lay_part(&gs.world, x, y, head, 1)
-    turret_lay_part(&gs.world, x, y, .Turret_Pillar, pillars)
 }
 
-// A cell holds one kind of pile and spawn_ground_item's ring would hang the
-// rest in the air, so a part takes the nearest column with room on its floor.
-TURRET_PART_SPREAD :: 3
-turret_lay_part :: proc(w: ^World_Grid, x, y: int, item: Item, count: int) {
-    if item == .None || count <= 0 do return
-    for r in 0 ..= TURRET_PART_SPREAD do for side in ([2]int{-1, 1}) {
-        cx := x + r*side
-        if !in_bounds(cx, y) || is_solid(w, cx, y) do continue
-        land := turret_landing(w, cx, y)
-        pile := w.items[grid_idx(int(land.x), int(land.y))]
-        if pile == .None || pile == item {
-            spawn_ground_item(w, land, item, count)
-            return
-        }
-    }
-    spawn_ground_item(w, turret_landing(w, x, y), item, count)
-}
-
-// Ground items do not fall by themselves, so a part lands here: the open cell
-// on the first solid tile down the column.  With no floor at all it stays where
-// it came off, because the bottom of a sky island's column is no place to reach.
-turret_landing :: proc(w: ^World_Grid, x, y: int) -> [2]i32 {
-    for ly := y; in_bounds(x, ly + 1); ly += 1 {
-        if is_solid(w, x, ly + 1) do return {i32(x), i32(ly)}
-    }
-    return {i32(x), i32(y)}
-}
-
-// One turret part off the grid; turret_come_apart lays its item down.
+// One turret part off the grid and onto the ground as its item.
 turret_loosen :: proc(gs: ^Game_State, x, y: int) {
     t   := get_tile(&gs.world, x, y)
     idx := grid_idx(x, y)
@@ -169,6 +128,7 @@ turret_loosen :: proc(gs: ^Game_State, x, y: int) {
     golem_remove_block_mark(gs, {i32(x), i32(y)})
     gs.world.tile_flags[idx] -= {.Placed, .Golem_Placed}
     gs.world.sim_data[idx] = {}
+    spawn_ground_item(&gs.world, {i32(x), i32(y)}, terrain_table[t].drop_item, 1)
     gravity_check_removed(gs, x, y)
     log_action(gs, "Turret part %v comes loose at (%d,%d)", t, x, y)
 }
