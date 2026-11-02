@@ -563,6 +563,27 @@ handle_entity_died :: proc(gs: ^Game_State, e: Event) {
     }
 }
 
+// Far enough for every player tool: the longest wand, its blast ring, and a
+// step taken while the shot is in flight.
+MINED_DROP_REACH :: ULTRA_WAND_RANGE + 2
+
+// A block the player mines in reach goes straight into the bag, Glenn
+// 2026-11-02, so stone mined over open sky is not lost to the fall.  Any other
+// miner, or a full bag, leaves the drop on the mined cell, ringing outward when
+// a different pile (or a capped one) already lies there.  Either way a mined
+// tile's payout is never voided.
+give_mined_drop :: proc(gs: ^Game_State, e: Event, drop: Item) {
+    in_reach := e.source == PLAYER_ID &&
+        chebyshev(e.tile, player_tile(&gs.player)) <= MINED_DROP_REACH
+    if !in_reach || !inventory_insert(&gs.player.inventory, drop, 1) {
+        spawn_ground_item(&gs.world, e.tile, drop, 1)
+        return
+    }
+    spawn_collect_mote(gs, e.tile, drop)
+    eq_push(&gs.events, Event{type = .Item_Pickup, tile = e.tile, payload = {int_val = i32(drop)}})
+    log_action(gs, "Player banks %v x1 from (%d,%d)", drop, e.tile.x, e.tile.y)
+}
+
 handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     x := int(e.tile.x)
     y := int(e.tile.y)
@@ -620,8 +641,8 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     // The loose stratum the cave mouth cuts through pays a clod of dirt on top
     // of the tile's normal drop — a small starter reward for digging right
     // beside the descent shaft (the tiles draw_shaft_mouth scuffs brown).  The
-    // rock drops to the ground as usual; the dirt is banked directly (below) —
-    // into the PLAYER's bag, so only the player's own mining earns it.
+    // dirt is banked directly (below) — into the PLAYER's bag, so only the
+    // player's own mining earns it.
     shaft_earth := e.source == PLAYER_ID &&
         gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, x, y)
 
@@ -673,10 +694,12 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     gravity_check_removed(gs, x, y)
 
     if drop != .None {
-        // The drop lands on the mined cell when it can, and rings outward when
-        // a different pile (or a capped one) already lies there — a mined
-        // tile's payout is never voided.
-        spawn_ground_item(&gs.world, e.tile, drop, 1)
+        // A turret comes apart on the ground, Glenn 2026-11-02: its parts fall.
+        if is_turret_tile(old_tile) {
+            spawn_ground_item(&gs.world, e.tile, drop, 1)
+        } else {
+            give_mined_drop(gs, e, drop)
+        }
     }
 
     // The dirt half of the payout flies straight into the bag with a collect
