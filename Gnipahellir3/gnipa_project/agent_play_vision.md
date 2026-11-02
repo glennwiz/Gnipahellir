@@ -45,3 +45,11 @@ As simple as possible.
 | /v1/wait | POST | Advance N ticks without acting |
 | /v1/new_game | POST | Fresh run; optional seed and scenario |
 | /v1/screenshot | GET | Optional, later: PNG of the current frame |
+
+## 4. What ships in the game
+
+- Agent server: small HTTP server on its own thread inside the binary, handing requests to the main loop through a locked queue.
+- Step mode: simulation pauses awaiting input, advances on act/wait.
+- Session flagging: saves and stats record "agent-assisted", keeping human leaderboards and achievements clean. Agent runs get their own board.
+- Spectator overlay: last action + an optional one-line "thought" the agent sends with each act call, drawn on screen. This is what makes runs watchable.
+- Run log: every observation and action appended to a JSONL file for replay, sharing and debugging.
