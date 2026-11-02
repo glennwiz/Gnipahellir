@@ -285,25 +285,34 @@ knocks_loose :: proc(t: Tile_Type) -> bool {
 
 // Enemy demolition of a tile.  A player machine is knocked loose, not deleted:
 // it drops its item and spills what it held, so the loss is visible and
-// recoverable instead of a silent hole in the base.
-smash_tile :: proc(gs: ^Game_State, x, y: int) {
+// recoverable instead of a silent hole in the base.  The rest is what a mine
+// does to a tile (handle_tile_mined).  Returns whether the tile went to the
+// ground: that block is paid, so a digger's pocket gets nothing for it.
+smash_tile :: proc(gs: ^Game_State, x, y: int) -> (dropped: bool) {
     old := get_tile(&gs.world, x, y)
+    T := [2]i32{i32(x), i32(y)}
     // A hoard is never smashed away, whoever swings; an emptied container's
     // record goes with its tile.
-    if wave_target_refused(gs, {i32(x), i32(y)}) do return
+    if wave_target_refused(gs, T) do return
     if old == .Silo {
-        if s := silo_at(gs, gs.level_index, {i32(x), i32(y)}); s != nil do s^ = {}
+        if s := silo_at(gs, gs.level_index, T); s != nil do s^ = {}
     }
-    if old == .Barrel || old == .Rune_Coffer do barrel_on_mined(gs, {i32(x), i32(y)})
-    set_tile(&gs.world, x, y, .Void)
+    if old == .Barrel || old == .Rune_Coffer do barrel_on_mined(gs, T)
+    miner_anchor_on_taken(gs, T, old)
+    set_tile(&gs.world, x, y, gravity_open_tile(gs, y))
+    golem_remove_block_mark(gs, T)
+    gs.world.tile_flags[grid_idx(x, y)] -= {.Placed, .Golem_Placed}
+    gravity_check_removed(gs, x, y)
     if knocks_loose(old) {
         if drop := terrain_table[old].drop_item; drop != .None {
-            spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
+            spawn_ground_item(&gs.world, T, drop, 1)
+            dropped = true
         }
     }
-    spill_machine(gs, {i32(x), i32(y)}, old)
+    spill_machine(gs, T, old)
     if old == .Door do door_take_partner(gs, x, y)
     turret_come_apart(gs, x, y, old)
+    return
 }
 
 is_mineral :: proc(t: Tile_Type) -> bool {
@@ -1325,10 +1334,10 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
             cy := int(c.y)
             if is_solid(&gs.world, cx, cy) && is_builder_mineable(gs, cx, cy) &&
                !den_protected(gs, cx, cy, id) {
-                smash_tile(gs, cx, cy)
+                dropped := smash_tile(gs, cx, cy)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
                 log_action(gs, "Builder clears climb tile (%d,%d)", cx, cy)
-                e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
+                if !dropped do e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
                 nav.mine_timer = MINE_TIME
                 e.vel.x = 0
                 return true
@@ -1338,10 +1347,10 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
 
     // Mine: waypoint tile is solid and mineable (dens are off-limits).
     if is_builder_mineable(gs, tx, ty) && !den_protected(gs, tx, ty, id) {
-        smash_tile(gs, tx, ty)
+        dropped := smash_tile(gs, tx, ty)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
         log_action(gs, "Builder mines (%d,%d)", tx, ty)
-        e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
+        if !dropped do e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         nav.mine_timer = MINE_TIME
         e.vel.x = 0
         return true
@@ -1433,9 +1442,9 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     // Ceiling in the way: eat it.  Otherwise hop.
     if is_solid(&gs.world, x, y-1) {
         if is_builder_mineable(gs, x, y-1) && !den_protected(gs, x, y-1, id) {
-            smash_tile(gs, x, y-1)
+            dropped := smash_tile(gs, x, y-1)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y-1)}})
-            b.pocket = min(b.pocket + 1, POCKET_MAX)
+            if !dropped do b.pocket = min(b.pocket + 1, POCKET_MAX)
             nav.mine_timer = MINE_TIME
         } else {
             // Unmineable roof — the pillar can't continue; replan from here.

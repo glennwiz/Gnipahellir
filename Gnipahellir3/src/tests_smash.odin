@@ -202,3 +202,204 @@ a_dug_door_on_the_surface_opens_its_far_half_to_air :: proc(t: ^testing.T) {
 
     testing.expect_value(t, get_tile(&gs.world, 62, foot - 1), Tile_Type.Air)
 }
+
+// ─── A dig is a mine, and pays once (card 103) ────────────────────────────────
+
+// Turn the fixture's raider into Garm, his body pressed against the waypoint.
+smash_test_garm :: proc(gs: ^Game_State) -> ^Enemy {
+    e := smash_test_builder(gs)
+    e.kind, e.hp, e.hp_max = .Garm, GARM_HP, GARM_HP
+    e.pos = {SMASH_X - 1.8, SMASH_Y + 1 - GARM_H}
+    e.facing = 1
+    e.builder.den_built = true
+    return e
+}
+
+smash_test_miner :: proc(gs: ^Game_State, level: int, base: [2]i32) {
+    gs.level_index = level
+    gs.dimension.kind = .Metal
+    gs.dimension.miner = {active = true, base = base, head = base}
+}
+
+@(test)
+a_dug_auto_miner_releases_the_anchor :: proc(t: ^testing.T) {
+    for garm in ([]bool{false, true}) {
+        gs := turret_test_state()
+        defer free(gs)
+        if garm do smash_test_garm(gs)
+        else do smash_test_builder(gs)
+        smash_test_miner(gs, LEVEL_DIMENSION, {SMASH_X, SMASH_Y})
+        set_tile(&gs.world, SMASH_X, SMASH_Y, .Auto_Miner)
+
+        gs.delta_time = 1.0/60.0
+        update_enemies(gs)
+
+        testing.expect(t, get_tile(&gs.world, SMASH_X, SMASH_Y) != .Auto_Miner, "the miner was dug out")
+        testing.expect(t, !gs.dimension.miner.active, "the anchor goes with its base")
+        testing.expect_value(t, turret_ground_count(gs, .Auto_Miner), 1)
+    }
+}
+
+// A miner that is not the base anchors nothing: digging it holds the anchor.
+@(test)
+a_dug_spare_auto_miner_keeps_the_anchor :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    smash_test_builder(gs)
+    smash_test_miner(gs, LEVEL_DIMENSION, {SMASH_X + 9, SMASH_Y})
+    set_tile(&gs.world, SMASH_X, SMASH_Y, .Auto_Miner)
+    gs.delta_time = 1.0/60.0
+    update_enemies(gs)
+    testing.expect(t, get_tile(&gs.world, SMASH_X, SMASH_Y) != .Auto_Miner, "the miner was dug out")
+    testing.expect(t, gs.dimension.miner.active, "the anchor holds")
+}
+
+// The release valve: losing a spawner of the anchored kind may not lock every
+// gate, and an enemy's dig loses it as surely as the player's pick.
+@(test)
+a_dug_spawner_opens_the_release_valve :: proc(t: ^testing.T) {
+    Case :: struct {level: int, tile: Tile_Type, active: bool}
+    for c in ([]Case{
+        {LEVEL_SURFACE,   .Dimension_Spawner,      false},
+        {LEVEL_SURFACE,   .Dimension_Spawner_Gold, true},   // another kind's
+        {LEVEL_DIMENSION, .Dimension_Spawner,      true},   // not out in the world
+    }) {
+        gs := turret_test_state()
+        defer free(gs)
+        smash_test_builder(gs)
+        smash_test_miner(gs, c.level, {5, 5})
+        set_tile(&gs.world, SMASH_X, SMASH_Y, c.tile)
+        gs.delta_time = 1.0/60.0
+        update_enemies(gs)
+        testing.expectf(t, get_tile(&gs.world, SMASH_X, SMASH_Y) != c.tile, "%v was dug out", c.tile)
+        testing.expectf(t, gs.dimension.miner.active == c.active, "%v on level %d", c.tile, c.level)
+    }
+}
+
+// A block goes to the ground or into the pocket, never both.  Each of the three
+// digs a builder makes, on a machine that drops itself and on stone that does not.
+@(test)
+a_dig_pays_the_pocket_only_for_what_it_did_not_drop :: proc(t: ^testing.T) {
+    Dig :: enum {Waypoint, Climb, Pillar}
+    for dig in Dig do for tile in ([]Tile_Type{.Smelter, .Stone}) {
+        gs := turret_test_state()
+        defer free(gs)
+        e := smash_test_builder(gs)
+        at := [2]int{SMASH_X, SMASH_Y}
+        switch dig {
+        case .Waypoint:
+        case .Climb:
+            at = {SMASH_X - 1, SMASH_Y - 1}
+            e.nav.path.tiles[0] = {SMASH_X, SMASH_Y - 1}
+        case .Pillar:
+            at = {SMASH_X - 1, SMASH_Y - 1}
+            e.builder.escaping = true
+            e.builder.escape_from = SMASH_Y
+        }
+        set_tile(&gs.world, at.x, at.y, tile)
+        drop0 := turret_ground_count(gs, terrain_table[tile].drop_item)
+
+        gs.delta_time = 1.0/60.0
+        update_enemies(gs)
+
+        testing.expectf(t, get_tile(&gs.world, at.x, at.y) != tile, "%v: %v was dug out", dig, tile)
+        dropped := turret_ground_count(gs, terrain_table[tile].drop_item) - drop0
+        testing.expectf(t, int(e.builder.pocket) + dropped == 1,
+            "%v: %v paid pocket %d and ground %d", dig, tile, e.builder.pocket, dropped)
+    }
+}
+
+@(test)
+a_dug_door_pays_no_pocket_block :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e := smash_test_builder(gs)
+    set_tile(&gs.world, SMASH_X, SMASH_Y, .Door)
+    set_tile(&gs.world, SMASH_X, SMASH_Y - 1, .Door)
+    gs.delta_time = 1.0/60.0
+    update_enemies(gs)
+    testing.expect_value(t, turret_ground_count(gs, .Door), 1)
+    testing.expect_value(t, e.builder.pocket, 0)
+}
+
+// Garm's dig is the same demolition, from update_garm.
+@(test)
+garm_digs_a_loaded_machine_like_any_digger :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e := smash_test_garm(gs)
+    MY :: SMASH_Y - 1   // the top row of his body: he swings top down
+    set_tile(&gs.world, SMASH_X, MY, .Smelter)
+    set_tile(&gs.world, SMASH_X, MY - 1, .Wood)   // rests on the smelter alone
+    sd := &gs.world.sim_data[grid_idx(SMASH_X, MY)]
+    sd.store_item, sd.store_count = .Iron_Bar, 2
+
+    gs.delta_time = 1.0/60.0
+    update_enemies(gs)
+
+    testing.expect(t, get_tile(&gs.world, SMASH_X, MY) != .Smelter, "he dug it out")
+    testing.expect_value(t, turret_ground_count(gs, .Iron_Bar), 2)
+    testing.expect_value(t, turret_ground_count(gs, .Smelter), 1)
+    testing.expect(t, get_tile(&gs.world, SMASH_X, MY - 1) != .Wood, "the wood let go")
+    testing.expect(t, e.nav.mine_timer > 0, "the dig costs him the swing")
+}
+
+@(test)
+a_dug_block_lets_go_of_what_leaned_on_it :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    smash_test_builder(gs)
+    set_tile(&gs.world, SMASH_X, SMASH_Y, .Stone)
+    set_tile(&gs.world, SMASH_X, SMASH_Y - 1, .Wood)   // rests on the stone alone
+    gs.delta_time = 1.0/60.0
+    update_enemies(gs)
+    testing.expect(t, !is_solid(&gs.world, SMASH_X, SMASH_Y), "the stone was dug out")
+    testing.expect(t, get_tile(&gs.world, SMASH_X, SMASH_Y - 1) != .Wood, "the wood let go")
+}
+
+// The tile's records go with it: nothing marks an empty cell as built.
+@(test)
+a_dug_block_takes_its_marks_with_it :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    smash_test_builder(gs)
+    idx := grid_idx(SMASH_X, SMASH_Y)
+    set_tile(&gs.world, SMASH_X, SMASH_Y, .Stone)
+    gs.world.tile_flags[idx] += {.Placed, .Golem_Placed}
+    testing.expect(t, golem_set_block_mark(gs, {SMASH_X, SMASH_Y}, true), "the block takes a mark")
+    testing.expect_value(t, gs.golem_marks.count, 1)
+
+    gs.delta_time = 1.0/60.0
+    update_enemies(gs)
+
+    testing.expect(t, !is_solid(&gs.world, SMASH_X, SMASH_Y), "the stone was dug out")
+    testing.expect(t, .Placed not_in gs.world.tile_flags[idx], "the Placed flag goes")
+    testing.expect(t, .Golem_Placed not_in gs.world.tile_flags[idx], "the Golem_Placed flag goes")
+    testing.expect(t, .Golem_Marked not_in gs.world.tile_flags[idx], "the mark goes")
+    testing.expect_value(t, gs.golem_marks.count, 0)
+}
+
+// A dig opens what a mine opens: sky stays sky, and a cave stays void.
+@(test)
+a_dig_opens_air_above_the_surface_line :: proc(t: ^testing.T) {
+    {
+        gs := turret_test_state()
+        defer free(gs)
+        smash_test_builder(gs)
+        gs.level_index = LEVEL_SKY
+        set_tile(&gs.world, SMASH_X, SMASH_Y, .Stone)
+        gs.delta_time = 1.0/60.0
+        update_enemies(gs)
+        testing.expect_value(t, get_tile(&gs.world, SMASH_X, SMASH_Y), Tile_Type.Air)
+    }
+    {
+        gs := turret_test_state()
+        defer free(gs)
+        set_tile(&gs.world, 62, SURFACE_Y - 2, .Stone)
+        set_tile(&gs.world, 64, SURFACE_Y + 2, .Stone)
+        smash_tile(gs, 62, SURFACE_Y - 2)
+        smash_tile(gs, 64, SURFACE_Y + 2)
+        testing.expect_value(t, get_tile(&gs.world, 62, SURFACE_Y - 2), Tile_Type.Air)
+        testing.expect_value(t, get_tile(&gs.world, 64, SURFACE_Y + 2), Tile_Type.Void)
+    }
+}

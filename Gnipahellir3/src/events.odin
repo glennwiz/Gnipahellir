@@ -587,6 +587,23 @@ give_mined_drop :: proc(gs: ^Game_State, e: Event, drop: Item) {
     log_action(gs, "Player banks %v x1 from (%d,%d)", drop, e.tile.x, e.tile.y)
 }
 
+// The tile at T is being taken, by a pick or by a dig.
+miner_anchor_on_taken :: proc(gs: ^Game_State, T: [2]i32, old_tile: Tile_Type) {
+    // Reclaiming the Auto-Miner's base releases the dimension anchor.
+    if old_tile == .Auto_Miner && gs.dimension.miner.active &&
+       gs.dimension.miner.base == T {
+        miner_on_mined(gs)
+    }
+
+    // Release valve: while a miner anchors a world, reclaiming ANY spawner
+    // of that kind also releases the anchor — losing the original spawner
+    // tile can no longer lock every dimension gate in the game.
+    if gs.dimension.miner.active && gs.level_index != LEVEL_DIMENSION &&
+       old_tile == dimension_spawner_tile[gs.dimension.kind] {
+        miner_on_mined(gs)
+    }
+}
+
 handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     x := int(e.tile.x)
     y := int(e.tile.y)
@@ -658,19 +675,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         builder_alert(gs, owner)
     }
 
-    // Reclaiming the Auto-Miner's base releases the dimension anchor.
-    if old_tile == .Auto_Miner && gs.dimension.miner.active &&
-       gs.dimension.miner.base == e.tile {
-        miner_on_mined(gs)
-    }
-
-    // Release valve: while a miner anchors a world, reclaiming ANY spawner
-    // of that kind also releases the anchor — losing the original spawner
-    // tile can no longer lock every dimension gate in the game.
-    if gs.dimension.miner.active && gs.level_index != LEVEL_DIMENSION &&
-       old_tile == dimension_spawner_tile[gs.dimension.kind] {
-        miner_on_mined(gs)
-    }
+    miner_anchor_on_taken(gs, e.tile, old_tile)
 
     // Mined tiles open to air above the surface line, to void underground
     fill: Tile_Type = .Void
