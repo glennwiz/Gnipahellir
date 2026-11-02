@@ -14213,6 +14213,22 @@ a_door_is_stopped_by_either_row_or_the_map_edge :: proc(t: ^testing.T) {
     testing.expect(t, den_door_blocked(gs, &dens, b), "past the map edge")
 }
 
+// The door gap itself counts, both rows, not only the corridor past it.
+@(test)
+a_door_is_stopped_at_its_own_gap :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    dens := collect_dens(gs)
+    for dy in i32(-1) ..= 0 {
+        T := DD_ANCHOR + {2, dy}
+        set_tile(&gs.world, int(T.x), int(T.y), .Rune_Stone)
+        testing.expectf(t, den_door_blocked(gs, &dens, b), "rune stone at row %d of the gap", dy)
+        set_tile(&gs.world, int(T.x), int(T.y), .Void)
+    }
+}
+
 // A neighbour's wall across the corridor stops the door like rune stone does.
 @(test)
 another_dens_wall_stops_a_door :: proc(t: ^testing.T) {
