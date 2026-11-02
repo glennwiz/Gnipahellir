@@ -49,7 +49,8 @@ EARTH_COOLDOWN :: f32(3)
 EARTH_DAMAGE   :: 5
 
 // One row per turret head.  pillars is the pattern: how many Turret_Pillar
-// tiles the head must stand on (0 = placed bare, the old laser).  A new turret
+// tiles the head must stand on.  Placing checks it and nothing else does, so a
+// laser an old save left standing bare keeps firing.  A new turret
 // is a row here, a tile, a head item and a recipe.  Applied on the cooldown:
 // damage at once, burn as a status (update_enemy_status).
 Turret_Rule :: struct {
@@ -66,7 +67,10 @@ Turret_Rule :: struct {
 
 @(rodata)
 turret_table := #partial [Tile_Type]Turret_Rule{
-    .Rainbow_Laser = {range = LASER_RANGE, cooldown = LASER_COOLDOWN, damage = LASER_DAMAGE},
+    .Rainbow_Laser = {
+        pillars = 2, range = LASER_RANGE, cooldown = LASER_COOLDOWN, damage = LASER_DAMAGE,
+        refusal = "A Rainbow Laser goes on top of two Turret Pillars",
+    },
     .Flame_Turret  = {
         pillars = 1, range = FLAME_RANGE, cooldown = FLAME_COOLDOWN, burn_time = FLAME_BURN_TIME,
         jet = spawn_flame_jet, refusal = "A Flame Head goes on top of a Turret Pillar",
@@ -107,8 +111,12 @@ turret_come_apart :: proc(gs: ^Game_State, x, y: int, old: Tile_Type) {
         if rule.pillars < y - head_y do return
         turret_loosen(gs, x, head_y)
     }
+    // The column stops at the first tile that is no pillar: an old save's bare
+    // laser can stand on another turret.  The cell just taken is already gone.
     for i in 1 ..= rule.pillars {
-        if get_tile(&gs.world, x, head_y + i) == .Turret_Pillar do turret_loosen(gs, x, head_y + i)
+        if head_y + i == y do continue
+        if get_tile(&gs.world, x, head_y + i) != .Turret_Pillar do break
+        turret_loosen(gs, x, head_y + i)
     }
 }
 

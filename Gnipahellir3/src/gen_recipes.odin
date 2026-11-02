@@ -112,10 +112,9 @@ recipe_table := [?]Recipe{
 	// Plank 2 + Iron Ore 2 + Emerald 1 — the gem-economy sink — when the real
 	// wave trigger lands.
 	{ .Fire_Wand, 1, .Bench, {{.Wood_Log, 1}, {.Stone_Block, 1}, {}} },
-	// Base defense, rung one: the same log-and-stone price as the wand that
-	// calls the waves in, and no unlock row - a turret you cannot build yet is
-	// a turret that arrives after the base is already gone.
-	{ .Rainbow_Laser, 1, .Bench, {{.Wood_Log, 1}, {.Stone_Block, 1}, {}} },
+	// The top of the turret line, Glenn 2026-11-02: a head on two pillars at a
+	// late-game price.  Flame, Water and Earth are what you build before it.
+	{ .Rainbow_Laser, 1, .Bench, {{.Gold_Bar, 8}, {.Emerald, 6}, {.Diamond, 3}} },
 	// Built turrets, first guess at the price: the pillar is stone and iron,
 	// each head its own element on top.
 	{ .Turret_Pillar, 1, .Bench, {{.Stone_Block, 6}, {.Iron_Bar, 2}, {}} },
@@ -200,6 +199,7 @@ recipe_unlock := #partial [Item]Item{
 	.Magic_Kettle = .Emerald,
 	.Mana_Wheel = .Magic_Kettle,
 	.Mana_Pipe = .Mana_Wheel,
+	.Rainbow_Laser = .Diamond,
 	// Iron is what a pillar needs, so the cards open with the first bar.
 	.Turret_Pillar = .Iron_Bar,
 	.Flame_Head = .Iron_Bar,

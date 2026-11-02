@@ -10507,18 +10507,19 @@ a_builder_needs_a_clear_line_to_see_the_player :: proc(t: ^testing.T) {
 }
 
 @(test)
-the_rainbow_laser_is_a_bench_craft_and_a_structure :: proc(t: ^testing.T) {
-    // Known from the start: a turret you cannot build until some gate opens
-    // arrives after the base it was meant to defend is gone.
-    testing.expect_value(t, recipe_unlock[.Rainbow_Laser], Item.None)
+the_rainbow_laser_is_a_dear_bench_craft_and_a_structure :: proc(t: ^testing.T) {
+    // Late game now, Glenn 2026-11-02: the card opens on the first diamond and
+    // every ingredient is a late one.
+    testing.expect_value(t, recipe_unlock[.Rainbow_Laser], Item.Diamond)
 
     idx := -1
     for r, i in recipe_table do if r.result == .Rainbow_Laser { idx = i; break }
     testing.expect(t, idx >= 0, "a Rainbow Laser recipe exists")
     r := recipe_table[idx]
     testing.expect_value(t, r.station, Station.Bench)
-    testing.expect_value(t, r.ingredients[0], Ingredient{.Wood_Log, 1})
-    testing.expect_value(t, r.ingredients[1], Ingredient{.Stone_Block, 1})
+    testing.expect_value(t, r.ingredients[0], Ingredient{.Gold_Bar, 8})
+    testing.expect_value(t, r.ingredients[1], Ingredient{.Emerald, 6})
+    testing.expect_value(t, r.ingredients[2], Ingredient{.Diamond, 3})
 
     // The item places the tile, the tile drops the item back, and it counts as
     // a structure — so the pick reclaims it and wave hunters will hunt it.
@@ -13240,4 +13241,88 @@ an_earth_turret_lands_one_slow_heavy_blow :: proc(t: ^testing.T) {
     hp := gs.enemies.data[id].hp
     turret_test_run(gs, EARTH_COOLDOWN + 0.5)
     testing.expect_value(t, gs.enemies.data[id].hp, hp)
+}
+
+@(test)
+the_rainbow_laser_needs_two_pillars :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    turret_test_site(gs, PX, PY)
+
+    // Bare ground, then one pillar: refused with the note, item kept.
+    turret_test_place(gs, .Rainbow_Laser, PX, PY)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY), Tile_Type.Air)
+    turret_test_place(gs, .Turret_Pillar, PX, PY)
+    turret_test_place(gs, .Rainbow_Laser, PX, PY - 1)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY - 1), Tile_Type.Air)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Rainbow_Laser), 1)
+    n := &gs.notify.items[gs.notify.count - 1]
+    testing.expect_value(t, string(n.text[:n.len]), turret_table[.Rainbow_Laser].refusal)
+
+    // Two pillars: the head sits on top and fires.
+    turret_test_place(gs, .Turret_Pillar, PX, PY - 1)
+    turret_test_place(gs, .Rainbow_Laser, PX, PY - 2)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY - 2), Tile_Type.Rainbow_Laser)
+    id := turret_test_enemy(gs, PX + 3.5, f32(PY) - 1.5)
+    gs.delta_time = LASER_COOLDOWN
+    update_sim(gs)
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50 - LASER_DAMAGE)
+
+    // Any of the three returns all three.
+    for at in 0 ..= 2 {
+        gs2 := test_state()
+        defer free(gs2)
+        turret_test_site(gs2, PX, PY)
+        set_tile(&gs2.world, PX, PY, .Turret_Pillar)
+        set_tile(&gs2.world, PX, PY - 1, .Turret_Pillar)
+        set_tile(&gs2.world, PX, PY - 2, .Rainbow_Laser)
+        eq_push(&gs2.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {PX, i32(PY - at)}})
+        process_events(gs2)
+        testing.expect_value(t, turret_ground_count(gs2, .Turret_Pillar), 2)
+        testing.expect_value(t, turret_ground_count(gs2, .Rainbow_Laser), 1)
+        for dy in 0 ..= 2 do testing.expect(t, !is_solid(&gs2.world, PX, PY - dy), "the column is clear")
+    }
+}
+
+// A run saved before the pillars has lasers standing on plain ground.  Nothing
+// in the save changed, so they load as they stood, fire, and come up alone.
+@(test)
+an_old_saves_bare_laser_keeps_working :: proc(t: ^testing.T) {
+    PATH := "_test_bare_laser.dat"
+    defer os.remove(PATH)
+    PX :: 60
+    PY :: SURFACE_Y - 1
+
+    gs := test_state()
+    defer free(gs)
+    turret_test_site(gs, PX, PY)
+    set_tile(&gs.world, PX, PY, .Rainbow_Laser)
+    set_tile(&gs.world, PX, PY - 3, .Rainbow_Laser)  // lasers once stood on anything
+    set_tile(&gs.world, PX, PY - 2, .Rainbow_Laser)
+    testing.expect(t, save_game_to(gs, PATH), "saved")
+
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "loaded")
+    testing.expect_value(t, get_tile(&back.world, PX, PY), Tile_Type.Rainbow_Laser)
+
+    id := turret_test_enemy(back, PX + 3.5, f32(PY) + 0.5)
+    back.delta_time = LASER_COOLDOWN
+    update_sim(back)
+    process_events(back)
+    eq_clear(&back.events)
+    testing.expect_value(t, back.enemies.data[id].hp, 50 - 3*LASER_DAMAGE)  // all three fire
+
+    // A bare laser is one part; a laser under it is its own machine.
+    eq_push(&back.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {PX, PY}})
+    process_events(back)
+    testing.expect_value(t, turret_ground_count(back, .Rainbow_Laser), 1)
+    testing.expect_value(t, turret_ground_count(back, .Turret_Pillar), 0)
+    eq_push(&back.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {PX, PY - 3}})
+    process_events(back)
+    testing.expect_value(t, get_tile(&back.world, PX, PY - 2), Tile_Type.Rainbow_Laser)
 }

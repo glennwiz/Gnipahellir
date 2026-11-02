@@ -21,7 +21,7 @@ turret_heads := [?]Turret_Head_Case{
     {.Flame_Turret, .Flame_Head, .Iron_Bar, 1},
     {.Water_Turret, .Water_Head, .Iron_Bar, 1},
     {.Earth_Turret, .Earth_Head, .Iron_Bar, 1},
-    // <turret-heads>
+    {.Rainbow_Laser, .Rainbow_Laser, .Diamond, 2},
 }
 
 TT_X :: 60
@@ -416,4 +416,30 @@ earth_keeps_its_place_in_the_line :: proc(t: ^testing.T) {
     testing.expect(t, EARTH_RANGE > FLAME_RANGE, "a thrower, not a jet")
 }
 
-// <turret-tests>
+// The coordinator's rule for the text: it says where the laser goes and that it
+// needs to see its target.
+@(test)
+the_laser_text_names_the_pillars_and_the_sight_rule :: proc(t: ^testing.T) {
+    desc := item_table[.Rainbow_Laser].desc
+    testing.expect(t, strings.contains(desc, "two Turret Pillars"), "the pattern")
+    testing.expect(t, strings.contains(desc, "it can see"), "the sight rule")
+}
+
+// An old save's bare laser over a fused turret: taking the laser takes only the
+// laser.  The fused turret below keeps its pillar and stands.
+@(test)
+a_bare_laser_leaves_the_turret_beneath_it_alone :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    turret_test_site(gs, TT_X, TT_Y)
+    set_tile(&gs.world, TT_X, TT_Y, .Turret_Pillar)
+    set_tile(&gs.world, TT_X, TT_Y - 1, .Flame_Turret)
+    set_tile(&gs.world, TT_X, TT_Y - 2, .Rainbow_Laser)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {TT_X, TT_Y - 2}})
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, turret_ground_count(gs, .Rainbow_Laser), 1)
+    testing.expect_value(t, turret_ground_count(gs, .Turret_Pillar), 0)
+    testing.expect_value(t, get_tile(&gs.world, TT_X, TT_Y - 1), Tile_Type.Flame_Turret)
+    testing.expect_value(t, get_tile(&gs.world, TT_X, TT_Y), Tile_Type.Turret_Pillar)
+}

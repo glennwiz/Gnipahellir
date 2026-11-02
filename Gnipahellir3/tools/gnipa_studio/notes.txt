@@ -185,9 +185,8 @@ recipe	Fire_Wand	card is known from the start (no unlock row below).  Revert to
 recipe	Fire_Wand	Plank 2 + Iron Ore 2 + Emerald 1 — the gem-economy sink — when the real
 recipe	Fire_Wand	wave trigger lands.
 icon	Rainbow_Laser	Rainbow Laser - the machine box again, its window a prismatic lens.
-recipe	Rainbow_Laser	Base defense, rung one: the same log-and-stone price as the wand that
-recipe	Rainbow_Laser	calls the waves in, and no unlock row - a turret you cannot build yet is
-recipe	Rainbow_Laser	a turret that arrives after the base is already gone.
+recipe	Rainbow_Laser	The top of the turret line, Glenn 2026-11-02: a head on two pillars at a
+recipe	Rainbow_Laser	late-game price.  Flame, Water and Earth are what you build before it.
 struct	Rainbow_Laser	A turret is equipment, not scenery: the pick reclaims it, and the wave
 struct	Rainbow_Laser	hunters count it among the structures worth smashing.
 glow	Rainbow_Laser	prismatic rose - the lens between shots
