@@ -6,6 +6,7 @@ import "core:net"
 import "core:os"
 import "core:strings"
 import "core:testing"
+import "core:time"
 
 @(private="file")
 agent_test_reply :: proc(link: ^Agent_Link) -> string {
@@ -1519,4 +1520,27 @@ agent_state_lists_dens_and_their_hoards :: proc(t: ^testing.T) {
     for e in edges {
         testing.expectf(t, len(agent_test_state(link, gs, e.line)["dens"].(json.Array)) == e.n, "%s", e.line)
     }
+}
+
+@(test)
+agent_turbo_draws_once_a_second_and_only_while_driven :: proc(t: ^testing.T) {
+    link := new(Agent_Link)
+    defer free(link)
+    start := time.tick_now()
+    later :: proc(from: time.Tick, d: time.Duration) -> time.Tick {
+        return time.Tick{from._nsec + i64(d)}
+    }
+
+    link.last_draw = start  // a draw just now: only the guards can say yes
+    testing.expect(t, agent_draw_due(link, start), "the keyboard's game always draws")
+    link.connected = true
+    testing.expect(t, agent_draw_due(link, start), "a plain agent run always draws")
+    link.connected, link.turbo = false, true
+    testing.expect(t, agent_draw_due(link, start), "nobody driving: the window is someone's")
+    link.connected = true
+
+    link.last_draw = start
+    testing.expect(t, !agent_draw_due(link, later(start, AGENT_TURBO_DRAW - 1)))
+    testing.expect(t, agent_draw_due(link, later(start, AGENT_TURBO_DRAW)))
+    testing.expect(t, !agent_draw_due(link, later(start, AGENT_TURBO_DRAW + 1)), "the clock restarts at a draw")
 }

@@ -209,7 +209,7 @@ class B:
         return acts
     def endplan(s):
         # every script ends in a think, so a forgotten plan must not leave him standing idle
-        if s.planned: return
+        if s.planned or os.environ.get('GNIPA_AGENT_TURBO'): return  # a harness run has no think time
         try: s.think()
         except Exception as e: print('endplan failed',e,flush=True)
     # ---- pathing

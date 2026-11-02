@@ -62,14 +62,19 @@ def p3(b):
     b.sel('Sky_Altar'); b.a(3,place=[91,77]); assert b.t(91,77)=='Sky_Altar'
     b.walkx(96); b.sel('Tree_Grower'); b.a(3,place=[94,79]); b.a(2,move='left')
     b.sel('Smelter'); b.a(3,place=[97,79]); assert b.t(97,79)=='Smelter'
-    b.sel('Smelter'); b.a(3,place=[98,79]); log('second smelter',b.t(98,79),b.r.get('refused'))
     b.walkj(100,limit=20); b.sel('Tree_Grower')
     for c in((102,79),(104,79)): b.a(3,place=list(c)); log(c,b.t(*c))
     b.walkj(96,limit=20)
     b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.st()
     b.a(3,use=[97,79]); b.a(3,feed=b.slot('Silver_Ore')); b.a(3,feed=b.slot('Wood_Log')); b.a(2); b.st()
     # cloud drops float, so stand in them: a stone bridge along row 80 and the roof above it
-    b.walkj(98,limit=20); b.waitland(); assert b.pos()[1]==81,b.pos()
+    b.walkj(98,limit=20); b.waitland()
+    if b.pos()[1]<81:  # some worlds roof the gap over: dig down to the row the bridge runs on
+        b.sel('Pickaxe')
+        for y in range(b.pos()[1]+1,82):
+            if b.solid(98,y): b.dig(98,y,tries=30)
+        b.a(30); b.waitland()
+    assert b.pos()[1]==81,b.pos()
     b.sel('Stone_Block')
     for nx in range(b.pos()[0]+1,106):
         if not b.solid(nx,82): b.a(2,place=[nx,82])
@@ -99,8 +104,6 @@ def p4(b):
         b.st()
     skychop2(b); b.rebless()
     b.flyto(96,77,tmax=18); b.a(3,use=[97,79]); b.a(3,collect=True); b.a(2)
-    b.a(3,use=[98,79]); b.a(3,feed=b.slot('Iron_Ore'))
-    if b.slot('Wood_Log') is not None: b.a(3,use=[98,79]); b.a(3,feed=b.slot('Wood_Log'))
     b.a(2); b.st(); b.rebless()
     log('PHASE clouds',b.r['frame'],b.ftime())
 def p5(b):
