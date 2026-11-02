@@ -22,3 +22,12 @@ This is not an AI feature in the game. The game ships no models, calls no AI ser
 - No cloud service. The API is local to the player's machine.
 - No vendor coupling. Nothing in the game knows or cares which agent is connected.
 - Not an anti-cheat problem: single-player focus; agent runs never touch human leaderboards or Steam economy features.
+
+## 2. Design principles
+
+- The agent is a player, not an admin. Agent actions go through the same command queue as keyboard input. Same verbs, same cooldowns, same fog of war. No debug powers, no map reveal, no spawn commands.
+- Plain HTTP + JSON. No SDK required, no protocol negotiation beyond a version field. If curl can play, everything can play.
+- Text-first observations. The world is described as structured text (stats, inventory, a tile grid with a legend, events). Cheap in tokens, readable by every model, trivially diffable. Screenshots are optional later.
+- The world waits. Models think in seconds, not frames. A step mode pauses the simulation between actions and advances a requested number of ticks. Real-time play is a later option, not the baseline.
+- Off by default, local only. Bound to 127.0.0.1, enabled explicitly in settings or via launch flag. Security posture: the API can do nothing a player with a keyboard can't.
+- Deterministic when asked. A fixed-seed mode makes runs reproducible, so agents and prompts can be compared fairly.
