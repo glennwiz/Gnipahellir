@@ -742,4 +742,34 @@ item_icons := [Item]Item_Icon{
 	.Fire_Wand = {WAND_GRID, {{}, {}, {255, 200, 90, 255}, {235, 110, 30, 255}, {}}},
 	// Rainbow Laser - the machine box again, its window a prismatic lens.
 	.Rainbow_Laser = {SMELTER_GRID, {{150, 140, 178, 255}, {88, 80, 112, 255}, {}, {255, 90, 130, 255}, {120, 240, 255, 255}}},
+	// Turret Pillar - a banded stone column, wide at the foot.
+	.Turret_Pillar = {Icon_Grid{
+		"...DDDDDD...",
+		"...BBBBBB...",
+		"....BAAB....",
+		"....BAAB....",
+		"....DDDD....",
+		"....BAAB....",
+		"....BAAB....",
+		"....DDDD....",
+		"....BAAB....",
+		"...BBAABB...",
+		"..BBBBBBBB..",
+		"..DDDDDDDD..",
+	}, {{150, 154, 168, 255}, {70, 72, 84, 255}, {}, {112, 116, 130, 255}, {}}},
+	// Flame Head - an iron cup with the fire standing in it.
+	.Flame_Head = {Icon_Grid{
+		".....AA.....",
+		"....AAa.....",
+		"....AaaA....",
+		"...AAagAA...",
+		"...AaggaA...",
+		"...AaggaA...",
+		"..DAAaaAAD..",
+		"..DBBBBBBD..",
+		"..DBBBBBBD..",
+		"...DBBBBD...",
+		"....DDDD....",
+		"............",
+	}, {{96, 92, 100, 255}, {60, 56, 64, 255}, {255, 240, 150, 255}, {235, 90, 30, 255}, {255, 170, 50, 255}}},
 }

@@ -36,7 +36,7 @@ fuzz_pool := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Iron_Ore, .Silver_Ore, .Fl
 // The subset the place action wields on purpose (the rest of the pool still
 // reaches placement through the random-hand path).
 @(rodata)
-fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log}
+fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Turret_Pillar, .Flame_Head}
 
 // Own xorshift so the stream never entangles with gs.loot_rng.
 @(private = "file")
@@ -84,6 +84,23 @@ fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     }
     tot[.None] = 0
     return tot
+}
+
+// Mirror turret_come_apart: mining one part of a fused turret pays the rest.
+@(private = "file")
+fuzz_turret_parts :: proc(gs: ^Game_State, x, y: int, old: Tile_Type, want: ^[Item]int) {
+    head_y := y
+    rule   := turret_table[old]
+    if old == .Turret_Pillar {
+        head_y -= 1
+        for get_tile(&gs.world, x, head_y) == .Turret_Pillar do head_y -= 1
+        rule = turret_table[get_tile(&gs.world, x, head_y)]
+        if rule.pillars < y - head_y do return
+        want[terrain_table[get_tile(&gs.world, x, head_y)].drop_item] += 1
+    }
+    for i in 1 ..= rule.pillars {
+        if head_y + i != y && get_tile(&gs.world, x, head_y + i) == .Turret_Pillar do want[.Turret_Pillar] += 1
+    }
 }
 
 @(private = "file")
@@ -214,6 +231,7 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
                 if whash(u32(grid_idx(mx, my)) * 2246822519 + 101) % 100 >= u32(pct) do drop = .None
             }
             if drop != .None do want[drop] += 1
+            fuzz_turret_parts(gs, mx, my, old, &want)
             if gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, mx, my) {
                 want[.Dirt] += 1
             }

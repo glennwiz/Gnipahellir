@@ -12920,3 +12920,223 @@ a_v23_save_keeps_its_enemies_and_stashed_levels :: proc(t: ^testing.T) {
     testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(old)) == nil, "wrote")
     testing.expect(t, !load_game_from(back, PATH), "a wrong number at this size is refused")
 }
+
+// ─── Turret patterns ──────────────────────────────────────────────────────────
+
+// tests_turrets.odin reaches the file-private test_state through this.
+turret_test_state :: proc() -> ^Game_State {
+    return test_state()
+}
+
+// Open ground with a player beside (x,y) and the given stacks in the bag.
+turret_test_site :: proc(gs: ^Game_State, x, y: int) {
+    laser_test_lane(gs, x, y)
+    for dx in -LASER_LANE ..= LASER_LANE do set_tile(&gs.world, x + dx, y + 1, .Stone)
+    gs.player.pos = {f32(x) - 3, f32(y) - PLAYER_H + 1}
+    gs.player.inventory.selected = -1
+}
+
+// Through the real path: wield `item`, push the Place_Request, drain it.
+turret_test_place :: proc(gs: ^Game_State, item: Item, x, y: int) {
+    inv := &gs.player.inventory
+    inv.slots[TEST_HAND] = {item, 1}
+    inv.selected = TEST_HAND
+    eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(x), i32(y)}})
+    process_events(gs)
+    eq_clear(&gs.events)
+}
+
+turret_test_enemy :: proc(gs: ^Game_State, x, y: f32) -> int {
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return -1
+    size := enemy_body_size(.Raider)
+    gs.enemies.data[id] = Enemy{pos = {x - size.x*0.5, y - size.y*0.5}, kind = .Raider, hp = 50, hp_max = 50}
+    return id
+}
+
+// Run `seconds` of the sim steps a turret lives on, in game_update's order.
+turret_test_run :: proc(gs: ^Game_State, seconds: f32) {
+    for _ in 0 ..< int(seconds / gs.delta_time + 0.5) {
+        update_sim(gs)
+        update_enemy_status(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+}
+
+turret_ground_count :: proc(gs: ^Game_State, it: Item) -> int {
+    n := 0
+    for g, i in gs.world.items do if g == it do n += int(gs.world.item_counts[i])
+    return n
+}
+
+@(test)
+a_flame_head_fuses_only_on_a_pillar :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    turret_test_site(gs, PX, PY)
+
+    // On bare ground the head refuses, keeps the item and says why.
+    testing.expect(t, !placement_ok(gs, .Flame_Head, PX, PY), "a head needs its pillar")
+    turret_test_place(gs, .Flame_Head, PX, PY)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY), Tile_Type.Air)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Flame_Head), 1)
+    testing.expect(t, gs.notify.count > 0, "the refusal says why")
+    if gs.notify.count > 0 {
+        n := &gs.notify.items[gs.notify.count - 1]
+        testing.expect_value(t, string(n.text[:n.len]), turret_table[.Flame_Turret].refusal)
+    }
+
+    // Beside a wall, which would satisfy any other block, it still refuses.
+    set_tile(&gs.world, PX + 1, PY, .Stone)
+    testing.expect(t, !placement_ok(gs, .Flame_Head, PX, PY), "a neighbour is not a pillar")
+    set_tile(&gs.world, PX + 1, PY, .Air)
+
+    turret_test_place(gs, .Turret_Pillar, PX, PY)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY), Tile_Type.Turret_Pillar)
+    turret_test_place(gs, .Flame_Head, PX, PY - 1)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY - 1), Tile_Type.Flame_Turret)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Flame_Head), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Turret_Pillar), 0)
+}
+
+@(test)
+a_fused_flame_turret_burns_what_it_sees :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = 1.0 / 60.0
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    HY :: PY - 1
+    turret_test_site(gs, PX, PY)
+    turret_test_place(gs, .Turret_Pillar, PX, PY)
+    turret_test_place(gs, .Flame_Head, PX, HY)
+    eye := f32(HY) + 0.5
+
+    // Past FLAME_RANGE the head holds its fire, though a laser would reach.
+    far := turret_test_enemy(gs, PX + 0.5 + FLAME_RANGE + 1, eye)
+    testing.expect(t, FLAME_RANGE + 1 < LASER_RANGE, "flame is the short reach")
+    turret_test_run(gs, 2)
+    testing.expect_value(t, gs.enemies.data[far].hp, 50)
+    enemy_free(&gs.enemies, far)
+
+    // A wall between them: no target, no fire.
+    set_tile(&gs.world, PX + 2, HY, .Stone)
+    id := turret_test_enemy(gs, PX + 3.5, eye)
+    turret_test_run(gs, 2)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50)
+    set_tile(&gs.world, PX + 2, HY, .Air)
+
+    // In sight it burns, and over the same time a laser would do far more.
+    turret_test_run(gs, 3)
+    burned := 50 - gs.enemies.data[id].hp
+    laser  := 3 / LASER_COOLDOWN * LASER_DAMAGE
+    testing.expect(t, burned > 0, "the jet sets it alight")
+    testing.expect(t, f32(burned) >= laser/3 - 1 && f32(burned) <= laser/2, "a third to a half of the laser")
+
+    // Out of sight the fire goes on for a while, then stops: over time, not on hit.
+    set_tile(&gs.world, PX + 2, HY, .Stone)
+    hp := gs.enemies.data[id].hp
+    turret_test_run(gs, FLAME_BURN_TIME)
+    testing.expect(t, gs.enemies.data[id].hp < hp, "a burn outlives the jet")
+    hp = gs.enemies.data[id].hp
+    turret_test_run(gs, 2)
+    testing.expect_value(t, gs.enemies.data[id].hp, hp)
+    testing.expect_value(t, gs.enemy_status[id], Enemy_Status{})
+}
+
+@(test)
+a_fused_turret_comes_apart_whole :: proc(t: ^testing.T) {
+    build :: proc(gs: ^Game_State, x, y: int) {
+        set_tile(&gs.world, x, y, .Turret_Pillar)
+        set_tile(&gs.world, x, y - 1, .Flame_Turret)
+    }
+    expect_parts :: proc(t: ^testing.T, gs: ^Game_State, x, y: int, loc := #caller_location) {
+        testing.expect(t, !is_solid(&gs.world, x, y), "pillar gone", loc = loc)
+        testing.expect(t, !is_solid(&gs.world, x, y - 1), "head gone", loc = loc)
+        testing.expect_value(t, turret_ground_count(gs, .Turret_Pillar), 1, loc)
+        testing.expect_value(t, turret_ground_count(gs, .Flame_Head), 1, loc)
+    }
+    mine :: proc(gs: ^Game_State, x, y: int, source: Entity_ID) {
+        eq_push(&gs.events, Event{type = .Tile_Mined, source = source, tile = {i32(x), i32(y)}})
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    PX :: 60
+    PY :: SURFACE_Y - 1
+
+    // By the head, by the pillar, and by a raider's smash of either.
+    for at_y in 0 ..= 1 {
+        gs := test_state()
+        defer free(gs)
+        turret_test_site(gs, PX, PY)
+        build(gs, PX, PY)
+        mine(gs, PX, PY - at_y, PLAYER_ID)
+        expect_parts(t, gs, PX, PY)
+
+        gs2 := test_state()
+        defer free(gs2)
+        turret_test_site(gs2, PX, PY)
+        build(gs2, PX, PY)
+        smash_tile(gs2, PX, PY - at_y)
+        expect_parts(t, gs2, PX, PY)
+    }
+
+    // A second pillar under the pattern stands apart from it.
+    gs := test_state()
+    defer free(gs)
+    turret_test_site(gs, PX, PY)
+    set_tile(&gs.world, PX, PY, .Turret_Pillar)
+    build(gs, PX, PY - 1)
+    mine(gs, PX, PY, PLAYER_ID)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY - 2), Tile_Type.Flame_Turret)
+    testing.expect_value(t, get_tile(&gs.world, PX, PY - 1), Tile_Type.Turret_Pillar)
+    testing.expect_value(t, turret_ground_count(gs, .Turret_Pillar), 1)
+}
+
+@(test)
+turrets_fire_past_turrets_but_block_everyone_else :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = 1.0 / 60.0
+    PX :: 60
+    PY :: SURFACE_Y - 1
+    HY :: PY - 1
+    turret_test_site(gs, PX, PY)
+    set_tile(&gs.world, PX, PY, .Turret_Pillar)
+    set_tile(&gs.world, PX, HY, .Flame_Turret)
+    set_tile(&gs.world, PX + 2, HY, .Turret_Pillar)  // a neighbour in the line
+    id := turret_test_enemy(gs, PX + 3.5, f32(HY) + 0.5)
+
+    turret_test_run(gs, 2)
+    testing.expect(t, gs.enemies.data[id].hp < 50, "flame fires past a pillar")
+
+    set_tile(&gs.world, PX, PY, .Air)
+    set_tile(&gs.world, PX, HY, .Rainbow_Laser)
+    set_tile(&gs.world, PX + 1, HY, .Flame_Turret)
+    _, ok := laser_target(gs, PX, HY)
+    testing.expect(t, ok, "the laser fires past turrets too")
+
+    // Only turrets are see-through, and only to turrets.
+    from, to := [2]f32{PX + 0.5, f32(HY) + 0.5}, [2]f32{PX + 3.5, f32(HY) + 0.5}
+    testing.expect(t, !sight_line_clear(&gs.world, from, to), "a turret still blocks a builder's eye")
+    set_tile(&gs.world, PX + 2, HY, .Stone)
+    testing.expect(t, !sight_line_clear(&gs.world, from, to, past_turrets = true), "stone blocks a turret")
+}
+
+@(test)
+a_burn_leaves_with_its_enemy_and_its_level :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.delta_time = 1.0 / 60.0
+    id := turret_test_enemy(gs, 60, 40)
+    gs.enemy_status[id].burn = FLAME_BURN_TIME
+    despawn_enemy(gs, id)
+    update_enemy_status(gs)
+    testing.expect_value(t, gs.enemy_status[id], Enemy_Status{})
+
+    // Enemy_Status stays out of the save: the layout must not move.
+    testing.expect_value(t, size_of(Save_Data), SAVE_DATA_EXPECTED_SIZE)
+}

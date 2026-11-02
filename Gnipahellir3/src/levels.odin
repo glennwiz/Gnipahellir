@@ -101,6 +101,7 @@ level_transition :: proc(gs: ^Game_State, portal: ^Portal) {
     ls := &gs.levels
     ls.worlds[gs.level_index]  = gs.world
     ls.enemies[gs.level_index] = gs.enemies
+    gs.enemy_status = {}
 
     dest := portal.dest_level
     if ls.generated[dest] {

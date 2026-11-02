@@ -51,6 +51,9 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return false
 
+    // A turret head only ever stands on its pillars.
+    if !turret_pattern_ok(&gs.world, x, y, turret_table[place_tile]) do return false
+
     if tpl := structure_template_for(gs, item); tpl != nil {  // finished foundation
         if ok, _ := structure_template_satisfied(&gs.world, tpl, x, y); !ok do return false
     }
@@ -74,6 +77,7 @@ place_refusal :: proc(gs: ^Game_State, place_tile: Tile_Type, x, y: int) -> stri
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return "Out of reach"
     if t := get_tile(&gs.world, x, y); t != .Air && t != .Void do return "Something is already there"
+    if rule := turret_table[place_tile]; !turret_pattern_ok(&gs.world, x, y, rule) do return rule.refusal
     if !is_solid(&gs.world, x-1, y) && !is_solid(&gs.world, x+1, y) &&
        !is_solid(&gs.world, x, y-1) && !is_solid(&gs.world, x, y+1) {
         return "It needs something solid beside it"

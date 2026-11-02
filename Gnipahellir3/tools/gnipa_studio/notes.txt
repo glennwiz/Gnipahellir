@@ -191,3 +191,10 @@ recipe	Rainbow_Laser	a turret that arrives after the base is already gone.
 struct	Rainbow_Laser	A turret is equipment, not scenery: the pick reclaims it, and the wave
 struct	Rainbow_Laser	hunters count it among the structures worth smashing.
 glow	Rainbow_Laser	prismatic rose - the lens between shots
+recipe	Turret_Pillar	Built turrets, first guess at the price: the pillar is stone and iron,
+recipe	Turret_Pillar	each head its own element on top.
+unlock	Turret_Pillar	Iron is what a pillar needs, so the cards open with the first bar.
+icon	Turret_Pillar	Turret Pillar - a banded stone column, wide at the foot.
+icon	Flame_Head	Flame Head - an iron cup with the fire standing in it.
+glow	Turret_Pillar	cold iron until a head wakes it
+glow	Flame_Turret	banked coals

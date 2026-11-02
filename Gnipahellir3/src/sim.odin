@@ -25,6 +25,83 @@ LASER_RANGE    :: f32(8)
 LASER_DAMAGE   :: 2
 LASER_COOLDOWN :: f32(0.5)
 
+// Flame, first guesses for Glenn to tune: half the laser's reach.  It does no
+// hit of its own, it keeps the target alight, and a burn pays FLAME_BURN_HIT
+// every FLAME_BURN_TICK: 1.7 a second against the laser's 4.
+FLAME_RANGE     :: f32(4)
+FLAME_COOLDOWN  :: f32(0.5)
+FLAME_BURN_TIME :: f32(2)      // how long a target stays alight after the jet
+FLAME_BURN_TICK :: f32(0.6)
+FLAME_BURN_HIT  :: 1
+
+// One row per turret head.  pillars is the pattern: how many Turret_Pillar
+// tiles the head must stand on (0 = placed bare, the old laser).  A new turret
+// is a row here, a tile, a head item and a recipe.  Applied on the cooldown:
+// damage at once, burn as a status (update_enemy_status).
+Turret_Rule :: struct {
+    pillars:   int,
+    range:     f32,
+    cooldown:  f32,
+    damage:    int,
+    burn_time: f32,
+    jet:       proc(gs: ^Game_State, from, to: [2]f32),  // the look, every frame on target
+    refusal:   string,                                   // the note when the pattern is wrong
+}
+
+@(rodata)
+turret_table := #partial [Tile_Type]Turret_Rule{
+    .Rainbow_Laser = {range = LASER_RANGE, cooldown = LASER_COOLDOWN, damage = LASER_DAMAGE},
+    .Flame_Turret  = {
+        pillars = 1, range = FLAME_RANGE, cooldown = FLAME_COOLDOWN, burn_time = FLAME_BURN_TIME,
+        jet = spawn_flame_jet, refusal = "A Flame Head goes on top of a Turret Pillar",
+    },
+}
+
+// Is this tile part of a turret?  Turrets fire past these (Glenn 2026-11-02).
+is_turret_tile :: proc(t: Tile_Type) -> bool {
+    return t == .Turret_Pillar || turret_table[t].range > 0
+}
+
+// Do the pillars this head needs stand directly under (x,y)?
+turret_pattern_ok :: proc(w: ^World_Grid, x, y: int, rule: Turret_Rule) -> bool {
+    for i in 1 ..= rule.pillars do if get_tile(w, x, y + i) != .Turret_Pillar do return false
+    return true
+}
+
+// A fused turret is one machine: whatever takes a part of it, a pick or a
+// raider, the rest comes loose where it stands, so no part is lost and no head
+// is left in the air.  `old` is what (x,y) held, already gone from the grid.
+// A pillar under the pattern is not part of it and stays.
+turret_come_apart :: proc(gs: ^Game_State, x, y: int, old: Tile_Type) {
+    head_y := y
+    rule   := turret_table[old]
+    if old == .Turret_Pillar {
+        head_y -= 1
+        for get_tile(&gs.world, x, head_y) == .Turret_Pillar do head_y -= 1
+        rule = turret_table[get_tile(&gs.world, x, head_y)]
+        if rule.pillars < y - head_y do return
+        turret_loosen(gs, x, head_y)
+    }
+    for i in 1 ..= rule.pillars {
+        if get_tile(&gs.world, x, head_y + i) == .Turret_Pillar do turret_loosen(gs, x, head_y + i)
+    }
+}
+
+// One turret part off the grid and onto the ground as its item.
+turret_loosen :: proc(gs: ^Game_State, x, y: int) {
+    t   := get_tile(&gs.world, x, y)
+    idx := grid_idx(x, y)
+    set_tile(&gs.world, x, y, gravity_open_tile(gs, y))
+    golem_remove_block_mark(gs, {i32(x), i32(y)})
+    gs.world.tile_flags[idx] -= {.Placed, .Golem_Placed}
+    gs.world.sim_data[idx] = {}
+    spawn_ground_item(&gs.world, {i32(x), i32(y)}, terrain_table[t].drop_item, 1)
+    gravity_check_removed(gs, x, y)
+    log_action(gs, "Turret part %v comes loose at (%d,%d)", t, x, y)
+}
+
+
+
 // The Gem Replicator only works as deep as gems actually form: caves 2/3 roll
 // gems at depth > 60 below CAVE_LVL_TOP (levels.odin), so this is that exact
 // row.  Checked at placement — the condition is static per cell, so a refusal
@@ -142,15 +219,15 @@ tick_engine :: proc(gs: ^Game_State, x, y: int) {
     }
 }
 
-// The turret's aim: the nearest live enemy whose body center lies inside
-// LASER_RANGE of this tile's center with no solid tile between them, or
+// A turret's aim: the nearest live enemy whose body center lies inside range of
+// this tile's center with nothing solid between them but other turrets, or
 // ok=false.  A walled-off enemy is not a target at all, so the turret passes
 // it over for a farther one it can see, and beam and motes follow.  PURE — render re-runs it
 // every frame to draw the beam, so it must never touch Game_State.  Squared
 // distances only, so sim.odin still needs no math import.
-laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
+turret_target :: proc(gs: ^Game_State, x, y: int, range: f32) -> (best: int, ok: bool) {
     cx, cy := f32(x) + 0.5, f32(y) + 0.5
-    best_d := LASER_RANGE * LASER_RANGE
+    best_d := range * range
     best = -1
     for ei in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[ei] do continue
@@ -159,11 +236,15 @@ laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
         dx   := e.pos.x + size.x*0.5 - cx
         dy   := e.pos.y + size.y*0.5 - cy
         if d := dx*dx + dy*dy; d <= best_d &&
-           sight_line_clear(&gs.world, {cx, cy}, {cx + dx, cy + dy}, skip_ends = true) {
+           sight_line_clear(&gs.world, {cx, cy}, {cx + dx, cy + dy}, skip_ends = true, past_turrets = true) {
             best, best_d, ok = ei, d, true
         }
     }
     return
+}
+
+laser_target :: proc(gs: ^Game_State, x, y: int) -> (best: int, ok: bool) {
+    return turret_target(gs, x, y, LASER_RANGE)
 }
 
 // A placed laser charges to LASER_COOLDOWN and fires the moment something
@@ -204,6 +285,60 @@ tick_rainbow_laser :: proc(gs: ^Game_State, x, y: int) {
     })
 }
 
+// A fused turret: same charge-and-cap clock as the laser, its look and its
+// effect from turret_table.
+tick_turret :: proc(gs: ^Game_State, x, y: int) {
+    rule := turret_table[gs.world.terrain[grid_idx(x, y)]]
+    sd   := &gs.world.sim_data[grid_idx(x, y)]
+    sd.growth_timer = min(sd.growth_timer + gs.delta_time, rule.cooldown)
+
+    ei, ok := turret_target(gs, x, y, rule.range)
+    if !ok do return
+
+    e    := &gs.enemies.data[ei]
+    size := enemy_body_size(e.kind)
+    rule.jet(gs, {f32(x) + 0.5, f32(y) + 0.5}, {e.pos.x + size.x*0.5, e.pos.y + size.y*0.5})
+
+    if sd.growth_timer < rule.cooldown do return
+    sd.growth_timer = 0
+    log_action(gs, "%v at (%d,%d) fires on Enemy#%d", gs.world.terrain[grid_idx(x, y)], x, y, ei)
+    if rule.burn_time > 0 {
+        gs.enemy_status[ei].burn = rule.burn_time
+    }
+    if rule.damage > 0 {
+        eq_push(&gs.events, Event{
+            type    = .Damage_Dealt,
+            source  = PLAYER_ID,
+            target  = enemy_entity_id(ei),
+            payload = {int_val = i32(rule.damage)},
+        })
+    }
+}
+
+// Step 5b0.  What turrets left on an enemy runs down here.  Damage is a plain
+// Damage_Dealt, like a laser hit, so it precedes process_events.  A dead slot's
+// status goes with it, so a slot reused later starts clean.
+update_enemy_status :: proc(gs: ^Game_State) {
+    for &s, i in gs.enemy_status {
+        if !gs.enemies.active[i] {
+            s = {}
+            continue
+        }
+        s.burn -= gs.delta_time
+        s.burn_charge += gs.delta_time
+        if s.burn_charge >= FLAME_BURN_TICK {
+            s.burn_charge -= FLAME_BURN_TICK
+            eq_push(&gs.events, Event{
+                type    = .Damage_Dealt,
+                source  = PLAYER_ID,
+                target  = enemy_entity_id(i),
+                payload = {int_val = i32(FLAME_BURN_HIT)},
+            })
+        }
+        if s.burn <= 0 do s = {}
+    }
+}
+
 @(rodata)
 tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Smelter     = tick_smelter,
@@ -218,6 +353,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Magic_Kettle = tick_boiler,
     .Mana_Wheel   = tick_engine,
     .Rainbow_Laser = tick_rainbow_laser,
+    .Flame_Turret  = tick_turret,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is

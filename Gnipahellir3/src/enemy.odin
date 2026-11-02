@@ -281,6 +281,7 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) {
             spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
         }
     }
+    turret_come_apart(gs, x, y, old)
 }
 
 is_mineral :: proc(t: Tile_Type) -> bool {
@@ -914,6 +915,7 @@ despawn_enemy :: proc(gs: ^Game_State, i: int) {
     risen_hero_on_despawn(gs, i, tile)
     entity_map_clear(&gs.world, enemy_entity_id(i), tile)
     enemy_free(&gs.enemies, i)
+    gs.enemy_status[i] = {}
 }
 
 spawn_level_1_enemies :: proc(gs: ^Game_State) {
@@ -1887,8 +1889,10 @@ builder_sees_player :: proc(e: ^Enemy, gs: ^Game_State, radius: f32) -> bool {
 // Sample a sight line every half tile; any solid tile blocks it.  skip_ends
 // ignores the tiles the two ends stand in, for a looker that is itself a solid
 // tile (the Rainbow Laser) and a target that may be dug into a wall: only what
-// lies BETWEEN them blocks.  PURE — render reaches this through laser_target.
-sight_line_clear :: proc(w: ^World_Grid, from, to: [2]f32, skip_ends := false) -> bool {
+// lies BETWEEN them blocks.  past_turrets lets a turret's shot pass over other
+// turrets; a turret still blocks everyone else's sight.  PURE — render reaches
+// this through laser_target.
+sight_line_clear :: proc(w: ^World_Grid, from, to: [2]f32, skip_ends := false, past_turrets := false) -> bool {
     d     := to - from
     steps := int(math.sqrt(d.x*d.x + d.y*d.y) * 2) + 1
     for i in 1 ..< steps {
@@ -1898,7 +1902,7 @@ sight_line_clear :: proc(w: ^World_Grid, from, to: [2]f32, skip_ends := false) -
             if x == int(from.x) && y == int(from.y) { continue }
             if x == int(to.x)   && y == int(to.y)   { continue }
         }
-        if is_solid(w, x, y) { return false }
+        if is_solid(w, x, y) && !(past_turrets && is_turret_tile(get_tile(w, x, y))) { return false }
     }
     return true
 }

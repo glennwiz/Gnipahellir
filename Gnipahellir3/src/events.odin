@@ -721,4 +721,6 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
             gravity_check_removed(gs, px, py)
         }
     }
+
+    turret_come_apart(gs, x, y, old_tile)
 }

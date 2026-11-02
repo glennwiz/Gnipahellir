@@ -223,6 +223,13 @@ Tile_Type :: enum u8 {
 	// What water leaves of lava: footing over a hazard, not a quarry.  Mining
 	// it pays nothing.  (appended: terrain ordinals are serialized)
 	Scoria,
+	// The stand every built turret sits on: bench-crafted, placed, and inert
+	// until a head goes on top (turret_table, sim.odin).  (appended: terrain
+	// ordinals are serialized)
+	Turret_Pillar,
+	// A Flame Head fused onto a pillar: short reach, sets what it sees alight.
+	// (appended: terrain ordinals are serialized)
+	Flame_Turret,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -377,6 +384,10 @@ Item :: enum u8 {
 	// range by itself — base defense the player does not have to aim.
 	// (appended: item ordinals are serialized)
 	Rainbow_Laser,
+	// Turret parts: a pillar stands alone, a head fuses onto it.  (appended:
+	// item ordinals are serialized)
+	Turret_Pillar,
+	Flame_Head,
 	// <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 
