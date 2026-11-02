@@ -36,7 +36,7 @@ fuzz_pool := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Iron_Ore, .Silver_Ore, .Fl
 // The subset the place action wields on purpose (the rest of the pool still
 // reaches placement through the random-hand path).
 @(rodata)
-fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Turret_Pillar, .Flame_Head, .Water_Head, .Earth_Head}
+fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Turret_Pillar, .Flame_Head, .Water_Head, .Earth_Head, .Rainbow_Laser}
 
 // Own xorshift so the stream never entangles with gs.loot_rng.
 @(private = "file")
@@ -99,7 +99,9 @@ fuzz_turret_parts :: proc(gs: ^Game_State, x, y: int, old: Tile_Type, want: ^[It
         want[terrain_table[get_tile(&gs.world, x, head_y)].drop_item] += 1
     }
     for i in 1 ..= rule.pillars {
-        if head_y + i != y && get_tile(&gs.world, x, head_y + i) == .Turret_Pillar do want[.Turret_Pillar] += 1
+        if head_y + i == y do continue
+        if get_tile(&gs.world, x, head_y + i) != .Turret_Pillar do break
+        want[.Turret_Pillar] += 1
     }
 }
 
