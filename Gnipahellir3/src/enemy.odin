@@ -425,10 +425,10 @@ den_owner_index :: proc(gs: ^Game_State, T: [2]i32) -> int {
 // builders tunnel through their own (or each other's) den walls and then loop
 // forever repairing them.  Only the structure itself is protected; natural
 // rock around a den stays diggable or nearby targets become unreachable.
-// `owner` (enemy slot, -1 = none): a builder standing INSIDE its own den may
-// chew through its own walls — a den it can't leave is a coffin (the bounce
-// loop from playtest 2026-07-16), and the encase loop repairs the hole on the
-// next haul.  Only from inside: outside, the world is natural diggable rock
+// `owner` (enemy slot, -1 = none): a builder standing INSIDE its own den with
+// no way out by the door may chew through its own walls — a den it can't leave
+// is a coffin (the bounce loop from playtest 2026-07-16), and the encase loop
+// repairs the hole on the next haul.  Only from inside: outside, the world is natural diggable rock
 // (never a cage), and an outside exemption turns every commute into a
 // break-in/repair treadmill that eats all the hauled ore.
 den_protected :: proc(gs: ^Game_State, x, y: int, owner: int = -1) -> bool {
@@ -476,10 +476,27 @@ den_protected_in :: proc(gs: ^Game_State, dl: ^Den_List, x, y: int, owner: int =
         if !den_structure_slot(&o.builder, T) { continue }
         if i == owner {
             // Same interior box as the trespass check (den + door corridor).
+            // Home has a door: the wall opens only when that door will not do,
+            // or the repair pass refills the slot and the next haul never banks.
             rel := builder_tile(o) - o.builder.anchor
-            if rel.x >= -1 && rel.x <= 2 && rel.y >= -2 && rel.y <= 0 { continue }
+            if rel.x >= -1 && rel.x <= 2 && rel.y >= -2 && rel.y <= 0 &&
+               (o.builder.stuck_count > 0 || den_door_blocked(gs, dl, &o.builder)) { continue }
         }
         return true
+    }
+    return false
+}
+
+// Is the 2-high door corridor out of a den stopped by something its owner
+// cannot dig?  A dug tile is no obstacle: natural rock in the corridor is a way
+// out, so only unmineable tiles and another den's walls count.
+den_door_blocked :: proc(gs: ^Game_State, dl: ^Den_List, b: ^Builder_State) -> bool {
+    for dx in i32(2) ..= i32(2 + DEN_SHELL_LAYERS) do for dy in i32(-1) ..= 0 {
+        T := b.anchor + [2]i32{dx, dy}
+        x, y := int(T.x), int(T.y)
+        if !is_solid(&gs.world, x, y) do continue
+        if !is_builder_mineable(gs, x, y) do return true
+        if den_material(gs, x, y) && den_protected_in(gs, dl, x, y) do return true
     }
     return false
 }
@@ -694,30 +711,30 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             // through in every intermediate column — checking only the takeoff
             // row lets it plan jumps straight into overhangs (e.g. the wall
             // above a 1-high doorway).
-            if !is_solid(w, x, y-1) {
+            // A rise of 1 still needs the row above it: under a low ceiling the
+            // hop stops dead at the landing's height and falls back, for ever.
+            if !is_solid(w, x, y-1) && !is_solid(w, x, y-2) {
                 for jdx in 1 ..= 2 {
                     jx := x + d*jdx
                     arc_clear := true
                     for ix := x + d; ix != jx; ix += d {
-                        if is_solid(w, ix, y) || is_solid(w, ix, y-1) { arc_clear = false; break }
+                        if is_solid(w, ix, y) || is_solid(w, ix, y-1) || is_solid(w, ix, y-2) { arc_clear = false; break }
                     }
                     if arc_clear && is_standable(w, jx, y-1) && !is_solid(w, jx, y-2) {
                         push_trans(&trans, &nt, i32(jx), i32(y-1), COST_WALK)
                     }
                 }
-                if !is_solid(w, x, y-2) {
-                    for jdx in 1 ..= 2 {
-                        jx := x + d*jdx
-                        arc_clear := true
-                        for ix := x + d; ix != jx; ix += d {
-                            if is_solid(w, ix, y-1) || is_solid(w, ix, y-2) { arc_clear = false; break }
-                        }
-                        // Water carries a body up a wall it could not jump dry,
-                        // and a basin's walls are not dug: this is the way out.
-                        swim_out := get_tile(w, x, y) == .Water
-                        if arc_clear && (!is_solid(w, jx, y-1) || swim_out) && is_standable(w, jx, y-2) {
-                            push_trans(&trans, &nt, i32(jx), i32(y-2), COST_WALK)
-                        }
+                for jdx in 1 ..= 2 {
+                    jx := x + d*jdx
+                    arc_clear := true
+                    for ix := x + d; ix != jx; ix += d {
+                        if is_solid(w, ix, y-1) || is_solid(w, ix, y-2) { arc_clear = false; break }
+                    }
+                    // Water carries a body up a wall it could not jump dry,
+                    // and a basin's walls are not dug: this is the way out.
+                    swim_out := get_tile(w, x, y) == .Water
+                    if arc_clear && (!is_solid(w, jx, y-1) || swim_out) && is_standable(w, jx, y-2) {
+                        push_trans(&trans, &nt, i32(jx), i32(y-2), COST_WALK)
                     }
                 }
             }
@@ -1439,11 +1456,13 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     }
 
     if nav.mine_timer > 0 { return }   // update_builder ticks it down
-    // Ceiling in the way: eat it.  Otherwise hop.
-    if is_solid(&gs.world, x, y-1) {
-        if is_builder_mineable(gs, x, y-1) && !den_protected(gs, x, y-1, id) {
-            dropped := smash_tile(gs, x, y-1)
-            eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y-1)}})
+    // Ceiling in the way: eat it, both rows, since a hop rises through two and
+    // the escape only ends with both clear.  Otherwise hop.
+    roof_y := y - 1 if is_solid(&gs.world, x, y-1) else y - 2
+    if is_solid(&gs.world, x, roof_y) {
+        if is_builder_mineable(gs, x, roof_y) && !den_protected(gs, x, roof_y, id) {
+            dropped := smash_tile(gs, x, roof_y)
+            eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(roof_y)}})
             if !dropped do b.pocket = min(b.pocket + 1, POCKET_MAX)
             nav.mine_timer = MINE_TIME
         } else {
