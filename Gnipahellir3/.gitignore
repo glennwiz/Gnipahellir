@@ -16,3 +16,4 @@ tools/gnipa_studio/studio_shot_*.png
 # Odin linux build output
 src.bin
 gnipahellir_save.dat.*.bak
+gnipahellir_save.dat.tmp
