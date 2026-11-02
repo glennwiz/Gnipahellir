@@ -36,7 +36,7 @@ fuzz_pool := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Iron_Ore, .Silver_Ore, .Fl
 // The subset the place action wields on purpose (the rest of the pool still
 // reaches placement through the random-hand path).
 @(rodata)
-fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Turret_Pillar, .Flame_Head, .Water_Head, .Earth_Head, .Rainbow_Laser}
+fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Crafting_Bench, .Door, .Turret_Pillar, .Flame_Head, .Water_Head, .Earth_Head, .Rainbow_Laser}
 
 // Own xorshift so the stream never entangles with gs.loot_rng.
 @(private = "file")
@@ -143,8 +143,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [9]int
-    action_names := [9]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back"}
+    viol_by: [10]int
+    action_names := [10]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine"}
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -199,7 +199,7 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         furnace_at:  [2]int  // the furnace a smelter action borrows, and what stood there
         furnace_old: Tile_Type
 
-        action := fz_range(&rng, 0, 8)
+        action := fz_range(&rng, 0, 9)
         switch action {
         case 0:
             name = "pickup"
@@ -317,6 +317,19 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             } else {
                 eq_push(&gs.events, Event{type = .Smelter_Withdraw_Fuel, tile = T})
             }
+
+        case 9:
+            // Whatever lost its ground pays out as if mined, and nothing else.
+            name = "undermine"
+            for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
+                if !is_undermined(gs, x, y) do continue
+                old := get_tile(&gs.world, x, y)
+                want[terrain_table[old].drop_item] += 1
+                fuzz_turret_parts(gs, x, y, old, &want)
+                allow_zero = false
+            }
+            before = fuzz_ledger(gs)
+            update_undermined(gs)
         }
 
         process_events(gs)
@@ -325,7 +338,7 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             gs.frame += 1
         }
         after := fuzz_ledger(gs)
-        if action >= 7 {  // the arena gets its tile back; totals may move freely here
+        if action == 7 || action == 8 {  // the arena gets its tile back; totals may move freely here
             set_tile(&gs.world, furnace_at.x, furnace_at.y, furnace_old)
             gs.world.sim_data[grid_idx(furnace_at.x, furnace_at.y)] = {}
         }
