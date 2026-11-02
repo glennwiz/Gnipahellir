@@ -113,7 +113,7 @@ action_log_begin_run :: proc(gs: ^Game_State) {
     now := time.now()
     d_buf: [time.MIN_YYYY_DATE_LEN]u8
     t_buf: [time.MIN_HMS_LEN]u8
-    log_action(gs, "=== run start %s %s - save v%d, world seed %d ===",
+    log_action(gs, "=== run start %s %s - save v%d ===",
         time.to_string_yyyy_mm_dd(now, d_buf[:]), time.to_string_hms(now, t_buf[:]),
-        SAVE_VERSION, gs.world_seed)
+        SAVE_VERSION)
 }

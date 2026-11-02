@@ -76,6 +76,8 @@ main :: proc() {
         gs.ui.title_fresh = !agent.listening
         if agent.listening do grave_raise(gs)  // needs the stats: the last hero's grave is in them
     }
+    // A world from the title logs its own seed when it starts.
+    if !gs.ui.title_fresh do log_action(gs, "World seed %d", gs.world_seed)
     load_settings(gs)  // after audio_init: overrides its default volumes
 
     for !rl.WindowShouldClose() && !gs.quit_requested {
