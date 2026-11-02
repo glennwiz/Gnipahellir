@@ -16,11 +16,14 @@ is_door :: proc(w: ^World_Grid, x, y: int) -> bool {
 }
 
 // The vertical partner of a door tile (the other of its two stacked cells).
-// Prefers below, then above.  ok=false for a lone door tile.
+// ok=false for a lone door tile.
 door_partner :: proc(w: ^World_Grid, x, y: int) -> (px, py: int, ok: bool) {
-    if is_door(w, x, y + 1) do return x, y + 1, true
-    if is_door(w, x, y - 1) do return x, y - 1, true
-    return 0, 0, false
+    // Doors can stack, so a door tile with doors both ways is not ambiguous:
+    // counted up from the foot of the run they alternate foot, head, foot...
+    below := 0
+    for is_door(w, x, y + below + 1) do below += 1
+    py = below % 2 == 0 ? y - 1 : y + 1
+    return x, py, is_door(w, x, py)
 }
 
 // The two cells a door occupies if placed with its foot at (x,y): the clicked

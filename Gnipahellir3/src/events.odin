@@ -715,38 +715,43 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
         }
     }
 
-    // A mined smelter, boiler or gem replicator spills its tray, its loaded
-    // input AND its fuel — nothing in the machine is lost.  (The replicator's
-    // in_* is its seed gem; its fuel_count is always 0, a harmless no-op.)
-    // Timers and buffers die with the tile so a future machine starts fresh.
-    sd := &gs.world.sim_data[idx]
+    spill_machine(gs, e.tile, old_tile)
+    if old_tile == .Door do door_take_partner(gs, x, y)
+
+    turret_come_apart(gs, x, y, old_tile)
+}
+
+// A smelter, boiler or gem replicator gone from T spills its tray, its loaded
+// input AND its fuel — nothing in the machine is lost.  (The replicator's
+// in_* is its seed gem; its fuel_count is always 0, a harmless no-op.)
+// Timers and buffers die with the tile so a future machine starts fresh.
+spill_machine :: proc(gs: ^Game_State, T: [2]i32, old_tile: Tile_Type) {
+    sd := &gs.world.sim_data[grid_idx(int(T.x), int(T.y))]
     boiler_rule, is_boiler := boiler_rule_for(old_tile)
     if old_tile == .Smelter || old_tile == .Gem_Replicator || is_boiler {
         fuel := is_boiler ? boiler_rule.fuel_item : FUEL_ITEM
         if sd.store_count > 0 {
-            spawn_ground_item(&gs.world, e.tile, sd.store_item, int(sd.store_count))
+            spawn_ground_item(&gs.world, T, sd.store_item, int(sd.store_count))
         }
         if sd.in_count > 0 {
-            spawn_ground_item(&gs.world, e.tile, sd.in_item, int(sd.in_count))
+            spawn_ground_item(&gs.world, T, sd.in_item, int(sd.in_count))
         }
         if sd.fuel_count > 0 {
-            spawn_ground_item(&gs.world, e.tile, fuel, int(sd.fuel_count))
+            spawn_ground_item(&gs.world, T, fuel, int(sd.fuel_count))
         }
     }
     sd^ = {}
+}
 
-    // A door is two tiles: mining one half takes the whole door.  The generic
-    // path above already dropped a single Door for this half; remove the partner
-    // (no second drop) so no half is left standing.
-    if old_tile == .Door {
-        if px, py, ok := door_partner(&gs.world, x, y); ok {
-            pidx := grid_idx(px, py)
-            golem_remove_block_mark(gs,{i32(px),i32(py)})
-            gs.world.tile_flags[pidx] -= {.Placed,.Golem_Placed}
-            set_tile(&gs.world, px, py, gravity_open_tile(gs, py))
-            gravity_check_removed(gs, px, py)
-        }
-    }
-
-    turret_come_apart(gs, x, y, old_tile)
+// A door is two tiles: taking one half takes the whole door.  The caller has
+// dropped the single Door already; remove the partner (no second drop) so no
+// half is left standing.
+door_take_partner :: proc(gs: ^Game_State, x, y: int) {
+    px, py, ok := door_partner(&gs.world, x, y)
+    if !ok do return
+    pidx := grid_idx(px, py)
+    golem_remove_block_mark(gs,{i32(px),i32(py)})
+    gs.world.tile_flags[pidx] -= {.Placed,.Golem_Placed}
+    set_tile(&gs.world, px, py, gravity_open_tile(gs, py))
+    gravity_check_removed(gs, px, py)
 }

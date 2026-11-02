@@ -263,8 +263,14 @@ is_builder_mineable :: proc(gs: ^Game_State, x, y: int) -> bool {
     return .Mineable in terrain_table[t].flags && !wave_target_refused(gs, {i32(x), i32(y)})
 }
 
-// Enemy demolition of a tile.  A player machine (any .Placeable tile) is
-// knocked loose, not deleted: it drops its item so the loss is visible and
+// A player's build: a dig knocks it loose instead of deleting it.  A door is
+// placed by its own rules and is not .Placeable, so it is named here.
+knocks_loose :: proc(t: Tile_Type) -> bool {
+    return .Placeable in terrain_table[t].flags || t == .Door
+}
+
+// Enemy demolition of a tile.  A player machine is knocked loose, not deleted:
+// it drops its item and spills what it held, so the loss is visible and
 // recoverable instead of a silent hole in the base.
 smash_tile :: proc(gs: ^Game_State, x, y: int) {
     old := get_tile(&gs.world, x, y)
@@ -276,11 +282,13 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) {
     }
     if old == .Barrel || old == .Rune_Coffer do barrel_on_mined(gs, {i32(x), i32(y)})
     set_tile(&gs.world, x, y, .Void)
-    if .Placeable in terrain_table[old].flags {
+    if knocks_loose(old) {
         if drop := terrain_table[old].drop_item; drop != .None {
             spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
         }
     }
+    spill_machine(gs, {i32(x), i32(y)}, old)
+    if old == .Door do door_take_partner(gs, x, y)
     turret_come_apart(gs, x, y, old)
 }
 
@@ -1495,9 +1503,9 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
         // that spills a machine whole (the tunneller demolition pins it), routes
         // the barrel/silo records, and refuses a loaded container.  It also
         // consumes the tile itself, so no Builder_Mined goes out for it — the
-        // handler plays its own dig sound.  Only .Placeable tiles qualify; plain
+        // handler plays its own dig sound.  Only a player's build qualifies; plain
         // terrain keeps the cheap carve, and with it the pocket economy.
-        if .Placeable in terrain_table[old].flags {
+        if knocks_loose(old) {
             handle_tile_mined(gs, Event{
                 type   = .Tile_Mined,
                 source = enemy_entity_id(id),
