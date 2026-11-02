@@ -320,7 +320,8 @@ equipment_reclaim_requires_one_continuous_hold :: proc(t: ^testing.T) {
     update_reclaim(gs)
     process_events(gs)
     testing.expect_value(t, get_tile(&gs.world, int(target.x), int(target.y)), Tile_Type.Air)
-    testing.expect_value(t, gs.world.items[grid_idx(int(target.x), int(target.y))], Item.Smelter)
+    testing.expect_value(t, gs.world.items[grid_idx(int(target.x), int(target.y))], Item.None)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Smelter), 1)
 }
 
 @(test)
@@ -451,7 +452,7 @@ door_crafts_places_anchors_and_mines :: proc(t: ^testing.T) {
     eq_push(&gs.events, Event{type = .Tile_Mined, tile = {22, 41}})
     process_events(gs)
     testing.expect(t, get_tile(w, 22, 41) != .Door && get_tile(w, 22, 40) != .Door, "both halves removed")
-    testing.expect_value(t, w.items[grid_idx(22, 41)], Item.Door)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Door), 1)
 }
 
 @(test)
@@ -582,7 +583,7 @@ dirt_places_and_mines_back :: proc(t: ^testing.T) {
 
     eq_push(&gs.events, Event{type = .Tile_Mined, tile = {i32(tx), i32(ty)}})
     process_events(gs)
-    testing.expect_value(t, gs.world.items[grid_idx(tx, ty)], Item.Dirt)   // mines back to a clod
+    testing.expect_value(t, inventory_count(inv, .Dirt), 1)   // mines back to a clod
 }
 
 @(test)
@@ -1182,8 +1183,8 @@ sealed_chest_refuses_pickup_until_the_scroll_is_out :: proc(t: ^testing.T) {
 	gs.reclaim = {}
 	for _ in 0 ..< 60 do update_reclaim(gs)
 	process_events(gs)
-	// Reclaims drop at the tile as a ground pile, same as any other structure.
-	testing.expect_value(t, gs.world.items[grid_idx(11, 41)], Item.Rune_Coffer)
+	// Reclaims go into the bag, same as any other block the player mines.
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Rune_Coffer), 1)
 	testing.expect(t, get_tile(&gs.world, 11, 41) != .Rune_Scroll_Chest_A, "the chest should be gone from the world")
 	testing.expect(t, barrel_at(gs, gs.level_index, {11, 41}) == nil, "its storage record should be freed")
 }
@@ -1222,7 +1223,7 @@ rune_coffer_re_places_as_ordinary_storage :: proc(t: ^testing.T) {
 	gs.input.mouse_tile = {11, 41}
 	for _ in 0 ..< 60 do update_reclaim(gs)
 	process_events(gs)
-	testing.expect_value(t, gs.world.items[grid_idx(11, 41)], Item.Rune_Coffer)
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Rune_Coffer), 1)
 	testing.expect(t, barrel_at(gs, gs.level_index, {11, 41}) == nil, "reclaim frees the record")
 }
 
@@ -2253,7 +2254,7 @@ mining_leaves_drops_leaf_and_opens_to_air :: proc(t: ^testing.T) {
 
     // Above the surface line the hole opens to air (not void), leaf drops
     testing.expect_value(t, get_tile(&gs.world, 31, SURFACE_Y - 2), Tile_Type.Air)
-    testing.expect_value(t, gs.world.items[grid_idx(31, SURFACE_Y - 2)], Item.Leaf)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Leaf), 1)
 }
 
 @(test)
@@ -9533,7 +9534,7 @@ mossy_stone_mines_places_and_grows_mushrooms :: proc(t: ^testing.T) {
 	// Mining the mossy block drops the block itself, not plain stone.
 	set_tile(&gs.world, 31, SURFACE_Y, .Mossy_Stone)
 	for _ in 0 ..< PICK_HITS do mine_swing(gs, {31, i32(SURFACE_Y)})
-	testing.expect_value(t, gs.world.items[grid_idx(31, SURFACE_Y)], Item.Mossy_Stone)
+	testing.expect_value(t, inventory_count(&gs.player.inventory, .Mossy_Stone), 1)
 
 	// Place it from the Place Slot while the pick stays in hand — on the
 	// grass beside the hole, where placement finds its solid neighbour.
@@ -13325,4 +13326,226 @@ an_old_saves_bare_laser_keeps_working :: proc(t: ^testing.T) {
     eq_push(&back.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {PX, PY - 3}})
     process_events(back)
     testing.expect_value(t, get_tile(&back.world, PX, PY - 2), Tile_Type.Rainbow_Laser)
+}
+
+// ─── Mined drops ──────────────────────────────────────────────────────────────
+
+// An island of one Cloud Ore over open sky, the player standing beside it on a
+// cloud of their own.  Everything under both is air down to the grid floor.
+@(private = "file")
+sky_ore_state :: proc() -> (gs: ^Game_State, ore: [2]i32) {
+    gs = test_state()
+    gs.level_index = LEVEL_SKY
+    for y in 0 ..< GRID_H do for x in 20 ..< 60 do set_tile(&gs.world, x, y, .Air)
+    gs.world.items = {}
+    gs.world.item_counts = {}
+    for x in 25 ..= 31 do set_tile(&gs.world, x, 40, .Cloud)
+    gs.player.pos = {30, 40 - PLAYER_H}
+    ore = {i32(gs.player.pos.x + PLAYER_W * 0.5) + PICK_RANGE, 40}
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Cloud_Ore)
+    gs.ui.show_title = false
+    gs.agent.driving = true  // no window to poll: input stays as the test set it
+    return
+}
+
+// Every Cloud Stone lying on the ground, wherever it fell.
+@(private = "file")
+ground_cloud_stone :: proc(gs: ^Game_State) -> int {
+    n := 0
+    for it, i in gs.world.items do if it == .Cloud_Stone do n += int(gs.world.item_counts[i])
+    return n
+}
+
+@(private = "file")
+run_frames :: proc(gs: ^Game_State, frames: int) {
+    for _ in 0 ..< frames {
+        gs.delta_time = 1.0 / 60.0
+        game_update(gs)
+    }
+}
+
+@(test)
+mined_cloud_stone_reaches_the_bag_over_open_sky :: proc(t: ^testing.T) {
+    gs, ore := sky_ore_state()
+    defer free(gs)
+
+    for _ in 0 ..< PICK_HITS do mine_swing(gs, ore)
+    testing.expect_value(t, get_tile(&gs.world, int(ore.x), int(ore.y)), Tile_Type.Air)
+    run_frames(gs, GRID_H * ITEM_FALL_FRAMES)  // long enough to reach the grid floor
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 1)
+    testing.expect_value(t, ground_cloud_stone(gs), 0)
+}
+
+@(test)
+a_wand_banks_a_block_at_the_end_of_its_reach :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+    far := [2]i32{player_tile(&gs.player).x + wand_mine_range[.Mine_Wand_Runic], 40}
+    set_tile(&gs.world, int(far.x), int(far.y), .Cloud_Ore)
+    gs.mining = {active = true, target = far}
+
+    run_frames(gs, 2)
+
+    testing.expect_value(t, get_tile(&gs.world, int(far.x), int(far.y)), Tile_Type.Air)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 1)
+    testing.expect_value(t, ground_cloud_stone(gs), 0)
+}
+
+@(test)
+a_full_bag_leaves_the_mined_drop_to_fall_conserved :: proc(t: ^testing.T) {
+    gs, ore := sky_ore_state()
+    defer free(gs)
+    hand := gs.player.inventory.slots[TEST_HAND]
+    for &s in gs.player.inventory.slots do s = {item = .Dirt, count = MAX_STACK}
+    gs.player.inventory.slots[TEST_HAND] = hand
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = ore})
+    process_events(gs)
+    testing.expect_value(t, gs.world.items[grid_idx(int(ore.x), int(ore.y))], Item.Cloud_Stone)
+
+    for f in 0 ..< GRID_H * ITEM_FALL_FRAMES {
+        gs.frame = u64(f)
+        update_item_fall(gs)
+    }
+    testing.expect_value(t, gs.world.items[grid_idx(int(ore.x), GRID_H - 1)], Item.Cloud_Stone)
+    testing.expect_value(t, ground_cloud_stone(gs), 1)
+}
+
+@(test)
+enemy_mining_still_drops_to_the_ground :: proc(t: ^testing.T) {
+    gs, ore := sky_ore_state()
+    defer free(gs)
+
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = ore})
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 0)
+    testing.expect_value(t, gs.world.items[grid_idx(int(ore.x), int(ore.y))], Item.Cloud_Stone)
+}
+
+// Fires a wand shot through the real update, the player already `step` tiles
+// further off when it lands, as if they kept walking while it flew.
+@(private = "file")
+land_wand_shot :: proc(gs: ^Game_State, target: [2]i32, blast: bool, step: f32) {
+    gs.mining = {active = true, blast = blast, target = target, travel = WAND_TRAVEL_TIME}
+    gs.player.pos.x -= step
+    for gs.mining.active do run_frames(gs, 1)
+}
+
+// An Ultra Wand shot at its longest, all nine cells of the blast Cloud Ore.
+@(private = "file")
+ultra_blast_target :: proc(gs: ^Game_State) -> [2]i32 {
+    target := [2]i32{player_tile(&gs.player).x + ULTRA_WAND_RANGE, 40}
+    for dy in i32(-1) ..= 1 do for dx in i32(-1) ..= 1 {
+        set_tile(&gs.world, int(target.x + dx), int(target.y + dy), .Cloud_Ore)
+    }
+    return target
+}
+
+@(test)
+an_ultra_blast_at_full_range_banks_all_nine_cells :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+
+    land_wand_shot(gs, ultra_blast_target(gs), true, 0)
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 9)
+    testing.expect_value(t, ground_cloud_stone(gs), 0)
+}
+
+@(test)
+an_ultra_blast_banks_after_the_player_steps_away :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+
+    land_wand_shot(gs, ultra_blast_target(gs), true, 1)
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 9)
+    testing.expect_value(t, ground_cloud_stone(gs), 0)
+}
+
+@(test)
+a_wand_shot_banks_after_the_player_runs_off :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+    far := [2]i32{player_tile(&gs.player).x + wand_mine_range[.Mine_Wand_Runic], 40}
+    set_tile(&gs.world, int(far.x), int(far.y), .Cloud_Ore)
+
+    // MOVE_SPEED over WAND_TRAVEL_TIME is 1.44 tiles: two tile edges at most.
+    land_wand_shot(gs, far, false, 2)
+
+    testing.expect_value(t, get_tile(&gs.world, int(far.x), int(far.y)), Tile_Type.Air)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 1)
+    testing.expect_value(t, ground_cloud_stone(gs), 0)
+}
+
+@(test)
+a_block_at_the_edge_of_reach_is_banked :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+    edge := [2]i32{player_tile(&gs.player).x + MINED_DROP_REACH, 40}
+    set_tile(&gs.world, int(edge.x), int(edge.y), .Cloud_Ore)
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = edge})
+    process_events(gs)
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 1)
+    testing.expect_value(t, ground_cloud_stone(gs), 0)
+}
+
+@(test)
+a_banked_drop_flies_to_the_player_as_a_collect_mote :: proc(t: ^testing.T) {
+    gs, ore := sky_ore_state()
+    defer free(gs)
+    gs.particles = {}
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = ore})
+    process_events(gs)
+
+    motes := 0
+    for p in gs.particles.data {
+        if p.active && p.homing && p.color == item_table[.Cloud_Stone].color do motes += 1
+    }
+    testing.expect_value(t, motes, 1)
+}
+
+@(test)
+banking_a_block_off_a_den_floor_robs_the_den :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    _, a := den_robbery_fixture(gs)
+    gs.player.pos = {f32(a.x), f32(a.y)}
+    set_tile(&gs.world, int(a.x), int(a.y), .Cloud_Ore)
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = a})
+    process_events(gs)
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 1)
+    testing.expect(t, gs.den_revenge.active, "the bag path robs the den as the ground pickup did")
+}
+
+@(test)
+a_block_mined_out_of_reach_stays_on_the_ground :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+    far := [2]i32{player_tile(&gs.player).x + MINED_DROP_REACH + 1, 40}
+    set_tile(&gs.world, int(far.x), int(far.y), .Cloud_Ore)
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = far})
+    process_events(gs)
+
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Cloud_Stone), 0)
+    testing.expect_value(t, gs.world.items[grid_idx(int(far.x), int(far.y))], Item.Cloud_Stone)
+}
+
+@(test)
+banking_a_mined_log_still_teaches_crafting :: proc(t: ^testing.T) {
+    gs, _ := sky_ore_state()
+    defer free(gs)
+    set_tile(&gs.world, 33, 40, .Wood)
+
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {33, 40}})
+    process_events(gs)
+
+    testing.expect(t, gs.craft_hint_shown, "the bag path must raise the same pickup event as the ground")
 }
