@@ -1,6 +1,7 @@
 package game
 
 import "core:testing"
+import "core:time"
 import "core:strings"
 import "core:fmt"
 import "core:log"
@@ -3667,7 +3668,9 @@ loading_a_save_resets_the_transient_raid_director :: proc(t: ^testing.T) {
     gs.raid = {warning_active = true, target = T, warning_timer = 5, pressure = 12}
     spawn_tile_fx(gs, .Raid_Rumble, T, RAID_WARNING_TIME, {205, 55, 24, 255})
 
+    gs.den_revenge = {active = true, timer = 5}
     testing.expect(t, load_game_from(gs, path), "save loads")
+    testing.expect(t, !gs.den_revenge.active, "a grudge belongs to the session that made it")
     testing.expect_value(t, gs.raid, Raid_State{})
     for f in gs.tile_fx.data do if f.active && f.kind == .Raid_Rumble {
         testing.expect(t, false, "no rumble telegraph may outlive its director across a load")
@@ -9388,7 +9391,9 @@ a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
 	testing.expect(t, os.write_entire_file(path, buf) == nil, "wrote a synthetic v23 save")
 
 	gs := test_state(); defer free(gs)
+	gs.den_revenge = {active = true, timer = 5}
 	testing.expect(t, load_game_from(gs, path), "a v23 save should still load")
+	testing.expect(t, !gs.den_revenge.active, "a grudge belongs to the session that made it")
 
 	testing.expect_value(t, gs.level_index, LEVEL_CAVE2)
 	testing.expect_value(t, gs.player.hp, 7)
@@ -11087,4 +11092,391 @@ the_event_trace_logs_what_the_queue_processed :: proc(t: ^testing.T) {
         "an event with no bespoke line should still be traced")
     testing.expect(t, !strings.contains(traced, "evt Play_Sound"),
         "pure audio noise stays out of the trace")
+}
+
+// ─── Dens are the dungeon ─────────────────────────────────────────────────────
+
+// A builder with a finished den on the surface level, its hoard on the floor.
+@(private = "file")
+den_robbery_fixture :: proc(gs: ^Game_State) -> (oi: int, a: [2]i32) {
+    gs.enemies = {}
+    gs.wave    = {}
+    gs.level_index = LEVEL_SURFACE
+    for &c in gs.world.entity_map do c = INVALID_ENTITY   // test_state's builders leave marks
+    spawn_builder(gs, 60)
+    oi = 0
+    a = {60, 96}
+    b := &gs.enemies.data[oi].builder
+    b.anchor, b.den_built, b.goal = a, true, .Fetch_Mineral
+    gs.world.items[grid_idx(60, 96)] = .Iron_Ore
+    gs.world.item_counts[grid_idx(60, 96)] = 5
+    gs.world.items[grid_idx(59, 96)] = .Gold_Ore
+    gs.world.item_counts[grid_idx(59, 96)] = 2
+    return
+}
+
+@(private = "file")
+den_rob :: proc(gs: ^Game_State, T: [2]i32) {
+    eq_push(&gs.events, Event{type = .Item_Pickup, tile = T, payload = {int_val = i32(Item.Iron_Ore)}})
+    process_events(gs)
+    eq_clear(&gs.events)
+}
+
+@(private = "file")
+den_tick_directors :: proc(gs: ^Game_State, seconds: int) {
+    for _ in 0 ..< seconds * 60 {
+        update_den_revenge(gs)
+        update_waves(gs)
+        eq_clear(&gs.events)
+    }
+}
+
+@(test)
+a_den_hoard_counts_what_lies_on_its_floor :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    oi, _ := den_robbery_fixture(gs)
+    testing.expect_value(t, den_hoard(gs, &gs.enemies.data[oi].builder), 7)
+}
+
+@(test)
+a_robbed_owner_returns_as_a_raider_with_friends :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+
+    // Lifting something elsewhere is not a robbery.
+    den_rob(gs, a + {9, 0})
+    testing.expect(t, !gs.den_revenge.active, "only a den's floor counts")
+
+    den_rob(gs, a)
+    testing.expect(t, gs.den_revenge.active, "taking from the hoard starts the grudge")
+    testing.expect_value(t, gs.enemies.data[oi].builder.goal, Builder_Goal.Hunt)
+
+    den_tick_directors(gs, int(DEN_REVENGE_DELAY) - 1)
+    testing.expect(t, gs.enemies.active[oi], "the owner stays home until it comes due")
+    testing.expect_value(t, wave_count_kind(gs, .Raider), 0)
+
+    den_tick_directors(gs, 2)
+    testing.expect(t, !gs.enemies.active[oi] || gs.enemies.data[oi].kind == .Raider,
+        "the owner leaves his den")
+    testing.expect(t, gs.wave.warning_active, "it comes through the wave warning")
+
+    den_tick_directors(gs, int(WAVE_WARNING_TIME) + 1)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), DEN_REVENGE_PARTY)
+    testing.expect_value(t, gs.wave.warning_party, 0)
+    testing.expect(t, !gs.den_revenge.active, "the grudge is spent")
+}
+
+@(test)
+killing_the_owner_settles_the_grudge :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+
+    den_rob(gs, a)
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(oi)})
+    process_events(gs)
+    eq_clear(&gs.events)
+
+    gs.den_revenge.timer = 0
+    den_tick_directors(gs, int(WAVE_WARNING_TIME) + 2)
+    testing.expect_value(t, wave_count_kind(gs, .Raider), 0)
+    testing.expect(t, !gs.den_revenge.active, "a dead owner leaves no debt behind")
+}
+
+@(test)
+a_grudge_from_a_deep_cave_waits_for_the_surface_and_clears_his_slot :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+    den_rob(gs, a)
+
+    // He lives in a level that is stashed by the time it comes due.
+    gs.den_revenge.level = LEVEL_CAVE2
+    gs.levels.enemies[LEVEL_CAVE2] = gs.enemies
+    gs.levels.worlds[LEVEL_CAVE2].entity_map = gs.world.entity_map
+    gs.enemies = {}
+    gs.den_revenge.timer = 0
+
+    gs.level_index = LEVEL_CAVE3
+    den_tick_directors(gs, 2)
+    testing.expect(t, gs.den_revenge.active, "it holds while the player is off the surface")
+
+    gs.level_index = LEVEL_SURFACE
+    den_tick_directors(gs, 1)
+    testing.expect(t, !gs.levels.enemies[LEVEL_CAVE2].active[oi], "the stashed owner has left")
+    gone := enemy_entity_id(oi)
+    for id in gs.levels.worlds[LEVEL_CAVE2].entity_map do testing.expect(t, id != gone, "no stale mark in his level's map")
+    testing.expect(t, gs.wave.warning_active, "and the wave is on its way")
+}
+
+@(test)
+a_second_robbery_never_resets_the_first_grudge :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+
+    spawn_builder(gs, 120)
+    b2 := &gs.enemies.data[1].builder
+    b2.anchor, b2.den_built, b2.goal = {120, 96}, true, .Fetch_Mineral
+
+    den_rob(gs, a)
+    den_tick_directors(gs, 100)
+    timer := gs.den_revenge.timer
+    den_rob(gs, b2.anchor)
+
+    testing.expect_value(t, gs.den_revenge.owner, oi)
+    testing.expect_value(t, gs.den_revenge.anchor, a)
+    testing.expect_value(t, gs.den_revenge.timer, timer)
+}
+
+@(test)
+a_due_grudge_waits_behind_a_pending_scripted_wave :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+    den_rob(gs, a)
+    gs.den_revenge.timer = 0
+
+    wave_trigger(gs, .Air)
+    update_den_revenge(gs)
+    testing.expect_value(t, gs.wave.pending_kind, Wave_Kind.Air)
+    testing.expect_value(t, gs.wave.pending_party, 0)
+    testing.expect(t, gs.den_revenge.active, "the grudge keeps waiting")
+    testing.expect(t, gs.enemies.active[oi], "and the owner stays home meanwhile")
+}
+
+@(test)
+a_new_builder_in_the_slot_is_not_the_one_you_robbed :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    oi, a := den_robbery_fixture(gs)
+    den_rob(gs, a)
+
+    gs.enemies.data[oi].builder.anchor = {120, 96}
+    gs.den_revenge.timer = 0
+    den_tick_directors(gs, int(WAVE_WARNING_TIME) + 2)
+
+    testing.expect(t, gs.enemies.active[oi], "an innocent builder stays")
+    testing.expect_value(t, gs.enemies.data[oi].kind, Enemy_Kind.Builder)
+    testing.expect(t, !gs.wave.warning_active && !gs.wave.pending, "and no wave comes")
+    testing.expect_value(t, wave_count_kind(gs, .Raider), 0)
+}
+
+// The whole loop in the real game order on the real world: robbed, due, and the
+// party reaches the base.
+@(test)
+robbed_den_soak_the_raiders_reach_the_base :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    _, a := den_robbery_fixture(gs)
+    px, py := snap_to_standable(&gs.world, 40, SURFACE_Y - 2)
+    set_tile(&gs.world, px, py, .Crafting_Bench)
+
+    den_rob(gs, a)
+    gs.den_revenge.timer = 5
+
+    landed, smashed: bool
+    for _ in 0 ..< 240 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        update_den_revenge(gs)
+        update_waves(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if wave_count_kind(gs, .Raider) >= DEN_REVENGE_PARTY do landed = true
+        if get_tile(&gs.world, px, py) != .Crafting_Bench { smashed = true; break }
+    }
+    testing.expect(t, landed, "the party should land")
+    testing.expect(t, smashed, "the party should reach the base and smash it")
+}
+
+// ─── Waves that dig ───────────────────────────────────────────────────────────
+
+// A bench sealed in a stone box on the surface; no way in on foot.
+@(private = "file")
+walled_bench :: proc(gs: ^Game_State, X, Y: int) {
+    for y in Y - 4 ..= Y + 1 do for x in X - 4 ..= X + 4 do set_tile(&gs.world, x, y, .Stone)
+    for y in Y - 3 ..= Y do for x in X - 3 ..= X + 3 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, X, Y, .Crafting_Bench)
+}
+
+@(test)
+vargr_come_through_the_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+
+    X, Y := 90, SURFACE_Y - 2
+    walled_bench(gs, X, Y)
+    gs.wave.structures_indexed = false
+    testing.expect(t, wave_force(gs, .Ground, wave_table[.Ground].count) > 0, "wolves should land")
+
+    mined, smashed := 0, false
+    for _ in 0 ..< 180 * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        for k in 0 ..< gs.events.size {
+            if gs.events.events[(gs.events.head + k) % MAX_EVENTS].type == .Builder_Mined do mined += 1
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, X, Y) != .Crafting_Bench { smashed = true; break }
+    }
+    log.infof("digging wave: %d tiles mined", mined)
+    testing.expect(t, smashed, "wolves should reach a walled bench")
+    testing.expect(t, mined >= 1, "they come through the wall, not around it")
+}
+
+@(test)
+a_digging_wave_stays_inside_the_frame :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+
+    walled_bench(gs, 90, SURFACE_Y - 2)
+    gs.wave.structures_indexed = false
+    wave_force(gs, .Ground, 60)
+
+    // Counts work, not wall time: a timing assert proves nothing on a loaded
+    // machine, so the times are logged for a quiet run to read.
+    worst, total: time.Duration
+    frames := 60 * 60
+    most := 0
+    for _ in 0 ..< frames {
+        gs.player.hp = 1000
+        start := time.tick_now()
+        update_enemies(gs)
+        d := time.tick_since(start)
+        worst = max(worst, d)
+        total += d
+        most = max(most, gs.nav_searches)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    log.infof("digging wave: %d enemies, worst frame %v, mean %v, most searches %d",
+        gs.enemies.count, worst, total / time.Duration(frames), most)
+    testing.expect(t, gs.enemies.count >= 60, "the whole wave is still alive to path")
+    testing.expect_value(t, most, MAX_NAV_SEARCHES_PER_FRAME)
+}
+
+// ─── Steam or magic ───────────────────────────────────────────────────────────
+
+@(private = "file")
+hot_machine :: proc(gs: ^Game_State, x, y: int, tile: Tile_Type) {
+    set_tile(&gs.world, x, y, tile)
+    gs.world.sim_data[grid_idx(x, y)].growth_timer = 1
+}
+
+@(private = "file")
+lure_fixture :: proc(gs: ^Game_State) {
+    wave_clear_structures(gs)
+    gs.progression.rune_scroll_found[0] = true
+    // Enough plain structures to open every tier.
+    for x in 60 ..< 60 + int(WAVE_TIER_UNDER) do set_tile(&gs.world, x, SURFACE_Y - 1, .Crafting_Bench)
+    gs.wave.cycle = WAVE_LURE_EVERY - 1
+}
+
+@(test)
+a_burning_boiler_draws_raiders_and_a_kettle_draws_sprites :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+
+    hot_machine(gs, 110, SURFACE_Y - 1, .Boiler)
+    th := wave_threat(gs)
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Underground)
+
+    set_tile(&gs.world, 110, SURFACE_Y - 1, .Air)
+    hot_machine(gs, 112, SURFACE_Y - 1, .Magic_Kettle)
+    th = wave_threat(gs)
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Air)
+
+    // The heavier industry wins a mixed base.
+    hot_machine(gs, 114, SURFACE_Y - 1, .Boiler)
+    hot_machine(gs, 116, SURFACE_Y - 1, .Boiler)
+    th = wave_threat(gs)
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Underground)
+}
+
+@(test)
+a_cold_machine_draws_nothing_and_the_lure_keeps_its_gates :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+
+    set_tile(&gs.world, 110, SURFACE_Y - 1, .Boiler)   // built, never lit
+    th := wave_threat(gs)
+    testing.expect_value(t, gs.wave.lure[.Underground], f32(0))
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Ground)   // the plain cycle's turn
+
+    // Before the first rune scroll nothing comes from below, lure or no lure.
+    hot_machine(gs, 110, SURFACE_Y - 1, .Boiler)
+    gs.progression.rune_scroll_found[0] = false
+    th = wave_threat(gs)
+    testing.expect(t, wave_pick_kind(gs, th) != .Underground, "the tier gate outranks the lure")
+}
+
+@(test)
+only_every_other_wave_follows_the_lure :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+    hot_machine(gs, 110, SURFACE_Y - 1, .Magic_Kettle)
+    th := wave_threat(gs)
+
+    seen: [Wave_Kind]int
+    for c in 0 ..< 12 {
+        gs.wave.cycle = c
+        seen[wave_pick_kind(gs, th)] += 1
+    }
+    testing.expect(t, seen[.Air] >= 6, "the lured kind takes at least its share")
+    testing.expect(t, seen[.Ground] > 0 && seen[.Underground] > 0, "the rest of the cycle still comes")
+
+    // Steam and magic level: no winner, the plain cycle keeps its turn.
+    hot_machine(gs, 112, SURFACE_Y - 1, .Boiler)
+    th = wave_threat(gs)
+    gs.wave.cycle = WAVE_LURE_EVERY - 1
+    testing.expect_value(t, wave_pick_kind(gs, th), Wave_Kind.Ground)
+}
+
+@(test)
+with_nothing_burning_a_lure_turn_stays_the_plain_cycle :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+    th := wave_threat(gs)
+    testing.expect_value(t, gs.wave.lure, [Wave_Kind]f32{})
+
+    // Every lure turn: all three kinds are open, order Air, Ground, Underground.
+    want := [3]Wave_Kind{.Air, .Ground, .Underground}
+    for c := WAVE_LURE_EVERY - 1; c < 12; c += WAVE_LURE_EVERY {
+        gs.wave.cycle = c
+        testing.expect_value(t, wave_pick_kind(gs, th), want[c %% 3])
+    }
+}
+
+@(test)
+the_director_sends_what_the_kettle_drew :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    lure_fixture(gs)
+    hot_machine(gs, 110, SURFACE_Y - 1, .Magic_Kettle)
+
+    gs.wave.pressure = WAVE_PRESSURE_TARGET
+    wave_step(gs, 3)
+    testing.expect(t, gs.wave.warning_active, "the warning should arm")
+    testing.expect_value(t, gs.wave.warning_kind, Wave_Kind.Air)
+    wave_step(gs, int(WAVE_WARNING_TIME) + 1)
+    testing.expect(t, wave_count_kind(gs, .Fire_Sprite) > 0, "the sky answers the mist")
 }

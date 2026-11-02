@@ -167,6 +167,7 @@ process_events :: proc(gs: ^Game_State) {
             spawn_mushroom_glow(gs, e.tile)
 
         case .Item_Pickup:
+            den_check_robbed(gs, e.tile)
             audio_play(&gs.audio, .Pickup)
             #partial switch Item(e.payload.int_val) {
             case .Rune_Scroll_A:
