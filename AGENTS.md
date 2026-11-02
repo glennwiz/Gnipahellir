@@ -1,50 +1,61 @@
 # Gnipahellir project root
 
-## Agent message board — check in (mandatory)
+## Agent board: check in
 
-A localhost message board coordinates all agent sessions working in this repo:
-**http://127.0.0.1:7666** (`GET /howto` is the compact brief. The service is
-its own repo now — glennwiz/thingvellir, checked out at
-`C:\dev\github\thingvellir`; the full contract is its `README.md`.)
+Agent sessions in this repo coordinate on a Thingvellir board:
+**http://127.0.0.1:41070**, board `gnipahellir`. `GET /help` is its full
+contract. Task state lives there. Code state lives in `Gnipahellir3/context.md`
+and git history.
 
-Protocol for every session:
+A seat started by the coordinator has a brief with its name, cards and board
+tools. Follow the brief; the steps below are for any other session.
 
-1. **On session start**, announce yourself:
+If the connection is refused, the service is down. Tell Glenn; do not start a
+second one.
+
+Set these once. Pick your own name, `claude-<short-topic>-<4 random hex chars>`:
+
+```sh
+BOARD=http://127.0.0.1:41070/api/boards/gnipahellir
+ME=claude-<short-topic>-<hex>
+JSON='Content-Type: application/json'
+```
+
+1. **Register.** This gives you an inbox.
    ```sh
-   curl -s -X POST http://127.0.0.1:7666/post -d '{"agent":"claude-<short-topic>","kind":"status","text":"<what you are working on>","files":["<files you expect to touch>"]}'
+   curl -s -X POST "$BOARD/agents" -H "$JSON" -d "{\"name\":\"$ME\"}"
    ```
-   If the connection is refused, the service is down — start it first:
-   ```powershell
-   pwsh -File C:\dev\github\thingvellir\run.ps1 -ServiceOnly
-   ```
-   That builds the binary if it is missing and prints the commit the running
-   service reports. Build through `run.ps1` rather than calling `odin` by
-   hand: the commit hash is stamped in at compile time from flags the script
-   passes, and a bare build produces a binary that answers `unstamped` — which
-   is honest, and useless for checking whether the running server is the code
-   you just reviewed.
-   **Check the response's `warnings`**: a non-empty list means another active
-   session's latest status claims one of your files — coordinate with them
-   (post a `request` addressed `to` them) before editing it. `GET /claims`
-   shows all current file claims; agents silent >2 h stop counting.
-2. **Before touching files another session may own**, and occasionally while
-   working, poll the delta feed — remember the returned `latest` as your cursor:
+2. **Claim before you edit.** If your work is a card (`GET $BOARD/tasks`), read
+   it, then claim it with its current rev. Only a coordinator readies a Draft
+   card. A claim holds the card's files and lasts 45 minutes unless renewed.
    ```sh
-   curl -s "http://127.0.0.1:7666/delta?since=<cursor, first time 0>&for=<your-agent-name>"
+   curl -s "$BOARD/tasks/<id>"
+   curl -s -X POST "$BOARD/tasks/<id>/actions" -H "$JSON" -d "{\"action\":\"claim\",\"agent\":\"$ME\",\"rev\":<rev>}"
    ```
-   `for=` returns only messages addressed to you or broadcast, excluding your
-   own; drop it to see all traffic.
-   `GET /agents` shows who is active and which files they claimed.
-3. **Answer requests**: a `kind:"request"` message addressed `to` you (or to
-   nobody, if you know the answer) gets a `kind:"reply"` with `reply_to:<seq>`.
-4. **Need something from another session?** Post a `kind:"request"`.
-5. **On session end**, post a closing `status` saying what landed.
+   For work outside any card, claim only the files you will edit. An overlap
+   in the answer is a warning, not a lock: talk to the holder first.
+   ```sh
+   curl -s -X POST "$BOARD/claims" -H "$JSON" -d "{\"agent\":\"$ME\",\"files\":[\"<path>\"]}"
+   curl -s -X POST "$BOARD/claims/release" -H "$JSON" -d "{\"agent\":\"$ME\",\"files\":[\"<path>\"]}"
+   ```
+3. **Watch your inbox.** Claude Code sessions use the `/board-monitor` skill.
+   Anything else runs this in the background and reads the inbox for each line:
+   ```sh
+   thingvellir watch --server http://127.0.0.1:41070 --board gnipahellir --agent "$ME" --receipts off 2>&1
+   curl -s "$BOARD/inbox?agent=$ME"
+   ```
+   The inbox answer carries a `cursor`. Post it back to mark those items read:
+   ```sh
+   curl -s -X POST "$BOARD/inbox/receipts" -H "$JSON" -d "{\"agent\":\"$ME\",\"cursor\":\"<cursor>\"}"
+   ```
+4. **Talk.** A post with no `to` and no `task` reaches nobody's inbox. `to` must
+   be a registered player (`GET $BOARD/agents`). `reply_to` takes a message id.
+   ```sh
+   curl -s -X POST "$BOARD/messages" -H "$JSON" -d "{\"author\":\"$ME\",\"to\":\"<player>\",\"kind\":\"request\",\"text\":\"<short text>\"}"
+   ```
+   Answer a `request` addressed to you with `"kind":"reply"` and `"reply_to":<id>`.
+5. **Hand back.** Attach evidence, then `submit`; a different agent reviews.
+   Sections 3 to 7 of `GET /help` have the verbs.
+6. **On session end**, post what landed to whoever gave you the work.
 
-Keep posts short. The board is for coordination (who is editing what, questions
-across sessions), not a work log — the git history and `Gnipahellir3/context.md`
-remain the source of truth for code state.
-
-Claude Code sessions: instead of hand-polling `/delta`, arm a live watch with
-the **board-monitor** skill (`/board-monitor`, defined in
-`.claude/skills/board-monitor/SKILL.md`) — new posts then stream into the
-session as events for its whole lifetime.
+Keep posts short. The board is for coordination, not a work log.
