@@ -5727,7 +5727,7 @@ a_landed_hit_bleeds_and_shows_its_number :: proc(t: ^testing.T) {
 own_den_is_never_a_cage :: proc(t: ^testing.T) {
     // den_protected guards a built den's placed blocks from every other
     // builder — and from its owner too while the owner is outside (commutes
-    // use the door).  But an owner standing INSIDE may always chew out:
+    // use the door).  But an owner boxed INSIDE may always chew out:
     // a den it can't leave is a coffin (stuck-inside bounce loop, playtest
     // 2026-07-16).
     gs := test_state()
@@ -5744,6 +5744,8 @@ own_den_is_never_a_cage :: proc(t: ^testing.T) {
     e.pos = {30.1, 87}   // standing inside the den interior
     testing.expect(t, den_protected(gs, 30, 85), "den roof is protected from the world")
     testing.expect(t, den_protected(gs, 30, 85, 1), "and from other builders")
+    testing.expect(t, den_protected(gs, 30, 85, 0), "an owner with a working door uses it")
+    set_tile(&gs.world, 33, 88, .Rune_Stone)   // the door corridor, stopped for good
     testing.expect(t, !den_protected(gs, 30, 85, 0), "but never from an owner boxed inside")
 
     e.pos = {60, 87}     // owner off at work: the den is sacred again
@@ -5850,6 +5852,7 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     top, top_idx := u16(0), 0
     for c, i in churn do if c > top { top, top_idx = c, i }
     log.infof("builder soak: most touched tile = %d at (%d,%d)", top, top_idx % GRID_W, top_idx / GRID_W)
+    log.infof("CHURN top %d", top)
     testing.expect(t, top <= MAX_TILE_CHURN, "one tile carved and laid back this often means plans undo themselves")
 }
 
@@ -14093,4 +14096,318 @@ a_builder_in_the_pond_gets_out :: proc(t: ^testing.T) {
         testing.expect(t, out, "out of the basin within a minute")
         testing.expect_value(t, pond_water(gs), start)
     }
+}
+
+// ─── A den is left by its door ────────────────────────────────────────────────
+
+DD_ANCHOR :: [2]i32{60, 80}
+
+// A finished shelter and shell sunk in solid rock, its owner at home with one
+// ore vein beyond the wall opposite the door.
+@(private = "file")
+den_door_fixture :: proc(gs: ^Game_State) -> (id: int) {
+    gs.enemies = {}
+    gs.wave    = {}
+    for y in CAVE_TOP ..< CAVE_BOT do for x in CAVE_LEFT ..< CAVE_RIGHT do set_tile(&gs.world, x, y, .Stone)
+    a := DD_ANCHOR
+    for t in build_templates[Build_Kind.Shelter].tiles {
+        set_tile(&gs.world, int(a.x + t.off.x), int(a.y + t.off.y), t.tile)
+    }
+    for dx in i32(3) ..= 4 do for dy in i32(-1) ..= 0 do set_tile(&gs.world, int(a.x + dx), int(a.y + dy), .Void)
+    spawn_builder(gs, int(a.x))
+    id = 0
+    e := &gs.enemies.data[id]
+    e.pos = {f32(a.x) + 0.1, f32(a.y)}
+    e.vel = {}
+    e.nav = {}
+    b := &e.builder
+    b.build, b.anchor, b.den_built, b.goal = .Shelter, a, true, .Fetch_Mineral
+    for dy in i32(-5) ..= 1 do for dx in i32(-4) ..= 4 {
+        T := a + [2]i32{dx, dy}
+        if den_structure_slot(b, T) && !den_template_tile(b, T) do set_tile(&gs.world, int(T.x), int(T.y), .Iron_Ore)
+    }
+    set_tile(&gs.world, int(a.x) - 12, int(a.y), .Iron_Ore)
+    gs.player.pos = {6, 10}
+    return
+}
+
+@(private = "file")
+den_template_tile :: proc(b: ^Builder_State, T: [2]i32) -> bool {
+    for t in build_templates[b.build].tiles do if t.off == T - b.anchor && t.tile != .Void do return true
+    return false
+}
+
+// How many of the den's own slots stand open.
+@(private = "file")
+den_holes :: proc(gs: ^Game_State, b: ^Builder_State) -> (n: int) {
+    for dy in i32(-5) ..= 1 do for dx in i32(-4) ..= 4 {
+        T := b.anchor + [2]i32{dx, dy}
+        if den_structure_slot(b, T) && !is_solid(&gs.world, int(T.x), int(T.y)) do n += 1
+    }
+    return
+}
+
+@(private = "file")
+den_door_run :: proc(gs: ^Game_State, seconds: int, b: ^Builder_State) -> (holes: int) {
+    for _ in 0 ..< seconds * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        holes = max(holes, den_holes(gs, b))
+    }
+    return
+}
+
+// Run 5 and 6: a builder left through its own wall, the repair pass ate the next
+// haul, and no hoard ever formed.
+@(test)
+a_builder_leaves_its_den_by_the_door_and_the_haul_banks :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    testing.expect_value(t, den_holes(gs, b), 0)
+    holes := den_door_run(gs, 240, b)
+    testing.expect_value(t, holes, 0)
+    testing.expect(t, den_hoard(gs, b) > 0, "a haul lands on the floor")
+}
+
+// A door nobody can dig out: the wall is the way, no coffin.
+@(test)
+a_builder_with_a_stopped_door_leaves_by_its_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    set_tile(&gs.world, int(DD_ANCHOR.x) + 3, int(DD_ANCHOR.y), .Rune_Stone)
+    testing.expect(t, den_door_run(gs, 30, b) > 0, "the wall opens")
+}
+
+// Natural rock in the corridor is dug, not a reason to break the wall.
+@(test)
+rock_in_the_corridor_does_not_open_the_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    set_tile(&gs.world, int(DD_ANCHOR.x) + 3, int(DD_ANCHOR.y), .Stone)
+    set_tile(&gs.world, int(DD_ANCHOR.x) + 3, int(DD_ANCHOR.y) - 1, .Stone)
+    testing.expect_value(t, den_door_run(gs, 30, b), 0)
+}
+
+// Either row of the 2-high corridor stops it, and so does the map edge.
+@(test)
+a_door_is_stopped_by_either_row_or_the_map_edge :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    dens := collect_dens(gs)
+    testing.expect(t, !den_door_blocked(gs, &dens, b), "an open door")
+    T := DD_ANCHOR + {4, -1}
+    set_tile(&gs.world, int(T.x), int(T.y), .Rune_Stone)
+    testing.expect(t, den_door_blocked(gs, &dens, b), "the top row, far end")
+    set_tile(&gs.world, int(T.x), int(T.y), .Void)
+    b.anchor.x = GRID_W - 3
+    testing.expect(t, den_door_blocked(gs, &dens, b), "past the map edge")
+}
+
+// A neighbour's wall across the corridor stops the door like rune stone does.
+@(test)
+another_dens_wall_stops_a_door :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    T := DD_ANCHOR + {3, 0}
+    set_tile(&gs.world, int(T.x), int(T.y), .Wood)
+    dens := collect_dens(gs)
+    testing.expect(t, !den_door_blocked(gs, &dens, b), "alone, wood in the corridor is diggable")
+    n := enemy_alloc_builder_neighbour(gs, T)
+    dens = collect_dens(gs)
+    testing.expect_value(t, dens.n, 2)
+    testing.expect(t, n >= 0 && den_door_blocked(gs, &dens, b), "a neighbour's wall stops the door")
+}
+
+@(private = "file")
+enemy_alloc_builder_neighbour :: proc(gs: ^Game_State, wall: [2]i32) -> int {
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return -1
+    t := build_templates[Build_Kind.Shelter].tiles[10]   // the first wood wall
+    e := &gs.enemies.data[id]
+    e^ = Enemy{kind = .Builder, hp = 1, hp_max = 1, pos = {150, 80}}
+    e.builder.build, e.builder.den_built, e.builder.anchor = .Shelter, true, wall - t.off
+    return id
+}
+
+// A strike means the door did not work out: the wall may open then.
+@(test)
+a_struck_builder_may_open_its_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    b := &gs.enemies.data[id].builder
+    W := DD_ANCHOR + {-3, 0}
+    testing.expect(t, den_protected(gs, int(W.x), int(W.y), id), "with a door the wall holds")
+    b.stuck_count = 1
+    testing.expect(t, !den_protected(gs, int(W.x), int(W.y), id), "after a strike it opens")
+}
+
+// The owner out of the box never gets the exemption, door or no door.
+@(test)
+a_stopped_door_opens_no_wall_from_outside :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    e := &gs.enemies.data[id]
+    set_tile(&gs.world, int(DD_ANCHOR.x) + 3, int(DD_ANCHOR.y), .Rune_Stone)
+    W := DD_ANCHOR + {-3, 0}
+    testing.expect(t, !den_protected(gs, int(W.x), int(W.y), id), "from inside it opens")
+    e.pos = {f32(DD_ANCHOR.x) - 8, f32(DD_ANCHOR.y)}
+    testing.expect(t, den_protected(gs, int(W.x), int(W.y), id), "from outside it holds")
+}
+
+// Card 87's other question, den (98,98) with no floor at row 99: the shell pass
+// fills the floor first, so no hoard is laid over a void.
+@(test)
+a_den_with_a_hole_in_its_floor_mends_it_before_it_hoards :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := den_door_fixture(gs)
+    e := &gs.enemies.data[id]
+    F := DD_ANCHOR + {0, 1}
+    set_tile(&gs.world, int(F.x), int(F.y), .Void)
+    T, found := den_next_build_tile(e, gs)
+    testing.expect(t, found, "the hole is an open slot")
+    testing.expect_value(t, T, F)
+}
+
+// ─── Plans that can be walked ─────────────────────────────────────────────────
+
+// A pocket of open room in solid rock, floor at y+1, a builder standing in it.
+@(private = "file")
+route_room :: proc(gs: ^Game_State, x0, x1, y0, y: int) -> (id: int) {
+    gs.enemies = {}
+    gs.wave    = {}
+    for ty in CAVE_TOP ..< CAVE_BOT do for tx in CAVE_LEFT ..< CAVE_RIGHT do set_tile(&gs.world, tx, ty, .Stone)
+    for ty in y0 ..= y do for tx in x0 ..= x1 do set_tile(&gs.world, tx, ty, .Void)
+    id, _ = enemy_alloc(&gs.enemies)
+    gs.enemies.data[id] = Enemy{kind = .Builder, hp = 10, hp_max = 10, pos = {f32(x0) + 0.1, f32(y)}, grounded = true}
+    gs.player.pos = {6, 10}
+    return
+}
+
+// Run 6: 94% of escapes rose one tile or less.  The hop rises through two rows,
+// and the second was never mined, so the pillar stalled under its own roof.
+@(test)
+a_pillar_escape_mines_both_rows_and_rises :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 62, 79, 80)   // one clear row over the head
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.escaping, b.escape_timer, b.escape_from = true, 0, 80
+    for _ in 0 ..< 60 * 16 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if !b.escaping do break
+    }
+    testing.expect(t, b.escape_from - builder_tile(e).y >= ESCAPE_MIN_RISE, "the pillar rose")
+}
+
+// An unmineable second row ends the escape instead of hopping at it for ever.
+@(test)
+a_pillar_escape_stops_at_an_unmineable_roof :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 62, 79, 80)
+    e := &gs.enemies.data[id]
+    set_tile(&gs.world, 60, 78, .Rune_Stone)
+    e.builder.escaping, e.builder.escape_from = true, 80
+    builder_escape_pillar(e, id, gs, gs.delta_time)
+    testing.expect(t, !e.builder.escaping, "the escape ends")
+    testing.expect_value(t, get_tile(&gs.world, 60, 78), Tile_Type.Rune_Stone)
+}
+
+// A neighbour's wall in the second row is a roof like rune stone is.
+@(test)
+a_pillar_escape_stops_at_another_dens_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 62, 79, 80)
+    e := &gs.enemies.data[id]
+    set_tile(&gs.world, 60, 78, .Wood)
+    other, _ := enemy_alloc(&gs.enemies)
+    gs.enemies.data[other] = Enemy{kind = .Builder, hp = 1, hp_max = 1, pos = {150, 80}}
+    o := &gs.enemies.data[other].builder
+    o.build, o.den_built, o.anchor = .Shelter, true, {60, 81}
+    e.builder.escaping, e.builder.escape_from = true, 80
+    builder_escape_pillar(e, id, gs, gs.delta_time)
+    testing.expect(t, !e.builder.escaping, "the escape ends")
+    testing.expect_value(t, get_tile(&gs.world, 60, 78), Tile_Type.Wood)
+}
+
+// Through the real update: under a low ceiling the builder digs its headroom
+// and crosses, instead of hopping at the far lip again and again.
+@(test)
+a_builder_under_a_low_ceiling_crosses_without_bouncing :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 70, 78, 80)
+    for y in 80 ..= 84 do set_tile(&gs.world, 62, y, .Void)
+    set_tile(&gs.world, 63, 80, .Stone)
+    for x in 60 ..= 61 do set_tile(&gs.world, x, 78, .Stone)
+    set_tile(&gs.world, 68, 79, .Iron_Ore)
+    e := &gs.enemies.data[id]
+    e.pos.x = 61.1
+    b := &e.builder
+    b.goal, b.den_built, b.anchor = .Fetch_Mineral, true, {20, 100}
+    hops := 0
+    for _ in 0 ..< 60 * 40 {
+        was := e.vel.y
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if e.vel.y < 0 && was >= 0 do hops += 1
+        if b.carry != .Air do break
+    }
+    log.infof("low ceiling: %d hops, carry %v", hops, b.carry)
+    testing.expect(t, b.carry != .Air, "the ore is reached")
+    testing.expect(t, hops <= 6, "no repeat hops")   // 5 as it stands, 9 without the ceiling check
+}
+
+// No hop is planned under a low ceiling: it stops at the landing's height and
+// falls back, which is the jump-bounce of run 6 loop 3.
+@(test)
+no_hop_is_planned_under_a_low_ceiling :: proc(t: ^testing.T) {
+    plan :: proc(ceiling: [][2]int, tx, ty: int) -> bool {
+        gs := test_state()
+        defer free(gs)
+        route_room(gs, 60, 66, 78, 80)
+        set_tile(&gs.world, 62, 80, .Stone)
+        set_tile(&gs.world, 63, 80, .Stone)
+        for c in ceiling do set_tile(&gs.world, c.x, c.y, .Stone)
+        path: Nav_Path
+        return astar_dig(gs, {61, 80}, {i32(tx), i32(ty)}, 0, 0, &path, allow_mining = false)
+    }
+    // A hop over a pit too deep to climb out of: only the arc reaches the far lip.
+    hop :: proc(ceiling: Maybe([2]int)) -> bool {
+        gs := test_state()
+        defer free(gs)
+        route_room(gs, 60, 66, 78, 80)
+        for y in 80 ..= 84 do set_tile(&gs.world, 62, y, .Void)
+        set_tile(&gs.world, 63, 80, .Stone)
+        if c, ok := ceiling.?; ok do set_tile(&gs.world, c.x, c.y, .Stone)
+        path: Nav_Path
+        return astar_dig(gs, {61, 80}, {63, 79}, 0, 0, &path, allow_mining = false)
+    }
+    testing.expect(t, hop(nil), "the hop is there with headroom")
+    testing.expect(t, !hop([2]int{61, 78}), "no hop with a ceiling over the takeoff")
+    testing.expect(t, !hop([2]int{62, 78}), "no hop with a ceiling over the arc")
+    testing.expect(t, plan({}, 62, 79), "the step is there with headroom")
+    testing.expect(t, plan({{61, 78}}, 62, 79), "a body steps up one under a ceiling")
+    testing.expect(t, plan({}, 63, 79), "the far hop is there with headroom")
+    testing.expect(t, !plan({{61, 78}, {62, 78}}, 63, 79), "no hop under a ceiling")
 }
