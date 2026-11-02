@@ -6252,7 +6252,10 @@ an_odd_ore_leftover_never_jams_the_smelter :: proc(t: ^testing.T) {
     sd.in_item, sd.in_count = .Silver_Ore, 1
     for &s in inv.slots do s = {item = .Stone_Block, count = MAX_STACK}
     inv.slots[0] = {item = .Gold_Ore, count = 2}
+    gs.notify.count = 0
     testing.expect(t, !smelter_feed(gs, T, 0), "no room for the leftover")
+    testing.expect_value(t, gs.notify.count, 1)  // the bag's reason, not the furnace's too
+    testing.expect_value(t, string(gs.notify.items[0].text[:gs.notify.items[0].len]), "The bag is full")
     testing.expect_value(t, sd.in_item, Item.Silver_Ore)
     testing.expect_value(t, int(sd.in_count), 1)
     testing.expect_value(t, int(inv.slots[0].count), 2)
@@ -10582,6 +10585,77 @@ a_flyer_with_nothing_it_can_reach_gutters_out :: proc(t: ^testing.T) {
     testing.expect(t, !gs.enemies.active[fi], "a parked flyer must not hold back every later wave")
     gone := enemy_entity_id(fi)
     for id in gs.world.entity_map do testing.expect(t, id != gone, "a gutted sprite must leave the entity map")
+}
+
+@(test)
+a_sprite_gutting_out_mid_step_leaves_no_ghost_behind :: proc(t: ^testing.T) {
+    // The body crosses a tile the frame it gutters: the map still holds it at
+    // the tile it left, which is not the tile despawn_enemy clears.
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+    X, Y :: 60, 20
+    for x in X - 3 ..= X + 3 do for y in Y - 3 ..= Y + 3 do set_tile(&gs.world, x, y, .Air)
+    fi := wave_seed_hunter(gs, .Fire_Sprite, X, Y)
+    e := &gs.enemies.data[fi]
+    e.pos.x = f32(X + 1) - BUILDER_W*0.5 - 0.001
+    e.vel = {FIRE_SPRITE_SPEED, 0}
+    prev := builder_tile(e)
+    entity_map_move(&gs.world, enemy_entity_id(fi), prev, prev)
+    e.builder.anchor = prev
+    e.builder.stuck_timer = FIRE_SPRITE_STALL
+    e.builder.stuck_count = FIRE_SPRITE_GIVE_UP - 1
+
+    update_enemies(gs)
+    testing.expect(t, !gs.enemies.active[fi], "the sprite should gutter out this frame")
+    gone := enemy_entity_id(fi)
+    for id in gs.world.entity_map do testing.expect(t, id != gone, "a gutted sprite must leave the entity map")
+}
+
+@(test)
+a_burn_forgives_a_sprites_stalls :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+    X, Y :: 60, 20
+    for x in X - 3 ..= X + 3 do for y in Y - 3 ..= Y + 3 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, X + 1, Y, .Crafting_Bench)
+    fi := wave_seed_hunter(gs, .Fire_Sprite, X, Y)
+    gs.enemies.data[fi].builder.stuck_count = FIRE_SPRITE_GIVE_UP - 1
+    for _ in 0 ..< 240 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if get_tile(&gs.world, X + 1, Y) != .Crafting_Bench do break
+    }
+    testing.expect(t, get_tile(&gs.world, X + 1, Y) != .Crafting_Bench, "the sprite should burn the bench")
+    testing.expect_value(t, int(gs.enemies.data[fi].builder.stuck_count), 0)
+}
+
+@(test)
+standing_in_reach_never_counts_as_a_sprite_stall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    wave_clear_structures(gs)
+    gs.player.pos = {8, 8}
+    X, Y :: 60, 20
+    for x in X - 3 ..= X + 3 do for y in Y - 3 ..= Y + 3 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, X + 1, Y, .Crafting_Bench)
+    fi := wave_seed_hunter(gs, .Fire_Sprite, X, Y)
+    b := &gs.enemies.data[fi].builder
+    b.anchor = builder_tile(&gs.enemies.data[fi])
+    // Its swing is held off for longer than the watch, so only the reset saves it.
+    b.attack_timer = FIRE_SPRITE_STALL * 3
+    for _ in 0 ..< int(FIRE_SPRITE_STALL * 2 * 60) {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, int(b.stuck_count), 0)
+    testing.expect(t, b.has_target, "a sprite in reach keeps its target")
+    testing.expect_value(t, b.target_tile, [2]i32{X + 1, Y})
 }
 
 @(test)
