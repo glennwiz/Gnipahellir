@@ -1880,14 +1880,25 @@ builder_sees_player :: proc(e: ^Enemy, gs: ^Game_State, radius: f32) -> bool {
     bc := [2]f32{e.pos.x + BUILDER_W*0.5, e.pos.y + BUILDER_H*0.5}
     pc := [2]f32{gs.player.pos.x + PLAYER_W*0.5, gs.player.pos.y + PLAYER_H*0.5}
     d  := pc - bc
-    dist2 := d.x*d.x + d.y*d.y
-    if dist2 > radius*radius { return false }
+    if d.x*d.x + d.y*d.y > radius*radius { return false }
+    return sight_line_clear(&gs.world, bc, pc)
+}
 
-    // Sample the sight line every half tile; any solid tile blocks it.
-    steps := int(math.sqrt(dist2) * 2) + 1
+// Sample a sight line every half tile; any solid tile blocks it.  skip_ends
+// ignores the tiles the two ends stand in, for a looker that is itself a solid
+// tile (the Rainbow Laser) and a target that may be dug into a wall: only what
+// lies BETWEEN them blocks.  PURE — render reaches this through laser_target.
+sight_line_clear :: proc(w: ^World_Grid, from, to: [2]f32, skip_ends := false) -> bool {
+    d     := to - from
+    steps := int(math.sqrt(d.x*d.x + d.y*d.y) * 2) + 1
     for i in 1 ..< steps {
-        p := bc + d * (f32(i) / f32(steps))
-        if is_solid(&gs.world, int(p.x), int(p.y)) { return false }
+        p := from + d * (f32(i) / f32(steps))
+        x, y := int(p.x), int(p.y)
+        if skip_ends {
+            if x == int(from.x) && y == int(from.y) { continue }
+            if x == int(to.x)   && y == int(to.y)   { continue }
+        }
+        if is_solid(w, x, y) { return false }
     }
     return true
 }
