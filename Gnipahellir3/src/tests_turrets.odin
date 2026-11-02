@@ -19,6 +19,8 @@ Turret_Head_Case :: struct {
 @(rodata)
 turret_heads := [?]Turret_Head_Case{
     {.Flame_Turret, .Flame_Head, .Iron_Bar, 1},
+    {.Water_Turret, .Water_Head, .Iron_Bar, 1},
+    {.Earth_Turret, .Earth_Head, .Iron_Bar, 1},
     // <turret-heads>
 }
 
@@ -261,10 +263,10 @@ a_shot_carries_only_its_own_effect :: proc(t: ^testing.T) {
         gs.world.sim_data[grid_idx(TT_X, head_y)].growth_timer = rule.cooldown
         id := turret_test_enemy(gs, TT_X + 2.5, f32(head_y) + 0.5)
         gs.enemy_status[id].burn = 1
-        // <shot-setup>
+        gs.enemy_status[id].slow = 0.25
         update_sim(gs)
         testing.expect_value(t, gs.enemy_status[id].burn, rule.burn_time > 0 ? rule.burn_time : 1)
-        // <shot-checks>
+        testing.expect_value(t, gs.enemy_status[id].slow, rule.slow_time > 0 ? rule.slow_time : 0.25)
         hits := 0
         for {
             e := eq_pop(&gs.events) or_break
@@ -334,7 +336,7 @@ a_burn_does_not_cross_a_portal_or_a_load :: proc(t: ^testing.T) {
 
     // Whatever holds this slot after a load or on the next level is not the
     // enemy that was burning.
-    gs.enemy_status[3] = {burn = 2}
+    gs.enemy_status[3] = {burn = 2, slow = 2}
     testing.expect(t, load_game_from(gs, path), "loaded")
     testing.expect_value(t, gs.enemy_status[3], Enemy_Status{})
 
@@ -354,6 +356,64 @@ a_despawn_clears_the_slots_status_at_once :: proc(t: ^testing.T) {
     gs.enemy_status[id] = {burn = 2}
     despawn_enemy(gs, id)
     testing.expect_value(t, gs.enemy_status[id], Enemy_Status{})
+}
+
+// Every body in the game, through the real update: a slowed one covers less
+// ground than the same one free.  Dropped in open air, since gravity is the one
+// motion every walking kind shares whatever its brain wants.
+@(test)
+water_slows_every_kind_of_enemy :: proc(t: ^testing.T) {
+    fall :: proc(kind: Enemy_Kind, slowed: bool) -> f32 {
+        gs := turret_test_state()
+        defer free(gs)
+        id, _ := enemy_alloc(&gs.enemies)
+        gs.enemies.data[id] = Enemy{pos = {TT_X, 5}, kind = kind, hp = 50, hp_max = 50}
+        for _ in 0 ..< 4 {  // short: Garm conjures a floor under himself
+            if slowed do gs.enemy_status[id].slow = WATER_SLOW_TIME
+            update_enemies(gs)
+        }
+        return gs.enemies.data[id].pos.y - 5
+    }
+    for kind in Enemy_Kind {
+        if kind == .Fire_Sprite do continue  // flies, pinned by the turret test
+        free_d, slow_d := fall(kind, false), fall(kind, true)
+        testing.expectf(t, free_d > 0, "%v falls", kind)
+        testing.expectf(t, slow_d < free_d * 0.75, "%v slowed fell %v, free %v", kind, slow_d, free_d)
+    }
+}
+
+// The end of a burn takes the burn and nothing else.
+@(test)
+a_slow_outlives_a_burn :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    id := turret_test_enemy(gs, 60, 40)
+    gs.enemy_status[id] = {burn = gs.delta_time / 2, slow = 1}
+    update_enemy_status(gs)
+    testing.expect_value(t, gs.enemy_status[id].burn, f32(0))
+    testing.expect(t, gs.enemy_status[id].slow > 0, "the slow runs on")
+}
+
+@(test)
+water_hits_once_a_cooldown_and_stays_weak :: proc(t: ^testing.T) {
+    c := turret_heads[1]
+    gs := turret_test_state()
+    defer free(gs)
+    head_y := tt_build(gs, c)
+    gs.world.sim_data[grid_idx(TT_X, head_y)].growth_timer = WATER_COOLDOWN
+    id := turret_test_enemy(gs, TT_X + 3.5, f32(head_y) + 0.5)
+    turret_test_run(gs, 2.5 * WATER_COOLDOWN)
+    testing.expect_value(t, gs.enemies.data[id].hp, 50 - 3*WATER_DAMAGE)
+    testing.expect(t, WATER_DAMAGE > 0, "weak, not harmless")
+    testing.expect(t, WATER_RANGE < LASER_RANGE, "under the laser's reach")
+    testing.expect(t, WATER_SLOW > 0 && WATER_SLOW < 1, "a slow, not a stop")
+    testing.expect(t, WATER_SLOW_TIME > WATER_COOLDOWN, "a jet keeps its target slowed")
+}
+
+@(test)
+earth_keeps_its_place_in_the_line :: proc(t: ^testing.T) {
+    testing.expect(t, EARTH_RANGE < LASER_RANGE, "under the laser's reach")
+    testing.expect(t, EARTH_RANGE > FLAME_RANGE, "a thrower, not a jet")
 }
 
 // <turret-tests>

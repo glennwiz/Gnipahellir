@@ -34,6 +34,20 @@ FLAME_BURN_TIME :: f32(2)      // how long a target stays alight after the jet
 FLAME_BURN_TICK :: f32(0.6)
 FLAME_BURN_HIT  :: 1
 
+// Water, first guesses for Glenn to tune: the laser's middle distance, a
+// quarter of its damage, and what it hits moves at half speed for a moment.
+WATER_RANGE     :: f32(6)
+WATER_COOLDOWN  :: f32(1)
+WATER_DAMAGE    :: 1
+WATER_SLOW_TIME :: f32(1.5)
+WATER_SLOW      :: f32(0.5)
+
+// Earth, first guesses for Glenn to tune: the hardest single blow of any
+// turret, far apart, so its 1.7 a second stays under the laser's 4.
+EARTH_RANGE    :: f32(7)
+EARTH_COOLDOWN :: f32(3)
+EARTH_DAMAGE   :: 5
+
 // One row per turret head.  pillars is the pattern: how many Turret_Pillar
 // tiles the head must stand on (0 = placed bare, the old laser).  A new turret
 // is a row here, a tile, a head item and a recipe.  Applied on the cooldown:
@@ -44,7 +58,9 @@ Turret_Rule :: struct {
     cooldown:  f32,
     damage:    int,
     burn_time: f32,
-    jet:       proc(gs: ^Game_State, from, to: [2]f32),  // the look, every frame on target
+    slow_time: f32,
+    jet:       proc(gs: ^Game_State, from, to: [2]f32),  // the look, every frame on target (optional)
+    impact:    proc(gs: ^Game_State, at: [2]f32),        // the look of a shot landing (optional)
     refusal:   string,                                   // the note when the pattern is wrong
 }
 
@@ -54,6 +70,15 @@ turret_table := #partial [Tile_Type]Turret_Rule{
     .Flame_Turret  = {
         pillars = 1, range = FLAME_RANGE, cooldown = FLAME_COOLDOWN, burn_time = FLAME_BURN_TIME,
         jet = spawn_flame_jet, refusal = "A Flame Head goes on top of a Turret Pillar",
+    },
+    .Water_Turret  = {
+        pillars = 1, range = WATER_RANGE, cooldown = WATER_COOLDOWN, damage = WATER_DAMAGE,
+        slow_time = WATER_SLOW_TIME,
+        jet = spawn_water_jet, refusal = "A Water Head goes on top of a Turret Pillar",
+    },
+    .Earth_Turret  = {
+        pillars = 1, range = EARTH_RANGE, cooldown = EARTH_COOLDOWN, damage = EARTH_DAMAGE,
+        impact = spawn_earth_impact, refusal = "An Earth Head goes on top of a Turret Pillar",
     },
 }
 
@@ -297,13 +322,18 @@ tick_turret :: proc(gs: ^Game_State, x, y: int) {
 
     e    := &gs.enemies.data[ei]
     size := enemy_body_size(e.kind)
-    rule.jet(gs, {f32(x) + 0.5, f32(y) + 0.5}, {e.pos.x + size.x*0.5, e.pos.y + size.y*0.5})
+    hit  := [2]f32{e.pos.x + size.x*0.5, e.pos.y + size.y*0.5}
+    if rule.jet != nil do rule.jet(gs, {f32(x) + 0.5, f32(y) + 0.5}, hit)
 
     if sd.growth_timer < rule.cooldown do return
     sd.growth_timer = 0
+    if rule.impact != nil do rule.impact(gs, hit)
     log_action(gs, "%v at (%d,%d) fires on Enemy#%d", gs.world.terrain[grid_idx(x, y)], x, y, ei)
     if rule.burn_time > 0 {
         gs.enemy_status[ei].burn = rule.burn_time
+    }
+    if rule.slow_time > 0 {
+        gs.enemy_status[ei].slow = rule.slow_time
     }
     if rule.damage > 0 {
         eq_push(&gs.events, Event{
@@ -324,6 +354,7 @@ update_enemy_status :: proc(gs: ^Game_State) {
             s = {}
             continue
         }
+        s.slow = max(s.slow - gs.delta_time, 0)
         s.burn -= gs.delta_time
         s.burn_charge += gs.delta_time
         if s.burn_charge >= FLAME_BURN_TICK {
@@ -335,8 +366,16 @@ update_enemy_status :: proc(gs: ^Game_State) {
                 payload = {int_val = i32(FLAME_BURN_HIT)},
             })
         }
-        if s.burn <= 0 do s = {}
+        if s.burn <= 0 {
+            s.burn, s.burn_charge = 0, 0
+        }
     }
+}
+
+// How much of this frame an enemy's body gets to move.  The brain keeps full
+// time, so only its feet and its wings are slowed.
+enemy_move_dt :: proc(gs: ^Game_State, i: int) -> f32 {
+    return gs.enemy_status[i].slow > 0 ? gs.delta_time * WATER_SLOW : gs.delta_time
 }
 
 @(rodata)
@@ -354,6 +393,8 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Mana_Wheel   = tick_engine,
     .Rainbow_Laser = tick_rainbow_laser,
     .Flame_Turret  = tick_turret,
+    .Water_Turret  = tick_turret,
+    .Earth_Turret  = tick_turret,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is

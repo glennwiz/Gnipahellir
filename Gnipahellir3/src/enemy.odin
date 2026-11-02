@@ -2447,33 +2447,34 @@ update_enemies :: proc(gs: ^Game_State) {
         if !gs.enemies.active[i] { continue }
         e := &gs.enemies.data[i]
         prev := builder_tile(e)
+        move_dt := enemy_move_dt(gs, i)
         switch e.kind {
         case .Builder:
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_builder(e, i, gs, dt)
         case .Garm:
-            move_body(&gs.world, &e.pos, &e.vel, {GARM_W, GARM_H}, dt,
+            move_body(&gs.world, &e.pos, &e.vel, {GARM_W, GARM_H}, move_dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_garm(e, i, gs, dt)
         case .Undead:
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_undead(e, i, gs, dt)
         case .Raider:
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_raider(e, i, gs, dt)
         case .Vargr:
             // The wolf IS the raider brain: same body, same travel, and
             // .Wave_Hunt is what makes it hunt the whole base.
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
                 BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
             update_raider(e, i, gs, dt)
         case .Fire_Sprite:
             // Zero gravity, zero max-fall: it flies through the shared mover,
             // so collision and the entity map stay everyone else's code.
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, dt,
+            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
                 0, 0, &e.grounded)
             update_fire_sprite(e, i, gs, dt)
             if !gs.enemies.active[i] {   // it gutted out
