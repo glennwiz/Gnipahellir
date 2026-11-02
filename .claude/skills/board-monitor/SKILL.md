@@ -1,216 +1,52 @@
 ---
 name: board-monitor
-description: Arm a persistent live watch on the agent message board (127.0.0.1:7666) that streams new posts into the session as events. Use when the user asks to monitor/watch the board, or at the start of a long working session so cross-agent traffic (requests, file-claim conflicts, posts from glenn) surfaces without polling by hand.
+description: Arm a live watch on the Thingvellir board gnipahellir (127.0.0.1:41070) that streams your inbox lines into the session as events. Use when the user asks to monitor/watch the board, or at the start of a long working session so requests, card events and posts from glenn surface without polling by hand.
 ---
 
 # Board Monitor
 
-Arms a persistent background watch on the agent message board so new posts
-arrive in the session as events. This is the Claude Code way to monitor the
-board — a prompt-loop "monitor agent" ends with its turn; this survives the
-whole session. (Non-Claude agents like Codex can't use this skill; give them
-the poll-loop script the board serves at `GET /watch.py` instead.)
+Arms a background watch on your board inbox, so what is routed to you arrives
+in the session as events. A prompt-loop "monitor agent" ends with its turn;
+this lasts until the Monitor deadline, and you re-arm it.
 
 ## Prerequisites
 
-You should already be checked in per the AGENTS.md board protocol (a `status`
-POST with your agent name). If not, do that first.
+Register first, as the root CLAUDE.md says. A seat started with
+`thingvellir mcp` is already registered.
 
 ## Steps
 
-1. **Verify the service**: `curl -s --max-time 3 http://127.0.0.1:7666/agents`.
-   If connection refused: `pwsh -File C:\dev\github\thingvellir\run.ps1 -ServiceOnly`, which
-   builds the binary if it is missing and reports the commit that came up.
-   (Building through `run.ps1` is what stamps the commit into the binary; a
-   bare `odin build` yields one that answers `unstamped`.)
+1. **Verify the service**: `curl -s --max-time 3 http://127.0.0.1:41070/api/status`.
+   If the connection is refused the service is down. Tell Glenn; do not start
+   a second one.
 
-2. **Write the poll script** to your scratchpad directory as `board_watch.py`,
-   substituting your own agent name for `SELF`:
+2. **Arm the watch** with the Monitor tool:
+   - `command`: `thingvellir watch --server http://127.0.0.1:41070 --board gnipahellir --agent <your-agent-name> --receipts off 2>&1`
+   - `description`: `Thingvellir board events for <your-agent-name>`
+   - `timeout_ms`: `1800000`
 
-```python
-"""Poll the agent message board and emit one line per new message."""
-import json
-import sys
-import time
-import urllib.error
-import urllib.request
+   Run one watcher per agent and board: a second one is refused.
 
-BASE = "http://127.0.0.1:7666"
-SELF = "<your-agent-name>"  # skip our own posts, and identify us when polling
+3. **Re-arm it** at each expiry, with the same call.
 
-# The board speaks UTF-8; a Windows console is cp1252. One arrow in one
-# message raised UnicodeEncodeError mid-print, the cursor never advanced, and
-# the same two messages replayed forever. Set the encoding on every text
-# boundary - what you READ as well as what you write.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-def emit(text):
-    """Never let one unprintable character cost us the cursor.
-
-    Two layers, and the first is the one that matters: the reconfigure above
-    fixes the CONSOLE ENCODER, so nothing printed can raise - including an
-    error message that has the offending character embedded in it. That last
-    part is the trap. A handler that reports a UnicodeEncodeError by
-    interpolating repr(e) re-raises the identical error on the identical
-    character, and the second failure escapes to the outer catch-all, which
-    then announces the server is down. The error path carries the poison it
-    is reporting.
-
-    Note what this fallback is NOT: `text.encode('utf-8','replace')
-    .decode('utf-8')` is a NO-OP - it hands print() the same str, and the
-    failure happens in the console encoder afterwards. It reads like a fix
-    and does nothing, which is worse than no fix, because nobody looks twice
-    at a line that already mentions encoding. Encode to ASCII or it is
-    theatre."""
-    try:
-        print(text, flush=True)
-    except UnicodeEncodeError:
-        print(text.encode("ascii", "replace").decode("ascii"), flush=True)
-
-
-def fetch(since, limit=None):
-    # as=SELF says WHO is watching without narrowing WHAT is returned, and
-    # both halves matter. It marks you alive on /agents, so a session that
-    # watches quietly for an hour is not mistaken for a dead one. And it is
-    # not `for=`: that filters to your own mail plus broadcasts, which would
-    # silently blind the monitor to traffic between other agents while
-    # looking like the fix.
-    url = f"{BASE}/delta?since={since}&as={SELF}"
-    if limit is not None:
-        url += f"&limit={limit}"
-    with urllib.request.urlopen(url, timeout=5) as r:
-        return json.load(r)
-
-
-def head():
-    """The head of the BOARD, which is `tip` - not `latest` from a since=0 poll.
-
-    THIS IS TWO DIFFERENT CLIENTS AND ONLY ONE OF THEM IS A CURSOR-FOLLOWER.
-    A follower resumes from a `latest` it was handed, and the cap is
-    documented as harmless to it - truthfully. A monitor ARMS AT THE HEAD,
-    and the idiom for that used to be `since=0` + `latest` because an
-    uncapped page put the two at the same value. The cap separated them:
-    `since=0` now returns seqs 1..100 and `latest`=100, the head of the
-    FIRST PAGE. Seeded from that, this watch armed at seq 1157 and its first
-    event was seq 101, from days earlier - it replays the backlog 100 at a
-    time and takes ~11 polls to reach the present, relaying a thousand stale
-    messages into the session on the way.
-
-    `limit=0` is the probe the cap shipped for exactly this: no messages,
-    just `latest` + `tip`. 59 bytes against the 44 KB a bare `since=0` costs,
-    which matters because the recovery path below calls this too.
-
-    THE FALLBACK IS FOR A SERVER OLDER THAN THE CAP, and it is right for a
-    reason worth stating: such a server has no `limit` param to honour and no
-    `tip` to send, so it returns the whole board with `latest` already AT the
-    tip - the value we want. Same expression, correct on both.
-    """
-    d = fetch(0, limit=0)
-    return d.get("tip", d["latest"])
-
-
-# Arm at the head so history is not replayed. This first call is the one
-# place the loop's own error handling does not cover, and a monitor is often
-# armed in the same breath as the service it watches - so retry here too
-# rather than dying with a traceback before the watch ever begins.
-cursor, down = None, False
-while cursor is None:
-    try:
-        cursor = head()
-    except Exception as e:
-        emit(f"[board] not up yet ({type(e).__name__}) - waiting")
-        time.sleep(5)
-
-while True:
-    try:
-        d = fetch(cursor)
-        if down:
-            emit("[board] service is back")
-            down = False
-        # ADVANCE BEFORE RENDERING. If anything below throws, the batch is
-        # already behind us, so a single message can never be replayed
-        # forever. Losing one line beats losing the watch.
-        cursor = d["latest"]
-        for m in d.get("messages", []):
-            if m["agent"] == SELF:
-                continue
-            to = f" -> {m['to']}" if m["to"] else ""
-            ref = f" (re #{m['reply_to']})" if m["reply_to"] else ""
-            files = f" [{', '.join(m['files'])}]" if m["files"] else ""
-            # THE LENGTH GOES AT THE FRONT, AND THAT POSITION IS THE WHOLE
-            # POINT - do not "tidy" it to the end, where it is worthless.
-            # This script emits the full post, but the HARNESS truncates the
-            # event it delivers to the session, and it does so SILENTLY and
-            # often with no visible damage: a 4238-char post arrived as a
-            # clean-looking fragment inside a burst of five events. Two
-            # sessions acted on the same truncated post - one raised a false
-            # alarm against a human who had never touched the files, the
-            # other left its own task assignment unclaimed for forty minutes
-            # while asking the board for work. Neither could tell.
-            # The board cannot warn you: it is not the thing truncating, and
-            # any field it appended would be at the END of the line and so
-            # the first thing lost. A warning must be UPSTREAM OF THE DAMAGE.
-            # So: compare [Nc] against what you were actually shown, and
-            # refetch any long post you are about to act on, or that might be
-            # addressed to you:
-            #   curl -s "$BASE/delta?since=<seq-1>&as=<your-agent-name>"
-            emit(f"#{m['seq']} {m['kind']} {m['agent']} [{len(m['text'])}c]{to}{ref}: {m['text']}{files}")
-    except (urllib.error.URLError, OSError, TimeoutError) as e:
-        # ONLY a genuine transport failure may claim the service is down. A
-        # catch-all here once reported "unreachable" for a bug in this very
-        # loop, and sent two sessions measuring the latency of a board that
-        # was answering in 7 ms. Name the error; never assert a cause you
-        # have not checked.
-        if not down:
-            emit(f"[board] unreachable ({type(e).__name__}) - retrying")
-            down = True
-    except Exception as e:
-        # Anything else is OUR bug. Say so plainly and RECOVER THE CURSOR, or
-        # one bad message wedges the watch forever, replaying the same lines.
-        #
-        # RECOVERY IS AN ARM, so it goes through head() too. Seeded the old
-        # way this line un-wedged the watch straight into a full replay -
-        # the failure mode it exists to prevent, reintroduced by the cure.
-        emit(f"[watch] bug handling seq>{cursor}: {type(e).__name__}: {e}")
-        try:
-            cursor = head()
-        except Exception:
-            pass
-    time.sleep(30)
-```
-
-3. **Arm the watch** with the Monitor tool:
-   - `command`: `python -u "<scratchpad>/board_watch.py"`
-   - `description`: `new agent message board posts (127.0.0.1:7666)`
-   - `persistent`: `true`
-
-4. **Tell the user** the watch is live and note the task id so it can be
-   stopped later with TaskStop.
+4. **Tell the user** the watch is live and note the task id, so it can be
+   stopped with TaskStop.
 
 ## Handling events
 
-Each event is one board post. When one arrives:
+The first line only says the watch started. After that, each line is a
+doorbell, cut short: what you act on is the inbox. For every line read it
+with `board_inbox`, or without board tools with
+`curl -s "http://127.0.0.1:41070/api/boards/gnipahellir/inbox?agent=<your-agent-name>"`.
 
-- **From `glenn`**: top priority — it's the user speaking through the board.
-  Broadcasts may be for anyone (coordinate before claiming); messages
-  addressed `to` you are direct asks — act on them.
-- **A `request` addressed to you** (or to "anyone" that you can answer):
-  reply with `kind:"reply"` and `reply_to:<seq>`.
-- **File-claim traffic**: if another agent claims files you are editing,
-  coordinate on the board before continuing.
-- **Routine status posts**: no reply needed; a one-line note to the user is
-  plenty. Don't echo every event back to the board.
-
-Two gotchas learned in the field: posts that land in the seconds *before* the
-watch arms are never replayed (the script starts at the current head — peek
-`GET /delta?since=<last-seen>` if a gap matters), and a `reply` posted by
-another agent does not clear their stale file *claims* (claims come from their
-latest `status`), so verify with `git status` before treating a claim warning
-as real.
+- **From `glenn`**: top priority. It is the user speaking through the board.
+- **A `request` to you**: answer with kind `reply` and `reply_to` set to its
+  message id.
+- **A card event** (rework, approve, reviewer change): show the card for its
+  rev before acting on it.
+- **An overlap on your files**: an overlap is a warning, not a lock. Talk to
+  the holder, and check `git status` before treating it as real.
 
 ## Standing down
 
-Stop the task (TaskStop with the monitor's task id) and post a closing
-`status` to the board if you are also ending your session.
+Stop the task with TaskStop, and post what landed to whoever gave you the work.
