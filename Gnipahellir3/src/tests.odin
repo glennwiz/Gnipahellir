@@ -9743,6 +9743,30 @@ drops_fall_until_they_land_on_something_solid :: proc(t: ^testing.T) {
 }
 
 @(test)
+a_hanging_pile_falls_at_its_pace_in_the_real_update :: proc(t: ^testing.T) {
+	gs := test_state(); defer free(gs)
+	gs.ui.show_title = false
+	gs.player.pos = {8, 8}
+	w := &gs.world
+	X, Y0 :: 60, 20
+	N :: 5
+	for y in Y0 ..= Y0 + N + 2 {
+		set_tile(w, X, y, .Air)
+		w.items[grid_idx(X, y)], w.item_counts[grid_idx(X, y)] = .None, 0
+	}
+	src := grid_idx(X, Y0)
+	w.items[src], w.item_counts[src] = .Stone_Block, 3
+
+	for _ in 0 ..< ITEM_FALL_FRAMES * N do game_update(gs)
+
+	at := grid_idx(X, Y0 + N)
+	testing.expect_value(t, w.items[at], Item.Stone_Block)
+	testing.expect_value(t, int(w.item_counts[at]), 3)
+	testing.expect_value(t, w.items[src], Item.None)
+	testing.expect_value(t, int(w.item_counts[src]), 0)
+}
+
+@(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
 	save :: "gnipahellir_save_death_test.dat"
 	snap :: "gnipahellir_snap_death_test.dat"
