@@ -4,7 +4,7 @@ from fast import *
 
 def rebless(b):
     """Top up flight at the sky swirl: hop left into it until flight is above 15 s."""
-    b.flightf=b.r['frame']-int((20-b.r['flight_s'])*60)
+    assert b.r["level"]==3,"rebless: not in the sky"; b.flightf=b.r["frame"]-int((20-b.r["flight_s"])*60)
     for i in range(8):
         b.a(1,jump=True,move='left'); b.a(10,move='left'); b.a(3)
         if b.r['flight_s']>15: break

@@ -54,18 +54,40 @@ class B:
         if s.r.get('in_tile') in HAZ: return True
         return any(s.t(x,y) in HAZ for x in {int(p['x']),int(p['x']+.79)} for y in {int(p['y']),int(p['y']+.9),int(p['y']+1.79)})
     def flee(s):
-        s.noguard=True; log('FLEE',s.p,s.pos())
-        for _ in range(8):
+        """Out of a hazard, now. Run 6 died here: the old loop only jumped straight up when no
+        cell on the same row was free, so x never changed and 3 potions burned in 28 s of lava.
+        Always steer: pick the nearest standable cell clear of hazards, up to 4 rows above the
+        feet, and swim or jump at it with the move held. Blocked 3 times: stone underfoot."""
+        s.noguard=True; log('FLEE',s.p,s.pos(),s.r.get('in_tile'))
+        stuck=0
+        for _ in range(40):
             if not s.inhaz(): break
-            s.ingest(s.g.st(int(s.p['x'])-20,int(s.p['y'])-12,41,25))
+            p=s.p
+            if p['hp']<=3 and s.slot('Potion_Health') is not None: s.a(1,equip=s.slot('Potion_Health'))
+            s.ingest(s.g.st(int(p['x'])-20,int(p['y'])-12,41,25))
             col,y=s.pos(); best=None
-            for d in (1,-1,2,-2,3,-3,4,-4,6,-6,8,-8):
-                if s.t(col+d,y) not in HAZ and s.t(col+d,y-1) not in HAZ and not s.solid(col+d,y) and not s.solid(col+d,y-1) and all(not s.solid(col+q*(1 if d>0 else -1),y-1) and not s.solid(col+q*(1 if d>0 else -1),y) for q in range(1,abs(d))): best=d;break
-            if best is None:
-                for c in((col+1,y),(col+1,y-1),(col-1,y),(col-1,y-1)):
-                    pass
-                s.a(1,jump=True); s.a(8); continue
-            s.a(min(30,abs(best)*8),move='right' if best>0 else 'left')
+            for r in range(1,15):
+                for dx in range(-r,r+1):
+                    for dy in range(-4,3):
+                        if max(abs(dx),abs(dy))!=r: continue
+                        c,f=col+dx,y+dy
+                        if s.solid(c,f+1) and s.t(c,f+1) not in HAZ and not s.solid(c,f) and not s.solid(c,f-1) and s.t(c,f) not in HAZ and s.t(c,f-1) not in HAZ:
+                            best=(c,f); break
+                    if best: break
+                if best: break
+            d='right' if best and best[0]>col else 'left'
+            log('flee to',best,'from',(col,y),'hp',p['hp'])
+            x0=p['x']
+            s.a(1,jump=True,move=d)
+            for _ in range(3): s.a(4,move=d); s.a(1,jump=True,move=d)
+            if abs(s.p['x']-x0)<.05:
+                stuck+=1
+                log('flee: body did not move with',d,'held, frame',s.r['frame'],'at',s.p,'in',s.r.get('in_tile'),'best',best)
+                if stuck>=3:
+                    it=s.stack()
+                    if it: s.sel(it); s.a(1,jump=True,place=[col,y+1]); s.a(6); s.a(1,place=[col,y+1]); log('stone under',s.t(col,y+1),s.r['notes'][-1:])
+                    stuck=0
+            else: stuck=0
         s.noguard=False
     def los(s,x0,y0,x1,y1):
         n=int(max(abs(x1-x0),abs(y1-y0))*3)+1
@@ -157,6 +179,9 @@ class B:
             if s.r['level']!=lv: return False
             c=s.p['x']+.4; d=tx+.5-c
             if abs(d)<tol: return True
+            nc=int(c+(1 if d>0 else -1)); fy=s.pos()[1]
+            if any(s.t(nc,r) in HAZ for r in (fy-1,fy)) and not s.r.get('flight_s') or (s.t(nc,fy+1) in HAZ and not s.solid(nc,fy) and not s.r.get('flight_s')):
+                log('walkx: hazard ahead',nc,fy); return False
             f=max(1,min(30,int(abs(d)*60/8)))
             s.a(f,move='left' if d<0 else 'right')
             if s.p['vx']==0 and abs(s.p['x']+.4-c)<0.01:
@@ -169,6 +194,7 @@ class B:
     def think(s,*acts,sec=20):
         """Last call before a think: what the player does meanwhile. Plays at 15 ticks/s and
         is blind, so give it only moves that are safe from where it starts."""
+        if s.r['screen']=='play' and s.inhaz(): s.flee()  # never hand a burning body a blind plan
         acts=list(acts) or s.safeacts(sec)
         r=s.g.plan(*acts); s.planned=True
         log('plan sent',r,len(acts),'steps, left',s.g.st(0,0,1,1).get('plan_left')); return r
@@ -413,7 +439,13 @@ class B:
             # run 3 died here: a conjured wall stopped the flight and this loop kept
             # pushing in rising lava with noguard on, ring and potion unused
             if s.r.get('in_tile') in HAZ or s.p['hp']<hp0:
-                if s.warpout('fly hurt at %s'%(s.pos(),)): return False
+                # a landing fall is not a threat: only warp for hazards or a foe in reach
+                near=any(abs(e['x']-s.p['x'])<8 and abs(e['y']-s.p['y'])<8 for e in s.r.get('enemies',[]))
+                if s.r.get('in_tile') not in HAZ and getattr(s,'nowarp',False): near=False; hp0=s.p['hp']
+                elif s.r.get('in_tile') not in HAZ and not near: return False
+                else: near=True
+                if not near: pass
+                elif s.warpout('fly hurt at %s'%(s.pos(),)): return False
                 if s.r.get('in_tile') in HAZ: s.flee(); return False
             if abs(s.p['x']-ox)+abs(s.p['y']-oy)<.01:
                 stuck=getattr(s,'_st',0)+1; s._st=stuck
@@ -649,7 +681,7 @@ class B:
         q=deque([(px,py,0)]); par={(px,py):None}; best=None
         while q:
             x,y,d=q.popleft()
-            if s.solid(x,y+2) and s.t(x,y+2) not in HAZ:
+            if s.solid(x,y+2) and s.t(x,y+2) not in HAZ and not s.nearhaz(x,y+1,3):
                 sc=max(abs(x-tx),abs(y-ty))
                 if best is None or sc<best[0]: best=(sc,x,y)
             if d>=n: continue

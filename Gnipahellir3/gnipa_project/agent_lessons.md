@@ -59,6 +59,11 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - `guard` kills Builders by default. To keep an owner alive for a den test, set
   `sparebuilder`, but keep away: he bites 1 a second, and if he dies beside you he rises as
   a Draugr that claws 3 on the next frame (ended life 2 of run 5).
+- Lava: move out, never jump in place; plan ticks run on while burning, so flee before any plan.
+- A sky hole in the deck drops you to L0 at (147,92): free, and drops in the hole go with you.
+- Plain Cloud drops 20% of the time, Cloud_Ore always.
+- Check the level after every portal step: run 6 life 3 ran the sky script on L0 and flew into the shaft, 32 tiles, dead.
+- Scroll C sits at (12,101) on Cave 3. A smashed L0 altar goes back on the Stone base until Scroll C is found.
 - Do not let flight lapse over an island: 21 tiles is 9 damage. Over void you fall to L0 free.
 
 ## How the game goes
@@ -83,7 +88,8 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Waves on L0 demolish the bench, altar and Scroll A chest while you are away. Altar and
   bench drop at their tile, and the altar must be set back on its base.
 - Potions: bed = 1 Dirt + 1 Plank + 5 seeds, placed on solid; gives 5-6 flowers, then
-  it is gone. 3 flowers make a potion. Dirt comes only from rows 54-59 by the shaft.
+  it is gone. 3 flowers make a potion. Bed yield 5 flowers in 120 s of active-level time. Drink via `equip`, +5 hp.
+  Grass mines to Grass_Turf, not Dirt. Dirt comes only from rows 54-59 by the shaft.
   Brew before waking Garm.
 
 ## Garm
@@ -114,9 +120,9 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Fire Sprites parked 90 s above the altar in Wave_Hunt.
 - A sky tree cut at the base leaves its trunk floating.
 - A surface trunk sat on rock and its base could not be cut, world seed unknown.
-- Builder dens never hold a hoard: he encases a tile, then mines it again 25 frames later, so
-  `stockpiles` never logs (run 5: 0 in about 145k frames). To test a rob, make a pile on the
-  floor yourself. Dens over a void have no floor, so build one first.
+- Builder dens can hoard, but late: run 6 soaks saw 345 stockpiles in caves (first at minute 8-47,
+  3 of 4 seeds) and almost none on the surface, since a haul only lands once the shell is full.
+  The 25-frame re-mine is the builder leaving by his own wall, not a Fetch harvest.
 - A smashed altar re-raises at the current tier: after ritual A it needs the Gold foundation.
 - Scroll A does not spawn if (141,94) holds a tile or a pile, and says nothing.
 - A Builder can dig through the pond bed and drain it by frame 4000 (run 5 life 3).

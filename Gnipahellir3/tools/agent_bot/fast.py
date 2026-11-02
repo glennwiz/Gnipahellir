@@ -31,11 +31,18 @@ def p2(b):
     b.st()
     assert b.goto(147,92,maxrepl=30,near=3); b.st()
     b.harvest({'Iron_Ore':10,'Silver_Ore':14},(100,70,175,104),maxsec=200); b.st()
-    b.quarry(55,d=1 if b.pos()[0]<140 else -1); b.quarry(55,d=-1 if b.pos()[0]<140 else 1); b.st()
+    b.quarry(75,d=1 if b.pos()[0]<140 else -1); b.quarry(75,d=-1 if b.pos()[0]<140 else 1); b.st()
     assert b.goto(145,94,maxrepl=30); b.st(); assert b.pos()==(145,94)
     b.waitland(); b.sel('Stone_Block')
-    for x in [146,147,148,149,144,143,142,141,140,139,138]:
+    for x in [145,146,147,148,149,150,144,143,142,141,140,139,138]:
         if not b.solid(x,95): b.a(2,place=[x,95])
+    # Scroll A needs (141,94) empty of tile and of pile; some worlds leave rock there
+    if b.solid(142,94) or b.solid(141,94):
+        b.walkx(143,limit=20); b.sel('Pickaxe')
+        for c in ((142,94),(141,94)):
+            if b.solid(*c): b.dig(*c,tries=30)
+        b.a(30); b.walkx(141,limit=10); b.a(5); b.scan()
+        b.goto(145,94,maxrepl=8); b.waitland()
     for i in range(4): b.a(2,craft='Plank')
     b.craft('Crafting_Bench'); b.sel('Crafting_Bench'); b.a(3,place=[142,94]); assert b.t(142,94)=='Crafting_Bench'
     b.a(2)
