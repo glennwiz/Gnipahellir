@@ -17,7 +17,7 @@ SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
 SAVE_BAK_SLOTS :: 16     // rejected saves kept beside the autosave; none is ever overwritten
-SAVE_VERSION :: i32(28)  // v28: MAX_ENEMIES 256 (Glenn's Q5), down from 1024
+SAVE_VERSION :: i32(29)  // v29: a grave knows its level (padding, same size); v28: MAX_ENEMIES 256
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
@@ -74,9 +74,35 @@ Save_Data_1024 :: struct {
     dimension:    Dimension_State,
     elapsed_time: f32,
     frame:        u64,
-    grave:        Grave_Record,
+    grave:        Grave_Record_v28,
     risen:        Risen_Hero,
     world_seed:   u32,
+}
+
+// FROZEN: the grave as v28 and older wrote it, always on the surface, always
+// standing.  What is padding here may hold anything.
+Grave_Record_v28 :: struct {
+    active:  bool,
+    tithe:   Item,
+    hero:    int,
+    seconds: f32,
+    cause:   [32]u8,
+    place:   [32]u8,
+    tile:    [2]i32,
+}
+#assert(size_of(Grave_Record_v28) == 96)
+
+grave_from_v28 :: proc(old: Grave_Record_v28) -> Grave_Record {
+    return {
+        active  = old.active,
+        tithe   = old.tithe,
+        hero    = old.hero,
+        seconds = old.seconds,
+        cause   = old.cause,
+        place   = old.place,
+        tile    = old.tile,
+        level   = LEVEL_SURFACE,
+    }
 }
 
 // One-version migration keeps the active playtest run intact.
@@ -205,7 +231,7 @@ save_data_shrink :: proc(old: ^Save_Data_1024) -> ^Save_Data {
     sd.dimension    = old.dimension
     sd.elapsed_time = old.elapsed_time
     sd.frame        = old.frame
-    sd.grave        = old.grave
+    sd.grave        = grave_from_v28(old.grave)
     sd.risen        = old.risen
     sd.world_seed   = old.world_seed
     surface := level_store_shrink(&old.levels, &sd.levels)
@@ -237,7 +263,9 @@ save_data_from_v28 :: proc(data: []u8) -> ^Save_Data {
     v28_take(&sd.dimension,    data, 4_048_064,          104)
     v28_take(&sd.elapsed_time, data, 4_048_168,          4)
     v28_take(&sd.frame,        data, 4_048_176,          8)
-    v28_take(&sd.grave,        data, 4_048_184,          96)
+    grave: Grave_Record_v28
+    v28_take(&grave,           data, 4_048_184,          96)
+    sd.grave = grave_from_v28(grave)
     v28_take(&sd.risen,        data, 4_048_280,          576)
     v28_take(&sd.world_seed,   data, 4_048_856,          4)
     return sd

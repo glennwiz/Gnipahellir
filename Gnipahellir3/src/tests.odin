@@ -11647,13 +11647,13 @@ a_tithe_crosses_to_the_next_world_exactly_once :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.stats.grave.tithe, Item.Potion_Health)
 
     start_new_game(gs)
+    grave_go(gs, LEVEL_CAVE2, CAVE_SPAWN_POS)  // where the hero fell
     testing.expect_value(t, grave_count_item(gs, .Potion_Health), 1)
     testing.expect(t, !gs.stats.grave.active, "the stats file let go of the grave")
     testing.expect(t, gs.grave.active, "the run took it")
 
     tile := gs.grave.tile
     testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Rune_Stone)
-    testing.expect(t, abs(int(tile.x) - GRID_W/2) < GRAVE_SHAFT_OFFSET + GRAVE_SEARCH, "the stone stands by the shaft")
     coffer := [2]i32{tile.x + 1, tile.y}
     testing.expect_value(t, get_tile(&gs.world, int(coffer.x), int(coffer.y)), Tile_Type.Rune_Coffer)
 
@@ -11667,7 +11667,7 @@ a_tithe_crosses_to_the_next_world_exactly_once :: proc(t: ^testing.T) {
     process_events(gs)
     testing.expect(t, gs.ui.show_barrel, "E opens the coffer")
     testing.expect_value(t, gs.ui.barrel_tile, coffer)
-    barrel_take(gs, barrel_at(gs, LEVEL_SURFACE, coffer), 0)
+    barrel_take(gs, barrel_at(gs, LEVEL_CAVE2, coffer), 0)
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Potion_Health), 1)
     testing.expect_value(t, grave_count_item(gs, .Potion_Health), 1)
 
@@ -11743,7 +11743,7 @@ every_world_has_room_for_the_stone :: proc(t: ^testing.T) {
 a_full_world_leaves_the_grave_waiting :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
-    for x in 0 ..< GRID_W do set_tile(&gs.world, x, SURFACE_Y - 1, .Stone)
+    for &tile in gs.world.terrain do tile = .Stone
     gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
     grave_raise(gs)
     testing.expect(t, gs.stats.grave.active, "the item stays in the stats file")
@@ -11800,7 +11800,7 @@ save_1024_fixture :: proc(gs: ^Game_State) -> ^Save_Data_1024 {
     old.dimension   = gs.dimension
     old.elapsed_time = gs.elapsed_time
     old.frame       = gs.frame
-    old.grave       = gs.grave
+    old.grave       = transmute(Grave_Record_v28)gs.grave
     old.risen       = gs.risen
     old.world_seed  = gs.world_seed
     old.levels.worlds    = gs.levels.worlds
@@ -11941,7 +11941,7 @@ the_risen_hero_carries_all_but_the_tithe_and_gives_it_back :: proc(t: ^testing.T
     waters_in_world := risen_ground_count(gs, .Scroll_Of_Waters)  // the pond's own
 
     testing.expect(t, gs.risen.has_kit, "the run holds the kit")
-    testing.expect(t, risen_hero_rise(gs), "the hero rises")
+    testing.expect(t, gs.risen.walking, "the hero rose with the stone")
     i := gs.risen.slot
     testing.expect_value(t, gs.enemies.data[i].kind, Enemy_Kind.Undead)
     testing.expect_value(t, gs.enemies.data[i].hp, RISEN_HERO_HP)
@@ -13018,7 +13018,7 @@ another_enemys_end_leaves_the_kit_on_the_hero :: proc(t: ^testing.T) {
     defer free(gs)
     risen_setup(gs)
     start_new_game(gs)
-    testing.expect(t, risen_hero_rise(gs), "rises")
+    testing.expect(t, gs.risen.walking, "rose with the stone")
     other := -1
     for active, i in gs.enemies.active do if active && i != gs.risen.slot { other = i; break }
     testing.expect(t, other >= 0, "the world has other enemies")
@@ -13056,14 +13056,418 @@ a_tithe_costs_one_item_from_split_stacks :: proc(t: ^testing.T) {
 }
 
 @(test)
-the_hero_rises_only_on_the_surface :: proc(t: ^testing.T) {
+the_hero_rises_only_at_the_grave :: proc(t: ^testing.T) {
     gs := test_state()
     defer free(gs)
     risen_setup(gs)
     start_new_game(gs)
+    gs.risen.walking = false
     gs.level_index = LEVEL_CAVE2
-    testing.expect(t, !risen_hero_rise(gs), "the record's slots are the surface's")
+    testing.expect(t, !risen_hero_rise(gs), "the stone is on the surface")
     testing.expect(t, !gs.risen.walking, "nothing rose")
+    gs.level_index = LEVEL_SURFACE
+    gs.grave = {}
+    testing.expect(t, !risen_hero_rise(gs), "a kit with no stone has nowhere to rise")
+}
+
+// ─── The grave where the hero fell, and its guardian (board card 93) ──────────
+
+@(private="file")
+grave_go :: proc(gs: ^Game_State, level: int, pos: [2]f32) {
+    p := Portal{dest_level = level, dest_pos = pos}
+    level_transition(gs, &p)
+    process_events(gs)
+}
+
+@(private="file")
+grave_stone_count :: proc(w: ^World_Grid) -> (n: int) {
+    for tile in w.terrain do if tile == .Rune_Stone do n += 1
+    return
+}
+
+// One death and the whole way back, through the real death and the real new
+// world, on a level that does not exist when that world starts.
+@(test)
+a_grave_in_a_cave_or_the_sky_stands_when_that_level_is_entered :: proc(t: ^testing.T) {
+    Case :: struct{level: int, pos: [2]f32}
+    for c in ([]Case{{LEVEL_CAVE2, CAVE_SPAWN_POS}, {LEVEL_CAVE3, CAVE_SPAWN_POS}, {LEVEL_SKY, {95, 80 - PLAYER_H}}}) {
+        gs := test_state()
+        defer free(gs)
+        game_state_init(gs, 4242)
+        grave_go(gs, c.level, c.pos)
+        fell := player_tile(&gs.player)
+        risen_setup(gs)
+        testing.expect_value(t, gs.stats.grave.level, i32(c.level))
+        testing.expect_value(t, gs.stats.grave.tile, fell)
+        grave_choose_tithe(gs, 1)  // one Plank stays at the grave
+
+        start_new_game_with(gs, 4243)
+        testing.expect(t, gs.grave.active && gs.grave.pending, "the run holds it, waiting")
+        testing.expect(t, !gs.stats.grave.active, "the stats let go")
+        testing.expect_value(t, grave_stone_count(&gs.world), 0)
+        testing.expect(t, !gs.risen.walking && gs.risen.has_kit, "no body yet, the kit is safe")
+
+        grave_go(gs, c.level, c.pos)
+        testing.expect(t, !gs.grave.pending, "it stands now")
+        tile := gs.grave.tile
+        testing.expect_value(t, grave_stone_count(&gs.world), 1)
+        testing.expect_value(t, get_tile(&gs.world, int(tile.x), int(tile.y)), Tile_Type.Rune_Stone)
+        testing.expect(t, chebyshev(tile, fell) <= 40, "near where the hero fell")
+        b := barrel_at(gs, c.level, tile + {1, 0})
+        testing.expect(t, b != nil, "the coffer stands with it, on this level")
+        testing.expect_value(t, grave_count_item(gs, .Plank), 1)
+
+        i := gs.risen.slot
+        testing.expect(t, gs.risen.walking && gs.enemies.active[i], "the hero rose")
+        e := &gs.enemies.data[i]
+        testing.expect_value(t, e.kind, Enemy_Kind.Undead)
+        testing.expect_value(t, e.hp, RISEN_HERO_HP)
+        testing.expect_value(t, builder_tile(e), tile + {2, 0})
+
+        // Away and back: the body waits on its level with the kit on it.
+        grave_go(gs, LEVEL_SURFACE, SURFACE_HOME_POS)
+        testing.expect(t, gs.risen.walking && gs.risen.has_kit, "leaving drops nothing")
+        testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 0)
+        grave_go(gs, c.level, c.pos)
+        testing.expect(t, gs.enemies.active[i], "still there")
+        testing.expect_value(t, gs.enemies.data[i].kind, Enemy_Kind.Undead)
+        testing.expect_value(t, grave_stone_count(&gs.world), 1)
+
+        planks := risen_ground_count(gs, .Plank)
+        swords := risen_ground_count(gs, .Sword)
+        eq_push(&gs.events, Event{type = .Damage_Dealt, source = PLAYER_ID, target = enemy_entity_id(i), payload = {int_val = RISEN_HERO_HP}})
+        process_events(gs)
+        process_events(gs)
+        testing.expect(t, !gs.enemies.active[i], "the player's blow fells them")
+        testing.expect(t, !gs.risen.has_kit, "the kit left the record")
+        testing.expect_value(t, risen_ground_count(gs, .Plank) - planks, 29)
+        testing.expect_value(t, risen_ground_count(gs, .Sword) - swords, 1)
+        testing.expect_value(t, risen_ground_count(gs, .Iron_Helm), 1)
+        testing.expect_value(t, risen_ground_count(gs, .Hell_Key), 0)
+        testing.expect_value(t, grave_count_item(gs, .Plank), 1)
+    }
+}
+
+@(test)
+a_surface_grave_stands_at_once_near_where_the_hero_fell :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    gs.player.pos = {40, f32(SURFACE_Y) - PLAYER_H}
+    fell := player_tile(&gs.player)
+    risen_setup(gs)
+    grave_choose_tithe(gs, 0)  // the Sword
+    start_new_game_with(gs, 4243)
+    tile := gs.grave.tile
+    testing.expect(t, !gs.grave.pending, "the surface exists")
+    testing.expect(t, chebyshev(tile, fell) <= 12, "near the fall, not by the shaft")
+    testing.expect_value(t, get_tile(&gs.world, int(tile.x + 1), int(tile.y)), Tile_Type.Rune_Coffer)
+    testing.expect_value(t, grave_count_item(gs, .Sword), 1)
+    testing.expect(t, gs.risen.walking, "the hero stands by it")
+    e := &gs.enemies.data[gs.risen.slot]
+    testing.expect_value(t, builder_tile(e), tile + {2, 0})
+    testing.expect_value(t, e.builder.goal, Builder_Goal.Hunt)
+    testing.expect_value(t, gs.world.entity_map[grid_idx(int(tile.x) + 2, int(tile.y))], enemy_entity_id(gs.risen.slot))
+}
+
+@(test)
+a_hero_lost_in_a_dimension_gets_the_stone_by_the_shaft :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    gs.level_index = LEVEL_DIMENSION
+    gs.player.pos = {150, 20}
+    risen_setup(gs)
+    testing.expect_value(t, gs.stats.grave.level, i32(LEVEL_SURFACE))
+    testing.expect_value(t, gs.stats.grave.tile, [2]i32{})
+    testing.expect_value(t, grave_text(&gs.stats.grave.place), dimension_table[gs.dimension.kind].name)
+    gs.level_index = LEVEL_SURFACE
+    start_new_game_with(gs, 4243)
+    testing.expect(t, !gs.grave.pending, "stands at once")
+    shaft := [2]i32{GRID_W/2 + GRAVE_SHAFT_OFFSET, SURFACE_Y - 1}
+    testing.expect(t, chebyshev(gs.grave.tile, shaft) <= 24, "by the shaft")
+}
+
+// Dropped on the things it must not crowd, the grave moves off them.
+@(test)
+the_stone_keeps_clear_of_portals_chests_and_rock :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    chest := [2]i32{GRID_W/2 - 12, SURFACE_Y - 1}
+    testing.expect_value(t, get_tile(&gs.world, int(chest.x), int(chest.y)), Tile_Type.Sky_Rune_Scroll_Chest)
+    gate := level_portals[LEVEL_SURFACE][0].tiles[0]
+    rock := [2]i32{60, SURFACE_Y + 20}
+
+    for from in ([][2]i32{chest, chest - {2, 0}, gate, gate - {1, 0}, rock}) {
+        game_state_init(gs, 4242)
+        gs.stats.grave = {active = true, hero = 1, tile = from}
+        grave_raise(gs)
+        testing.expect(t, gs.grave.active, "found a place")
+        for i in i32(0) ..< 3 {
+            cell := gs.grave.tile + {i, 0}
+            testing.expect(t, chebyshev(cell, chest) > 1, "off the chest")
+            testing.expect(t, chebyshev(cell, gate) > 1, "off the gate")
+            testing.expect(t, chebyshev(cell, level_portals[LEVEL_SURFACE][0].tiles[1]) > 1, "off the gate")
+            if i == 2 do testing.expect(t, !is_solid(&gs.world, int(cell.x), int(cell.y)), "room for the hero")
+            testing.expect(t, !is_solid(&gs.world, int(cell.x), int(cell.y) - 1), "not buried")
+            testing.expect(t, .Solid in terrain_table[get_tile(&gs.world, int(cell.x), int(cell.y) + 1)].flags, "footing")
+        }
+    }
+}
+
+// Solid rock with one room of it carved open, so the only way to pass is the rule.
+@(private="file")
+grave_room :: proc(gs: ^Game_State, x0, x1, top, floor: int) {
+    for x in x0 ..= x1 do for y in top ..= floor do set_tile(&gs.world, x, y, .Air)
+}
+
+@(private="file")
+grave_rock :: proc(gs: ^Game_State) {
+    for &tile in gs.world.terrain do tile = .Stone
+    gs.world.items = {}
+}
+
+@(test)
+the_stone_needs_head_room :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    grave_room(gs, 20, 26, 50, 50)  // a crawlway, one high
+    grave_room(gs, 60, 64, 49, 50)
+    gs.stats.grave = {active = true, hero = 1, tile = {22, 50}}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active, "found a place")
+    testing.expect(t, gs.grave.tile.x >= 60, "the room, not the crawlway")
+}
+
+@(test)
+the_stone_keeps_clear_of_a_loose_scroll :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    grave_room(gs, 20, 40, 49, 50)
+    idx := grid_idx(22, 50)
+    gs.world.items[idx] = .Scroll_Of_Waters
+    gs.world.item_counts[idx] = 1
+    gs.stats.grave = {active = true, hero = 1, tile = {22, 50}}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active, "found a place")
+    testing.expect(t, gs.grave.tile.x >= 24, "not beside it")
+}
+
+@(test)
+the_stone_keeps_clear_of_a_portal_with_no_tile_to_show_it :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    gate := level_portals[LEVEL_CAVE2][0].tiles
+    grave_room(gs, int(gate[0].x) - 8, int(gate[1].x) + 8, int(gate[0].y) - 1, int(gate[0].y))
+    gs.level_index = LEVEL_CAVE2
+    gs.stats.grave = {active = true, hero = 1, level = LEVEL_CAVE2, tile = gate[0]}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active && !gs.grave.pending, "found a place")
+    for i in i32(0) ..< 3 do for g in gate {
+        testing.expect(t, chebyshev(gs.grave.tile + {i, 0}, g) > 1, "off the gate")
+    }
+}
+
+@(test)
+the_stone_takes_the_nearest_room :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    grave_room(gs, 30, 40, 49, 50)
+    gs.stats.grave = {active = true, hero = 1, tile = {31, 50}}
+    grave_raise(gs)
+    testing.expect_value(t, gs.grave.tile, [2]i32{31, 50})
+}
+
+// The spawn clearance is the surface's: nobody appears there in a cave.
+@(test)
+a_cave_grave_takes_the_spot_the_surface_keeps_for_a_new_player :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.level_index = LEVEL_CAVE2
+    grave_rock(gs)
+    grave_room(gs, 80, 100, 52, 53)
+    gs.stats.grave = {active = true, hero = 1, level = LEVEL_CAVE2, tile = {88, 53}}
+    grave_raise(gs)
+    testing.expect_value(t, gs.grave.tile, [2]i32{88, 53})
+}
+
+// One row at a time: a portal or a neighbour cannot stand in for it.
+@(test)
+the_stone_keeps_clear_of_every_tile_on_its_list :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    for tile in ([]Tile_Type{.Cave_Entrance, .Sky_Altar, .Rune_Altar, .Sky_Rune_Scroll_Chest,
+                             .Rune_Scroll_Chest_A, .Rune_Scroll_Chest_B, .Rune_Scroll_Chest_C}) {
+        gs.grave = {}
+        gs.stats.grave = {active = true, hero = 1, tile = {22, 50}}
+        grave_rock(gs)
+        grave_room(gs, 20, 40, 49, 50)
+        set_tile(&gs.world, 22, 50, tile)
+        grave_raise(gs)
+        testing.expect(t, gs.grave.active, "found a place")
+        testing.expectf(t, gs.grave.tile.x >= 24, "%v: not beside it, at %v", tile, gs.grave.tile)
+    }
+}
+
+@(test)
+the_stone_will_not_stand_in_water_or_on_lava :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    grave_room(gs, 20, 30, 49, 50)
+    for x in 20 ..= 30 do set_tile(&gs.world, x, 50, .Water)
+    grave_room(gs, 60, 64, 49, 50)
+    gs.stats.grave = {active = true, hero = 1, tile = {22, 50}}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.tile.x >= 60, "not in the water")
+
+    gs.grave = {}
+    grave_rock(gs)
+    grave_room(gs, 20, 30, 49, 50)
+    for x in 20 ..= 30 do set_tile(&gs.world, x, 51, .Lava)
+    grave_room(gs, 60, 64, 49, 50)
+    gs.stats.grave = {active = true, hero = 1, tile = {22, 50}}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.tile.x >= 60, "not on the lava")
+}
+
+// A hero who dies where the next one wakes must not stand a stone on them, or
+// open the world with a claw.
+@(test)
+a_death_at_home_leaves_the_new_player_room_and_a_moment :: proc(t: ^testing.T) {
+    for seed in u32(1) ..= 8 {
+        gs := test_state()
+        defer free(gs)
+        game_state_init(gs, seed * 2654435761)
+        gs.player.pos = SURFACE_HOME_POS
+        risen_setup(gs)
+        grave_choose_tithe(gs, 0)
+        start_new_game_with(gs, seed * 40503)
+        testing.expect(t, gs.grave.active && !gs.grave.pending, "it stands")
+        body := player_tile(&gs.player)
+        for i in i32(0) ..< 3 {
+            testing.expect(t, chebyshev(gs.grave.tile + {i, 0}, body) > GRAVE_SPAWN_CLEAR, "off the new body")
+        }
+
+        i := gs.risen.slot
+        testing.expect(t, gs.risen.walking, "the hero rose")
+        hp := gs.player.hp
+        post := builder_tile(&gs.enemies.data[i])
+        gs.player.pos = gs.enemies.data[i].pos
+        gs.delta_time = 1.0 / 60.0
+        for _ in 0 ..< int(RISEN_FIRST_CLAW * 60) - 2 {
+            update_enemies(gs)
+            process_events(gs)
+        }
+        testing.expect_value(t, gs.player.hp, hp)
+        for _ in 0 ..< 10 {
+            update_enemies(gs)
+            process_events(gs)
+        }
+        testing.expectf(t, gs.player.hp < hp, "the claw lands after the grace, at %v", post)
+    }
+}
+
+@(test)
+a_full_store_leaves_the_tithe_on_the_ground_beside_the_stone :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    for &b in gs.sim.barrels do b.active = true
+    gs.stats.grave = {active = true, hero = 1, tithe = .Sword}
+    grave_raise(gs)
+    testing.expect_value(t, risen_ground_count(gs, .Sword), 1)
+}
+
+@(test)
+a_waiting_grave_survives_a_save_and_stands_after_it :: proc(t: ^testing.T) {
+    PATH := "test_grave_pending.dat"
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    grave_go(gs, LEVEL_CAVE2, CAVE_SPAWN_POS)
+    risen_setup(gs)
+    grave_choose_tithe(gs, 1)
+    start_new_game_with(gs, 4243)
+    testing.expect(t, save_game_to(gs, PATH), "wrote")
+    back := test_state()
+    defer free(back)
+    testing.expect(t, load_game_from(back, PATH), "loads")
+    testing.expect(t, back.grave.pending, "still waiting")
+    testing.expect_value(t, back.grave.level, i32(LEVEL_CAVE2))
+    grave_go(back, LEVEL_CAVE2, CAVE_SPAWN_POS)
+    testing.expect(t, !back.grave.pending && back.risen.walking, "stands, and the hero with it")
+    back.save_dirty = false
+}
+
+@(test)
+a_second_entry_raises_no_second_stone :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    grave_go(gs, LEVEL_CAVE2, CAVE_SPAWN_POS)
+    risen_setup(gs)
+    start_new_game_with(gs, 4243)
+    grave_go(gs, LEVEL_CAVE3, CAVE_SPAWN_POS)
+    testing.expect(t, gs.grave.pending, "another level does not raise it")
+    grave_go(gs, LEVEL_CAVE2, CAVE_SPAWN_POS)
+    testing.expect(t, gs.save_dirty, "the stone is worth an autosave")
+    slot := gs.risen.slot
+    grave_go(gs, LEVEL_SURFACE, SURFACE_HOME_POS)
+    grave_go(gs, LEVEL_CAVE2, CAVE_SPAWN_POS)
+    testing.expect_value(t, grave_stone_count(&gs.world), 1)
+    testing.expect_value(t, gs.risen.slot, slot)
+}
+
+@(test)
+the_hero_holds_the_post_then_fights_the_player_who_comes :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    game_state_init(gs, 4242)
+    gs.player.pos = {40, f32(SURFACE_Y) - PLAYER_H}
+    risen_setup(gs)
+    start_new_game_with(gs, 4243)
+    i := gs.risen.slot
+    post := risen_hero_post(gs)
+    gs.delta_time = 1.0 / 60.0
+
+    // Far off: the hero stands, though draugr know where you are.
+    gs.player.pos = {f32(post.x) + RISEN_GUARD_RANGE + 30, f32(SURFACE_Y) - PLAYER_H}
+    hp := gs.player.hp
+    for _ in 0 ..< 300 do update_enemies(gs)
+    process_events(gs)
+    testing.expect(t, chebyshev(builder_tile(&gs.enemies.data[i]), post) <= 2, "held the post")
+    testing.expect_value(t, gs.player.hp, hp)
+
+    // Drawn off and left: they walk home and do not claw from there.
+    gs.enemies.data[i].pos.x += 8
+    for _ in 0 ..< 300 do update_enemies(gs)
+    testing.expect(t, chebyshev(builder_tile(&gs.enemies.data[i]), post) <= 2, "walked back")
+
+    // The edge of the range, tile for tile.
+    stone := gs.grave.tile
+    y := f32(stone.y) - PLAYER_H + 1
+    gs.player.pos = {f32(stone.x) + RISEN_GUARD_RANGE + 1 + 0.5 - PLAYER_W*0.5, y}
+    testing.expect_value(t, chebyshev(player_tile(&gs.player), stone), i32(RISEN_GUARD_RANGE + 1))
+    for _ in 0 ..< 60 do update_enemies(gs)
+    testing.expect(t, chebyshev(builder_tile(&gs.enemies.data[i]), post) <= 2, "one tile past the range: holds")
+    gs.player.pos.x -= 1
+    for _ in 0 ..< 60 do update_enemies(gs)
+    testing.expect(t, chebyshev(builder_tile(&gs.enemies.data[i]), post) > 2, "at the range: comes")
+
+    // Close by: they come, and a claw lands.
+    gs.player.pos = {f32(post.x) + 3, f32(SURFACE_Y) - PLAYER_H}
+    for _ in 0 ..< 240 {
+        update_enemies(gs)
+        process_events(gs)
+    }
+    testing.expect(t, gs.player.hp < hp, "the hero fights")
 }
 
 @(test)
@@ -13175,7 +13579,10 @@ save_data_shrink_carries_every_field :: proc(t: ^testing.T) {
     testing.expect(t, same_bytes(&sd.sim, &old.sim), "sim")
     testing.expect(t, same_bytes(&sd.progression, &old.progression), "progression")
     testing.expect(t, same_bytes(&sd.dimension, &old.dimension), "dimension")
-    testing.expect(t, same_bytes(&sd.grave, &old.grave), "grave")
+    testing.expect_value(t, sd.grave.hero, old.grave.hero)
+    testing.expect_value(t, sd.grave.tile, old.grave.tile)
+    testing.expect_value(t, sd.grave.level, i32(LEVEL_SURFACE))
+    testing.expect(t, !sd.grave.pending, "an old grave stands")
     testing.expect(t, same_bytes(&sd.risen.kit, &old.risen.kit), "kit")
     testing.expect_value(t, sd.world.terrain[9], Tile_Type.Clay)
     for i in 0 ..< NUM_LEVELS {

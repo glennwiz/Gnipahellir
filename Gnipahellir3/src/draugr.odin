@@ -78,6 +78,10 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         golem_id=gid
     }
 
+    // The risen hero keeps to their grave until the player comes for it.
+    guarding := risen_hero_here(gs, id) && chebyshev(gs.grave.tile, pt) > RISEN_GUARD_RANGE
+    if guarding do pt = risen_hero_post(gs)
+
     // Player moved off the planned intercept — force a fresh path.
     if chebyshev(b.plan_target, pt) > 2 {
         b.plan_target = pt
@@ -86,7 +90,7 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     if builder_travel(e, id, gs, dt, pt, 1) {
         e.facing = 1 if pt.x >= bt.x else -1
-        if b.attack_timer <= 0 {
+        if !guarding && b.attack_timer <= 0 {
             b.attack_timer = DRAUGR_ATTACK_TIME
             // A claw costs a quarter of the player's max health, so four
             // clean strikes fell them from full (before armor blunts it).

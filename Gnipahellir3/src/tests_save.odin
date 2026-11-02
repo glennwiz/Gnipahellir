@@ -8,6 +8,7 @@ import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:reflect"
+import "core:slice"
 import "core:strings"
 import "core:testing"
 
@@ -84,14 +85,14 @@ a_v28_save_still_reads_after_the_next_bump :: proc(t: ^testing.T) {
 }
 
 // Every field filled, so a line missing from save_data_from_v28, or an offset
-// that is wrong, shows as a byte that differs.  Only v28 can compare whole: the
-// first bump moves the live struct, and the golden tests above carry on alone.
+// that is wrong, shows as a byte that differs.  Only the same size can compare
+// whole: a bump that moves the live struct leaves the golden tests above.
 @(test)
 the_frozen_v28_path_carries_every_field :: proc(t: ^testing.T) {
-	when SAVE_VERSION != 28 { return }
+	when size_of(Save_Data) != SAVE_V28_SIZE { return }
 	want := new(Save_Data)
 	defer free(want)
-	want.version = 28
+	want.version = SAVE_VERSION
 	mem.set(&want.level_index, 0x11, size_of(want.level_index))
 	mem.set(&want.world, 0x12, size_of(want.world))
 	mem.set(&want.levels, 0x13, size_of(want.levels))
@@ -108,10 +109,25 @@ the_frozen_v28_path_carries_every_field :: proc(t: ^testing.T) {
 	mem.set(&want.risen, 0x1d, size_of(want.risen))
 	mem.set(&want.world_seed, 0x1e, size_of(want.world_seed))
 
-	got := save_data_read(mem.ptr_to_bytes(want), SAVE_VERSION + 1)
+	// The file is v28 and its grave's padding holds junk: the fields made from
+	// that padding are set by the path, not read.
+	file := new_clone(want^)
+	defer free(file)
+	file.version = 28
+	got := save_data_read(mem.ptr_to_bytes(file))
 	defer free(got)
 	testing.expect(t, got != nil, "read")
 	if got == nil do return
+	testing.expect(t, mem.compare_ptrs(&got.grave.active, &file.grave.active, 1) == 0, "grave active")
+	testing.expect_value(t, got.grave.tithe, file.grave.tithe)
+	testing.expect_value(t, got.grave.hero, file.grave.hero)
+	testing.expect(t, mem.compare_ptrs(&got.grave.seconds, &file.grave.seconds, size_of(f32)) == 0, "grave seconds")
+	testing.expect_value(t, got.grave.cause, file.grave.cause)
+	testing.expect_value(t, got.grave.place, file.grave.place)
+	testing.expect_value(t, got.grave.tile, file.grave.tile)
+	testing.expect(t, !got.grave.pending, "a v28 grave stands")
+	testing.expect_value(t, got.grave.level, i32(LEVEL_SURFACE))
+	got.grave, want.grave = {}, {}
 	testing.expect(t, mem.compare_ptrs(got, want, size_of(Save_Data)) == 0, "every byte arrives")
 }
 
@@ -276,6 +292,34 @@ every_saved_enum_is_pinned :: proc(t: ^testing.T) {
 SAVE_LAYOUT_WRITE :: #config(SAVE_LAYOUT_WRITE, false)
 SAVE_LAYOUT_PATH  :: "src/testdata/save_layout.txt"
 SAVE_LAYOUT       :: string(#load("testdata/save_layout.txt"))
+
+// A bump rewrites save_layout.txt, so it forgets v28.  This file does not, and
+// any v28 field the live structs no longer hold where v28 wrote it must be
+// converted by save_data_from_v28 and named here.  New fields are free.
+SAVE_LAYOUT_V28 :: string(#load("testdata/save_layout_v28.txt"))
+
+@(private="file", rodata)
+v28_fields_converted := []string{}
+
+@(test)
+every_v28_field_stands_where_v28_wrote_it :: proc(t: ^testing.T) {
+	found, seen: map[typeid]bool
+	defer delete(found)
+	defer delete(seen)
+	lines := strings.builder_make()
+	defer strings.builder_destroy(&lines)
+	saved_walk(type_info_of(Save_Data), &found, &seen, &lines)
+	live := strings.split_lines(strings.to_string(lines))
+	defer delete(live)
+	frozen := strings.split_lines(SAVE_LAYOUT_V28)
+	defer delete(frozen)
+	testing.expect(t, strings.has_prefix(SAVE_LAYOUT_V28, "version 28\n"), "the frozen file is v28's")
+	for line in frozen[1:] {
+		if line == "" || slice.contains(live, line) do continue
+		field := line[:strings.index_byte(line, ' ')]
+		testing.expectf(t, slice.contains(v28_fields_converted, field), "v28's %s moved: convert it in save_data_from_v28, then add it to v28_fields_converted", line)
+	}
+}
 
 @(test)
 saved_layout_never_moves_inside_a_version :: proc(t: ^testing.T) {
