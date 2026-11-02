@@ -13885,3 +13885,208 @@ banking_a_mined_log_still_teaches_crafting :: proc(t: ^testing.T) {
 
     testing.expect(t, gs.craft_hint_shown, "the bag path must raise the same pickup event as the ground")
 }
+
+// Run 5 life 3: a Builder dug down through the clay under the pond, (34,56) to
+// (34,59), and every water tile ran away for good.
+@(test)
+a_builder_cannot_drain_the_pond :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.show_title = false
+    gs.player.pos = {f32(GRID_W - 10), f32(SURFACE_Y) - PLAYER_H}
+
+    water :: proc(gs: ^Game_State) -> (n: int) {
+        for c in gs.world.terrain do if c == .Water do n += 1
+        return
+    }
+    pond_x := -1
+    for x in 0 ..< GRID_W {
+        if get_tile(&gs.world, x, SURFACE_Y) == .Water { pond_x = x + 2; break }
+    }
+    testing.expect(t, pond_x >= 0, "the world has its pond")
+    start := water(gs)
+    bed_y := SURFACE_Y + 2
+
+    // No dig plan runs through the pond's walls or bed, from any side.
+    testing.expect(t, !is_builder_mineable(gs, pond_x, bed_y), "the bed")
+    testing.expect(t, !is_builder_mineable(gs, pond_x - 3, SURFACE_Y + 1), "the left wall")
+    testing.expect(t, !is_builder_mineable(gs, pond_x + 3, SURFACE_Y + 1), "the right wall")
+    testing.expect(t, is_builder_mineable(gs, pond_x - 4, SURFACE_Y + 1), "one tile back is plain rock")
+
+    // Ore under the middle of the pond, a Builder in the water above it.
+    set_tile(&gs.world, pond_x, bed_y + 5, .Iron_Ore)
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok)
+    e := &gs.enemies.data[id]
+    e.kind, e.hp, e.hp_max = .Builder, 6, 6
+    e.pos = {f32(pond_x) + (1 - BUILDER_W)*0.5, f32(bed_y) - BUILDER_H}
+    e.builder.goal = .Fetch_Mineral
+    e.builder.target_tile = {i32(pond_x), i32(bed_y + 5)}
+
+    for _ in 0 ..< 20 * 60 {
+        gs.delta_time = 1.0 / 60.0
+        game_update(gs)
+    }
+    testing.expect_value(t, water(gs), start)
+    for dx in -2 ..= 2 {
+        testing.expect_value(t, get_tile(&gs.world, pond_x + dx, bed_y), Tile_Type.Clay)
+    }
+    testing.expect_value(t, get_tile(&gs.world, pond_x - 3, SURFACE_Y + 1), Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, pond_x + 3, SURFACE_Y + 1), Tile_Type.Stone)
+
+    // The pick is not an enemy: the player may still breach it.
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {i32(pond_x), i32(bed_y)}})
+    testing.expect(t, get_tile(&gs.world, pond_x, bed_y) != .Clay, "the player digs where a Builder may not")
+}
+
+// Water tiles, and the pond's middle, for the tests below.
+pond_water :: proc(gs: ^Game_State) -> (n: int) {
+    for c in gs.world.terrain do if c == .Water do n += 1
+    return
+}
+
+pond_middle :: proc(gs: ^Game_State) -> int {
+    for x in 0 ..< GRID_W do if get_tile(&gs.world, x, SURFACE_Y) == .Water do return x + 2
+    return -1
+}
+
+// A Builder with a Fetch job at `target`, its feet at (x, feet_y).
+pond_builder :: proc(gs: ^Game_State, x, feet_y: int, target: [2]i32, pocket: u8) -> ^Enemy {
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind, e.hp, e.hp_max = .Builder, 6, 6
+    e.pos = {f32(x) + (1 - BUILDER_W)*0.5, f32(feet_y) - BUILDER_H}
+    e.builder.goal = .Fetch_Mineral
+    e.builder.target_tile = target
+    e.builder.pocket = pocket
+    return e
+}
+
+// The guard took the rim tunnel away, so a full pocket tried to bridge: Stone
+// laid on water deletes it, for good.
+@(test)
+a_full_pocket_does_not_pave_the_pond :: proc(t: ^testing.T) {
+    for hunt in ([]bool{false, true}) {
+        gs := test_state()
+        defer free(gs)
+        gs.ui.show_title = false
+        px := pond_middle(gs)
+        start := pond_water(gs)
+        far := px + 12
+        near := px - 10
+        for x in near - 2 ..= far + 2 do if get_tile(&gs.world, x, SURFACE_Y - 1) != .Air do set_tile(&gs.world, x, SURFACE_Y - 1, .Air)
+        set_tile(&gs.world, far, SURFACE_Y, .Iron_Ore)
+        e := pond_builder(gs, near, SURFACE_Y, {i32(far), SURFACE_Y}, POCKET_MAX)
+        if hunt {
+            e.builder.goal = .Hunt
+            gs.player.pos = {f32(far), f32(SURFACE_Y) - PLAYER_H}
+        } else {
+            gs.player.pos = {f32(GRID_W - 10), f32(SURFACE_Y) - PLAYER_H}
+        }
+        for _ in 0 ..< 60 * 60 {
+            gs.delta_time = 1.0 / 60.0
+            gs.player.hp = 1000
+            game_update(gs)
+        }
+        testing.expect_value(t, pond_water(gs), start)
+        for dx in -2 ..= 2 {
+            testing.expect(t, !is_solid(&gs.world, px + dx, SURFACE_Y + 1), "nothing laid in the basin")
+        }
+    }
+}
+
+// Each way a block gets laid, driven directly: the hunt above reaches only some.
+@(test)
+a_builder_never_lays_on_water :: proc(t: ^testing.T) {
+    testing.expect(t, builder_may_lay(.Air) && builder_may_lay(.Void), "open cells")
+    testing.expect(t, !builder_may_lay(.Hell_Gate), "the way to Hell")
+
+    gs := test_state()
+    defer free(gs)
+    px := pond_middle(gs)
+    start := pond_water(gs)
+    rim_y := SURFACE_Y - 1
+    e := pond_builder(gs, px - 3, SURFACE_Y, {}, POCKET_MAX)
+    id := 0
+    for i in 0 ..< MAX_ENEMIES do if &gs.enemies.data[i] == e do id = i
+    e.grounded = true
+
+    // The bridge step, with a stale waypoint out over the water.
+    e.nav.path.tiles[0] = {i32(px - 2), i32(rim_y)}
+    e.nav.path.len = 1
+    builder_exec_action(e, id, &e.nav, gs)
+    testing.expect_value(t, pond_water(gs), start)
+    testing.expect_value(t, e.builder.pocket, POCKET_MAX)
+
+    // The rescue pillar, airborne over the water.
+    e.pos = {f32(px) + 0.1, f32(rim_y)}
+    e.grounded = false
+    e.vel = {0, 1}
+    e.builder.escaping = true
+    e.builder.escape_from = i32(rim_y)
+    builder_escape_pillar(e, id, gs, 1.0 / 60.0)
+    testing.expect_value(t, pond_water(gs), start)
+
+    // A den slot on the water is skipped.
+    e.builder.step = 0
+    builder_do_step(e, id, gs, {i32(px), SURFACE_Y}, .Stone)
+    testing.expect_value(t, pond_water(gs), start)
+    testing.expect_value(t, e.builder.step, 1)
+
+    // No plan bridges water: bottomless, too wide to jump, so only a bridge crosses.
+    X, Y :: 60, 30
+    for x in X - 3 ..= X + 6 {
+        for y in Y - 5 ..= Y do set_tile(&gs.world, x, y, .Air)
+        for y in Y + 1 ..< GRID_H do set_tile(&gs.world, x, y, .Stone)
+    }
+    for x in X ..= X + 3 do for y in Y + 1 ..< GRID_H do set_tile(&gs.world, x, y, .Water)
+    path: Nav_Path
+    crossed := true
+    astar_dig(gs, {X - 2, Y}, {X + 5, Y}, 0, 8, &path, allow_mining = false, complete = &crossed)
+    testing.expect(t, !crossed, "no bridge on water")
+}
+
+// The swim-out is for water.  A dry two-high wall stays what it was.
+@(test)
+only_water_lifts_a_builder_up_a_wall :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    X, Y :: 60, 30
+    for x in X - 3 ..= X + 4 {
+        for y in Y - 5 ..= Y do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, Y + 1, .Stone)
+    }
+    for x in X + 1 ..= X + 4 do for y in Y - 1 ..= Y do set_tile(&gs.world, x, y, .Stone)
+    path: Nav_Path
+    dry, wet: bool
+    astar_dig(gs, {X, Y}, {X + 1, Y - 2}, 0, 0, &path, allow_mining = false, complete = &dry)
+    testing.expect(t, !dry, "a dry wall is no jump")
+    set_tile(&gs.world, X, Y, .Water)
+    astar_dig(gs, {X, Y}, {X + 1, Y - 2}, 0, 0, &path, allow_mining = false, complete = &wet)
+    testing.expect(t, wet, "water carries it up")
+}
+
+// The guard also shut a Builder's digs out of the basin.  It must get out with
+// the walls and the water as it found them, from either end of the bed.
+@(test)
+a_builder_in_the_pond_gets_out :: proc(t: ^testing.T) {
+    for dx in ([]int{-2, 0, 2}) {
+        gs := test_state()
+        defer free(gs)
+        gs.ui.show_title = false
+        gs.player.pos = {f32(GRID_W - 10), f32(SURFACE_Y) - PLAYER_H}
+        px := pond_middle(gs)
+        start := pond_water(gs)
+        target := [2]i32{i32(px + 16), SURFACE_Y}
+        set_tile(&gs.world, int(target.x), int(target.y), .Iron_Ore)
+        e := pond_builder(gs, px + dx, SURFACE_Y + 2, target, 0)
+        out := false
+        for _ in 0 ..< 60 * 60 {
+            gs.delta_time = 1.0 / 60.0
+            game_update(gs)
+            if int(e.pos.x) < px - 3 || int(e.pos.x) > px + 3 do out = true
+        }
+        testing.expect(t, out, "out of the basin within a minute")
+        testing.expect_value(t, pond_water(gs), start)
+    }
+}

@@ -257,10 +257,24 @@ is_standable :: proc(w: ^World_Grid, x, y: int) -> bool {
 // What an enemy dig may take, and every dig and dig plan asks here first.  Scroll
 // chests are .Mineable for the player's reclaim only, and a loaded silo, barrel
 // or coffer is rock to a digger, so none is hammered at or planned through.
+// Nor is a tile holding water back: a breached pond drains for good, and it may
+// be the only water a Boiler or Water Head will ever get.
 is_builder_mineable :: proc(gs: ^Game_State, x, y: int) -> bool {
     if !in_bounds(x, y) { return false }
     t := gs.world.terrain[grid_idx(x, y)]
-    return .Mineable in terrain_table[t].flags && !wave_target_refused(gs, {i32(x), i32(y)})
+    return .Mineable in terrain_table[t].flags && !wave_target_refused(gs, {i32(x), i32(y)}) &&
+           !holds_water_back(&gs.world, x, y)
+}
+
+// A block laid on water would delete it, and a laid block never comes back as
+// water.  Nor does anything enemy-built go on the way to Hell.
+builder_may_lay :: proc(t: Tile_Type) -> bool {
+    return t != .Water && !is_sacred_tile(t)
+}
+
+holds_water_back :: proc(w: ^World_Grid, x, y: int) -> bool {
+    return get_tile(w, x, y - 1) == .Water || get_tile(w, x - 1, y) == .Water ||
+           get_tile(w, x + 1, y) == .Water
 }
 
 // Enemy demolition of a tile.  A player machine (any .Placeable tile) is
@@ -681,7 +695,10 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                         for ix := x + d; ix != jx; ix += d {
                             if is_solid(w, ix, y-1) || is_solid(w, ix, y-2) { arc_clear = false; break }
                         }
-                        if arc_clear && !is_solid(w, jx, y-1) && is_standable(w, jx, y-2) {
+                        // Water carries a body up a wall it could not jump dry,
+                        // and a basin's walls are not dug: this is the way out.
+                        swim_out := get_tile(w, x, y) == .Water
+                        if arc_clear && (!is_solid(w, jx, y-1) || swim_out) && is_standable(w, jx, y-2) {
                             push_trans(&trans, &nt, i32(jx), i32(y-2), COST_WALK)
                         }
                     }
@@ -742,7 +759,8 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             // Bridge a gap: place a block at (nx, y+1) and stand on it —
             // only while the path still has pocket blocks to spend.
             if int(cur.bridges) < bridge_budget &&
-               !is_solid(w, nx, y) && in_bounds(nx, y+1) && !is_solid(w, nx, y+1) {
+               !is_solid(w, nx, y) && in_bounds(nx, y+1) && !is_solid(w, nx, y+1) &&
+               builder_may_lay(get_tile(w, nx, y+1)) {
                 push_trans(&trans, &nt, i32(nx), i32(y), COST_PLACE, bridge = true)
             }
         }
@@ -1328,7 +1346,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     // doesn't get us up there, and it feeds a place/carve livelock with
     // the climb rule above.
     if target.y >= bt.y && in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) &&
-       !is_sacred_tile(get_tile(&gs.world, tx, ty+1)) {
+       builder_may_lay(get_tile(&gs.world, tx, ty+1)) {
         if e.builder.pocket == 0 {
             log_action(gs, "Builder out of blocks at (%d,%d) - replans", tx, ty+1)
             nav.path = {}
@@ -1395,7 +1413,7 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     if !e.grounded {
         if e.vel.y >= 0 && !is_solid(&gs.world, x, y+1) && in_bounds(x, y+1) &&
            e.pos.y + BUILDER_H <= f32(y+1) &&
-           !is_sacred_tile(get_tile(&gs.world, x, y+1)) {
+           builder_may_lay(get_tile(&gs.world, x, y+1)) {
             if b.pocket > 0 do b.pocket -= 1
             set_tile(&gs.world, x, y+1, .Stone)
             eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(x), i32(y+1)}})
@@ -1527,8 +1545,8 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
         return
     }
 
-    if is_sacred_tile(get_tile(w, x, y)) {
-        e.builder.step += 1   // the way to Hell is no den slot — skip it
+    if !builder_may_lay(get_tile(w, x, y)) {
+        e.builder.step += 1   // the way to Hell is no den slot, a pond neither
         return
     }
 
