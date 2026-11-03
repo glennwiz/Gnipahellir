@@ -1727,28 +1727,31 @@ a_client_connecting_on_the_title_starts_the_frame_clock :: proc(t: ^testing.T) {
     testing.expect_value(t, link.panel.goal.len, 0)
 }
 
+// The two title tests bind fixed ports, so those sit below Linux's ephemeral
+// range (32768-60999): in it, a client socket from a test that listens on port 0
+// can hold the next port and this one gets the one after.  Clear of 7777/7878.
 @(test)
 the_title_only_binds_loopback_and_steps_past_a_taken_port :: proc(t: ^testing.T) {
-    first, port, ok := agent_title_bind(47311)
+    first, port, ok := agent_title_bind(23311)
     testing.expect(t, ok)
     defer net.close(first)
-    testing.expect_value(t, port, 47311)
+    testing.expect_value(t, port, 23311)
     at, err := net.bound_endpoint(first)
     testing.expect_value(t, err, nil)
     testing.expect_value(t, at.address, net.Address(net.IP4_Loopback))
 
-    second, next, ok2 := agent_title_bind(47311)
+    second, next, ok2 := agent_title_bind(23311)
     testing.expect(t, ok2)
     defer net.close(second)
-    testing.expect_value(t, next, 47312)
+    testing.expect_value(t, next, 23312)
 }
 
 @(test)
 the_title_bind_gives_up_when_every_port_is_taken :: proc(t: ^testing.T) {
     socks: [AGENT_TITLE_PORTS]net.TCP_Socket
-    for &s, i in socks do s, _ = net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 47331 + i}, 1)
+    for &s, i in socks do s, _ = net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 23331 + i}, 1)
     defer for s in socks do net.close(s)
-    _, _, ok := agent_title_bind(47331)
+    _, _, ok := agent_title_bind(23331)
     testing.expect(t, !ok)
 }
 
