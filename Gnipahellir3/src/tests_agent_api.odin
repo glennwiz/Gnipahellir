@@ -1006,9 +1006,6 @@ agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
     client, derr := net.dial_tcp(bound)
     testing.expect_value(t, derr, nil)
 
-    testing.expect(t, agent_pump(link, gs) == false || link.connected)
-    testing.expect(t, link.connected)
-
     // Two lines in one write, split across a partial third.
     net.send_tcp(client, transmute([]u8)string("{\"cmd\":\"state\"}\n{\"cmd\":\"state\"}\n{\"cmd\""))
     reply: [64 * 1024]u8
@@ -1543,4 +1540,442 @@ agent_turbo_draws_once_a_second_and_only_while_driven :: proc(t: ^testing.T) {
     testing.expect(t, !agent_draw_due(link, later(start, AGENT_TURBO_DRAW - 1)))
     testing.expect(t, agent_draw_due(link, later(start, AGENT_TURBO_DRAW)))
     testing.expect(t, !agent_draw_due(link, later(start, AGENT_TURBO_DRAW + 1)), "the clock restarts at a draw")
+}
+
+// ─── One address: the brief and the socket on one port (card 84) ──────────────
+
+// A listening link on a port of its own, with no client yet.
+@(private="file")
+agent_test_listening :: proc(t: ^testing.T) -> (gs: ^Game_State, link: ^Agent_Link, at: net.Endpoint) {
+    gs, link = agent_test_world()
+    link.connected = false
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, 1)
+    testing.expect_value(t, err, nil)
+    bound, berr := net.bound_endpoint(sock)
+    testing.expect_value(t, berr, nil)
+    net.set_blocking(sock, false)
+    link.listener  = sock
+    link.listening = true
+    link.port      = bound.port
+    return gs, link, bound
+}
+
+// Sends one request and pumps until the far side closes or `want` newlines came.
+@(private="file")
+agent_test_ask :: proc(gs: ^Game_State, link: ^Agent_Link, client: net.TCP_Socket, text: string, want_lines := -1, buf: []u8) -> string {
+    net.set_blocking(client, false)
+    net.send_tcp(client, transmute([]u8)text)
+    got, lines := 0, 0
+    for _ in 0 ..< 20000 {
+        agent_pump(link, gs)
+        n, err := net.recv_tcp(client, buf[got:])
+        if err == nil && n == 0 do break
+        if err == nil {
+            for b in buf[got:got + n] do if b == '\n' do lines += 1
+            got += n
+        }
+        if want_lines > 0 && lines >= want_lines do break
+    }
+    return string(buf[:got])
+}
+
+@(test)
+a_get_gets_the_brief_and_a_socket_client_plays_on_the_same_port :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    gs.world_seed = 90210
+    buf := new([AGENT_BRIEF_MAX + 1024]u8)
+    defer free(buf)
+
+    web, _ := net.dial_tcp(at)
+    reply := agent_test_ask(gs, link, web, "GET / HTTP/1.1\r\nHost: x\r\n\r\n", -1, buf[:])
+    net.close(web)
+    testing.expect(t, strings.has_prefix(reply, "HTTP/1.0 200 OK\r\n"), reply[:min(len(reply), 40)])
+    testing.expect(t, strings.contains(reply, "Content-Type: text/plain"))
+    head := strings.index(reply, "\r\n\r\n")
+    testing.expect(t, strings.contains(reply[:head], fmt.tprintf("Content-Length: %d\r\n", len(reply) - head - 4)))
+    testing.expect(t, !link.connected, "reading the brief does not take the game")
+    testing.expect(t, !gs.agent.driving)
+    testing.expect(t, !link.pending_open, "and the connection is closed")
+
+    client, _ := net.dial_tcp(at)
+    defer net.close(client)
+    out := agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
+    testing.expect(t, strings.has_prefix(out, `{"ok":true`))
+    testing.expect(t, link.connected, "a JSON first line is the client")
+}
+
+@(test)
+the_brief_is_written_from_the_game_as_it_stands :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    link.port = 40123
+    gs.world_seed = 90210
+    gs.level_index = 2
+    agent_handle_line(link, gs, `{"cmd":"objective","goal":"find the gold"}`)
+
+    brief := agent_write_brief(link, gs)
+    for want in ([]string{"127.0.0.1:40123", "world seed: 90210", "level 2", "screen: play", "the panel's goal: find the gold",
+                          "game's objective line: ", `"cmd":"act"`, `"cmd":"plan"`, `"cmd":"objective"`, "HOW THE GAME WAITS", "FIRST STEPS", `"move":"right"`, "Final Seal", "\"127.0.0.1\", 40123"}) {
+        testing.expect(t, strings.contains(brief, want), want)
+    }
+    testing.expect(t, strings.contains(brief, fmt.tprintf("up to %d ticks", AGENT_IDLE_MAX)))
+    testing.expect(t, strings.contains(brief, "another agent is connected"), "the link has a client")
+    tail := strings.trim_right_space(AGENT_LESSONS)
+    testing.expect(t, strings.has_suffix(strings.trim_right_space(brief), tail[len(tail) - 40:]), "the lessons fit, all of them")
+    testing.expect(t, !strings.contains(brief, "agent_play.sh"), "the lessons' harness head stays out")
+    testing.expect(t, strings.contains(brief, AGENT_LESSONS_FROM))
+    testing.expect(t, !strings.contains(brief, "%!"), "no format string went wrong")
+    link.connected = false
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "none, the socket is free"))
+}
+
+@(test)
+the_brief_is_served_while_a_client_plays_and_a_second_client_is_turned_away :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_BRIEF_MAX + 1024]u8)
+    defer free(buf)
+
+    client, _ := net.dial_tcp(at)
+    defer net.close(client)
+    agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
+    testing.expect(t, link.connected)
+
+    web, _ := net.dial_tcp(at)
+    reply := agent_test_ask(gs, link, web, "GET / HTTP/1.0\r\n\r\n", -1, buf[:])
+    net.close(web)
+    testing.expect(t, strings.contains(reply, "HOW THE GAME WAITS"))
+
+    second, _ := net.dial_tcp(at)
+    reply = agent_test_ask(gs, link, second, `{"cmd":"state"}` + "\n", -1, buf[:])
+    net.close(second)
+    testing.expect(t, strings.contains(reply, "another agent is playing"), reply)
+    testing.expect(t, !link.pending_open)
+
+    out := agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
+    testing.expect(t, strings.has_prefix(out, `{"ok":true`), "the first client never noticed")
+}
+
+@(test)
+a_first_line_that_is_not_json_is_refused_and_closed :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf: [1024]u8
+
+    web, _ := net.dial_tcp(at)
+    defer net.close(web)
+    body := "POST / HTTP/1.1\r\n\r\n" + `{"cmd":"act","move":"left"}` + "\n"
+    reply := agent_test_ask(gs, link, web, body, -1, buf[:])
+    testing.expect(t, strings.has_prefix(reply, `{"ok":false`), reply)
+    testing.expect(t, !link.connected, "a page's POST body does not get to play")
+    testing.expect_value(t, link.frames_left, 0)
+}
+
+@(test)
+a_silent_connection_does_not_drive_the_game_or_block_the_next :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_BRIEF_MAX + 1024]u8)
+    defer free(buf)
+
+    silent, _ := net.dial_tcp(at)
+    defer net.close(silent)
+    for _ in 0 ..< 200 {
+        testing.expect(t, agent_pump(link, gs), "the keyboard keeps the game")
+        if link.pending_open do break
+    }
+    testing.expect(t, link.pending_open)
+    testing.expect(t, !link.connected)
+
+    web, _ := net.dial_tcp(at)
+    reply := agent_test_ask(gs, link, web, "GET / HTTP/1.0\r\n\r\n", -1, buf[:])
+    net.close(web)
+    testing.expect(t, strings.contains(reply, "HOW THE GAME WAITS"))
+}
+
+@(test)
+a_client_connecting_on_the_title_starts_the_frame_clock :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+    gs.ui.show_title = true
+    gs.frame = 500
+    link.idle_off = true
+    link.realtime = true
+    link.panel.goal.len = 3
+
+    client, _ := net.dial_tcp(at)
+    defer net.close(client)
+    agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
+    testing.expect_value(t, gs.frame, 0)
+    testing.expect(t, !link.idle_off && !link.realtime, "a new client starts from the waiting game")
+    testing.expect_value(t, link.panel.goal.len, 0)
+}
+
+@(test)
+the_title_only_binds_loopback_and_steps_past_a_taken_port :: proc(t: ^testing.T) {
+    first, port, ok := agent_title_bind(47311)
+    testing.expect(t, ok)
+    defer net.close(first)
+    testing.expect_value(t, port, 47311)
+    at, err := net.bound_endpoint(first)
+    testing.expect_value(t, err, nil)
+    testing.expect_value(t, at.address, net.Address(net.IP4_Loopback))
+
+    second, next, ok2 := agent_title_bind(47311)
+    testing.expect(t, ok2)
+    defer net.close(second)
+    testing.expect_value(t, next, 47312)
+}
+
+@(test)
+the_title_bind_gives_up_when_every_port_is_taken :: proc(t: ^testing.T) {
+    socks: [AGENT_TITLE_PORTS]net.TCP_Socket
+    for &s, i in socks do s, _ = net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 47331 + i}, 1)
+    defer for s in socks do net.close(s)
+    _, _, ok := agent_title_bind(47331)
+    testing.expect(t, !ok)
+}
+
+@(test)
+a_sandbox_holds_its_marker_seed_and_a_copy_of_the_sprites :: proc(t: ^testing.T) {
+    root :: "gnipa_agent_sandbox_scratch"
+    art  :: root + "_art.dat"
+    defer os.remove_all(root)
+    defer os.remove(art)
+    bytes := "not the real sprite bank"
+    testing.expect(t, os.write_entire_file(art, transmute([]u8)bytes) == nil)
+
+    folder :: root + "/runs/one"
+    testing.expect(t, agent_sandbox_make(folder, 4242, art))
+    testing.expect(t, os.exists(folder + "/" + AGENT_SANDBOX_FILE))
+    seed, _ := os.read_entire_file_from_path(folder + "/seed", context.temp_allocator)
+    testing.expect_value(t, string(seed), "4242\n")
+    copied, _ := os.read_entire_file_from_path(folder + "/" + PIXEL_ART_FILE, context.temp_allocator)
+    testing.expect_value(t, string(copied), bytes)
+    source, _ := os.read_entire_file_from_path(art, context.temp_allocator)
+    testing.expect_value(t, string(source), bytes)
+
+    testing.expect(t, agent_sandbox_make(root + "/runs/two", 1, root + "_no_art"), "no sprite bank is no failure")
+    testing.expect(t, !os.exists(root + "/runs/two/" + PIXEL_ART_FILE))
+}
+
+@(test)
+the_title_a_key_asks_for_an_agent_and_then_only_esc_answers :: proc(t: ^testing.T) {
+    for fresh in ([]bool{true, false}) {
+        gs, link := agent_test_world()
+        defer free(gs)
+        defer free(link)
+        gs.ui.show_title  = true
+        gs.ui.title_fresh = fresh
+
+        testing.expect(t, !title_key(gs, .A), "A stays on the title, resumed run or fresh")
+        testing.expect(t, gs.ui.agent_requested)
+
+        gs.ui.agent_requested = false
+        gs.ui.agent_port = 7878
+        testing.expect(t, !title_key(gs, .SPACE), "the address stays up")
+        testing.expect(t, !title_key(gs, .A))
+        testing.expect(t, !gs.ui.agent_requested, "one sandbox per boot")
+        title_begin(gs)
+        testing.expect(t, gs.ui.show_title, "a click does not close it either")
+        testing.expect_value(t, gs.events.size, 0)
+        title_key(gs, .ESCAPE)
+        process_events(gs)
+        testing.expect(t, gs.quit_requested, "Esc leaves: a fullscreen window has no other door")
+    }
+}
+
+@(test)
+the_title_still_starts_a_run_with_no_agent :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.ui.show_title = true
+    title_begin(gs)
+    testing.expect(t, !gs.ui.show_title)
+
+    gs.ui.show_title  = true
+    gs.ui.title_fresh = true
+    title_begin(gs)
+    testing.expect_value(t, gs.events.size, 1)
+}
+
+@(test)
+the_title_seed_picks_the_agents_world_too :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    copy(gs.ui.title_seed[:], "4242")
+    gs.ui.title_seed_len = 4
+    testing.expect_value(t, title_chosen_seed(gs), 4242)
+}
+
+@(test)
+a_boot_leaves_the_old_action_log_alone_until_a_run_starts :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }
+    path :: "gnipa_action_held_scratch.log"
+    os.remove(path)
+    defer os.remove(path)
+    _ = os.write_entire_file(path, transmute([]u8)string("the last run\n"))
+
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.debug_log.path = path
+    gs.debug_log.held = true
+    gs.debug_log.pos  = 0
+    log_action(gs, "held line")
+    flush_action_log(gs)
+    kept, _ := os.read_entire_file_from_path(path, context.temp_allocator)
+    testing.expect_value(t, string(kept), "the last run\n")
+
+    action_log_release(gs)
+    flush_action_log(gs)
+    now, _ := os.read_entire_file_from_path(path, context.temp_allocator)
+    testing.expect(t, !strings.contains(string(now), "the last run"), "a run owns its log")
+    testing.expect(t, strings.contains(string(now), "held line"), "and nothing logged on the title is lost")
+
+    log_action(gs, "second line")
+    action_log_release(gs)
+    flush_action_log(gs)
+    now, _ = os.read_entire_file_from_path(path, context.temp_allocator)
+    testing.expect(t, strings.contains(string(now), "held line"), "a second release truncates nothing")
+}
+
+@(test)
+a_title_start_releases_the_log_before_the_reset_loses_it :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }
+    path :: "gnipa_action_title_scratch.log"
+    os.remove(path)
+    defer os.remove(path)
+    _ = os.write_entire_file(path, transmute([]u8)string("the last run\n"))
+
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.debug_log.path = path
+    gs.debug_log.held = true
+    gs.debug_log.pos  = 0
+    log_action(gs, "run header")
+    gs.ui.title_fresh = true
+    start_title_game(gs)
+    flush_action_log(gs)
+    now, _ := os.read_entire_file_from_path(path, context.temp_allocator)
+    testing.expect(t, !strings.contains(string(now), "the last run"))
+    testing.expect(t, strings.contains(string(now), "run header"))
+}
+
+@(test)
+a_won_run_is_a_screen_an_agent_can_read_and_leave :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.level_index = LEVEL_DIMENSION
+    gs.dimension.kind = .Hell
+    inventory_insert(&gs.player.inventory, .Hell_Key, 1)
+    set_tile(&gs.world, 60, 40, .Final_Seal)
+    gs.player.pos = {59, 41 - PLAYER_H}
+
+    // The last act of a run, through the same seam as every other.
+    agent_handle_line(link, gs, `{"cmd":"act","interact":true,"frames":1}`)
+    agent_drive(link, gs)
+    update_input(gs)
+    process_events(gs)
+    update_player(gs)
+    testing.expect(t, gs.ritual.active && gs.ritual.seal, "interact beside the Seal begins the end")
+
+    gs.ritual.timer = RITUAL_DURATION
+    gs.delta_time = AGENT_STEP
+    update_ritual(gs)
+    process_events(gs)
+    testing.expect(t, gs.game_won)
+    agent_reply_state(link, gs, nil)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"screen":"book"`), "the saga comes first")
+
+    agent_dismiss(gs)
+    agent_reply_state(link, gs, nil)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"screen":"won"`), agent_test_reply(link)[:60])
+
+    gs.agent.driving = true
+    agent_dismiss(gs)
+    process_events(gs)
+    testing.expect(t, !gs.game_won, "a dismiss starts the next run")
+}
+
+@(test)
+the_sandbox_run_starts_with_nothing_of_the_humans :: proc(t: ^testing.T) {
+    save  :: "gnipa_agent_reset_scratch_save.dat"
+    stats :: "gnipa_agent_reset_scratch_stats.dat"
+    os.remove(save)
+    defer os.remove(stats)
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.stats.runs_played = 9
+    gs.stats.grave       = {active = true, hero = 1}
+    gs.save_path         = ""   // a boot that set an unreadable save aside
+    gs.player.hp         = 3
+    gs.ui.agent_failed   = true
+    inventory_insert(&gs.player.inventory, .Hell_Key, 1)
+
+    agent_run_reset(gs, 4242, 7878, save, stats)
+
+    testing.expect_value(t, gs.stats.runs_played, 0)
+    testing.expect(t, !gs.grave.active && !gs.stats.grave.active, "the human's grave stays home")
+    testing.expect_value(t, gs.save_path, save)
+    testing.expect_value(t, gs.stats_path, stats)
+    testing.expect_value(t, gs.world_seed, 4242)
+    testing.expect_value(t, gs.player.hp, 10)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Hell_Key), 0)
+    testing.expect(t, gs.ui.show_title, "the title holds the address")
+    testing.expect(t, !gs.ui.title_fresh, "and an agent's dismiss closes it, not a seed prompt")
+    testing.expect_value(t, gs.ui.agent_port, 7878)
+    testing.expect(t, !gs.ui.agent_failed)
+    testing.expect(t, os.exists(stats), "the run's stats go where it was told")
+}
+
+@(test)
+the_boot_title_hook_stays_off_with_no_env_and_a_port_run_shows_its_address :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_boot_title(link, gs)
+    testing.expect(t, !gs.ui.agent_requested, "nothing listens unless asked")
+    testing.expect_value(t, gs.ui.agent_port, 0)
+
+    link.listening = true
+    link.port      = 7777
+    gs.debug_log.held = true
+    gs.debug_log.path = ""
+    link.listening = true
+    agent_boot_title(link, gs)
+    testing.expect_value(t, gs.ui.agent_port, 7777)
+    link.listening = false
+}
+
+@(test)
+a_boot_arms_the_action_log_but_holds_it :: proc(t: ^testing.T) {
+    when !GAME_DEBUG { return }
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    action_log_begin_run(gs)
+    testing.expect_value(t, gs.debug_log.path, ACTION_LOG_PATH)
+    testing.expect(t, gs.debug_log.held, "a boot has not started a run: the last run's log stays as it is")
+    testing.expect(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]), "=== run start"))
+    gs.debug_log = {}  // never flushed: this test's folder is not a run's
 }

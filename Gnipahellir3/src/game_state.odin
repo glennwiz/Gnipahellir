@@ -634,6 +634,9 @@ UI_State :: struct {
     title_fresh:     bool,   // no run to resume: the title offers a seed and starts a world
     title_seed:      [TITLE_SEED_DIGITS]u8, // digits typed on the title
     title_seed_len:  int,
+    agent_requested: bool,   // the title's [A] was pressed; main opens the sandbox
+    agent_failed:    bool,   // that failed: no port or no folder, and the title says so
+    agent_port:      int,    // listening for an agent: the title shows this address
     tithe_slot:      int,     // bag slot chosen on the death screen (-1 = none)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     drag_void:       bool,    // drag source is Player.void_slot, not the bag
