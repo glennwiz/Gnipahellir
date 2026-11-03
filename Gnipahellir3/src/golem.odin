@@ -277,6 +277,7 @@ golem_reset_job :: proc(g: ^Golem) {
 	g.has_target = false
 	g.path = {}
 	g.replan_timer = 0
+	g.vel.x = 0 // a reset worker stands; it kept walking on its old vel.x (an idle golem slid ~30 tiles after a deposit)
 }
 
 golem_release_reservation :: proc(gs: ^Game_State, id: int) {
@@ -498,8 +499,9 @@ golem_set_zone :: proc(gs: ^Game_State, a, b: [2]i32) {
 	lo.x = clamp(lo.x, 0, GRID_W-1); hi.x = clamp(hi.x, 0, GRID_W-1)
 	lo.y = clamp(lo.y, 0, GRID_H-1); hi.y = clamp(hi.y, 0, GRID_H-1)
 	gs.golems.work[gs.level_index] = {active = true, min = lo, max = hi}
-	for &g in gs.golems.data do if g.status == .Deployed && g.level == gs.level_index && g.mode == .Gather {
+	for &g, id in gs.golems.data do if g.status == .Deployed && g.level == gs.level_index && g.mode == .Gather {
 		golem_reset_job(&g)
+		gs.golem_transfer[id].empty_said = false
 	}
 	gs.save_dirty = true
 	notify(gs, "Gather zone marked: %dx%d", hi.x-lo.x+1, hi.y-lo.y+1)
@@ -1051,37 +1053,81 @@ golem_transfer_drop :: proc(gs: ^Game_State, id: int, tile: [2]i32) {
 // another walked between a ledge chest it never reached and its stockpile).
 // The dropped list clears after GOLEM_TRANSFER_RETRY_TIME, so a store the
 // player opens a way to is used again.
+// A Place and a Gather worker's climb back to its zone are watched the same
+// way (card 152: a worker dug into a hole under the site, and one below its
+// zone beside a placed wall, each retried one target every frame).  Neither
+// takes a slot on the dropped list: the worker waits out
+// GOLEM_TRANSFER_RETRY_TIME (build_wait, climb_wait) and says so.  A site
+// rarely has one reachable cell and not the next.
 golem_watch_transfer :: proc(gs: ^Game_State, g: ^Golem, id: int) {
 	w := &gs.golem_transfer[id]
 	if w.n > 0 {
 		w.age += gs.delta_time
 		if w.age >= GOLEM_TRANSFER_RETRY_TIME do w.n = 0
 	}
+	w.climb_wait = max(0, w.climb_wait - gs.delta_time)
+	w.build_wait = max(0, w.build_wait - gs.delta_time)
 	// Watched by job and target, not has_target: a route that keeps failing
 	// over (a recovery climb that ends, a replan that loses the target)
 	// blinks has_target while the worker stays on the same errand.
-	if g.job != .Fetch_Build && g.job != .Deliver {
+	zone_climb := g.job == .Seek && gs.golem_calls[id] == .None
+	if g.job != .Fetch_Build && g.job != .Deliver && g.job != .Place && !zone_climb {
 		w.watching = false
 		return
 	}
 	T := golem_tile(g)
 	d := abs(g.target.x-T.x) + abs(g.target.y-T.y)
-	if !w.watching || w.target != g.target || d < w.best || chebyshev(T, g.target) <= GOLEM_TRANSFER_REACH {
+	if !w.watching || w.target != g.target || d < w.best || chebyshev(T, g.target) <= golem_job_reach(g) {
 		w.watching, w.target, w.best, w.stall = true, g.target, d, 0
 		return
 	}
 	w.stall += gs.delta_time
 	if w.stall < GOLEM_TRANSFER_STALL_TIME do return
-	golem_transfer_drop(gs, id, g.target)
 	w.watching = false
 	if g.recovering do golem_end_recovery(g)
+	target := g.target
+	#partial switch g.job {
+	case .Seek:
+		w.climb_wait = GOLEM_TRANSFER_RETRY_TIME
+		golem_reset_job(g)
+		notify(gs, "Golem %d can't climb back to its zone", id+1)
+	case .Place:
+		golem_give_up_place(gs, g, id, target)
+	case:
+		golem_transfer_drop(gs, id, target)
+		golem_reset_job(g)
+	}
+}
+
+// A site this worker cannot get to: it lets its cell go, waits
+// GOLEM_TRANSFER_RETRY_TIME before it reserves again, and says so.
+golem_give_up_place :: proc(gs: ^Game_State, g: ^Golem, id: int, cell: [2]i32) {
+	golem_release_reservation(gs, id)
 	golem_reset_job(g)
+	gs.golem_transfer[id].build_wait = GOLEM_TRANSFER_RETRY_TIME
+	notify(gs, "Golem %d can't reach the build at %d,%d", id+1, cell.x, cell.y)
+}
+
+// A Build worker that dug itself in with a full pack cannot dig on: it sets
+// the pack down where it stands, a field cache, and tries again with room.
+golem_set_down_pack :: proc(gs: ^Game_State, g: ^Golem) {
+	for &it in g.pack do if it != .None {
+		spawn_ground_item(&gs.world, golem_tile(g), it, 1)
+		it = .None
+	}
+	gs.save_dirty = true
 }
 
 golem_set_target :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, vertical_recovery := true) -> bool {
-	ok := golem_set_target_route(gs, g, tile, vertical_recovery)
-	if !ok && (g.job == .Fetch_Build || g.job == .Deliver) do golem_transfer_drop(gs, golem_index(gs, g), tile)
-	return ok
+	if golem_set_target_route(gs, g, tile, vertical_recovery) do return true
+	// No route with a full pack is no route without digging: set it down and
+	// try next frame before giving the target up.
+	if (g.job == .Fetch_Build || g.job == .Place) && !golem_pack_has_room(g) {
+		golem_set_down_pack(gs, g)
+		return false
+	}
+	if g.job == .Fetch_Build || g.job == .Deliver do golem_transfer_drop(gs, golem_index(gs, g), tile)
+	return false
 }
 
 golem_set_target_route :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, vertical_recovery: bool) -> bool {
@@ -1213,6 +1259,22 @@ golem_assign_gather :: proc(gs:^Game_State, id:int) {
 	// just inside the zone — so don't yank it away from one it can still reach.
 	if w.active && T.y>w.max.y+2 {
 		if _, marked := golem_find_marked_resource(gs, id, nil); !marked {
+			tw:=&gs.golem_transfer[id]
+			// A worker that gave its climb up waits where it stands.
+			if tw.climb_wait>0 do return
+			// Nothing up there to do: stay on the ground (card 146's review: a
+			// zone in the air with nothing in it made the worker climb, idle on
+			// its Quick Clay, fall and climb again every ~14 s).
+			if !golem_zone_has_work(gs,id) {
+				if !tw.empty_said {
+					said:=false
+					for o in gs.golem_transfer do if o.empty_said {said=true; break}
+					tw.empty_said=true
+					if !said do notify(gs,"the crew's zone is empty")
+				}
+				return
+			}
+			tw.empty_said=false
 			g.job=.Seek
 			g.target={clamp(T.x,w.min.x,w.max.x),w.min.y}
 			g.has_target=true
@@ -1236,6 +1298,15 @@ golem_assign_gather :: proc(gs:^Game_State, id:int) {
 	} else {
 		_ = golem_assign_resource(gs,id)
 	}
+}
+
+// Something for a worker below its zone to climb back for: cargo to stock
+// beside it, or a resource or cleanup in it.
+golem_zone_has_work :: proc(gs: ^Game_State, id: int) -> bool {
+	g := &gs.golems.data[id]
+	if g.carry != .None || golem_pack_count(g) > 0 do return true
+	_, ok := golem_find_resource(gs, id, nil)
+	return ok
 }
 
 golem_follow_path :: proc(g: ^Golem, w: ^World_Grid) {
@@ -1396,6 +1467,25 @@ golem_in_work_zone :: proc(gs: ^Game_State, tile: [2]i32) -> bool {
 	return w.active && tile.x >= w.min.x && tile.x <= w.max.x && tile.y >= w.min.y && tile.y <= w.max.y
 }
 
+// What a worker may never dig on its way or out of a footprint (a block
+// another golem just laid aside, whose grace ends): the footprint check and
+// the dig share it, so a cell the crew skips and a dig it refuses are one set.
+golem_dig_forbidden :: proc(gs: ^Game_State, x, y: int, recovering: bool) -> bool {
+	idx := grid_idx(x, y)
+	t := gs.world.terrain[idx]
+	flags := gs.world.tile_flags[idx]
+	// Incidental path clearing protects the player's masonry.
+	if .Placed in flags && .Golem_Placed not_in flags do return true
+	// A den shell can otherwise turn a completed rescue pillar into a trap: the
+	// worker aborts beneath the protected ceiling and falls all the way back
+	// down. Only the active vertical self-rescue may punch its narrow shaft
+	// through that shell; ordinary pathing still leaves enemy dens intact.
+	if den_protected(gs, x, y, -1) && !recovering || is_structure_tile[t] do return true
+	// A marked block is the player's own order; anything else under the base stays.
+	if .Golem_Marked not_in flags && removal_undermines(gs, x, y) do return true
+	return .Mineable not_in terrain_table[t].flags
+}
+
 golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := false, id := -1) -> bool {
 	if g.mine_timer > 0 do return false
 	x, y := int(tile.x), int(tile.y)
@@ -1405,19 +1495,16 @@ golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := 
 	flags := gs.world.tile_flags[idx]
 	if !path_clear && !golem_in_work_zone(gs,tile) && .Golem_Marked not_in flags do return false
 	if .Golem_Placed in flags && golem_block_grace_protected(gs,id,tile) do return false
-	// A den shell can otherwise turn a completed rescue pillar into a trap: the
-	// worker aborts beneath the protected ceiling and falls all the way back
-	// down. Only the active vertical self-rescue may punch its narrow shaft
-	// through that shell; ordinary pathing still leaves enemy dens intact.
-	den_blocks_path := den_protected(gs,x,y,-1) && !g.recovering
-	// A Gather target is explicit permission to remove ordinary player masonry
-	// inside the rectangle. Incidental path clearing still protects it.
-	if (path_clear && .Placed in flags && .Golem_Placed not_in flags) || den_blocks_path || is_structure_tile[t] do return false
-	// A marked block is the player's own order; anything else under the base stays.
-	if .Golem_Marked not_in flags && removal_undermines(gs, x, y) do return false
 	if path_clear {
-		if .Mineable not_in terrain_table[t].flags do return false
-	} else if golem_resource_priority(t) == 0 && .Golem_Marked not_in flags do return false
+		if golem_dig_forbidden(gs, x, y, g.recovering) do return false
+	} else {
+		// A Gather target is explicit permission to remove ordinary player
+		// masonry inside the rectangle; dens, structures and the ground under
+		// the base still stay.
+		if den_protected(gs,x,y,-1) && !g.recovering || is_structure_tile[t] do return false
+		if .Golem_Marked not_in flags && removal_undermines(gs, x, y) do return false
+		if golem_resource_priority(t) == 0 && .Golem_Marked not_in flags do return false
+	}
 	drop := terrain_table[t].drop_item
 	if pct := terrain_table[t].drop_pct; pct > 0 {
 		if whash(u32(idx)*2246822519 + 101) % 100 >= u32(pct) do drop = .None
@@ -1523,10 +1610,14 @@ golem_project_reserve :: proc(gs: ^Game_State, id: int) -> bool {
 	// leaves the Plank courses buildable instead of stalling the whole
 	// monument.  The source scan walks the whole grid, so remember items
 	// that already failed — one scan per distinct missing item, not per cell.
+	golem_note_in_way(gs, p)
+	if gs.golem_transfer[id].build_wait > 0 do return false
 	failed: [8]Item
 	n_failed := 0
 	for ci in 0 ..< len(info.cells) {
 		if golem_project_cell_done(gs, p, ci) || p.reserved[ci] != 0 do continue
+		T := p.anchor + info.cells[ci].off
+		if golem_footprint_in_way(gs, T) do continue
 		item := info.cells[ci].item
 		if g.carry != item && !golem_pack_has(g, item) {
 			known_dry := false
@@ -1601,7 +1692,7 @@ golem_assign_build :: proc(gs: ^Game_State, id: int) {
 	if golem_project_cell_done(gs, p, ci) {golem_release_reservation(gs, id); return}
 	if g.carry == c.item {
 		g.job = .Place
-		_ = golem_set_target(gs, g, dest)
+		golem_route_place(gs, g, id, dest)
 		return
 	}
 	if g.carry != .None {
@@ -1617,7 +1708,7 @@ golem_assign_build :: proc(gs: ^Game_State, id: int) {
 	if golem_pack_take(g,c.item) {
 		g.carry=c.item
 		g.job=.Place
-		_ = golem_set_target(gs,g,dest)
+		golem_route_place(gs,g,id,dest)
 		return
 	}
 	if src, ok := golem_find_item_source(gs, golem_tile(g), c.item, golem_transfer_skips(gs, id)); ok {
@@ -1631,6 +1722,61 @@ golem_assign_build :: proc(gs: ^Game_State, id: int) {
 	}
 }
 
+// No route to the site: a full pack is set down first (golem_set_target) and
+// tried again next frame; with room and still no way the worker gives up.
+golem_route_place :: proc(gs: ^Game_State, g: ^Golem, id: int, cell: [2]i32) {
+	full := !golem_pack_has_room(g)
+	if golem_set_target(gs, g, cell) || full do return
+	golem_give_up_place(gs, g, id, cell)
+}
+
+// A block in a monument footprint no worker may dig (golem_dig_forbidden:
+// the player's masonry or structure, a den, the ground under the base, an
+// undiggable block).  A natural block or a golem's loose navigation block is
+// dug out on arrival (golem_clear_footprint).  A monument block that fell
+// lands as .Placed and reads as the player's.
+golem_footprint_in_way :: proc(gs: ^Game_State, T: [2]i32) -> bool {
+	t := get_tile(&gs.world, int(T.x), int(T.y))
+	if t == .Air || t == .Void do return false   // an open cell's stale flag is nothing
+	return golem_dig_forbidden(gs, int(T.x), int(T.y), false)
+}
+
+// Every worker skips those cells without a dropped-list slot; the crew says
+// so once per set of them, like golem_note_starved (card 152: a Clay in a
+// Stone cell looped reserve, Place and release with nothing said).
+golem_note_in_way :: proc(gs: ^Game_State, p: ^Golem_Project) {
+	info := &golem_plan_table[p.plan]
+	n, first := 0, [2]i32{}
+	for ci in 0 ..< len(info.cells) {
+		T := p.anchor + info.cells[ci].off
+		if golem_project_cell_done(gs, p, ci) || !golem_footprint_in_way(gs, T) do continue
+		if n == 0 do first = T
+		n += 1
+	}
+	if n == gs.golem_in_way_n && first == gs.golem_in_way_at do return
+	gs.golem_in_way_n, gs.golem_in_way_at = n, first
+	if n == 1 do notify(gs, "crew: something is in the way at %d,%d", first.x, first.y)
+	if n > 1 do notify(gs, "crew: %d blocks in the way, first at %d,%d", n, first.x, first.y)
+}
+
+
+// The worker digs a foreign block out of its cell (to its pack, a full pack
+// sets one block down) and places on a later frame.  Another golem's block
+// in its grace is waited out.  A block that turned up in the way after the
+// cell was reserved is let go: the in-way set names it on the next reserve.
+golem_clear_footprint :: proc(gs: ^Game_State, g: ^Golem, id: int, T: [2]i32) {
+	if golem_footprint_in_way(gs, T) {
+		golem_release_reservation(gs, id)
+		golem_reset_job(g)
+		return
+	}
+	if !golem_pack_has_room(g) {
+		spawn_ground_item(&gs.world, golem_tile(g), golem_pack_pop(g), 1)
+		gs.save_dirty = true
+	}
+	_ = golem_mine_tile(gs, g, T, true, id)   // a cooldown or a grace refuses it for now: the worker tries again next frame
+}
+
 golem_place_reserved :: proc(gs: ^Game_State, id: int) {
 	g := &gs.golems.data[id]
 	p := &gs.golems.projects[g.level]
@@ -1639,8 +1785,10 @@ golem_place_reserved :: proc(gs: ^Game_State, id: int) {
 	if ci < 0 || ci >= len(info.cells) {golem_release_reservation(gs, id); return}
 	c := info.cells[ci]
 	T := p.anchor + c.off
-	if g.carry != c.item || (get_tile(&gs.world, int(T.x), int(T.y)) != .Air && get_tile(&gs.world, int(T.x), int(T.y)) != .Void) {
-		golem_release_reservation(gs, id); golem_reset_job(g); return
+	if g.carry != c.item {golem_release_reservation(gs, id); golem_reset_job(g); return}
+	if t := get_tile(&gs.world, int(T.x), int(T.y)); t != .Air && t != .Void {
+		golem_clear_footprint(gs, g, id, T)
+		return
 	}
 	set_tile(&gs.world, int(T.x), int(T.y), c.tile)
 	gs.monument_cells[gs.level_index][grid_idx(int(T.x), int(T.y))] = c.tile

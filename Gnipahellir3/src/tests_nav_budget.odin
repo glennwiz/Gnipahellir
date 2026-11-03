@@ -478,18 +478,28 @@ a_spent_frame_does_not_call_a_worker_lost :: proc(t: ^testing.T) {
 only_a_failed_fetch_or_delivery_drops_its_target :: proc(t: ^testing.T) {
     // Card 145: a transfer target with no route goes on the worker's dropped
     // list.  A mine or a walk with no route is the gather skip list's business.
+    // Card 152: a Build errand (fetch or place) first sets a full pack down
+    // and tries again with room to dig; a Place with no route waits instead
+    // of taking a slot (golem_give_up_place).
     gs := nav_state()
     defer free(gs)
     // Roster slot 3, so the list is the worker's own and not slot 0's.
     g := &gs.golems.data[3]
     g^ = nav_pocket(gs)^
     gs.golems.data[0] = {}
-    for golem_pack_add(g, .Stone_Block) {}   // a full pack cannot dig the wall
     beyond := [2]i32{26, 59}   // past even a Place's reach
     for job in Golem_Job {
         gs.golem_transfer[3] = {}
         g.job = job
+        g.pack = {}
+        for golem_pack_add(g, .Stone_Block) {}   // a full pack cannot dig
         testing.expect(t, !golem_set_target(gs, g, beyond, false), "the far side is sealed")
+        build := job == .Fetch_Build || job == .Place
+        testing.expect_value(t, golem_pack_count(g) == 0, build)
+        if build {
+            testing.expect(t, !golem_resource_skipped(beyond, golem_transfer_skips(gs, 3)), "not yet: it may dig now")
+            testing.expect(t, !golem_set_target(gs, g, beyond, false), "the placed wall is sealed with room too")
+        }
         testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)
         dropped := golem_resource_skipped(beyond, golem_transfer_skips(gs, 3))
         testing.expect_value(t, dropped, job == .Fetch_Build || job == .Deliver)

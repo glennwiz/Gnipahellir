@@ -7674,6 +7674,7 @@ gather_zone_climb_back_still_fires_without_a_marked_resource :: proc(t: ^testing
 	for x in 18..=24 do set_tile(&gs.world,x,70,.Stone)
 	gs.golems.work[gs.level_index]={active=true,min={18,60},max={24,61}}
 	g:=&gs.golems.data[0]
+	set_tile(&gs.world,21,60,.Stone)   // card 152: an empty zone is not climbed to
 	g^={status=.Deployed,level=gs.level_index,pos={21.2,69-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
 
 	golem_assign_gather(gs,0)
@@ -9085,11 +9086,12 @@ a_grave_coffer_is_not_crew_storage :: proc(t: ^testing.T) {
 	testing.expect_value(t, barrel_total(tithe), 1)
 }
 
-// A barrel on top of a six-high natural stone ledge west of the site: the
-// golem walks up to its foot and finds no route the rest of the way.
+// A barrel on top of a six-high Rune_Stone ledge west of the site: the
+// golem walks up to its foot and finds no route the rest of the way.  (Not
+// natural stone: since card 152 a worker sets a full pack down and digs.)
 @(private = "file")
 ledge_barrel :: proc(gs: ^Game_State, item: Item) -> (^Barrel_State, [2]i32) {
-	for y in SURFACE_Y-6 ..< SURFACE_Y do for x in 70 ..= 86 do set_tile(&gs.world, x, y, .Stone)
+	for y in SURFACE_Y-6 ..< SURFACE_Y do for x in 70 ..= 86 do set_tile(&gs.world, x, y, .Rune_Stone)
 	at := [2]i32{80, i32(SURFACE_Y - 7)}
 	set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
 	barrel_on_placed(gs, at)
@@ -9105,7 +9107,8 @@ a_build_fetch_with_no_route_takes_the_next_source :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	p, _ := hearth_site_without_iron(gs)
 	far, far_at := ledge_barrel(gs, .Iron_Bar)
-	hearth_build_stocked(gs, p, 400)
+	// It tunnels under the ledge until its pack is full, then the stall drops it.
+	hearth_build_stocked(gs, p, 400 + int(GOLEM_TRANSFER_STALL_TIME / gs.delta_time))
 	testing.expect(t, !p.complete, "the only bar is out of reach")
 	testing.expect_value(t, barrel_total(far), 1)
 	testing.expect(t, golem_resource_skipped(far_at, golem_transfer_skips(gs, 0)), "the worker gave that source up")
@@ -9308,6 +9311,547 @@ a_transfer_that_gets_no_closer_drops_its_target :: proc(t: ^testing.T) {
 	golem_transfer_drop(gs, 0, far)
 	golem_watch_transfer(gs, g, 0)
 	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 1)
+}
+
+@(private = "file")
+notices_with :: proc(gs: ^Game_State, s: string) -> (n: int) {
+	for i in 0 ..< gs.notify.count {
+		it := &gs.notify.items[i]
+		if strings.contains(string(it.text[:it.len]), s) do n += 1
+	}
+	return
+}
+
+@(test)
+a_build_worker_dug_in_with_a_full_pack_sets_it_down_and_digs_on :: proc(t: ^testing.T) {
+	// Card 152, from card 145's repro: the Iron Bar sits in a barrel inside a
+	// Rune_Stone hut whose walls stop at the surface row.  The worker digs
+	// under the wall, fills its pack with the spoil, and has no route out:
+	// it set nothing down and gave the bar up, then sat in its hole.  A full
+	// pack is set down where it stands and the worker digs on.
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	for y in SURFACE_Y-6 ..< SURFACE_Y {
+		set_tile(&gs.world, 126, y, .Rune_Stone)
+		set_tile(&gs.world, 134, y, .Rune_Stone)
+	}
+	for x in 126 ..= 134 do set_tile(&gs.world, x, SURFACE_Y - 6, .Rune_Stone)
+	at := [2]i32{128, i32(SURFACE_Y - 1)}
+	set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+	barrel_on_placed(gs, at)
+	hut := barrel_at(gs, gs.level_index, at)
+	barrel_deposit(hut, .Iron_Bar, 1)
+	for _ in 0 ..< 2000 {
+		update_golems(gs)
+		update_gravity(gs)
+		if p.complete do break
+	}
+	testing.expect(t, p.complete, "the worker digs on to the bar and finishes the hearth")
+	testing.expect_value(t, barrel_total(hut), 0)
+	spoil := 0
+	for y in SURFACE_Y ..< SURFACE_Y + 4 do for x in 118 ..= 130 {
+		idx := grid_idx(x, y)
+		if gs.world.items[idx] != .None do spoil += int(gs.world.item_counts[idx])
+	}
+	testing.expect(t, spoil >= 1, "the spoil it set down lies in its tunnel")
+}
+
+// A worker in a sealed Rune_Stone cell level with the hearth site, holding the
+// capstone's Iron Bar with a full pack of spoil: there is no way out.
+@(private = "file")
+sealed_place_worker :: proc(gs: ^Game_State) -> (p: ^Golem_Project, g: ^Golem) {
+	gs.delta_time = .05
+	test_hold(gs, .Command_Wand)
+	gs.player.pos = {119, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-4 ..< SURFACE_Y do for x in 115 ..= 125 do set_tile(&gs.world, x, y, .Air)
+	golem_project_start(gs, .Clay_Hearth, {120, i32(SURFACE_Y - 1)})
+	assert(gs.golems.projects[gs.level_index].active)
+	for y in 50 ..= 54 do for x in 98 ..= 102 do set_tile(&gs.world, x, y, .Rune_Stone)
+	set_tile(&gs.world, 100, 53, .Air)
+	set_tile(&gs.world, 100, 52, .Air)
+	gs.golems.data[0] = {status = .Deployed, level = gs.level_index, pos = {99.725, 54 - GOLEM_H},
+		hp = GOLEM_HP, mode = .Build, facing = 1, project_cell = -1, carry = .Iron_Bar, grounded = true}
+	g = &gs.golems.data[0]
+	for &it in g.pack do it = .Dirt
+	return &gs.golems.projects[gs.level_index], g
+}
+
+@(test)
+a_place_with_no_route_sets_the_pack_down_then_lets_the_cell_go :: proc(t: ^testing.T) {
+	// Card 152 (1): a worker holding a cell's item with no route to the site
+	// retried that Place every frame forever (job=Place, has_target=false).
+	gs := test_state(); defer free(gs)
+	p, g := sealed_place_worker(gs)
+	capstone := len(golem_plan_table[p.plan].cells) - 1
+	cell := p.anchor + golem_plan_table[p.plan].cells[capstone].off
+	let_go, set_down := -1, -1
+	places := 0
+	for f in 0 ..< int(40 / gs.delta_time) {   // inside GOLEM_TRANSFER_RETRY_TIME
+		update_golems(gs)
+		if g.job == .Place do places += 1
+		if set_down < 0 && golem_pack_count(g) == 0 do set_down = f
+		if let_go < 0 && gs.golem_transfer[0].build_wait > 0 do let_go = f
+	}
+	testing.expect(t, let_go >= 0 && let_go < 10, "the unreachable site is let go at once")
+	testing.expect(t, set_down >= 0 && let_go > set_down, "after one more try with the pack set down")
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)   // a site takes no dropped-list slot
+	testing.expect_value(t, golem_pack_count(g), 0)
+	testing.expect_value(t, gs.world.items[grid_idx(100, 53)], Item.Dirt)
+	testing.expect_value(t, int(gs.world.item_counts[grid_idx(100, 53)]), len(g.pack))
+	testing.expect_value(t, g.carry, Item.Iron_Bar)
+	testing.expect_value(t, p.reserved[capstone], u8(0))
+	testing.expect_value(t, g.project_cell, i16(-1))
+	testing.expect(t, places < 10, "no Place retry after the cell is let go")
+	testing.expect_value(t, notices_with(gs, "can't reach the build at 120,53"), 1)
+	// The wait runs out: it tries once more and says so once more.
+	for _ in 0 ..< int(30 / gs.delta_time) do update_golems(gs)
+	testing.expect_value(t, notices_with(gs, "can't reach the build at 120,53"), 2)
+}
+
+@(test)
+a_place_that_gets_no_closer_lets_the_cell_go :: proc(t: ^testing.T) {
+	// The stall half for Place, on the watch itself.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	test_hold(gs, .Command_Wand)
+	gs.player.pos = {119, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-4 ..< SURFACE_Y do for x in 115 ..= 125 do set_tile(&gs.world, x, y, .Air)
+	testing.expect(t, golem_project_start(gs, .Clay_Hearth, {120, i32(SURFACE_Y - 1)}), "the site is marked")
+	p := &gs.golems.projects[gs.level_index]
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, pos = {100, 70}, hp = GOLEM_HP, mode = .Build,
+		job = .Place, target = {120, 53}, has_target = true, carry = .Iron_Bar, project_cell = 11}
+	p.reserved[11] = 1
+	steps := int(GOLEM_TRANSFER_STALL_TIME / gs.delta_time)
+	for _ in 0 ..< steps - 2 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, g.has_target, "not yet")
+	for _ in 0 ..< 4 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, !g.has_target, "no progress drops the site cell")
+	testing.expect_value(t, g.job, Golem_Job.Idle)
+	testing.expect_value(t, p.reserved[11], u8(0))
+	testing.expect_value(t, g.project_cell, i16(-1))
+	testing.expect(t, gs.golem_transfer[0].build_wait > 0, "the worker waits before it builds again")
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)
+	testing.expect_value(t, notices_with(gs, "can't reach the build at 120,53"), 1)
+	// Nothing is reserved again inside the wait.
+	testing.expect(t, !golem_project_reserve(gs, 0), "the worker waits")
+	testing.expect_value(t, p.reserved[11], u8(0))
+
+	// A Place in its own reach (wider than a transfer's) is not a stall.
+	gs.golem_transfer[0] = {}
+	g.job, g.target, g.has_target = .Place, golem_tile(g) + {GOLEM_BUILD_REACH, 0}, true
+	for _ in 0 ..< steps * 2 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, g.has_target, "in build reach never stalls")
+	// A walk to the player on a call is not a climb to the zone.
+	gs.golem_calls[0] = .Come
+	g.job, g.target, g.has_target = .Seek, {140, 20}, true
+	for _ in 0 ..< steps * 2 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, g.has_target, "a call is not watched")
+	testing.expect_value(t, gs.golem_transfer[0].climb_wait, f32(0))
+}
+
+@(test)
+a_foreign_block_in_a_footprint_is_dug_out_or_named :: proc(t: ^testing.T) {
+	// Card 152 (3): a Clay that landed in a Stone cell looped reserve, Place,
+	// release with nothing said.  A natural block is dug out and built over;
+	// the player's own block stays, and the crew says it is in the way, once.
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	natural := [2]i32{122, i32(SURFACE_Y - 2)}   // the Clay cell {2,-1}: cleared before the Plank above leans on it
+	set_tile(&gs.world, int(natural.x), int(natural.y), .Stone)
+	player := [2]i32{118, i32(SURFACE_Y - 1)}    // the Stone cell {-2,0}
+	set_tile(&gs.world, int(player.x), int(player.y), .Clay)
+	gs.world.tile_flags[grid_idx(int(player.x), int(player.y))] += {.Placed}
+	testing.expect(t, golem_footprint_in_way(gs, player), "the player's block is in the way")
+	testing.expect(t, !golem_footprint_in_way(gs, natural), "a natural block is not")
+	loose := [2]i32{119, i32(SURFACE_Y - 3)}
+	set_tile(&gs.world, int(loose.x), int(loose.y), .Stone)
+	gs.world.tile_flags[grid_idx(int(loose.x), int(loose.y))] += {.Placed, .Golem_Placed}
+	testing.expect(t, !golem_footprint_in_way(gs, loose), "nor is a golem's navigation block")
+	set_tile(&gs.world, int(loose.x), int(loose.y), .Air)
+	gs.world.tile_flags[grid_idx(int(loose.x), int(loose.y))] -= {.Golem_Placed}
+	testing.expect(t, !golem_footprint_in_way(gs, loose), "an open cell with a stale flag is not in the way")
+	gs.world.tile_flags[grid_idx(int(loose.x), int(loose.y))] -= {.Placed}
+	gs.golems.data[1] = gs.golems.data[0]   // a second worker: the crew says it once
+	gs.golems.data[1].pos.x -= 1
+	g := &gs.golems.data[0]
+	in_way_places := 0
+	for _ in 0 ..< int(50 / gs.delta_time) {   // inside GOLEM_TRANSFER_RETRY_TIME
+		update_golems(gs)
+		for &w in gs.golems.data[:2] do if w.job == .Place && w.target == player do in_way_places += 1
+	}
+	testing.expect_value(t, get_tile(&gs.world, int(natural.x), int(natural.y)), Tile_Type.Clay)
+	testing.expect_value(t, get_tile(&gs.world, int(player.x), int(player.y)), Tile_Type.Clay)
+	testing.expect(t, .Placed in gs.world.tile_flags[grid_idx(int(player.x), int(player.y))], "the player's block is untouched")
+	testing.expect_value(t, notices_with(gs, "something is in the way at 118,53"), 1)
+	testing.expect_value(t, notices_with(gs, "something is in the way"), 1)
+	testing.expect_value(t, in_way_places, 0)
+	info := &golem_plan_table[p.plan]
+	for ci in 0 ..< len(info.cells) - 1 {
+		T := p.anchor + info.cells[ci].off
+		if T == player do continue
+		testing.expectf(t, golem_project_cell_done(gs, p, ci), "cell %v is built", T)
+	}
+}
+
+@(test)
+many_blocks_in_a_footprint_are_said_once_and_keep_no_list_slot :: proc(t: ^testing.T) {
+	// Card 152's review probe: eleven of the hearth's cells hold the
+	// player's Dirt.  Noted one by one into the eight-slot dropped list they
+	// fell off it and were noted again every frame (4400 drops, 11 notices a
+	// frame), and pushed the worker's dropped sources off with them.
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	info := &golem_plan_table[p.plan]
+	for ci in 0 ..< len(info.cells) - 1 {
+		T := p.anchor + info.cells[ci].off
+		set_tile(&gs.world, int(T.x), int(T.y), .Dirt)
+		gs.world.tile_flags[grid_idx(int(T.x), int(T.y))] += {.Placed}
+	}
+	src := [2]i32{140, 94}
+	golem_transfer_drop(gs, 0, src)
+	for _ in 0 ..< 400 do update_golems(gs)
+	testing.expect_value(t, notices_with(gs, "in the way"), 1)
+	testing.expect_value(t, notices_with(gs, "crew: 11 blocks in the way, first at 118,53"), 1)
+	testing.expect_value(t, gs.golem_transfer[0].n, 1)
+	testing.expect(t, golem_resource_skipped(src, golem_transfer_skips(gs, 0)), "the dropped source stays dropped")
+
+	// Cleared: nothing to say.  One block, then the same one moved: each set is said.
+	for ci in 0 ..< len(info.cells) - 1 {
+		T := p.anchor + info.cells[ci].off
+		set_tile(&gs.world, int(T.x), int(T.y), .Air)
+		gs.world.tile_flags[grid_idx(int(T.x), int(T.y))] -= {.Placed}
+	}
+	// The worker is busy building now; the set is said whenever one reserves.
+	golem_note_in_way(gs, p)
+	testing.expect_value(t, notices_with(gs, "in the way"), 1)
+	a, b := [2]i32{118, i32(SURFACE_Y - 1)}, [2]i32{122, i32(SURFACE_Y - 1)}
+	set_tile(&gs.world, int(a.x), int(a.y), .Dirt)
+	gs.world.tile_flags[grid_idx(int(a.x), int(a.y))] += {.Placed}
+	golem_note_in_way(gs, p)
+	golem_note_in_way(gs, p)
+	set_tile(&gs.world, int(a.x), int(a.y), .Air)
+	gs.world.tile_flags[grid_idx(int(a.x), int(a.y))] -= {.Placed}
+	set_tile(&gs.world, int(b.x), int(b.y), .Dirt)
+	gs.world.tile_flags[grid_idx(int(b.x), int(b.y))] += {.Placed}
+	golem_note_in_way(gs, p)
+	testing.expect_value(t, notices_with(gs, "something is in the way at 118,53"), 1)
+	testing.expect_value(t, notices_with(gs, "something is in the way at 122,53"), 1)
+}
+
+@(test)
+a_worker_that_cannot_climb_back_to_its_zone_gives_up_and_says_so :: proc(t: ^testing.T) {
+	// Card 152 (4): a worker with cargo below its zone, under the player's
+	// stone, sat in job=Seek, has_target=false forever.  No headway for
+	// GOLEM_TRANSFER_STALL_TIME: it waits where it is and says so, once.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	for y in 38 ..= 56 do for x in 85 ..= 105 do set_tile(&gs.world, x, y, .Air)
+	for x in 85 ..= 105 do set_tile(&gs.world, x, 57, .Stone)
+	for x in 85 ..= 105 {
+		set_tile(&gs.world, x, 50, .Stone)
+		gs.world.tile_flags[grid_idx(x, 50)] += {.Placed}
+	}
+	gs.golems.work[gs.level_index] = {active = true, min = {90, 40}, max = {100, 45}}
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, pos = {95.2, 57 - GOLEM_H}, hp = GOLEM_HP, mode = .Gather,
+		grounded = true, facing = 1, project_cell = -1, carry = .Stone_Block}
+	gave_up := -1
+	for f in 0 ..< int(2 * GOLEM_TRANSFER_STALL_TIME / gs.delta_time) {
+		update_golems(gs)
+		if gave_up < 0 && gs.golem_transfer[0].climb_wait > 0 do gave_up = f
+	}
+	testing.expect(t, gave_up >= 0, "the worker gives the climb up")
+	testing.expect_value(t, notices_with(gs, "can't climb back to its zone"), 1)
+	seeks := 0
+	for _ in 0 ..< int(30 / gs.delta_time) {   // inside GOLEM_TRANSFER_RETRY_TIME
+		update_golems(gs)
+		if g.job == .Seek || g.recovering do seeks += 1
+	}
+	testing.expect_value(t, seeks, 0)
+	testing.expect_value(t, g.carry, Item.Stone_Block)
+	testing.expect_value(t, golem_tile(g).y, i32(56))
+	testing.expect_value(t, notices_with(gs, "can't climb back to its zone"), 1)
+	// The wait runs out and the worker tries again, and gives up again.
+	for _ in 0 ..< int(45 / gs.delta_time) {
+		update_golems(gs)
+		if g.recovering do seeks += 1
+	}
+	testing.expect(t, seeks > 0, "after the wait the worker climbs again")
+	testing.expect_value(t, notices_with(gs, "can't climb back to its zone"), 2)
+}
+
+@(test)
+a_worker_below_an_empty_zone_stays_on_the_ground :: proc(t: ^testing.T) {
+	// Card 146's review: a Gather zone in the air with nothing in it made the
+	// worker climb ~13 s, idle 1 s on Quick Clay, fall and climb again, every
+	// ~14 s forever.  It stays on the floor and the crew says so once.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	for y in 25 ..= 60 do for x in 10 ..= 30 do set_tile(&gs.world, x, y, .Air)
+	for x in 10 ..= 30 do set_tile(&gs.world, x, 61, .Stone)
+	gs.golems.work[gs.level_index] = {active = true, min = {15, 30}, max = {25, 40}}
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, pos = {20.2, 61 - GOLEM_H}, hp = GOLEM_HP, mode = .Gather,
+		grounded = true, facing = 1, project_cell = -1}
+	gs.golems.data[1] = g^
+	gs.golems.data[1].pos.x = 22.2
+	climbs := 0
+	for _ in 0 ..< int(40 / gs.delta_time) {
+		update_golems(gs)
+		if g.recovering || gs.golems.data[1].recovering do climbs += 1
+	}
+	testing.expect_value(t, climbs, 0)
+	testing.expect_value(t, golem_tile(g).y, i32(60))
+	testing.expect_value(t, notices_with(gs, "zone is empty"), 1)
+	// A resource in it is work: the worker climbs for it.
+	set_tile(&gs.world, 20, 35, .Stone)
+	for _ in 0 ..< 20 {
+		update_golems(gs)
+		if g.recovering do climbs += 1
+	}
+	testing.expect(t, climbs > 0, "a zone with work in it is climbed to")
+}
+
+@(test)
+a_reset_golem_stops_walking :: proc(t: ^testing.T) {
+	// Card 152: after a stockpile deposit an idle golem slid ~30 tiles on its
+	// old vel.x.  A job reset stands it still.
+	gs := test_state(); defer free(gs)
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, vel = {GOLEM_SPEED, 2}, job = .Deliver, has_target = true}
+	golem_reset_job(g)
+	testing.expect_value(t, g.vel.x, f32(0))
+	testing.expect_value(t, g.vel.y, f32(2))   // a fall goes on
+
+	// In the world: a delivery onto a pile, then nothing to do.
+	gs.delta_time = 1.0 / 60.0
+	for y in SURFACE_Y-4 ..< SURFACE_Y do for x in 80 ..= 140 do set_tile(&gs.world, x, y, .Air)
+	for x in 80 ..= 140 do set_tile(&gs.world, x, SURFACE_Y, .Grass)
+	gs.golems.work[gs.level_index] = {active = true, min = {118, i32(SURFACE_Y - 4)}, max = {124, i32(SURFACE_Y - 1)}}
+	g^ = {status = .Deployed, level = gs.level_index, pos = {121, f32(SURFACE_Y) - GOLEM_H}, hp = GOLEM_HP,
+		mode = .Gather, facing = 1, project_cell = -1, carry = .Stone_Block, grounded = true}
+	for _ in 0 ..< 600 {
+		update_golems(gs)
+		if g.carry == .None && !g.has_target do break
+	}
+	testing.expect_value(t, g.carry, Item.None)
+	x := g.pos.x
+	for _ in 0 ..< 120 do update_golems(gs)
+	testing.expectf(t, abs(g.pos.x - x) < 0.5, "an idle golem stands (moved %v)", g.pos.x - x)
+}
+
+@(test)
+a_worker_clears_its_cell_with_a_full_pack_and_names_what_it_cannot_dig :: proc(t: ^testing.T) {
+	// A natural block in a cell is dug out even with a full pack (one block
+	// is set down for it); one the worker cannot dig is named.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	test_hold(gs, .Command_Wand)
+	gs.player.pos = {119, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-8 ..< SURFACE_Y do for x in 110 ..= 130 do set_tile(&gs.world, x, y, .Air)
+	testing.expect(t, golem_project_start(gs, .Clay_Hearth, {120, i32(SURFACE_Y - 1)}), "the site is marked")
+	p := &gs.golems.projects[gs.level_index]
+	cell := [2]i32{118, i32(SURFACE_Y - 2)}   // the Clay cell {-2,-1}, index 4
+	set_tile(&gs.world, int(cell.x), int(cell.y), .Stone)
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, pos = {116.2, f32(SURFACE_Y) - GOLEM_H}, hp = GOLEM_HP,
+		mode = .Build, grounded = true, facing = 1, carry = .Clay, project_cell = 4,
+		job = .Place, target = cell, has_target = true}
+	p.reserved[4] = 1
+	for &it in g.pack do it = .Dirt
+	for _ in 0 ..< 40 {
+		update_golems(gs)
+		if get_tile(&gs.world, int(cell.x), int(cell.y)) == .Clay do break
+	}
+	testing.expect_value(t, get_tile(&gs.world, int(cell.x), int(cell.y)), Tile_Type.Clay)
+	testing.expect_value(t, g.carry, Item.None)
+	testing.expect(t, golem_pack_has(g, terrain_table[Tile_Type.Stone].drop_item), "the dug block is in the pack")
+	dirt := 0
+	for y in SURFACE_Y-3 ..< SURFACE_Y do for x in 112 ..= 120 do if gs.world.items[grid_idx(x, y)] == .Dirt do dirt += int(gs.world.item_counts[grid_idx(x, y)])
+	testing.expect_value(t, dirt, 1)
+	testing.expect_value(t, notices_with(gs, "in the way"), 0)
+
+	// Rune_Stone cannot be dug: named, let go, not retried.
+	stone := [2]i32{122, i32(SURFACE_Y - 2)}   // the Clay cell {2,-1}, index 5
+	set_tile(&gs.world, int(stone.x), int(stone.y), .Rune_Stone)
+	g.carry, g.project_cell, g.job, g.target, g.has_target = .Clay, 5, .Place, stone, true
+	p.reserved[5] = 1
+	for _ in 0 ..< 40 do update_golems(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(stone.x), int(stone.y)), Tile_Type.Rune_Stone)
+	testing.expect_value(t, p.reserved[5], u8(0))
+	testing.expect_value(t, notices_with(gs, "something is in the way at 122,52"), 1)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)   // the in-way set names it, no slot
+
+	// A natural block it may not dig (the last anchor of the player's block
+	// on it) is in the set too: no worker takes it, the crew says so once.
+	set_tile(&gs.world, int(stone.x), int(stone.y), .Clay)   // cell 5 done: cell 8 is the only Clay cell left
+	under := [2]i32{120, i32(SURFACE_Y - 3)}   // the Clay cell {0,-2}, index 8
+	set_tile(&gs.world, int(under.x), int(under.y), .Stone)
+	gs.world.tile_flags[grid_idx(int(under.x), int(under.y))] = {}   // the world's own flag there
+	set_tile(&gs.world, int(under.x), int(under.y) - 1, .Stone)
+	gs.world.tile_flags[grid_idx(int(under.x), int(under.y) - 1)] += {.Placed}
+	testing.expect(t, removal_undermines(gs, int(under.x), int(under.y)), "fixture: it holds the player's block up")
+	testing.expect(t, golem_footprint_in_way(gs, under), "the anchor of the player's block is in the way")
+	g.carry, g.project_cell, g.job, g.target, g.has_target = .Clay, 8, .Place, under, true
+	g.mode, g.pack = .Build, {}   // a full pack holding a Stone made it a Gather worker above
+	p.reserved[8] = 1
+	gs.golems.data[1] = g^   // a second worker with Clay, waiting for that cell
+	gs.golems.data[1].project_cell, gs.golems.data[1].job, gs.golems.data[1].has_target = -1, .Idle, false
+	for _ in 0 ..< 400 do update_golems(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(under.x), int(under.y)), Tile_Type.Stone)
+	testing.expect_value(t, p.reserved[8], u8(0))
+	testing.expect_value(t, gs.golem_transfer[0].n + gs.golem_transfer[1].n, 0)   // no list slot
+	testing.expect_value(t, notices_with(gs, "something is in the way at 120,51"), 1)
+}
+
+@(test)
+golem_mine_tile_keeps_its_gather_and_path_rules :: proc(t: ^testing.T) {
+	// Card 152 moved golem_mine_tile's path rules into golem_dig_forbidden;
+	// these are the rules both branches keep.
+	gs := test_state(); defer free(gs)
+	for y in 40 ..= 49 do for x in 40 ..= 60 do set_tile(&gs.world, x, y, .Air)
+	for x in 40 ..= 60 do set_tile(&gs.world, x, 50, .Stone)
+	gs.golems.work[gs.level_index] = {active = true, min = {40, 40}, max = {60, 50}}
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, pos = {50.2, 50 - GOLEM_H}, hp = GOLEM_HP, mode = .Gather, grounded = true, project_cell = -1}
+	// Gather: a structure in the zone stays, and so does a block no gather wants.
+	set_tile(&gs.world, 45, 49, .Barrel)
+	gs.world.tile_flags[grid_idx(45, 49)] += {.Golem_Marked}   // not even when marked
+	testing.expect(t, !golem_mine_tile(gs, g, {45, 49}, false, 0), "a structure is not gathered")
+	testing.expect_value(t, get_tile(&gs.world, 45, 49), Tile_Type.Barrel)
+	set_tile(&gs.world, 46, 49, .Rune_Stone)
+	testing.expect(t, !golem_mine_tile(gs, g, {46, 49}, false, 0), "a block of no gather priority is not gathered")
+	testing.expect_value(t, get_tile(&gs.world, 46, 49), Tile_Type.Rune_Stone)
+	// Path: the anchor of the player's block stays, unless the player marked it.
+	set_tile(&gs.world, 55, 48, .Stone)
+	set_tile(&gs.world, 55, 47, .Stone)
+	gs.world.tile_flags[grid_idx(55, 47)] += {.Placed}
+	set_tile(&gs.world, 55, 49, .Air)
+	testing.expect(t, removal_undermines(gs, 55, 48), "fixture: the stone holds the player's block")
+	testing.expect(t, !golem_mine_tile(gs, g, {55, 48}, true, 0), "an anchor is not dug on a path")
+	testing.expect(t, golem_set_block_mark(gs, {55, 48}, true), "the player marks it")
+	testing.expect(t, golem_mine_tile(gs, g, {55, 48}, true, 0), "a marked anchor is the player's order")
+}
+
+@(test)
+a_worker_waits_out_another_golems_grace_in_its_cell :: proc(t: ^testing.T) {
+	// A block another golem laid down a moment ago is its for
+	// GOLEM_BLOCK_GRACE_TIME: the worker waits in its cell, then digs and builds.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	test_hold(gs, .Command_Wand)
+	gs.player.pos = {119, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-8 ..< SURFACE_Y do for x in 110 ..= 130 do set_tile(&gs.world, x, y, .Air)
+	testing.expect(t, golem_project_start(gs, .Clay_Hearth, {120, i32(SURFACE_Y - 1)}), "the site is marked")
+	p := &gs.golems.projects[gs.level_index]
+	cell := [2]i32{118, i32(SURFACE_Y - 2)}   // the Clay cell {-2,-1}, index 4
+	set_tile(&gs.world, int(cell.x), int(cell.y), .Stone)
+	gs.world.tile_flags[grid_idx(int(cell.x), int(cell.y))] = {.Placed, .Golem_Placed}
+	golem_register_block_grace_until(gs, 1, cell, gs.elapsed_time + GOLEM_BLOCK_GRACE_TIME)
+	g := &gs.golems.data[0]
+	g^ = {status = .Deployed, level = gs.level_index, pos = {116.2, f32(SURFACE_Y) - GOLEM_H}, hp = GOLEM_HP,
+		mode = .Build, grounded = true, facing = 1, carry = .Clay, project_cell = 4,
+		job = .Place, target = cell, has_target = true}
+	p.reserved[4] = 1
+	for _ in 0 ..< 40 do update_golems(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(cell.x), int(cell.y)), Tile_Type.Stone)
+	testing.expect_value(t, p.reserved[4], u8(1))
+	testing.expect_value(t, g.job, Golem_Job.Place)
+	testing.expect_value(t, notices_with(gs, "in the way"), 0)
+	gs.elapsed_time += GOLEM_BLOCK_GRACE_TIME + 1
+	for _ in 0 ..< 40 do update_golems(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(cell.x), int(cell.y)), Tile_Type.Clay)
+}
+
+@(test)
+a_footprint_full_of_blocks_of_every_kind_is_said_once :: proc(t: ^testing.T) {
+	// Card 152, third review: every kind a worker may not clear from a
+	// footprint (the player's masonry and structures, an undiggable block,
+	// a den's wall, the ground under the player's block) is skipped with no
+	// list slot and said once per set, however many there are.
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	put :: proc(gs: ^Game_State, x, y: int, t: Tile_Type, flags: bit_set[Tile_Flag; u8]) {
+		set_tile(&gs.world, x, y, t)
+		gs.world.tile_flags[grid_idx(x, y)] = flags
+	}
+	S := SURFACE_Y
+	put(gs, 118, S-1, .Iron_Ore, {}); put(gs, 119, S-1, .Barrel, {})   // 118: a den wall
+	put(gs, 121, S-1, .Rune_Stone, {}); put(gs, 122, S-1, .Rune_Stone, {})
+	put(gs, 118, S-2, .Dirt, {.Placed}); put(gs, 122, S-2, .Dirt, {.Placed})
+	put(gs, 118, S-3, .Iron_Ore, {}); put(gs, 120, S-3, .Barrel, {})   // 118: a den wall (not Wood: a Plank cell of Wood is built)
+	put(gs, 121, S-3, .Rune_Stone, {}); put(gs, 122, S-3, .Dirt, {.Placed})
+	put(gs, 119, S-3, .Stone, {}); put(gs, 119, S-4, .Stone, {.Placed})   // the anchor of the player's stone above the site
+	den := den_owner_fixture(gs)
+	gs.enemies.data[den].builder.anchor = {120, i32(S - 1)}
+	testing.expect(t, den_protected(gs, 118, S-1, -1) && den_protected(gs, 118, S-3, -1), "fixture: two cells are a den's walls")
+	info := &golem_plan_table[p.plan]
+	for ci in 0 ..< len(info.cells) - 1 {
+		T := p.anchor + info.cells[ci].off
+		testing.expectf(t, golem_footprint_in_way(gs, T), "%v is in the way", T)
+	}
+	src := [2]i32{140, 94}
+	golem_transfer_drop(gs, 0, src)
+	gs.golems.data[1] = gs.golems.data[0]
+	gs.golems.data[1].pos.x -= 1
+	for _ in 0 ..< 400 do update_golems(gs)
+	testing.expect_value(t, notices_with(gs, "in the way"), 1)
+	testing.expect_value(t, notices_with(gs, "crew: 11 blocks in the way, first at 118,53"), 1)
+	testing.expect_value(t, gs.golem_transfer[0].n, 1)
+	testing.expect_value(t, gs.golem_transfer[1].n, 0)
+	testing.expect(t, golem_resource_skipped(src, golem_transfer_skips(gs, 0)), "the dropped source stays dropped")
+	testing.expect_value(t, get_tile(&gs.world, 120, S-3), Tile_Type.Barrel)
+	testing.expect_value(t, get_tile(&gs.world, 119, S-3), Tile_Type.Stone)
+}
+
+@(test)
+a_worker_below_its_zone_climbs_only_for_work :: proc(t: ^testing.T) {
+	// The gate on its own: cargo in hand or pack, or a resource in the zone.
+	gs := test_state(); defer free(gs)
+	for y in 25 ..= 60 do for x in 10 ..= 30 do set_tile(&gs.world, x, y, .Air)
+	for x in 10 ..= 30 do set_tile(&gs.world, x, 61, .Stone)
+	gs.golems.work[gs.level_index] = {active = true, min = {15, 30}, max = {25, 40}}
+	g := &gs.golems.data[0]
+	worker := Golem{status = .Deployed, level = gs.level_index, pos = {20.2, 61 - GOLEM_H}, hp = GOLEM_HP,
+		mode = .Gather, grounded = true, facing = 1, project_cell = -1}
+	g^ = worker
+	golem_assign_gather(gs, 0)
+	testing.expect(t, !g.recovering, "empty: no climb")
+	testing.expect(t, gs.golem_transfer[0].empty_said, "and it said so")
+	golem_assign_gather(gs, 0)
+	testing.expect_value(t, notices_with(gs, "zone is empty"), 1)
+
+	g^ = worker
+	_ = golem_pack_add(g, .Dirt)
+	golem_assign_gather(gs, 0)
+	testing.expect(t, g.recovering, "a packed block is cargo to stock beside the zone")
+	testing.expect(t, !gs.golem_transfer[0].empty_said, "work clears the word")
+
+	g^ = worker
+	golem_assign_gather(gs, 0)
+	testing.expect_value(t, notices_with(gs, "zone is empty"), 2)   // empty again, said again
+
+	// A new zone may be empty too: it is said for that one as well.
+	golem_set_zone(gs, {14, 30}, {25, 40})
+	g^ = worker
+	golem_assign_gather(gs, 0)
+	testing.expect_value(t, notices_with(gs, "zone is empty"), 3)
+}
+
+@(test)
+a_snapshot_restore_forgets_dropped_sources :: proc(t: ^testing.T) {
+	// Card 145's review: a same-session load must not keep a source dropped
+	// before it.  snapshot_restore_from rebuilds the state (game_state_init).
+	path :: "gnipahellir_snap_p152_scratch.dat"
+	defer os.remove(path)
+	gs := test_state(); defer free(gs)
+	testing.expect(t, save_game_to(gs, path), "snapshot written")
+	golem_transfer_drop(gs, 0, {140, 94})
+	gs.golem_transfer[0].climb_wait = 30
+	testing.expect(t, snapshot_restore_from(gs, path), "snapshot restored")
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)
+	testing.expect_value(t, gs.golem_transfer[0].climb_wait, f32(0))
 }
 
 @(test)

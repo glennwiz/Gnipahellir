@@ -245,6 +245,9 @@ Golem_Transfer :: struct {
     dropped:  [8][2]i32,  // targets given up on, oldest overwritten first
     n:        int,        // drops so far; the list holds min(n, len(dropped))
     age:      f32,        // seconds since the first drop; the list clears at GOLEM_TRANSFER_RETRY_TIME
+    climb_wait: f32,      // seconds before a worker that gave up its climb back to the zone tries again
+    build_wait: f32,      // seconds before a worker that could not reach its build site reserves again
+    empty_said: bool,     // this worker has said its zone is empty; cleared when the zone has work
 }
 
 GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
@@ -899,6 +902,8 @@ Game_State :: struct {
     golem_quick_clay: Golem_Quick_Clay_State,
     golem_need:   [8]Item, // items the active Build project can't source (golem_project_reserve); transient, not saved — drives the crew's NEEDS feedback
     golem_need_n: int,
+    golem_in_way_n:  int,    // footprint cells the crew may not clear, last said (golem_note_in_way); transient
+    golem_in_way_at: [2]i32, // the first of them
     golem_calls:  [MAX_GOLEMS]Golem_Call, // roster CALL/PICK UP orders; transient, not saved — a reload drops the call and the golem resumes its mode
 
     projectiles: Projectile_Store,
