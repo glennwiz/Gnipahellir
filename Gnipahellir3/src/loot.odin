@@ -35,6 +35,13 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     // First guesses for Glenn to tune.
     .Pond_Frog    = {{.Slime, 1, 1, 1.0}, {}, {}},
     .Ember_Beetle = {{.Coal, 1, 1, 1.0}, {}, {}},
+    .Mole         = {{.Dirt, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.5}, {}},
+}
+
+// What a digging roamer turns up with each hole, on top of the tile's own drop.
+@(rodata)
+dig_drop_table := #partial [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
+    .Mole = {{.Iron_Ore, 1, 1, 0.3}, {.Silver_Ore, 1, 1, 0.1}, {}},
 }
 
 // xorshift64 step.  Zero-guards so a zeroed test state still rolls.
@@ -105,7 +112,11 @@ spawn_ground_item :: proc(w: ^World_Grid, tile: [2]i32, item: Item, count: int) 
 }
 
 roll_enemy_drops :: proc(gs: ^Game_State, kind: Enemy_Kind, tile: [2]i32) {
-    for d in enemy_drop_table[kind] {
+    roll_drops(gs, kind, enemy_drop_table[kind], tile)
+}
+
+roll_drops :: proc(gs: ^Game_State, kind: Enemy_Kind, rows: [MAX_DROP_ROLLS]Drop_Entry, tile: [2]i32) {
+    for d in rows {
         if d.item == .None do continue
         if rand_f32(gs) >= d.chance do continue
         n := rand_range(gs, int(d.min), int(d.max))

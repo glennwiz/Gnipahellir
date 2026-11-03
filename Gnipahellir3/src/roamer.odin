@@ -26,18 +26,34 @@ EMBER_BEETLE_W     :: f32(0.8)
 EMBER_BEETLE_H     :: f32(0.5)
 EMBER_BEETLE_SPEED :: f32(2.5)
 
+MOLE_HP        :: 3
+MOLE_W         :: f32(0.9)
+MOLE_H         :: f32(0.6)
+MOLE_SPEED     :: f32(2.0)
+MOLE_DIG_EVERY :: f32(90)   // seconds of calm between holes
+
 Roamer_Spec :: struct {
     level:    int,   // spawn floors come from find_surface_floor: surface rows only
     cap:      int,   // 0 = not a roamer
     friendly: bool,  // runs on sight and turrets leave it alone
     sight:    i32,   // tiles at which it reacts to the player
     damage:   int,   // bite; only an unhurt hostile comes to use it
+    dig_every: f32,  // seconds of calm between holes; 0 = never digs
 }
 
 @(rodata)
 roamer_table := #partial [Enemy_Kind]Roamer_Spec{
     .Pond_Frog    = {level = LEVEL_SURFACE, cap = 4, friendly = true, sight = 7},
     .Ember_Beetle = {level = LEVEL_SURFACE, cap = 3, sight = 6, damage = 1},
+    .Mole         = {level = LEVEL_SURFACE, cap = 2, friendly = true, sight = 5, dig_every = MOLE_DIG_EVERY},
+}
+
+// What a digging roamer will open.  Never den material or a chest, so a den and
+// a hoard are out of its reach by this table alone.  No Dirt: world gen lays
+// none, and every Dirt in play was placed or settled and carries .Placed.
+@(rodata)
+roamer_earth := #partial [Tile_Type]bool{
+    .Grass = true,
 }
 
 // Step 5b1b.
@@ -100,6 +116,32 @@ roamer_walk :: proc(e: ^Enemy, gs: ^Game_State, dir: int, careful := false) -> b
     return true
 }
 
+// May a roamer open the floor tile (x, y)?  Natural earth only, with nothing
+// standing on it or beside it to fall in, and solid all round the hole, so it
+// is one deep, it opens no cave roof, and a pit never gets dug deeper or wider.
+// Nothing that falls may stand beside or under it, so a plank bridge or a tree
+// leaning on the lip keeps its anchor.
+roamer_may_dig :: proc(gs: ^Game_State, x, y: int) -> bool {
+    w := &gs.world
+    if !roamer_earth[get_tile(w, x, y)] || .Placed in w.tile_flags[grid_idx(x, y)] do return false
+    for dx in -1 ..= 1 do if get_tile(w, x + dx, y - 1) != .Air do return false
+    for n in ([3][2]int{{-1, 0}, {1, 0}, {0, 1}}) {
+        nx, ny := x + n.x, y + n.y
+        if !is_solid(w, nx, ny) || is_faller(w, nx, ny) do return false
+    }
+    return true
+}
+
+// Dig the floor out from under it, through the mine handler, and turn up
+// whatever the row pays into the hole.
+roamer_dig :: proc(e: ^Enemy, id: int, gs: ^Game_State) -> bool {
+    T := builder_tile(e) + {0, 1}
+    if !roamer_may_dig(gs, int(T.x), int(T.y)) do return false
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(id), tile = T})
+    roll_drops(gs, e.kind, dig_drop_table[e.kind], T)
+    return true
+}
+
 // Friendlies run on sight.  A hurt roamer runs from further off and through
 // walls: it knows who hit it.  An unhurt hostile comes for the player it can
 // see and bites, and the rest of the time everyone wanders.
@@ -137,6 +179,12 @@ update_roamer :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             log_action(gs, "%v#%d bites the player", e.kind, id)
         }
         return
+    }
+
+    // A digger's clock runs only in calm; stuck_timer is otherwise a builder's.
+    if spec.dig_every > 0 {
+        b.stuck_timer += dt
+        if b.stuck_timer >= spec.dig_every && e.grounded && roamer_dig(e, id, gs) do b.stuck_timer = 0
     }
 
     // Wander: has_target is "walking", facing the way.

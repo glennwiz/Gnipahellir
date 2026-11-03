@@ -43,6 +43,7 @@ Enemy_Kind :: enum u8 {
     // Roamers (roamer.odin): they live on a level, not in a wave.
     Pond_Frog,
     Ember_Beetle,
+    Mole,
 }
 
 Enemy_Nav :: struct {
