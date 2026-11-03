@@ -31,7 +31,8 @@ BIRD_WING_SPAN       :: f32(0.45)  // tiles, body to wing tip
 BIRD_WING_LIFT       :: f32(0.3)   // tiles, wing tip height at the top of a flap
 
 // Open rows between gen_sky_level's cloud bands, whose puffs reach 3 rows down.
-// The rainbow arcs through them: flocks fly in front of it and its foot islands.
+// The rainbow and the sky islands stand in them: flocks are scenery and fly in
+// front of the arc, its foot islands and the islands under it.
 @(rodata)
 bird_lanes := [MAX_BIRD_FLOCKS + 1]f32{20, 34, 46, 58, 70}
 

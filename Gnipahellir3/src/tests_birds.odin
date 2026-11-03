@@ -50,6 +50,17 @@ birds_are_stepped_by_game_update :: proc(t: ^testing.T) {
     testing.expect(t, gs.birds.seeded, "game_update runs the birds")
 }
 
+// One island's box as gen_sky_islands lays it, tree crown to cloud underside.
+// The bands stay outside every box, so a band cloud in a lane still fails.
+@(private = "file")
+over_a_sky_island :: proc(seed: u32, x, y: int) -> bool {
+    for spot, i in SKY_ISLAND_SPOTS {
+        x0 := spot.x + int(whash(seed + u32(i) * 3571) % SKY_ISLAND_NUDGE)
+        if x >= x0 && x < x0 + SKY_ISLAND_W && y >= spot.y - SKY_TREE_HEIGHT - 2 && y <= spot.y + 2 do return true
+    }
+    return false
+}
+
 @(test)
 flocks_hold_their_lanes_clear_of_every_cloud :: proc(t: ^testing.T) {
     gs := sky_state()
@@ -73,6 +84,7 @@ flocks_hold_their_lanes_clear_of_every_cloud :: proc(t: ^testing.T) {
                 if tile == .Rainbow_Bridge do continue // crossed on purpose
                 on_a_foot := abs(x - RAINBOW_CENTER_X) >= RAINBOW_HALF_SPAN
                 if on_a_foot && int(b.pos.y) >= RAINBOW_FOOT_Y do continue // and its islands
+                if over_a_sky_island(seed, x, int(b.pos.y)) do continue // these too
                 testing.expect_value(t, tile, Tile_Type.Air)
             }
         }

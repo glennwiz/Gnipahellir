@@ -207,6 +207,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"Boiler", "Steam_Engine", "Water_Bucket", "Lava_Bucket", "Magic_Lava_Bucket", "Gem_Replicator",
 		"GreenBerrie", "Green_Cave_Mushroom", "Magic_Kettle", "Mana_Wheel", "Mana_Pipe", "Mossy_Stone",
 		"Fire_Wand", "Rainbow_Laser", "Turret_Pillar", "Flame_Head", "Water_Head", "Earth_Head",
+		"Sky_Egg",
 	}},
 	{Tile_Flag, {
 		"Fire", "Poison", "Corrupted", "Lit", "Placed", "Golem_Placed", "Golem_Marked", "Piped",
@@ -223,7 +224,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"World_Anchor", "Quick_Clay", "Sand", "Rune_Coffer", "Steam", "Boiler", "Steam_Engine",
 		"Gem_Replicator", "Green_Cave_Mushroom", "Mossy_Stone", "Magic_Kettle", "Mana_Wheel",
 		"Mana_Mist", "Hell_Gate", "Final_Seal", "Rainbow_Laser", "Rune_Stone", "Scoria", "Turret_Pillar",
-		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge",
+		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest",
 	}},
 }
 

@@ -86,6 +86,7 @@ Draw_Style :: enum u8 {
 	Pixel_Mossy_Stone,
 	Pixel_Mana_Mist,
 	Pixel_Rainbow_Bridge,
+	Pixel_Nest,
 }
 
 @(rodata)
@@ -113,6 +114,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style {
 	.Mossy_Stone           = .Pixel_Mossy_Stone,
 	.Mana_Mist             = .Pixel_Mana_Mist,
 	.Rainbow_Bridge        = .Pixel_Rainbow_Bridge,
+	.Nest                  = .Pixel_Nest,
 	// all others default to .Solid (zero value)
 }
 
@@ -816,6 +818,16 @@ draw_pixel_rainbow_bridge :: proc(bx, by: i32) {
 	}
 }
 
+// A bowl of twigs on the cloud, open at the top so what it holds shows.
+draw_pixel_nest :: proc(bx, by: i32) {
+	twig := terrain_table[.Nest].color
+	dark := rl.Color{105, 78, 45, 255}
+	rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Air].color)
+	rl.DrawRectangle(bx, by + 6, CELL_SIZE, 4, twig)
+	rl.DrawRectangle(bx + 1, by + 7, 3, 1, dark)
+	rl.DrawRectangle(bx + 6, by + 8, 3, 1, dark)
+}
+
 // ─── Sky apparition — a wordless tease at the top of the world ────────────────
 //
 //  gen_sky_level fills rows 0-27 with pure Air above the topmost cloud band
@@ -1032,6 +1044,8 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
 		draw_pixel_mossy_stone(gs, px, py, x, y)
 	case .Pixel_Rainbow_Bridge:
 		draw_pixel_rainbow_bridge(px, py)
+	case .Pixel_Nest:
+		draw_pixel_nest(px, py)
 	case .Pixel_Rune_Scroll_Chest:
 		bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
 		rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)
