@@ -20,8 +20,16 @@ def p1():
         pass
     if b.count('Wood_Log')<7: raise Exception('logs')
     b.st()
+    stuck=0; lastx=None
     for i in range(40):
         if b.walkx(95,limit=60): break
+        # Run 7: 30 s jumping at a trunk at x 88, which p1 never chopped (it only cuts x<88).
+        # No progress twice: cut the trunk in the way, else give up loudly.
+        x=round(b.p['x'],1); stuck=stuck+1 if x==lastx else 0; lastx=x
+        if stuck>=2:
+            nc=int(b.p['x']+.4)+1; fy=b.pos()[1]
+            if any(b.t(nc,y)=='Wood' for y in (fy-1,fy)): b.chop(nc,nc-1); stuck=0; continue
+            raise Exception('p1: stuck walking to the shaft at x %s'%x)
         b.a(1,jump=True,move='right'); b.a(15,move='right')
     b.a(2,move='left')
     b.sel('Wood_Log'); b.a(2,place=[96,58]); assert b.t(96,58)=='Wood'
@@ -33,8 +41,14 @@ def p1():
     b.walkx(97,limit=6); b.sel('Pickaxe')
     for c in((98,60),(98,61)): b.dig(*c)
     b.a(3); b.st()
-    b.a(2,craft='Plank'); b.craft('Crafting_Bench'); b.sel('Crafting_Bench'); b.a(3,place=[98,61])
-    assert b.t(98,61)=='Crafting_Bench'
+    b.a(2,craft='Plank'); b.craft('Crafting_Bench'); b.sel('Crafting_Bench')
+    # run 8: (98,61) had no floor in one world ("It needs solid ground under it"): try the cells round the feet
+    fx,fy=b.pos()
+    for c in [(98,61),(fx+1,fy),(fx-1,fy),(fx+2,fy),(fx-2,fy)]:
+        if not b.solid(*c) and b.solid(c[0],c[1]+1):
+            b.a(3,place=list(c))
+            if b.t(*c)=='Crafting_Bench': break
+    assert b.count('Crafting_Bench')==0,('bench not placed',b.r['notes'][-1:])
     b.a(2); b.craft('Fire_Wand'); b.craft('Potion_Health'); b.a(2,craft='Plank'); b.st()
     assert b.count('Fire_Wand')==1
     b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.craft('Tree_Grower',3); b.st()
