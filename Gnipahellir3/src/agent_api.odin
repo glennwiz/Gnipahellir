@@ -7,7 +7,8 @@ package game
 // One port on 127.0.0.1.  A connection is judged by its first line: GET gets the
 // plain-text brief (agent_write_brief) and is closed, a JSON object makes it the
 // client, anything else is refused.  So a connection that has said nothing yet
-// does not drive the game, and the brief is served while a client plays.
+// does not drive the game, and the brief is served while a client plays.  Up to
+// AGENT_PENDING_MAX connections wait on their first line at once.
 //
 // Protocol: one JSON object per line each way.
 //   {"cmd":"state"}                                 full state, x/y/w/h pick the tile view
@@ -116,6 +117,7 @@ AGENT_ITEMS_MAX    :: 2000 // ground piles in one reply; caps it well inside AGE
 AGENT_SEND_TIMEOUT :: 2 * time.Second // a client that stops reading is dropped
 AGENT_LISTEN_S     :: 60   // a listen's wait when it names none
 AGENT_LISTEN_MAX_S :: 600
+AGENT_PENDING_MAX  :: 4    // connections waiting on their first line; a newer one past this sheds the oldest
 
 // Printable, JSON-safe, one per distinct tile type seen in a view.
 AGENT_ACTS_FILE    :: "acts.jsonl"
@@ -134,6 +136,13 @@ Agent_Plan_Step :: struct {
     frames: int,
     len:    int,
     line:   [AGENT_PLAN_LINE]u8,
+}
+
+// An accepted connection whose first line is not in yet.
+Agent_Pending :: struct {
+    sock: net.TCP_Socket,
+    len:  int,
+    buf:  [AGENT_LINE_MAX]u8,
 }
 
 Agent_Link :: struct {
@@ -156,10 +165,8 @@ Agent_Link :: struct {
     port:        int,
     listener:    net.TCP_Socket,
     client:      net.TCP_Socket,
-    pending:     net.TCP_Socket, // accepted, first line not in yet
-    pending_open: bool,
-    pend_len:    int,
-    pend_buf:    [AGENT_LINE_MAX]u8,
+    pending:     [AGENT_PENDING_MAX]Agent_Pending, // oldest first
+    pending_n:   int,
     brief:       [AGENT_BRIEF_MAX]u8,
     panel:       Agent_Panel,
     cmd:         Agent_Command,  // the act in progress
@@ -195,7 +202,7 @@ agent_open :: proc(link: ^Agent_Link) {
             AGENT_PORT_ENV, AGENT_SANDBOX_FILE)
         os.exit(1)
     }
-    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = port}, 1)
+    sock, err := agent_bind(port)
     if err != nil {
         fmt.eprintfln("agent api: cannot listen on 127.0.0.1:%d: %v", port, err)
         os.exit(1)
@@ -272,10 +279,16 @@ agent_run_reset :: proc(gs: ^Game_State, seed: u32, port: int, save_path, stats_
     gs.ui.agent_port   = port
 }
 
-// Loopback only: this is the one bind the title makes.
+// Loopback only, the one bind the game makes.  A burst of connections between two
+// frames queues in the backlog until the next frame accepts it.
+agent_bind :: proc(port: int) -> (net.TCP_Socket, net.Network_Error) {
+    return net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = port}, AGENT_PENDING_MAX)
+}
+
+// The title's ports, from base up.
 agent_title_bind :: proc(base: int) -> (sock: net.TCP_Socket, port: int, ok: bool) {
     for p in base ..< base + AGENT_TITLE_PORTS {
-        s, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = p}, 1)
+        s, err := agent_bind(p)
         if err == nil do return s, p, true
     }
     return
@@ -333,7 +346,7 @@ agent_close :: proc(link: ^Agent_Link, gs: ^Game_State) {
         agent_fight_flush(link)
         os.close(link.fight_file)
     }
-    if link.pending_open do agent_pending_close(link)
+    for link.pending_n > 0 do agent_pending_close(link, 0)
     link.listening = false
 }
 
@@ -347,7 +360,9 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
         agent_send(link, gs)
     }
     agent_accept(link)
-    if link.pending_open do agent_read_pending(link, gs)
+    for i := 0; i < link.pending_n; {
+        if !agent_read_pending(link, gs, i) do i += 1  // a served one leaves, and the next takes its index
+    }
     if link.connected && (agent_listening(link) || link.awaiting) do agent_read(link, gs)
     if !link.connected {
         gs.agent = {}  // back to the keyboard, with nothing of the last act left to replay
@@ -356,70 +371,77 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     return agent_drive(link, gs)
 }
 
-// One connection waits on its first line.  A newer one replaces it: no timer can
-// run here, and a silent connection must not keep the brief from the next.
+// Connections wait on their first line side by side, so a brief fetched just
+// before a connect is still answered.  Past AGENT_PENDING_MAX the oldest goes:
+// no timer can run here, and silent connections must not keep the brief from the next.
 @(private="file")
 agent_accept :: proc(link: ^Agent_Link) {
     for {
         sock, _, err := net.accept_tcp(link.listener)
         if err != nil do return
-        if link.pending_open do agent_pending_close(link)
+        if link.pending_n == AGENT_PENDING_MAX do agent_pending_close(link, 0)
         net.set_blocking(sock, false)
         net.set_option(sock, .TCP_Nodelay, true)
-        link.pending      = sock
-        link.pending_open = true
-        link.pend_len     = 0
+        link.pending[link.pending_n].sock = sock
+        link.pending[link.pending_n].len  = 0
+        link.pending_n += 1
     }
 }
 
+// Drops slot i; the younger ones move up, so the oldest stays first.
 @(private="file")
-agent_pending_close :: proc(link: ^Agent_Link) {
-    net.close(link.pending)
-    link.pending_open = false
+agent_pending_close :: proc(link: ^Agent_Link, i: int, close := true) {
+    if close do net.close(link.pending[i].sock)
+    copy(link.pending[i:link.pending_n], link.pending[i + 1:link.pending_n])
+    link.pending_n -= 1
 }
 
+// Reads slot i; true when it is answered or gone and has left the list.
 @(private="file")
-agent_read_pending :: proc(link: ^Agent_Link, gs: ^Game_State) {
+agent_read_pending :: proc(link: ^Agent_Link, gs: ^Game_State, i: int) -> (left: bool) {
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
-    n, err := net.recv_tcp(link.pending, link.pend_buf[link.pend_len:])
-    if err == .Would_Block || err == .Timeout do return
+    p := &link.pending[i]
+    n, err := net.recv_tcp(p.sock, p.buf[p.len:])
+    if err == .Would_Block || err == .Timeout do return false
     if err != nil || n == 0 {  // gone, or a line this long is not the protocol
-        agent_pending_close(link)
-        return
+        agent_pending_close(link, i)
+        return true
     }
-    link.pend_len += n
-    nl := strings.index_byte(string(link.pend_buf[:link.pend_len]), '\n')
-    if nl < 0 do return
-    line := string(link.pend_buf[:nl])
+    p.len += n
+    nl := strings.index_byte(string(p.buf[:p.len]), '\n')
+    if nl < 0 do return false
+    line := string(p.buf[:nl])
     switch {
     case strings.has_prefix(line, "GET "):
-        agent_pending_send(link, agent_http_brief(link, gs))
+        agent_pending_send(p.sock, agent_http_brief(link, gs))
     case !strings.has_prefix(strings.trim_left_space(line), "{"):
         // Not only tidiness: a web page can POST here, and its body must not play.
-        agent_pending_send(link, `{"ok":false,"error":"send one JSON object per line, or GET for the brief"}` + "\n")
+        agent_pending_send(p.sock, `{"ok":false,"error":"send one JSON object per line, or GET for the brief"}` + "\n")
     case link.connected:
-        agent_pending_send(link, `{"ok":false,"error":"another agent is playing: one client at a time"}` + "\n")
+        agent_pending_send(p.sock, `{"ok":false,"error":"another agent is playing: one client at a time"}` + "\n")
     case:
-        agent_promote(link, gs)
-        return
+        agent_promote(link, gs, i)
+        return true
     }
-    agent_pending_close(link)
+    agent_pending_close(link, i)
+    return true
 }
 
 @(private="file")
-agent_pending_send :: proc(link: ^Agent_Link, text: string) {
-    net.set_blocking(link.pending, true)
-    net.set_option(link.pending, .Send_Timeout, AGENT_SEND_TIMEOUT)
-    net.send_tcp(link.pending, transmute([]u8)text)
+agent_pending_send :: proc(sock: net.TCP_Socket, text: string) {
+    net.set_blocking(sock, true)
+    net.set_option(sock, .Send_Timeout, AGENT_SEND_TIMEOUT)
+    net.send_tcp(sock, transmute([]u8)text)
 }
 
 // The first JSON line: this connection is the client from here, that line first.
 @(private="file")
-agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State) {
-    link.client       = link.pending
-    link.pending_open = false
+agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, i: int) {
+    p := &link.pending[i]
+    link.client       = p.sock
     link.connected    = true
-    link.in_len       = copy(link.in_buf[:], link.pend_buf[:link.pend_len])
+    link.in_len       = copy(link.in_buf[:], p.buf[:p.len])
+    agent_pending_close(link, i, false)
     link.realtime     = false
     link.panel        = {}
     link.plan_stopped = {}
