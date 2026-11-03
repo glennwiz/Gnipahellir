@@ -7745,6 +7745,321 @@ gatherer_cleans_navigation_masonry_after_natural_resources :: proc(t:^testing.T)
 	testing.expect_value(t,player_cleanup,player_block)
 }
 
+// Agent run 8, life 7: a Gather zone over the base mined the ground under a
+// Smelter and a bench, and both broke.  The footing of a structure and of a
+// player-placed block stays; the rest of the zone is gathered.
+@(test)
+gather_zone_leaves_the_footing_of_the_base :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	gs.player.pos={8,8}
+	for y in 54..=59 do for x in 14..=26 do set_tile(&gs.world,x,y,.Air)
+	for x in 14..=26 do set_tile(&gs.world,x,61,.Stone)
+	for x in 16..=24 do set_tile(&gs.world,x,60,.Grass)
+	set_tile(&gs.world,14,60,.Stone); set_tile(&gs.world,15,60,.Air)
+	set_tile(&gs.world,25,60,.Air); set_tile(&gs.world,26,60,.Stone)
+	bench,block:=[2]i32{19,59},[2]i32{24,59}
+	set_tile(&gs.world,int(bench.x),int(bench.y),.Crafting_Bench)
+	set_tile(&gs.world,int(block.x),int(block.y),.Stone)
+	gs.world.tile_flags[grid_idx(int(block.x),int(block.y))]+={.Placed}
+	gs.golems.work[gs.level_index]={active=true,min={16,60},max={24,60}}
+	gs.golems.data[0]={status=.Deployed,level=gs.level_index,pos={16.2,60-GOLEM_H},hp=GOLEM_HP,
+		mode=.Gather,facing=1,grounded=true,project_cell=-1}
+
+	for _ in 0..<6000 {
+		update_golems(gs)
+		update_undermined(gs)
+		process_events(gs)
+		eq_clear(&gs.events)
+		update_gravity(gs)
+	}
+	testing.expect_value(t,get_tile(&gs.world,int(bench.x),int(bench.y)),Tile_Type.Crafting_Bench)
+	testing.expect_value(t,get_tile(&gs.world,int(block.x),int(block.y)),Tile_Type.Stone)
+	testing.expect_value(t,get_tile(&gs.world,int(bench.x),60),Tile_Type.Grass)
+	testing.expect_value(t,get_tile(&gs.world,int(block.x),60),Tile_Type.Grass)
+	for x in 16..=24 do if x!=int(bench.x) && x!=int(block.x) {
+		testing.expectf(t,get_tile(&gs.world,x,60)!=.Grass,"ground at x=%d around the footing is gathered",x)
+	}
+}
+
+// A golem plan may not tunnel through a structure's footing, or it would stall
+// at a cell golem_mine_tile refuses.  A raider's plan still may: undermining a
+// base is its trade.
+@(test)
+only_a_golem_route_spares_the_footing_of_a_structure :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 50..=62 do for x in 10..=30 do set_tile(&gs.world,x,y,.Stone)
+	set_tile(&gs.world,14,58,.Void); set_tile(&gs.world,26,58,.Void)
+	footing:=[2]i32{20,58}
+	set_tile(&gs.world,20,57,.Crafting_Bench)
+	golem,raider:Nav_Path
+	in_route :: proc(p:^Nav_Path,T:[2]i32) -> bool {
+		for i in 0..<p.len do if p.tiles[i]==T do return true
+		return false
+	}
+	testing.expect(t,astar_dig(gs,{14,58},{26,58},0,MAX_NAV_PATH,&raider),"fixture: a raider digs across")
+	testing.expect(t,in_route(&raider,footing),"a raider's straight dig takes the footing")
+	testing.expect(t,astar_dig(gs,{14,58},{26,58},0,MAX_NAV_PATH,&golem,protect_placed=true),"a golem digs across too")
+	testing.expect(t,!in_route(&golem,footing),"a golem goes round the footing")
+	golem_set_block_mark(gs,footing,true)
+	testing.expect(t,astar_dig(gs,{14,58},{26,58},0,MAX_NAV_PATH,&golem,protect_placed=true),"a golem digs across a marked footing")
+	testing.expect(t,in_route(&golem,footing),"a marked footing is the player's order")
+}
+
+@(test)
+what_a_golem_may_not_dig_from_under_the_base :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 50..=62 do for x in 8..=33 do set_tile(&gs.world,x,y,.Void)
+	for x in 10..=30 do set_tile(&gs.world,x,60,.Grass)
+	testing.expect(t,!removal_undermines(gs,12,60),"bare ground is free")
+	set_tile(&gs.world,15,59,.Crafting_Bench)
+	testing.expect(t,removal_undermines(gs,15,60),"the ground under a structure stays")
+	set_tile(&gs.world,20,59,.Stone)
+	gs.world.tile_flags[grid_idx(20,59)]+={.Placed}
+	testing.expect(t,removal_undermines(gs,20,60),"the ground under a player's block stays")
+	set_tile(&gs.world,26,59,.Stone)
+	gs.world.tile_flags[grid_idx(26,59)]+={.Placed,.Golem_Placed}
+	testing.expect(t,!removal_undermines(gs,26,60),"a golem's own masonry holds nothing back")
+	set_tile(&gs.world,18,59,.Stone)
+	testing.expect(t,!removal_undermines(gs,18,60),"natural rock holds nothing back")
+	set_tile(&gs.world,21,59,.Stone)
+	testing.expect(t,!removal_undermines(gs,20,60),"a player's block held up beside keeps no ground")
+	testing.expect_value(t,get_tile(&gs.world,20,60),Tile_Type.Grass)
+	set_tile(&gs.world,29,59,.Iron_Ore)
+	gs.world.tile_flags[grid_idx(29,59)]+={.Placed}
+	testing.expect(t,!removal_undermines(gs,29,60),"a placed block that never falls keeps no ground")
+	set_tile(&gs.world,23,59,.Wood)
+	testing.expect(t,!removal_undermines(gs,23,60),"a natural trunk is not the player's work")
+	testing.expect(t,!removal_undermines(gs,5,0),"the top row looks at no cell above the world")
+	set_tile(&gs.world,11,61,.Stone)
+	gs.world.tile_flags[grid_idx(11,61)]+={.Placed}
+	testing.expect(t,removal_undermines(gs,11,60),"the ground a player's block hangs from stays")
+	set_tile(&gs.world,31,60,.Stone)
+	gs.world.tile_flags[grid_idx(31,60)]+={.Placed}
+	testing.expect(t,removal_undermines(gs,30,60),"the ground a player's block leans on stays")
+	set_tile(&gs.world,27,59,.Stone)
+	gs.world.tile_flags[grid_idx(27,59)]+={.Placed}
+	set_tile(&gs.world,28,59,.Stone)
+	set_tile(&gs.world,27,61,.Stone)
+	gs.world.tile_flags[grid_idx(27,61)]+={.Placed}
+	testing.expect(t,removal_undermines(gs,27,60),"one held block does not excuse the next")
+
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={15.2,59-GOLEM_H},hp=GOLEM_HP,mode=.Gather,project_cell=-1}
+	testing.expect(t,!golem_mine_tile(gs,g,{15,60},true,0),"path clearing leaves a footing")
+	gs.golems.work[gs.level_index]={active=true,min={10,60},max={30,60}}
+	testing.expect(t,!golem_mine_tile(gs,g,{15,60},false,0),"a gather swing leaves a footing")
+	golem_set_block_mark(gs,{15,60},true)
+	testing.expect(t,golem_mine_tile(gs,g,{15,60},false,0),"a marked footing is mined")
+
+	// The leaning block is no idle worry: take its ground and it falls.
+	set_tile(&gs.world,30,60,.Void)
+	gravity_check_removed(gs,30,60)
+	testing.expect(t,get_tile(&gs.world,31,60)!=.Stone,"a block held only sideways falls with its ground")
+}
+
+// held_memo keeps answers while one A* search runs.  Each case below is one a
+// careless memo gets wrong; every answer is also checked against a fresh ask.
+@(private="file")
+memo_site :: proc() -> ^Game_State {
+	gs:=test_state()
+	for y in 50..=66 do for x in 10..=40 do set_tile(&gs.world,x,y,.Void)
+	return gs
+}
+
+@(private="file")
+memo_place :: proc(gs:^Game_State,x,y:int,t:Tile_Type=.Stone) {
+	set_tile(&gs.world,x,y,t)
+	gs.world.tile_flags[grid_idx(x,y)]+={.Placed}
+}
+
+@(private="file")
+memo_ask :: proc(t:^testing.T,gs:^Game_State,x,y:int,want:bool,loc:=#caller_location) {
+	testing.expect_value(t,removal_undermines(gs,x,y,true),want,loc=loc)
+	testing.expect_value(t,removal_undermines(gs,x,y,true),want,loc=loc)  // asked again
+	saved:=new(Held_Memo); defer free(saved)
+	saved^=gs.held_memo
+	testing.expect_value(t,removal_undermines(gs,x,y),want,loc=loc)       // fresh
+	gs.held_memo=saved^
+}
+
+@(test)
+a_kept_answer_never_vouches_for_the_cell_it_used :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	// Wood W (natural) - Q - P, P on P2, P2 on grass G: all of it hangs on G.
+	set_tile(&gs.world,22,59,.Wood)
+	memo_place(gs,21,59); memo_place(gs,20,59); memo_place(gs,20,60)
+	set_tile(&gs.world,20,61,.Grass)
+	held_memo_reset(&gs.held_memo)
+	memo_ask(t,gs,22,59,false)  // Q holds by P, P2, G: kept
+	memo_ask(t,gs,21,59,false)  // P holds by P2, G, inside the kept answer
+	memo_ask(t,gs,20,61,true)   // G was that answer's anchor: all of it falls
+
+	// Two answers share one anchor A.  The second may not take A over, or
+	// the first forgets it leaned on A.
+	set_tile(&gs.world,27,63,.Wood); memo_place(gs,28,63); memo_place(gs,29,63)
+	set_tile(&gs.world,30,63,.Grass)
+	memo_place(gs,31,63); memo_place(gs,32,63); set_tile(&gs.world,33,63,.Wood)
+	memo_place(gs,32,64); memo_place(gs,32,65); set_tile(&gs.world,32,66,.Grass)  // the right one also stands, further off
+	held_memo_reset(&gs.held_memo)
+	memo_ask(t,gs,27,63,false)
+	memo_ask(t,gs,33,63,false)
+	memo_ask(t,gs,30,63,true)
+}
+
+// An answer found by passing through an older one may not take its cells:
+// the older answer would forget the cell it leaned on.
+@(test)
+an_answer_found_through_an_older_one_is_not_kept :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	// Wood W - Z - S - C, C on grass G; H above C, under grass H2.
+	set_tile(&gs.world,23,59,.Wood)
+	memo_place(gs,22,59); memo_place(gs,21,59); memo_place(gs,20,59)
+	set_tile(&gs.world,20,60,.Grass)
+	memo_place(gs,20,58); set_tile(&gs.world,20,57,.Grass)
+	held_memo_reset(&gs.held_memo)
+	memo_ask(t,gs,23,59,false)  // Z holds by S, C, G
+	memo_ask(t,gs,20,60,false)  // C holds by H, through S of the older answer
+	memo_ask(t,gs,20,59,true)   // without C, S and Z hang on the wood
+}
+
+// Card 145's repro: a crew raised a Clay Hearth's 11 masonry cells, then its
+// own route dug the grass under the foundation and all of it fell.  Before
+// the core goes in, that masonry hangs on its grass alone.  A golem may take
+// grass from under it only while the rest still holds it up.
+@(test)
+a_golem_leaves_a_monument_its_last_ground :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	for x in 12..=36 do set_tile(&gs.world,x,61,.Grass)
+	A:=[2]i32{24,60}
+	gs.golems.projects[gs.level_index]={active=true,plan=.Clay_Hearth,level=gs.level_index,anchor=A}
+	g:=&gs.golems.data[0]
+	cells:=golem_plan_table[.Clay_Hearth].cells
+	for c, ci in cells do if c.tile!=.Clay_Hearth {
+		g^={status=.Deployed,level=gs.level_index,hp=GOLEM_HP,mode=.Build,project_cell=i16(ci),carry=c.item}
+		golem_place_reserved(gs,0)
+		T:=A+c.off
+		testing.expect_value(t,get_tile(&gs.world,int(T.x),int(T.y)),c.tile)
+	}
+	for dug:=true; dug; {
+		dug=false
+		for x in 12..=36 do if get_tile(&gs.world,x,61)==.Grass && !removal_undermines(gs,x,61) {
+			set_tile(&gs.world,x,61,.Void)
+			gravity_check_removed(gs,x,61)
+			dug=true
+		}
+	}
+	for c in cells do if c.tile!=.Clay_Hearth {
+		T:=A+c.off
+		testing.expectf(t,get_tile(&gs.world,int(T.x),int(T.y))==c.tile,"masonry at %v stands",T)
+	}
+	left:=0
+	for x in 12..=36 do if get_tile(&gs.world,x,61)==.Grass do left+=1
+	testing.expect_value(t,left,1)
+}
+
+// A stack holds what it stands on, and no more.
+@(test)
+a_stack_beside_a_block_holds_it_only_from_the_ground :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	set_tile(&gs.world,20,61,.Grass)
+	memo_place(gs,20,60)
+	set_tile(&gs.world,20,59,.Crafting_Bench)
+	testing.expect(t,removal_undermines(gs,20,61),"the bench stands on the block, not the block on the bench")
+}
+
+// gravity's own limit: 256 blocks are searched, a 257th says held.  A piece of
+// exactly 256 still falls.
+@(test)
+a_piece_of_256_hanging_on_one_cell_keeps_it :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	for y in 45..=70 do for x in 8..=40 do set_tile(&gs.world,x,y,.Void)
+	for y in 50..=65 do for x in 12..=27 do memo_place(gs,x,y)
+	set_tile(&gs.world,20,66,.Grass)
+	testing.expect_value(t,(27-12+1)*(65-50+1),MAX_FALLING)
+	testing.expect(t,removal_undermines(gs,20,66),"256 placed blocks on one grass cell")
+	memo_place(gs,28,50)
+	testing.expect(t,!removal_undermines(gs,20,66),"a 257th is past what gravity searches: it stands")
+}
+
+@(test)
+an_answer_that_leaned_on_a_stack_is_not_kept :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	// W (natural wood) - Q - R - a bench standing on grass.
+	set_tile(&gs.world,23,59,.Wood)
+	memo_place(gs,22,59); memo_place(gs,21,59)
+	set_tile(&gs.world,20,59,.Crafting_Bench)
+	set_tile(&gs.world,20,60,.Grass)
+	held_memo_reset(&gs.held_memo)
+	memo_ask(t,gs,23,59,false)
+	memo_ask(t,gs,20,59,true)  // without the bench R and Q hang on the wood
+}
+
+@(test)
+a_moved_world_is_asked_afresh :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	set_tile(&gs.world,15,60,.Grass)
+	set_tile(&gs.world,15,59,.Crafting_Bench)
+	testing.expect(t,removal_undermines(gs,15,60),"a bench stands on it")
+	set_tile(&gs.world,15,59,.Void)
+	testing.expect(t,!removal_undermines(gs,15,60),"the bench is gone")
+
+	set_tile(&gs.world,22,59,.Wood)
+	memo_place(gs,21,59); memo_place(gs,20,59); memo_place(gs,20,60)
+	set_tile(&gs.world,20,61,.Grass)
+	testing.expect(t,!removal_undermines(gs,22,59),"held by its grass")
+	set_tile(&gs.world,20,61,.Void)
+	testing.expect(t,removal_undermines(gs,22,59),"the grass is gone")
+
+	// The id wraps: the memo starts over and old answers count for nothing.
+	set_tile(&gs.world,20,61,.Grass)
+	gs.held_memo.id=max(u32)-3
+	testing.expect(t,!removal_undermines(gs,22,59),"held by its grass, near the wrap")
+	for k in 0..<6 {
+		grass:=k%2==1
+		set_tile(&gs.world,20,61,.Grass if grass else .Void)
+		testing.expectf(t,removal_undermines(gs,22,59)!=grass,"call %d across the wrap, grass %v",k,grass)
+	}
+}
+
+// Gravity moves blocks between its own searches; an answer from before the
+// move holds nothing up.
+@(test)
+gravity_asks_afresh_after_the_world_moved :: proc(t:^testing.T) {
+	gs:=memo_site(); defer free(gs)
+	for y in 55..=58 do memo_place(gs,30,y)
+	set_tile(&gs.world,30,59,.Stone)
+	memo_place(gs,31,55)
+	set_tile(&gs.world,31,55,.Void)
+	gs.world.tile_flags[grid_idx(31,55)]-={.Placed}
+	gravity_check_removed(gs,31,55)  // the tower is searched top down and held
+	testing.expect_value(t,get_tile(&gs.world,30,55),Tile_Type.Stone)
+	set_tile(&gs.world,30,59,.Void)
+	gravity_check_removed(gs,30,59)
+	testing.expect(t,get_tile(&gs.world,30,58)!=.Stone,"the tower lost its ground and falls")
+}
+
+// One A* search keeps answers; the next one, after the world moved, may not.
+@(test)
+each_golem_search_asks_afresh :: proc(t:^testing.T) {
+	gs:=test_state(); defer free(gs)
+	for y in 50..=62 do for x in 10..=30 do set_tile(&gs.world,x,y,.Stone)
+	set_tile(&gs.world,14,58,.Void); set_tile(&gs.world,26,58,.Void)
+	for c in ([3][2]int{{20,56},{21,57},{19,56}}) do set_tile(&gs.world,c.x,c.y,.Void)
+	memo_place(gs,20,57); memo_place(gs,19,57)  // P on the route, held by Q beside it
+	route:Nav_Path
+	in_route :: proc(p:^Nav_Path,T:[2]i32) -> bool {
+		for i in 0..<p.len do if p.tiles[i]==T do return true
+		return false
+	}
+	testing.expect(t,astar_dig(gs,{14,58},{26,58},0,MAX_NAV_PATH,&route,protect_placed=true))
+	testing.expect(t,in_route(&route,{20,58}),"P is held by Q: its ground may go")
+	set_tile(&gs.world,19,57,.Void)
+	gs.world.tile_flags[grid_idx(19,57)]-={.Placed}
+	testing.expect(t,astar_dig(gs,{14,58},{26,58},0,MAX_NAV_PATH,&route,protect_placed=true))
+	testing.expect(t,!in_route(&route,{20,58}),"Q is gone: P hangs on its ground")
+}
+
 @(test)
 fresh_golem_masonry_has_cross_worker_grace :: proc(t:^testing.T) {
 	gs:=test_state(); defer free(gs)

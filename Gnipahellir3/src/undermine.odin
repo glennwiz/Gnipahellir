@@ -59,3 +59,41 @@ update_undermined :: proc(gs: ^Game_State) {
         eq_push(&gs.events, Event{type = .Tile_Mined, source = WORLD_ID, tile = {i32(x), i32(y)}})
     }
 }
+
+// Would emptying (x,y) bring the player's work down?  A structure resting on
+// it breaks (is_undermined), and a player-placed block it alone anchors falls
+// (gravity).  Golems leave such a cell alone.  A block with an anchor of its
+// own besides (x,y), or a stack beside it standing on one, is settled by a
+// look at its neighbours; only a block without one costs a gravity search,
+// with the cell emptied for the length of it.  in_search: the caller (one A*
+// search, which asks of a cell many times) keeps the world still between
+// calls, so answers carry over; anyone else starts fresh.
+removal_undermines :: proc(gs: ^Game_State, x, y: int, in_search := false) -> bool {
+    DIRS :: [4][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}}
+    w, m := &gs.world, &gs.held_memo
+    if !in_search do held_memo_reset(m)
+    i := grid_idx(x, y)
+    if m.asked[i] != 0 && m.asked[i] >= m.floor do return m.answer[i]
+    m.asked[i] = m.id
+    m.answer[i] = true
+    if needs_ground(get_tile(w, x, y - 1)) do return true
+    blocks: for d in DIRS {
+        nx, ny := x + d[0], y + d[1]
+        if !in_bounds(nx, ny) do continue
+        f := w.tile_flags[grid_idx(nx, ny)]
+        if .Placed not_in f || .Golem_Placed in f || !is_faller(w, nx, ny) do continue
+        for e in DIRS {
+            if e == -d do continue
+            ax, ay := nx + e[0], ny + e[1]
+            for needs_ground(get_tile(w, ax, ay)) do ay += 1  // a stack holds what it stands on
+            if is_anchor_cell(w, ax, ay) do continue blocks
+        }
+        was := w.terrain[i]
+        w.terrain[i] = .Void
+        held := gravity_piece_held(gs, nx, ny, {x, y})
+        w.terrain[i] = was
+        if !held do return true
+    }
+    m.answer[i] = false
+    return false
+}

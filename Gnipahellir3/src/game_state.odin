@@ -856,6 +856,19 @@ Persistent_Stats :: struct {
 
 // ─── Game State (fat struct) ──────────────────────────────────────────────────
 
+// Scratch for gravity_piece_held (gravity.odin) and removal_undermines
+// (undermine.odin): visited marks stamped with a search id, so no search
+// clears a grid, and the answers found, kept while the world stands still
+// (held_memo_reset ends that).  Transient, never saved.
+Held_Memo :: struct {
+    seen:    [GRID_W * GRID_H]u32, // id of the last search to visit the cell
+    held_in: [GRID_W * GRID_H]u32, // id of the recorded held piece the cell is part of
+    asked:   [GRID_W * GRID_H]u32, // removal_undermines answered here at this id
+    answer:  [GRID_W * GRID_H]bool, // and said this
+    id:      u32,                  // the last search id given out
+    floor:   u32,                  // pieces recorded below this id are stale
+}
+
 Game_State :: struct {
     world:       World_Grid,
     level_index: int,
@@ -881,6 +894,7 @@ Game_State :: struct {
     monument_cells: Monument_Cells, // saved
     golem_grace: Golem_Grace_State,
     golem_marks: Golem_Mark_Index,
+    held_memo:   Held_Memo, // transient gravity search scratch (gravity.odin)
     golem_quick_clay: Golem_Quick_Clay_State,
     golem_need:   [8]Item, // items the active Build project can't source (golem_project_reserve); transient, not saved — drives the crew's NEEDS feedback
     golem_need_n: int,
