@@ -169,6 +169,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 	}},
 	{Enemy_Kind, {
 		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle", "Rain_Wisp", "Rock_Harpy",
+		"Mole",
 	}},
 	{Equip_Slot, {
 		"None", "Weapon", "Head", "Chest", "Hands", "Legs", "Feet", "Charm", "Tool", "Charm_2",

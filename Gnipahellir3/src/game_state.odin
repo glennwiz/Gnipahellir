@@ -45,6 +45,7 @@ Enemy_Kind :: enum u8 {
     Ember_Beetle,
     Rain_Wisp,
     Rock_Harpy,
+    Mole,
 }
 
 Enemy_Nav :: struct {
