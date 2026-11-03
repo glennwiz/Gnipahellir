@@ -8666,6 +8666,55 @@ golem_quick_clay_dissolves_once_worker_moves_away :: proc(t:^testing.T) {
 }
 
 @(test)
+golem_idle_on_its_quick_clay_comes_down :: proc(t:^testing.T) {
+	// Run 8 life 1: a worker parked Idle on its own Quick Clay at (111,46)
+	// with air down to row 53 once the tree under it was cut. With no work
+	// (no zone) its foothold dissolves after GOLEM_IDLE_FOOTHOLD_TIME.
+	gs:=test_state(); defer free(gs)
+	for y in 40..=53 do for x in 15..=25 do set_tile(&gs.world,x,y,.Air)
+	for x in 15..=25 do set_tile(&gs.world,x,54,.Stone)
+	gs.golems.work[gs.level_index]={}
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={20.2,46-GOLEM_H},hp=GOLEM_HP,mode=.Gather,grounded=true,project_cell=-1}
+	golem_place_quick_clay(gs,g,0,{20,46})
+	for _ in 0..<int(GOLEM_IDLE_FOOTHOLD_TIME*30) do update_golems(gs)
+	testing.expect_value(t,get_tile(&gs.world,20,46),Tile_Type.Quick_Clay)
+	for _ in 0..<300 do update_golems(gs)
+	testing.expect(t,get_tile(&gs.world,20,46)!=Tile_Type.Quick_Clay,"an idle worker's foothold should dissolve")
+	testing.expect_value(t,golem_tile(g).y,i32(53))
+	testing.expect(t,g.grounded,"the worker should land on the real floor")
+	testing.expect_value(t,g.hp,GOLEM_HP)
+}
+
+@(test)
+golem_reset_mid_climb_does_not_climb_to_the_map_top :: proc(t:^testing.T) {
+	// Run 8: a zone change reset a climbing worker's job, leaving it
+	// recovering toward target (0,0); it pillared to the map top, Idle.
+	gs:=test_state(); defer free(gs)
+	gs.delta_time=.05
+	for y in 20..=60 do for x in 28..=32 do set_tile(&gs.world,x,y,.Air)
+	for x in 28..=32 do set_tile(&gs.world,x,61,.Stone)
+	g:=&gs.golems.data[0]
+	g^={status=.Deployed,level=gs.level_index,pos={30.2,61-GOLEM_H},hp=GOLEM_HP,mode=.Gather,
+		job=.Seek,target={30,40},has_target=true,grounded=true,facing=1,project_cell=-1,
+		recovering=true,recover_from=60}
+	for _ in 0..<20 do update_golems(gs)
+	testing.expect(t,golem_tile(g).y<60,"the fixture climb should have started")
+	golem_set_zone(gs,{28,52},{32,60})
+	testing.expect(t,!g.recovering,"a reset job ends the climb")
+	top:=golem_tile(g).y
+	for _ in 0..<600 {
+		update_golems(gs)
+		top=min(top,golem_tile(g).y)
+		if g.recovering && g.job==.Idle {
+			testing.expect(t,false,"a climbing worker must not report Idle")
+			break
+		}
+	}
+	testing.expectf(t,top>=50,"the worker climbed to row %d with nothing above it to reach",top)
+}
+
+@(test)
 golem_sweep_clears_quick_clay_orphaned_by_a_load :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	g := &gs.golems.data[0]

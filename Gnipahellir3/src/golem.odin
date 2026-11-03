@@ -28,6 +28,7 @@ GOLEM_BLOCK_GRACE_TIME :: f32(3.0)
 GOLEM_QUICK_CLAY_LINGER :: i32(2) // chebyshev tiles a worker may stray before its old foothold dissolves
 GOLEM_TRANSFER_STALL_TIME :: f32(10.0) // seconds a fetch or delivery may go without getting closer before it drops that target
 GOLEM_TRANSFER_RETRY_TIME :: f32(60.0) // seconds before dropped sources and stores are tried again
+GOLEM_IDLE_FOOTHOLD_TIME :: f32(1.0) // seconds a golem may stand idle before its own Quick Clay dissolves under it
 
 Golem_Build_Cell :: struct {
 	off:  [2]i32,
@@ -268,6 +269,9 @@ golem_damage :: proc(gs: ^Game_State, id, damage: int) {
 }
 
 golem_reset_job :: proc(g: ^Golem) {
+	// A climb is toward the target; with the target gone it would climb
+	// toward row 0 (run 8: a zone change sent one to the map top, Idle).
+	g.recovering = false
 	g.job = .Idle
 	g.target = {}
 	g.has_target = false
@@ -1289,8 +1293,11 @@ golem_tick_quick_clay :: proc(gs: ^Game_State) {
 	for &slot in gs.golem_quick_clay.blocks {
 		if !slot.active || slot.level != gs.level_index do continue
 		g := &gs.golems.data[slot.owner]
+		// An idle worker has nothing to stand up there for (run 8: one parked
+		// on its pillar in mid air after the tree under it was cut).
 		if g.status != .Deployed || g.level != gs.level_index ||
-		   chebyshev(golem_tile(g), slot.tile) > GOLEM_QUICK_CLAY_LINGER {
+		   chebyshev(golem_tile(g), slot.tile) > GOLEM_QUICK_CLAY_LINGER ||
+		   gs.golem_idle[slot.owner] >= GOLEM_IDLE_FOOTHOLD_TIME {
 			golem_dissolve_quick_clay(gs, &slot)
 		}
 	}
@@ -1843,6 +1850,9 @@ update_golems :: proc(gs: ^Game_State) {
 	// The first worker of a frame moves round the crew, so one that cannot
 	// find a route never holds the searches away from the slots after it.
 	for i in 0 ..< MAX_GOLEMS do golem_update_one(gs, (int(gs.frame) + i) % MAX_GOLEMS)
+	for &g, id in gs.golems.data {
+		gs.golem_idle[id] = 0 if g.has_target else gs.golem_idle[id] + gs.delta_time
+	}
 	golem_tick_quick_clay(gs)
 }
 
