@@ -102,6 +102,12 @@ enemy_blood := [Enemy_Kind]rl.Color{
     .Vargr       = {150, 40, 40, 255},
     .Pond_Frog    = {120, 190, 90, 255},
     .Ember_Beetle = {235, 110, 26, 255},
+    .Rain_Wisp    = {150, 200, 240, 255},
+    .Rock_Harpy   = {130, 105, 85, 255},
+    .Mole         = {150, 60, 60, 255},
+    .Cave_Eel     = {70, 110, 120, 255},
+    .Magma_Crawler = {235, 90, 26, 255},
+    .Stone_Grub   = {128, 128, 128, 255},
 }
 
 // A landed blow sprays the victim's blood away from the hit — the fan gives
@@ -412,6 +418,15 @@ spawn_clay_drip :: proc(gs: ^Game_State, T: [2]i32) {
         vel  := [2]f32{jitter(seed, 0.6), 1.2 + jitter(seed + 1, 0.6)}
         spawn_particle(&gs.particles, center, vel,
             rl.Color{190, 150, 115, 220}, 0.5 + jitter(seed + 3, 0.15), f32(i) * 0.04)
+    }
+}
+
+spawn_rain_splash :: proc(gs: ^Game_State, T: [2]i32) {
+    center := [2]f32{f32(T.x) + 0.5, f32(T.y) + 0.5}
+    for i in 0 ..< 5 {
+        seed := u32(gs.frame)*41 + u32(i)*733
+        vel  := [2]f32{jitter(seed, 2.5), -1.5 + jitter(seed + 1, 1.0)}
+        spawn_particle(&gs.particles, center, vel, rl.Color{120, 180, 240, 220}, 0.3 + jitter(seed + 3, 0.1))
     }
 }
 

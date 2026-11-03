@@ -87,6 +87,7 @@ Draw_Style :: enum u8 {
 	Pixel_Mana_Mist,
 	Pixel_Rainbow_Bridge,
 	Pixel_Nest,
+	Pixel_Cinders,
 }
 
 @(rodata)
@@ -115,6 +116,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style {
 	.Mana_Mist             = .Pixel_Mana_Mist,
 	.Rainbow_Bridge        = .Pixel_Rainbow_Bridge,
 	.Nest                  = .Pixel_Nest,
+	.Cinders               = .Pixel_Cinders,
 	// all others default to .Solid (zero value)
 }
 
@@ -1034,6 +1036,8 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
 		draw_pixel_clay(px, py, x, y)
 	case .Pixel_Flower_Bed:
 		draw_pixel_flower_bed(gs, px, py, x, y)
+	case .Pixel_Cinders:
+		draw_pixel_cinders(gs, px, py, x, y)
 	case .Pixel_Steam:
 		draw_pixel_steam(gs, px, py, x, y)
 	case .Pixel_Mana_Mist:
@@ -1056,6 +1060,22 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
 		rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[.Air].color)
 	case .Solid:
 		rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, terrain_table[t].color)
+	}
+}
+
+// ─── Pixel Art: Cinders ───────────────────────────────────────────────────────
+//
+//  Open cave with a low bed of embers that flicker per cell.  Read-only.
+
+draw_pixel_cinders :: proc(gs: ^Game_State, bx, by: i32, x, y: int) {
+	rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Void].color)
+	ember := terrain_table[.Cinders].color
+	rl.DrawRectangle(bx, by + CELL_SIZE - 2, CELL_SIZE, 2, rl.Color{120, 40, 16, 255})
+	h := i32(x * 31 + y * 57)
+	beat := i32(gs.elapsed_time * 6)
+	for i in i32(0) ..< 3 {
+		ex := bx + (h * 7 + i * 3 + beat * (i + 1)) %% CELL_SIZE
+		rl.DrawRectangle(ex, by + CELL_SIZE - 3 - i, 2, 1, ember)
 	}
 }
 
@@ -2437,7 +2457,7 @@ draw_enemy :: proc(e: ^Enemy, t: f32) {
 		draw_builder(e, .Vargr)
 	case .Fire_Sprite:
 		draw_fire_sprite(e, t)
-	case .Pond_Frog, .Ember_Beetle:
+	case .Pond_Frog, .Ember_Beetle, .Rain_Wisp, .Rock_Harpy, .Mole, .Cave_Eel, .Magma_Crawler, .Stone_Grub:
 		draw_roamer(e)
 	}
 }
@@ -2447,6 +2467,12 @@ draw_enemy :: proc(e: ^Enemy, t: f32) {
 roamer_colors := #partial [Enemy_Kind][3]rl.Color{
 	.Pond_Frog    = {{62, 130, 58, 255}, {150, 200, 110, 255}, {240, 220, 90, 255}},
 	.Ember_Beetle = {{44, 34, 34, 255}, {235, 90, 26, 255}, {255, 190, 60, 255}},
+	.Rain_Wisp    = {{196, 214, 232, 255}, {96, 150, 214, 255}, {40, 60, 110, 255}},
+	.Rock_Harpy   = {{92, 78, 66, 255}, {150, 130, 104, 255}, {240, 190, 60, 255}},
+	.Mole         = {{58, 46, 40, 255}, {226, 170, 160, 255}, {18, 14, 12, 255}},
+	.Cave_Eel     = {{46, 70, 82, 255}, {150, 190, 180, 255}, {230, 240, 120, 255}},
+	.Magma_Crawler = {{70, 34, 26, 255}, {255, 150, 40, 255}, {255, 230, 120, 255}},
+	.Stone_Grub   = {{110, 106, 100, 255}, {176, 168, 150, 255}, {40, 36, 34, 255}},
 }
 
 draw_roamer :: proc(e: ^Enemy) {

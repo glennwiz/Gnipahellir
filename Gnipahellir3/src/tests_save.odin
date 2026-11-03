@@ -168,7 +168,8 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"Metal", "Gold", "Runic", "Hell",
 	}},
 	{Enemy_Kind, {
-		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle",
+		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle", "Rain_Wisp", "Rock_Harpy",
+		"Mole", "Cave_Eel", "Magma_Crawler", "Stone_Grub",
 	}},
 	{Equip_Slot, {
 		"None", "Weapon", "Head", "Chest", "Hands", "Legs", "Feet", "Charm", "Tool", "Charm_2",
@@ -208,7 +209,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"GreenBerrie", "Green_Cave_Mushroom", "Magic_Kettle", "Mana_Wheel", "Mana_Pipe", "Mossy_Stone",
 		"Fire_Wand", "Rainbow_Laser", "Turret_Pillar", "Flame_Head", "Water_Head", "Earth_Head",
 		"Sky_Egg",
-		"Slime", "Coal",
+		"Slime", "Coal", "Eel_Skin",
 	}},
 	{Tile_Flag, {
 		"Fire", "Poison", "Corrupted", "Lit", "Placed", "Golem_Placed", "Golem_Marked", "Piped",
@@ -225,7 +226,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"World_Anchor", "Quick_Clay", "Sand", "Rune_Coffer", "Steam", "Boiler", "Steam_Engine",
 		"Gem_Replicator", "Green_Cave_Mushroom", "Mossy_Stone", "Magic_Kettle", "Mana_Wheel",
 		"Mana_Mist", "Hell_Gate", "Final_Seal", "Rainbow_Laser", "Rune_Stone", "Scoria", "Turret_Pillar",
-		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest",
+		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest", "Cinders",
 	}},
 }
 
@@ -268,6 +269,21 @@ saved_enum_ordinals_never_move :: proc(t: ^testing.T) {
 	}
 }
 
+// A row search, not delete_key on the found map: delete_key on a map keyed by
+// typeid hangs the odin compiler at -o:size and above (dev-2026-10).
+@(private="file")
+enum_is_pinned :: proc(id: typeid, rows: type_of(pinned_enums)) -> bool {
+	for row in rows do if row.type == id do return true
+	return false
+}
+
+@(test)
+enum_is_pinned_finds_only_its_rows :: proc(t: ^testing.T) {
+	testing.expect(t, enum_is_pinned(Tile_Type, pinned_enums), "a pinned enum has its row")
+	testing.expect(t, !enum_is_pinned(Save_Data, pinned_enums), "a type with no row is not pinned")
+	testing.expect(t, !enum_is_pinned(Tile_Type, nil), "no rows pin nothing")
+}
+
 @(test)
 every_saved_enum_is_pinned :: proc(t: ^testing.T) {
 	found, seen: map[typeid]bool
@@ -277,8 +293,7 @@ every_saved_enum_is_pinned :: proc(t: ^testing.T) {
 	defer strings.builder_destroy(&lines)
 	saved_walk(type_info_of(Save_Data), &found, &seen, &lines)
 	testing.expect(t, Tile_Type in found && Item in found && Equip_Slot in found && Tile_Flag in found, "the walk reaches the enums")
-	for row in pinned_enums do delete_key(&found, row.type)
-	for id in found do testing.expectf(t, false, "%v is saved and has no row in pinned_enums", id)
+	for id in found do testing.expectf(t, enum_is_pinned(id, pinned_enums), "%v is saved and has no row in pinned_enums", id)
 }
 
 // testdata/save_layout.txt is the name, offset, size and type of every field of
@@ -352,5 +367,36 @@ saved_layout_never_moves_inside_a_version :: proc(t: ^testing.T) {
 			testing.expectf(t, false, "saved layout moved, read the note above this test:\n  now %s\n  was %s", now, was)
 			break
 		}
+	}
+}
+
+// Cards 112 and the post-Mole merge: the cave roamers come after master's Rain_Wisp,
+// Rock_Harpy and Mole, so those load as themselves, and every roamer keeps its
+// kind across a save.
+@(test)
+roamers_keep_their_kind_across_a_save :: proc(t: ^testing.T) {
+	path :: "gnipahellir_roamer_kind_scratch.dat"
+	defer os.remove(path)
+	testing.expect_value(t, int(Enemy_Kind.Rain_Wisp), 8)
+	testing.expect_value(t, int(Enemy_Kind.Rock_Harpy), 9)
+	testing.expect_value(t, int(Enemy_Kind.Mole), 10)
+	testing.expect_value(t, int(Enemy_Kind.Cave_Eel), 11)
+	testing.expect_value(t, int(Enemy_Kind.Magma_Crawler), 12)
+	testing.expect_value(t, int(Enemy_Kind.Stone_Grub), 13)
+
+	gs := turret_test_state()
+	defer free(gs)
+	gs.enemies = {}
+	kinds := []Enemy_Kind{.Rain_Wisp, .Rock_Harpy, .Mole, .Cave_Eel, .Magma_Crawler, .Stone_Grub}
+	for k in kinds {
+		id, _ := enemy_alloc(&gs.enemies)
+		gs.enemies.data[id] = Enemy{kind = k, hp = 1, hp_max = 1, pos = {f32(40 + id*10), 20}}
+	}
+	testing.expect(t, save_game_to(gs, path), "save written")
+	gs.enemies = {}
+	testing.expect(t, load_game_from(gs, path), "save loads")
+	for k, i in kinds {
+		testing.expect(t, gs.enemies.active[i], "slot came back")
+		testing.expect_value(t, gs.enemies.data[i].kind, k)
 	}
 }

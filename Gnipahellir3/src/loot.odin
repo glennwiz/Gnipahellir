@@ -35,6 +35,18 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     // First guesses for Glenn to tune.
     .Pond_Frog    = {{.Slime, 1, 1, 1.0}, {}, {}},
     .Ember_Beetle = {{.Coal, 1, 1, 1.0}, {}, {}},
+    .Rain_Wisp    = {{.Cloud_Stone, 1, 1, 0.5}, {}, {}},
+    .Rock_Harpy   = {{.Stone_Block, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.35}, {}},
+    .Mole         = {{.Dirt, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.5}, {}},
+    .Cave_Eel     = {{.Eel_Skin, 1, 1, 1.0}, {}, {}},
+    .Magma_Crawler = {{.Coal, 1, 2, 1.0}, {}, {}},
+    .Stone_Grub   = {{.Stone_Block, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.25}, {}},
+}
+
+// What a digging roamer turns up with each hole, on top of the tile's own drop.
+@(rodata)
+dig_drop_table := #partial [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
+    .Mole = {{.Iron_Ore, 1, 1, 0.3}, {.Silver_Ore, 1, 1, 0.1}, {}},
 }
 
 // xorshift64 step.  Zero-guards so a zeroed test state still rolls.
@@ -104,8 +116,23 @@ spawn_ground_item :: proc(w: ^World_Grid, tile: [2]i32, item: Item, count: int) 
     }
 }
 
+// A flyer dies in the air: what it carried lands on the floor under it, or
+// stays where it died over the open void.
+flyer_drop_tile :: proc(w: ^World_Grid, tile: [2]i32) -> [2]i32 {
+    for y in int(tile.y) ..< GRID_H - 1 {
+        if is_solid(w, int(tile.x), y + 1) do return {tile.x, i32(y)}
+    }
+    return tile
+}
+
 roll_enemy_drops :: proc(gs: ^Game_State, kind: Enemy_Kind, tile: [2]i32) {
-    for d in enemy_drop_table[kind] {
+    tile := tile
+    if enemy_behaviour[kind].gravity == 0 do tile = flyer_drop_tile(&gs.world, tile)
+    roll_drops(gs, kind, enemy_drop_table[kind], tile)
+}
+
+roll_drops :: proc(gs: ^Game_State, kind: Enemy_Kind, rows: [MAX_DROP_ROLLS]Drop_Entry, tile: [2]i32) {
+    for d in rows {
         if d.item == .None do continue
         if rand_f32(gs) >= d.chance do continue
         n := rand_range(gs, int(d.min), int(d.max))

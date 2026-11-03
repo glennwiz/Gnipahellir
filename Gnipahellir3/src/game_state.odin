@@ -43,6 +43,12 @@ Enemy_Kind :: enum u8 {
     // Roamers (roamer.odin): they live on a level, not in a wave.
     Pond_Frog,
     Ember_Beetle,
+    Rain_Wisp,
+    Rock_Harpy,
+    Mole,
+    Cave_Eel,
+    Magma_Crawler,
+    Stone_Grub,
 }
 
 Enemy_Nav :: struct {
@@ -219,6 +225,13 @@ GOLEM_PROJECT_CELLS :: 128
 MAX_GOLEM_DEPOTS     :: 8
 GOLEM_DEPOT_SLOTS    :: 12
 GOLEM_PACK_CAP       :: 8
+// Resource choices a worker found no route to, kept across frames so an
+// assignment the search budget interrupts picks up at the next choice.
+Golem_Skips :: struct {
+    tiles: [16][2]i32,
+    n:     int,
+}
+
 GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
 GOLEM_QUICK_CLAY_CAP  :: MAX_GOLEMS * 4
 
@@ -381,6 +394,7 @@ Projectile :: struct {
     active: bool,
     damage: int,
     age:    f32,   // seconds alive; dies at PROJECTILE_LIFETIME
+    drip:   bool,  // a Rain Wisp's drop: soaks the player, passes through enemies
 }
 
 Projectile_Store :: struct {
@@ -574,10 +588,17 @@ Agent_Command :: struct {
 
 AGENT_TEXT_MAX :: 96
 AGENT_LOG_MAX  :: 6
+AGENT_HEARD_MAX :: 8  // the watcher's lines the agent has not read; a full queue holds the next one in the field
 
 Agent_Text :: struct {
     buf: [AGENT_TEXT_MAX + 1]u8,  // kept NUL-terminated for raylib
     len: int,
+}
+
+// A line the watcher typed, and the frame it was sent on.
+Agent_Heard :: struct {
+    frame: u64,
+    text:  Agent_Text,
 }
 
 Agent_Past_Goal :: struct {
@@ -592,6 +613,13 @@ Agent_Panel :: struct {
     step:  Agent_Text,
     past:  [AGENT_LOG_MAX]Agent_Past_Goal,  // newest first
     count: int,
+    // The talk between the watcher and the agent.  None of it is game state.
+    say:       Agent_Text,   // the agent's last line to the watcher
+    typing:    bool,         // the watcher's field over the item bar is open
+    draft:     Agent_Text,   // what the watcher is typing
+    sent:      Agent_Text,   // the watcher's last line
+    heard:     [AGENT_HEARD_MAX]Agent_Heard,  // sent, not yet in a reply; oldest first
+    heard_len: int,
 }
 
 // Rewritten by agent_pump every frame; never saved.
@@ -634,6 +662,9 @@ UI_State :: struct {
     title_fresh:     bool,   // no run to resume: the title offers a seed and starts a world
     title_seed:      [TITLE_SEED_DIGITS]u8, // digits typed on the title
     title_seed_len:  int,
+    agent_requested: bool,   // the title's [A] was pressed; main opens the sandbox
+    agent_failed:    bool,   // that failed: no port or no folder, and the title says so
+    agent_port:      int,    // listening for an agent: the title shows this address
     tithe_slot:      int,     // bag slot chosen on the death screen (-1 = none)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     drag_void:       bool,    // drag source is Player.void_slot, not the bag
@@ -811,6 +842,11 @@ Game_State :: struct {
     roamer_timer: f32,        // transient, toward the next top-up (roamer.odin)
     nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
                              // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME
+    golem_searches: int,     // the same for golems; reset in update_golems,
+                             // capped by MAX_GOLEM_SEARCHES_PER_FRAME
+    golem_skips: [MAX_GOLEMS]Golem_Skips, // transient: resource choices each golem found no route to
+    nav_work:    int,        // astar_dig work this frame, golems and enemies:
+                             // nodes expanded + heap sift steps; reset in update_golems
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,
@@ -826,6 +862,8 @@ Game_State :: struct {
     tile_fx:     Tile_Fx_Store,   // reusable tile-overlay telegraphs (fx.odin); transient, not saved
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     leaf_fall_t: f32,             // GreenBerrie slow-fall buff seconds left (player.odin); transient, not saved
+    soak_t:      f32,             // Rain Wisp drip slow seconds left (events.odin grants, player.odin ticks); transient, not saved
+    bite_slow_t: f32,             // eel-bite slow seconds left (events.odin grants, player.odin spends); transient, not saved
     flight_t:    f32,             // altar-swirl flight buff seconds left (levels.odin grants, player.odin ticks); transient, not saved
     fluid:       Fluid_State,     // water/lava flow clocks (fluid.odin); transient, not saved
     power:       Power_State,     // live engine charge field (sim.odin); transient, not saved

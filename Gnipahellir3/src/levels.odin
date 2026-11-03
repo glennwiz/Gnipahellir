@@ -636,6 +636,21 @@ saga_lines :: proc(gs: ^Game_State, bufs: ^[4][64]u8) -> [4]string {
 //  Full-grid cellular-automata cave.  `depth_tier` 1 = cave 2, 2 = cave 3;
 //  deeper tiers are richer in ore and wetter with lava.
 
+CAVE_POOL_W :: 16
+CAVE_POOL_H :: 4
+
+// A stone-lined tub whose rim is `top`: it holds its water whatever the noise
+// carved around it, which a bare chamber floor would not.
+dig_cave_pool :: proc(w: ^World_Grid, cx, top: int) {
+    x0, x1 := cx - CAVE_POOL_W/2, cx + CAVE_POOL_W/2 - 1
+    for y in top ..= top + CAVE_POOL_H {
+        for x in x0 - 1 ..= x1 + 1 {
+            wall := x < x0 || x > x1 || y == top + CAVE_POOL_H
+            set_tile(w, x, y, wall ? Tile_Type.Stone : Tile_Type.Water)
+        }
+    }
+}
+
 CAVE_LVL_TOP :: 3
 CAVE_LVL_BOT :: GRID_H - 2
 
@@ -748,6 +763,9 @@ gen_cave_level :: proc(w: ^World_Grid, depth_tier: int, seed: u32 = 0) {
             }
         }
     }
+
+    // Deep Cave's pool: the only water underground, and the Cave Eels' home.
+    if depth_tier == 1 do dig_cave_pool(w, GRID_W/4, 36)
 
     // Spawn chamber (mid-map) with the return portal
     carve_box(w, 91, 20, 101, 26)

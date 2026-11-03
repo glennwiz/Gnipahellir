@@ -12,6 +12,8 @@ package game
 Buff :: enum u8 {
 	Leaf_Fall,
 	Flight,
+	Soaked,
+	Eel_Bite,
 }
 
 Buff_Info :: struct {
@@ -32,6 +34,16 @@ buff_table := [Buff]Buff_Info{
 		"The altar's swirl bears you aloft: move freely in any direction.",
 		.Sky_Altar,
 	},
+	.Soaked = {
+		"Soaked",
+		"A rain wisp dripped on you: your stride drags until you dry off.",
+		.Water_Bucket,
+	},
+	.Eel_Bite = {
+		"Eel Bite",
+		"An eel's bite has numbed your legs: you move slower for a moment.",
+		.Eel_Skin,
+	},
 }
 
 // Seconds left on a buff; 0 = not running.
@@ -41,6 +53,10 @@ buff_remaining :: proc(gs: ^Game_State, b: Buff) -> f32 {
 		return gs.leaf_fall_t
 	case .Flight:
 		return gs.flight_t
+	case .Soaked:
+		return gs.soak_t
+	case .Eel_Bite:
+		return gs.bite_slow_t
 	}
 	return 0
 }

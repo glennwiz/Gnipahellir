@@ -26,9 +26,7 @@ BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
 // and his MAX_NAV_PATH plan budget.  Only Garm gets it (builder_build_den).
 GARM_BUILD_REACH :: i32(9)
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
-MAX_NAV_SEARCHES_PER_FRAME :: 3   // ~1.2-1.4 ms per long or exhausted search
-                                  // (release build), so this bounds pathing
-                                  // at ~4 ms a frame whatever the enemy count;
+MAX_NAV_SEARCHES_PER_FRAME :: 3   // bounds pathing whatever the enemy count;
                                   // a hunter over budget simply asks again
                                   // next frame
 REPLAN_BACKOFF  :: f32(3.0)   // wait after a search that found no route, or
@@ -415,6 +413,13 @@ enemy_behaviour := [Enemy_Kind]Enemy_Behaviour{
     .Vargr        = {{BUILDER_W, BUILDER_H}, RAIDER_SPEED, VARGR_HP, BUILDER_GRAVITY, update_raider},
     .Pond_Frog    = {{POND_FROG_W, POND_FROG_H}, POND_FROG_SPEED, POND_FROG_HP, BUILDER_GRAVITY, update_roamer},
     .Ember_Beetle = {{EMBER_BEETLE_W, EMBER_BEETLE_H}, EMBER_BEETLE_SPEED, EMBER_BEETLE_HP, BUILDER_GRAVITY, update_roamer},
+    .Rain_Wisp    = {{RAIN_WISP_W, RAIN_WISP_H}, RAIN_WISP_SPEED, RAIN_WISP_HP, 0, update_rain_wisp},
+    .Rock_Harpy   = {{ROCK_HARPY_W, ROCK_HARPY_H}, ROCK_HARPY_SPEED, ROCK_HARPY_HP, 0, update_rock_harpy},
+    .Mole         = {{MOLE_W, MOLE_H}, MOLE_SPEED, MOLE_HP, BUILDER_GRAVITY, update_roamer},
+    // Zero gravity: water holds it up, and update_roamer drops it when none does.
+    .Cave_Eel     = {{CAVE_EEL_W, CAVE_EEL_H}, CAVE_EEL_SPEED, CAVE_EEL_HP, 0, update_roamer},
+    .Magma_Crawler = {{MAGMA_CRAWLER_W, MAGMA_CRAWLER_H}, MAGMA_CRAWLER_SPEED, MAGMA_CRAWLER_HP, BUILDER_GRAVITY, update_roamer},
+    .Stone_Grub   = {{STONE_GRUB_W, STONE_GRUB_H}, STONE_GRUB_SPEED, STONE_GRUB_HP, BUILDER_GRAVITY, update_roamer},
 }
 
 enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
@@ -606,6 +611,51 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 
 PLAN_CARVE_LOOKBACK :: 5   // steps back a move checks its support against the plan
 
+// An open-set entry.  f travels with the node, so a sift never reaches back
+// into nodes[] or takes a square root.
+A_Open :: struct {
+    f:    f32,
+    node: i16,
+}
+
+// Lowest f first; the older node wins a tie, so a search is deterministic.
+astar_open_before :: proc(a, b: A_Open) -> bool {
+    return a.f < b.f || (a.f == b.f && a.node < b.node)
+}
+
+// Binary min-heap over open[:size].  Each sift step costs one unit of work.
+astar_open_push :: proc(open: []A_Open, size: ^int, item: A_Open, work: ^int) {
+    i := size^
+    size^ += 1
+    for i > 0 {
+        work^ += 1
+        parent := (i - 1) / 2
+        if !astar_open_before(item, open[parent]) { break }
+        open[i] = open[parent]
+        i = parent
+    }
+    open[i] = item
+}
+
+astar_open_pop :: proc(open: []A_Open, size: ^int, work: ^int) -> A_Open {
+    top := open[0]
+    size^ -= 1
+    n := size^
+    item := open[n]
+    i := 0
+    for {
+        c := 2*i + 1
+        if c >= n { break }
+        work^ += 1
+        if c + 1 < n && astar_open_before(open[c + 1], open[c]) { c += 1 }
+        if !astar_open_before(open[c], item) { break }
+        open[i] = open[c]
+        i = c
+    }
+    open[i] = item
+    return top
+}
+
 astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1, allow_mining := true, complete: ^bool = nil, protect_placed := false) -> bool {
     w := &gs.world
     out^ = {}
@@ -682,8 +732,8 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
     closed: [GRID_W * GRID_H]bool
 
-    // Open set: node indices.  Linear scan for min-f (budget is small enough).
-    open:      [MAX_ASTAR_NODES]i16
+    // Open set: a binary heap on f.
+    open:      [MAX_ASTAR_NODES]A_Open
     open_size: int
 
     // Best-effort fallback: expanded node closest to the goal.  If the search
@@ -718,7 +768,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     // Seed the open set with the start node.
     nodes[0]  = {pos = sf, g = 0, parent = -1}
     g_cost[grid_idx(fx, fy)] = 0
-    open[0]   = 0
+    open[0]   = {node = 0}
     n_count   = 1
     open_size = 1
     found     := i16(-1)
@@ -726,19 +776,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     trans: [24]A_Trans
 
     outer: for open_size > 0 {
-        // Pick the open node with the lowest f = g + h.
-        best_f  := max(f32)
-        best_oi := 0
-        for oi in 0 ..< open_size {
-            ni := int(open[oi])
-            f  := nodes[ni].g + ASTAR_H_WEIGHT * heuristic(nodes[ni].pos, to)
-            if f < best_f { best_f = f; best_oi = oi }
-        }
-
-        // Pop it (swap with last).
-        cur_idx := int(open[best_oi])
-        open[best_oi] = open[open_size - 1]
-        open_size -= 1
+        // Take the open node with the lowest f = g + h.
+        cur_idx := int(astar_open_pop(open[:], &open_size, &gs.nav_work).node)
+        gs.nav_work += 1
 
         cur := nodes[cur_idx]
         vi  := grid_idx(int(cur.pos.x), int(cur.pos.y))
@@ -912,9 +952,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             }
             bridges := cur.bridges + (u8(1) if trans[i].bridge else u8(0))
             nodes[n_count] = {pos = np, g = tentative_g, parent = i16(cur_idx), bridges = bridges}
-            open[open_size] = i16(n_count)
-            open_size += 1
-            n_count   += 1
+            f := tentative_g + ASTAR_H_WEIGHT * heuristic(np, to)
+            astar_open_push(open[:], &open_size, {f = f, node = i16(n_count)}, &gs.nav_work)
+            n_count += 1
 
             if chebyshev(np, to) <= stop_within {
                 found = i16(n_count - 1)

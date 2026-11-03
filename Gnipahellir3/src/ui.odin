@@ -796,7 +796,17 @@ draw_title :: proc(gs: ^Game_State) {
 	draw_stepped_panel_shape(PROMPT_X + 3, PROMPT_Y + 3, PROMPT_W - 6, PROMPT_H - 6, rl.Color{72, 50, 29, 255})
 	draw_stepped_panel_shape(PROMPT_X + 6, PROMPT_Y + 6, PROMPT_W - 12, PROMPT_H - 12, rl.Color{19, 15, 17, 255})
 	prompt_col := (tick / 5) % 4 == 0 ? rl.Color{165, 118, 54, 255} : rl.Color{255, 218, 132, 255}
+	if gs.ui.agent_port != 0 {
+		address: [64]u8
+		fmt.bprintf(address[:63], "http://127.0.0.1:%d/", gs.ui.agent_port)
+		center_text("GIVE YOUR AGENT THIS ADDRESS", PROMPT_Y + 13, 22, prompt_col)
+		center_text(cstring(raw_data(address[:])), PROMPT_Y + PROMPT_H + 18, 24, rl.Color{255, 218, 132, 255})
+		center_text("It plays in a sandbox folder; your save is safe. Watch here. [Esc] quits", PROMPT_Y + PROMPT_H + 54, 18, rl.Color{157, 144, 134, 255})
+		return
+	}
 	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
+	agent_line: cstring = "No port or folder for an agent. [A] tries again" if gs.ui.agent_failed else "[A] Let an agent play"
+	center_text(agent_line, PROMPT_Y + PROMPT_H + 70, 18, rl.Color{157, 144, 134, 255})
 
 	if !gs.ui.title_fresh do return
 	seed_line: [64]u8
@@ -817,6 +827,14 @@ draw_title :: proc(gs: ^Game_State) {
 // digits and Backspace edit the seed and Y recalls the last world's.
 TITLE_SEED_DIGITS :: 10 // every u32 fits
 title_key :: proc(gs: ^Game_State, key: rl.KeyboardKey) -> bool {
+	if gs.ui.agent_port != 0 {
+		if key == .ESCAPE do eq_push(&gs.events, Event{type = .Quit_Request})
+		return false
+	}
+	if key == .A {
+		gs.ui.agent_requested = true
+		return false
+	}
 	if !gs.ui.title_fresh do return true
 	ui := &gs.ui
 	#partial switch key {
@@ -836,6 +854,17 @@ title_key :: proc(gs: ^Game_State, key: rl.KeyboardKey) -> bool {
 		return false
 	}
 	return true
+}
+
+// The title closes into a run.  While it shows an agent's address it stays: the
+// agent's first dismiss closes it, and the run is the agent's.
+title_begin :: proc(gs: ^Game_State) {
+	if gs.ui.agent_port != 0 do return
+	if gs.ui.title_fresh {
+		eq_push(&gs.events, Event{type = .Title_Start})
+	} else {
+		gs.ui.show_title = false
+	}
 }
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
@@ -1857,6 +1886,37 @@ draw_ui :: proc(gs: ^Game_State) {
 	// tooltips, dragged icons, books, menus, and every full-screen modal.
 	draw_notifications(gs)
 	if gs.agent.panel != nil do draw_agent_panel(gs.agent.panel)
+	if gs.agent.panel != nil do draw_agent_chat(gs.agent.panel)
+}
+
+AGENT_CHAT_W :: i32(640)  // fits AGENT_TEXT_MAX characters of the 11 px font
+AGENT_CHAT_X :: (i32(UI_W) - AGENT_CHAT_W) / 2
+AGENT_CHAT_Y :: i32(HOTBAR_Y) - 50  // the field, just over the held item's name
+AGENT_CHAT_SAY :: rl.Color{150, 200, 235, 255}
+
+// The talk over the item bar: the agent's last line, then the watcher's own,
+// or the field while it is open.
+draw_agent_chat :: proc(p: ^Agent_Panel) {
+	line: [AGENT_TEXT_MAX + 32]u8
+	if p.say.len > 0 {
+		fmt.bprintf(line[:len(line) - 1], "Agent: %s", string(p.say.buf[:p.say.len]))
+		rl.DrawText(cstring(raw_data(line[:])), AGENT_CHAT_X + 6, AGENT_CHAT_Y - 18, 11, AGENT_CHAT_SAY)
+	}
+	if !p.typing {
+		line = {}
+		if p.sent.len > 0 {
+			fmt.bprintf(line[:len(line) - 1], "You: %s  (%s)", string(p.sent.buf[:p.sent.len]), "waiting" if p.heard_len > 0 else "read")
+		} else {
+			fmt.bprintf(line[:len(line) - 1], "[Enter] talk to the agent")
+		}
+		rl.DrawText(cstring(raw_data(line[:])), AGENT_CHAT_X + 6, AGENT_CHAT_Y + 4, 11, rl.Color{157, 144, 134, 200})
+		return
+	}
+	rl.DrawRectangle(AGENT_CHAT_X, AGENT_CHAT_Y, AGENT_CHAT_W, 20, rl.Color{10, 9, 12, 230})
+	rl.DrawRectangleLinesEx({f32(AGENT_CHAT_X), f32(AGENT_CHAT_Y), f32(AGENT_CHAT_W), 20}, 1, NORSE_GOLD)
+	draft := cstring(raw_data(p.draft.buf[:]))
+	rl.DrawText(draft, AGENT_CHAT_X + 6, AGENT_CHAT_Y + 4, 11, rl.RAYWHITE)
+	rl.DrawRectangle(AGENT_CHAT_X + 8 + rl.MeasureText(draft, 11), AGENT_CHAT_Y + 4, 2, 12, NORSE_GOLD_HOT)
 }
 
 // The agent's own account of what it is doing, for whoever is watching.
@@ -1883,8 +1943,9 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 		}
 	}
 
-	if p.goal.len == 0 && p.step.len == 0 do return
+	if p.goal.len == 0 && p.step.len == 0 && p.say.len == 0 do return
 	lines := i32(2) + (i32(p.goal.len) / (WRAP / 2) + 1) + (i32(p.step.len) / (WRAP / 2) + 1) + i32(p.count) * 2
+	if p.say.len > 0 do lines += i32(p.say.len) / (WRAP / 2) + 1
 	rl.DrawRectangle(PANEL_X, PANEL_Y, PANEL_W, lines * LINE + 12, NORSE_PANEL)
 	rl.DrawRectangleLinesEx({f32(PANEL_X), f32(PANEL_Y), f32(PANEL_W), f32(lines * LINE + 12)}, 2, NORSE_BORDER)
 
@@ -1895,6 +1956,9 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 	wrapped(&p.goal, x, &y, NORSE_GOLD_HOT)
 	if p.step.len > 0 {
 		wrapped(&p.step, x, &y, rl.RAYWHITE)
+	}
+	if p.say.len > 0 {
+		wrapped(&p.say, x, &y, AGENT_CHAT_SAY)
 	}
 	y += 4
 	for i in 0 ..< p.count {

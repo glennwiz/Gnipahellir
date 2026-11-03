@@ -1,10 +1,15 @@
 package game
 
 // agent_api.odin — lets an outside agent play the running game over a local
-// socket.  Diagnostic only: everything is behind GAME_DEBUG, and nothing listens
-// unless GNIPA_AGENT_PORT is set.
+// socket.  Nothing listens until a human picks "Let an agent play" on the title,
+// in any build, or a debug build starts with GNIPA_AGENT_PORT set.
 //
-// Protocol: one JSON object per line each way, on 127.0.0.1.
+// One port on 127.0.0.1.  A connection is judged by its first line: GET gets the
+// plain-text brief (agent_write_brief) and is closed, a JSON object makes it the
+// client, anything else is refused.  So a connection that has said nothing yet
+// does not drive the game, and the brief is served while a client plays.
+//
+// Protocol: one JSON object per line each way.
 //   {"cmd":"state"}                                 full state, x/y/w/h pick the tile view
 //   {"cmd":"act","move":"left","frames":30,...}     play those frames, reply with state after
 //                                                   a refused warp answers ok:false and plays
@@ -36,6 +41,15 @@ package game
 //   {"cmd":"objective","goal":"...","step":"..."}   tell the watcher what you are up to;
 //                                                   a new goal files the old one, with
 //                                                   "result":"failed" if it did not work
+//   {"cmd":"say","text":"..."}                      a line to the watcher, over the item bar
+//   {"cmd":"listen","seconds":60}                   answers with state when the watcher has
+//                                                   typed a line, or when the time is up
+//
+// The watcher talks back: in agent mode Enter opens a field over the item bar,
+// Enter sends, Esc closes.  It is the one key input an agent's game hears, and
+// it reaches only the agent: every reply carries the unread lines in "heard",
+// once.  Both sides are recorded and logged; a replay sends the says again and
+// prints the watcher's lines, and neither touches the sim.
 //
 // While a client is connected the game WAITS: between acts it plays the agent's
 // plan at quarter speed, about 15 ticks a second, so a plan meant to fill a 20 s
@@ -66,7 +80,8 @@ package game
 //
 // An agent run writes a save and truncates action.log in the working directory,
 // so agent_open refuses to run anywhere that does not hold AGENT_SANDBOX_FILE.
-// tools/agent_play.sh builds such a folder.
+// tools/agent_play.sh builds such a folder.  The title option builds its own and
+// moves the process into it, so every relative path the game writes lands there.
 
 import "base:runtime"
 import "core:encoding/json"
@@ -78,6 +93,11 @@ import "core:strings"
 import "core:time"
 
 AGENT_PORT_ENV     :: "GNIPA_AGENT_PORT"
+AGENT_TITLE_ENV    :: "GNIPA_AGENT_TITLE" // a port: boot as if [A] was pressed, for tools/test_agent_title.py
+AGENT_TITLE_PORT   :: 7878 // the first port the title tries
+AGENT_TITLE_PORTS  :: 16   // and how many, so a second game still gets one
+AGENT_RUNS_DIR     :: "agent_runs"
+AGENT_BRIEF_MAX    :: 64 * 1024
 AGENT_TURBO_ENV    :: "GNIPA_AGENT_TURBO"
 AGENT_TURBO_DRAW   :: 1 * time.Second // between draws of a turbo run
 AGENT_SANDBOX_FILE :: "agent_sandbox"
@@ -94,12 +114,19 @@ AGENT_LINE_MAX     :: 4096
 AGENT_REPLY_MAX    :: 512 * 1024
 AGENT_ITEMS_MAX    :: 2000 // ground piles in one reply; caps it well inside AGENT_REPLY_MAX
 AGENT_SEND_TIMEOUT :: 2 * time.Second // a client that stops reading is dropped
+AGENT_LISTEN_S     :: 60   // a listen's wait when it names none
+AGENT_LISTEN_MAX_S :: 600
 
 // Printable, JSON-safe, one per distinct tile type seen in a view.
 AGENT_ACTS_FILE    :: "acts.jsonl"
 AGENT_FIGHT_FILE   :: "fight.log"
 AGENT_FIGHT_RANGE  :: 30      // tiles from the player
 AGENT_FIGHT_BUF    :: 64 * 1024
+
+// What a run has learned, from the lessons a run keeps up.  The file's head is about
+// this repo's harness, not the game.
+AGENT_LESSONS      :: #load("../gnipa_project/agent_lessons.md", string)
+AGENT_LESSONS_FROM :: "## How the bot plays"
 
 AGENT_TILE_CHARS :: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#*+-=~:;.,!?@$%^&()[]{}<>/|_"
 
@@ -124,8 +151,16 @@ Agent_Link :: struct {
     planning:    bool,           // the act in progress is a plan step
     step_frames: int,            // that step's whole length
     plan_stopped: Agent_Text,    // why a step could not start, until the next plan
+    awaiting:    bool,           // a listen waits for the watcher's line
+    await_until: time.Tick,      // or until then
+    port:        int,
     listener:    net.TCP_Socket,
     client:      net.TCP_Socket,
+    pending:     net.TCP_Socket, // accepted, first line not in yet
+    pending_open: bool,
+    pend_len:    int,
+    pend_buf:    [AGENT_LINE_MAX]u8,
+    brief:       [AGENT_BRIEF_MAX]u8,
     panel:       Agent_Panel,
     cmd:         Agent_Command,  // the act in progress
     first:       bool,           // its first frame has not run yet
@@ -165,9 +200,17 @@ agent_open :: proc(link: ^Agent_Link) {
         fmt.eprintfln("agent api: cannot listen on 127.0.0.1:%d: %v", port, err)
         os.exit(1)
     }
+    agent_arm(link, sock, port)
+    fmt.printfln("agent api: listening on 127.0.0.1:%d", port)
+}
+
+// A bound listener goes live; acts and fights record into the working directory.
+@(private="file")
+agent_arm :: proc(link: ^Agent_Link, sock: net.TCP_Socket, port: int) {
     net.set_blocking(sock, false)
     link.listener  = sock
     link.listening = true
+    link.port      = port
     link.turbo     = os.get_env(AGENT_TURBO_ENV, context.temp_allocator) != ""
     if fd, ferr := os.open(AGENT_ACTS_FILE, os.O_WRONLY | os.O_CREATE | os.O_APPEND); ferr == nil {
         link.acts_file = fd
@@ -176,7 +219,88 @@ agent_open :: proc(link: ^Agent_Link) {
     if fd, ferr := os.open(AGENT_FIGHT_FILE, os.O_WRONLY | os.O_CREATE | os.O_APPEND); ferr == nil {
         link.fight_file = fd
     }
-    fmt.printfln("agent api: listening on 127.0.0.1:%d", port)
+}
+
+// After boot: a run started under GNIPA_AGENT_PORT has been the agent's from the
+// first line, and GNIPA_AGENT_TITLE asks for what [A] does.
+agent_boot_title :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    if link.listening {
+        action_log_release(gs)
+        gs.ui.agent_port = link.port
+        return
+    }
+    gs.ui.agent_requested = os.get_env(AGENT_TITLE_ENV, context.temp_allocator) != ""
+}
+
+// "Let an agent play": a port, a folder of its own and a new world, and the game
+// moves into that folder.  Nothing of the human's is read or written after this:
+// the save, stats and action.log paths are relative, and the stats in memory go.
+// A failure changes nothing and leaves the title up.
+agent_title_start :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    gs.ui.agent_requested = false
+    gs.ui.agent_failed    = true
+
+    base := AGENT_TITLE_PORT
+    if n, ok := strconv.parse_int(os.get_env(AGENT_TITLE_ENV, context.temp_allocator)); ok do base = n
+    sock, port, bound := agent_title_bind(base)
+    if !bound do return
+    seed   := title_chosen_seed(gs)
+    folder := agent_run_folder(port)
+    if !agent_sandbox_make(folder, seed) || os.set_working_directory(folder) != nil {
+        net.close(sock)
+        return
+    }
+
+    agent_arm(link, sock, port)
+    agent_run_reset(gs, seed, port, SAVE_FILE, STATS_FILE)
+    action_log_begin_run(gs)
+    action_log_release(gs)
+    log_action(gs, "World seed %d", seed)
+    fmt.printfln("agent api: listening on 127.0.0.1:%d, run folder %s", port, folder)
+}
+
+// The state the sandbox starts from: a new world, none of the human's stats, and
+// the title up with the address.  save_path comes back too: a boot that set an
+// unreadable save aside has cleared it.
+agent_run_reset :: proc(gs: ^Game_State, seed: u32, port: int, save_path, stats_path: string) {
+    gs.stats      = {}
+    gs.save_path  = save_path
+    gs.stats_path = stats_path
+    start_new_game_with(gs, seed)
+    gs.ui.show_title   = true
+    gs.ui.agent_port   = port
+}
+
+// Loopback only: this is the one bind the title makes.
+agent_title_bind :: proc(base: int) -> (sock: net.TCP_Socket, port: int, ok: bool) {
+    for p in base ..< base + AGENT_TITLE_PORTS {
+        s, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = p}, 1)
+        if err == nil do return s, p, true
+    }
+    return
+}
+
+// The port keeps two games from sharing a folder started in the same second.
+@(private="file")
+agent_run_folder :: proc(port: int) -> string {
+    now := time.now()
+    y, mo, d := time.date(now)
+    h, mi, s := time.clock(now)
+    return fmt.tprintf("%s/%04d%02d%02d-%02d%02d%02d-%d", AGENT_RUNS_DIR, y, int(mo), d, h, mi, s, port)
+}
+
+// A folder a run can live in, as tools/agent_play.sh builds one.  The sprite bank
+// is reloaded from disk on every New Game, so it comes along.
+agent_sandbox_make :: proc(folder: string, seed: u32, art := PIXEL_ART_FILE) -> bool {
+    if os.make_directory_all(folder) != nil do return false
+    join :: proc(folder, name: string) -> string { return fmt.tprintf("%s/%s", folder, name) }
+    if os.write_entire_file(join(folder, AGENT_SANDBOX_FILE), []u8{}) != nil do return false
+    if os.write_entire_file(join(folder, "seed"), transmute([]u8)fmt.tprintf("%d\n", seed)) != nil do return false
+    if data, err := os.read_entire_file_from_path(art, context.temp_allocator); err == nil {
+        if os.write_entire_file(join(folder, PIXEL_ART_FILE), data) != nil do return false
+    }
+    return true
 }
 
 // Whether this frame draws.  Only a connected turbo run skips: the keyboard's
@@ -209,6 +333,7 @@ agent_close :: proc(link: ^Agent_Link, gs: ^Game_State) {
         agent_fight_flush(link)
         os.close(link.fight_file)
     }
+    if link.pending_open do agent_pending_close(link)
     link.listening = false
 }
 
@@ -216,33 +341,175 @@ agent_close :: proc(link: ^Agent_Link, gs: ^Game_State) {
 agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     if !link.listening do return true
 
+    if link.awaiting do agent_await(link, gs, time.tick_now())
     if link.reply_due {
         link.reply_due = false
         agent_send(link, gs)
     }
-    if !link.connected {
-        client, _, err := net.accept_tcp(link.listener)
-        if err == nil {
-            net.set_blocking(client, false)
-            net.set_option(client, .TCP_Nodelay, true)
-            link.client    = client
-            link.connected = true
-            link.realtime  = false
-            link.in_len    = 0
-            link.panel     = {}
-            link.plan_stopped = {}
-            link.idle_off  = false
-            link.idle_step = 0
-            link.idle_ticks = 0
-            if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
-        }
-    }
-    if link.connected && agent_listening(link) do agent_read(link, gs)
+    agent_accept(link)
+    if link.pending_open do agent_read_pending(link, gs)
+    if link.connected && (agent_listening(link) || link.awaiting) do agent_read(link, gs)
     if !link.connected {
         gs.agent = {}  // back to the keyboard, with nothing of the last act left to replay
         return true
     }
     return agent_drive(link, gs)
+}
+
+// One connection waits on its first line.  A newer one replaces it: no timer can
+// run here, and a silent connection must not keep the brief from the next.
+@(private="file")
+agent_accept :: proc(link: ^Agent_Link) {
+    for {
+        sock, _, err := net.accept_tcp(link.listener)
+        if err != nil do return
+        if link.pending_open do agent_pending_close(link)
+        net.set_blocking(sock, false)
+        net.set_option(sock, .TCP_Nodelay, true)
+        link.pending      = sock
+        link.pending_open = true
+        link.pend_len     = 0
+    }
+}
+
+@(private="file")
+agent_pending_close :: proc(link: ^Agent_Link) {
+    net.close(link.pending)
+    link.pending_open = false
+}
+
+@(private="file")
+agent_read_pending :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    n, err := net.recv_tcp(link.pending, link.pend_buf[link.pend_len:])
+    if err == .Would_Block || err == .Timeout do return
+    if err != nil || n == 0 {  // gone, or a line this long is not the protocol
+        agent_pending_close(link)
+        return
+    }
+    link.pend_len += n
+    nl := strings.index_byte(string(link.pend_buf[:link.pend_len]), '\n')
+    if nl < 0 do return
+    line := string(link.pend_buf[:nl])
+    switch {
+    case strings.has_prefix(line, "GET "):
+        agent_pending_send(link, agent_http_brief(link, gs))
+    case !strings.has_prefix(strings.trim_left_space(line), "{"):
+        // Not only tidiness: a web page can POST here, and its body must not play.
+        agent_pending_send(link, `{"ok":false,"error":"send one JSON object per line, or GET for the brief"}` + "\n")
+    case link.connected:
+        agent_pending_send(link, `{"ok":false,"error":"another agent is playing: one client at a time"}` + "\n")
+    case:
+        agent_promote(link, gs)
+        return
+    }
+    agent_pending_close(link)
+}
+
+@(private="file")
+agent_pending_send :: proc(link: ^Agent_Link, text: string) {
+    net.set_blocking(link.pending, true)
+    net.set_option(link.pending, .Send_Timeout, AGENT_SEND_TIMEOUT)
+    net.send_tcp(link.pending, transmute([]u8)text)
+}
+
+// The first JSON line: this connection is the client from here, that line first.
+@(private="file")
+agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    link.client       = link.pending
+    link.pending_open = false
+    link.connected    = true
+    link.in_len       = copy(link.in_buf[:], link.pend_buf[:link.pend_len])
+    link.realtime     = false
+    link.panel        = {}
+    link.plan_stopped = {}
+    link.idle_off     = false
+    link.idle_step    = 0
+    link.idle_ticks   = 0
+    if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
+}
+
+@(private="file")
+agent_http_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
+    body := agent_write_brief(link, gs)
+    return fmt.tprintf("HTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+}
+
+// The brief, written fresh for each GET from the game as it stands.
+agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
+    b := strings.builder_from_bytes(link.brief[:])
+    w := &b
+    fmt.sbprintf(w, "GNIPAHELLIR\n\n")
+    fmt.sbprintf(w, "You are the player. A human gave you this address and watches you in the game's window.\n")
+    fmt.sbprintf(w, "HP is 10 and does not regenerate. Death ends the life; the goal is to break the Final Seal.\n\n")
+
+    fmt.sbprintf(w, "NOW\n")
+    fmt.sbprintf(w, "address: 127.0.0.1:%d, loopback only\n", link.port)
+    fmt.sbprintf(w, "world seed: %d\n", gs.world_seed)
+    fmt.sbprintf(w, "screen: %s, level %d, frame %d\n", agent_screen(gs), gs.level_index, gs.frame)
+    fmt.sbprintf(w, "client: %s\n", "another agent is connected, one at a time" if link.connected else "none, the socket is free")
+    objective: [128]u8
+    fmt.sbprintf(w, "the game's objective line: %s\n", current_objective(gs, objective[:]))
+    if link.panel.goal.len > 0 {
+        fmt.sbprintf(w, "the panel's goal: %s\n", string(link.panel.goal.buf[:link.panel.goal.len]))
+    }
+
+    fmt.sbprintf(w, "\nCONNECT\n")
+    fmt.sbprintf(w, "Same port, plain TCP: one JSON object per line each way. No HTTP, no keys, no account.\n")
+    fmt.sbprintf(w, "Hold ONE connection for the whole run, from a background process if your tool calls are short: ")
+    fmt.sbprintf(w, "when it closes the game runs on in real time with nobody at the keys.\n")
+    fmt.sbprintf(w, "  import json, socket\n")
+    fmt.sbprintf(w, "  s = socket.create_connection((\"127.0.0.1\", %d)); f = s.makefile(\"rb\")\n", link.port)
+    fmt.sbprintf(w, "  def ask(o): s.sendall((json.dumps(o) + \"\\n\").encode()); return json.loads(f.readline())\n")
+    fmt.sbprintf(w, "  ask({{\"cmd\": \"act\", \"dismiss\": True}})  # closes the title; the run starts\n")
+
+    fmt.sbprintf(w, "\nCOMMANDS\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"state\",\"x\":0,\"y\":0,\"w\":%d,\"h\":%d}}  all optional: the default view is %dx%d round you, and the whole level is yours to read\n",
+        GRID_W, GRID_H, AGENT_VIEW_W, AGENT_VIEW_H)
+    fmt.sbprintf(w, "{{\"cmd\":\"act\",...,\"frames\":30}}  plays 1..%d ticks at 60 a second, then replies with state\n", AGENT_MAX_FRAMES)
+    fmt.sbprintf(w, "  move: left, right, none. jump, down, interact, dismiss, warp: true\n")
+    fmt.sbprintf(w, "  one of mine, place, use, reclaim: [x,y] in tiles. Tiles are %dx%d; state's player x,y are tiles too\n", GRID_W, GRID_H)
+    fmt.sbprintf(w, "  one of select, equip, feed (with count), store, take: bag slot. select -1 is an empty hand\n")
+    fmt.sbprintf(w, "  craft: item name, from state's craftable. collect, withdraw, withdraw_fuel: true, on the smelter a use opened\n")
+    fmt.sbprintf(w, "  store and take work on the barrel a use opened. tithe: slot, on the death screen; then dismiss moves on\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"plan\",\"acts\":[{{...}},...]}}  up to %d acts to play while you think; an act drops the rest\n", AGENT_PLAN_MAX)
+    fmt.sbprintf(w, "{{\"cmd\":\"wait\",\"frames\":30}}  ticks with no input. {{\"cmd\":\"idle\",\"on\":false}}  no idle ticks between acts\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"realtime\",\"on\":true}}  the game stops waiting for you\n")
+    fmt.sbprintf(w, "A refused request answers ok:false with error. State's notes hold the toasts, the only reason some refusals give.\n")
+    fmt.sbprintf(w, "A view's rows are one character per tile: legend names them, solid stops you, floor holds you up. enemies lists only what is inside the view.\n")
+    fmt.sbprintf(w, "screen is title, settings, snapshots, menu, dead, book, won or play. dismiss gets past any but play, and starts the next life after dead or won.\n")
+
+    fmt.sbprintf(w, "\nFIRST STEPS\n")
+    fmt.sbprintf(w, "A walk: {{\"cmd\":\"act\",\"move\":\"right\",\"frames\":60}}. move is the key; a key the game does not know does nothing and gives no error.\n")
+    fmt.sbprintf(w, "Walking is about 4 tiles a second and stops when the act ends. A jump clears about 2 tiles. Falls hurt from a few tiles up.\n")
+    fmt.sbprintf(w, "Read the whole level once: items lists what lies on the ground by tile cell, and walking through a cell takes up what lies there. The pickaxe is the first thing to find.\n")
+    fmt.sbprintf(w, "select takes the slot number from state's inventory, not a hotbar key. Bare hands mine, slowly: a log can take 200 frames with no word until it drops.\n")
+    fmt.sbprintf(w, "This address's HTTP side only reads the brief; everything else is the socket.\n")
+
+    fmt.sbprintf(w, "\nHOW THE GAME WAITS\n")
+    fmt.sbprintf(w, "While you are connected the game waits for you, at a fixed step, and the keyboard is ignored.\n")
+    fmt.sbprintf(w, "Between acts it plays your plan at a quarter speed, about 15 ticks a second, so 20 s of thinking is a 300 tick plan.\n")
+    fmt.sbprintf(w, "With no plan it idles at that speed for up to %d ticks, then holds. So plan before a long think, and pick safe moves.\n", AGENT_IDLE_MAX)
+
+    fmt.sbprintf(w, "\nOBJECTIVE PANEL\n")
+    fmt.sbprintf(w, "The human reads your panel in the window, so keep it true:\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"objective\",\"goal\":\"kill Garm\",\"step\":\"perch at the east wall\"}}\n")
+    fmt.sbprintf(w, "A new goal files the old one; add \"result\":\"failed\" if it did not work.\n")
+
+    fmt.sbprintf(w, "\nTALK\n")
+    fmt.sbprintf(w, "The human can type to you from the window. Read state's heard in every reply: each line comes once, so answer it.\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"say\",\"text\":\"...\"}}  your answer, shown over the item bar and in your panel, up to %d characters\n", AGENT_TEXT_MAX)
+    fmt.sbprintf(w, "{{\"cmd\":\"listen\",\"seconds\":60}}  waits up to %d s for a line from the human, then replies with state. When you have nothing to do, listen.\n", AGENT_LISTEN_MAX_S)
+
+    fmt.sbprintf(w, "\nTHE END OF A RUN\n")
+    fmt.sbprintf(w, "Finish the rituals, kill Garm, take the Hell Key through the gate, and act with interact:true beside the Final Seal. ")
+    fmt.sbprintf(w, "Stay alive through the ceremony. screen says won, and a dismiss starts over.\n")
+
+    fmt.sbprintf(w, "\nLESSONS FROM EARLIER RUNS\n")
+    fmt.sbprintf(w, "Names like goto and harvest are one bot's helpers, not commands.\n\n")
+    lessons := AGENT_LESSONS
+    strings.write_string(w, lessons[strings.index(lessons, AGENT_LESSONS_FROM):])
+    return strings.to_string(b)
 }
 
 // Loads this frame's input into gs.agent and decides whether the sim ticks.
@@ -266,8 +533,57 @@ agent_drive :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
 }
 
 // Between a plan's ticks the client can still talk: an act overrides the plan.
+// A listen holds the next line until it has answered.
 agent_listening :: proc(link: ^Agent_Link) -> bool {
-    return link.frames_left == 0 || link.planning
+    return !link.awaiting && (link.frames_left == 0 || link.planning)
+}
+
+// A listen answers with state once the watcher has said something, or at its end.
+agent_await :: proc(link: ^Agent_Link, gs: ^Game_State, now: time.Tick) {
+    if link.panel.heard_len == 0 && time.tick_diff(link.await_until, now) < 0 do return
+    link.awaiting = false
+    agent_reply_state(link, gs, nil)
+    link.reply_due = true
+}
+
+// The watcher's Enter: opens the field, or sends what is in it.  The line goes
+// to the agent and the records, never to the game.
+agent_chat_enter :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    p := &link.panel
+    if !p.typing {
+        p.typing = true
+        return
+    }
+    if p.draft.len == 0 {
+        p.typing = false
+        return
+    }
+    if p.heard_len == AGENT_HEARD_MAX do return  // the agent has not caught up: the line waits in the field
+    p.heard[p.heard_len] = {frame = gs.frame, text = p.draft}
+    p.heard_len += 1
+    p.sent   = p.draft
+    p.draft  = {}
+    p.typing = false
+    agent_record_talk(link, gs, "heard", string(p.sent.buf[:p.sent.len]))
+    log_action(gs, "Watcher says: %s", string(p.sent.buf[:p.sent.len]))
+}
+
+// A typed character, if the field is open.  The window's font is ASCII.
+agent_chat_char :: proc(p: ^Agent_Panel, ch: rune) {
+    if !p.typing || ch < ' ' || ch > '~' || p.draft.len == AGENT_TEXT_MAX do return
+    p.draft.buf[p.draft.len] = u8(ch)  // erase and close leave the rest zeroed: the text stays NUL-terminated
+    p.draft.len += 1
+}
+
+agent_chat_erase :: proc(p: ^Agent_Panel) {
+    if p.draft.len == 0 do return  // a shut field has no draft
+    p.draft.len -= 1
+    p.draft.buf[p.draft.len] = 0
+}
+
+agent_chat_close :: proc(p: ^Agent_Panel) {
+    p.typing = false
+    p.draft  = {}
 }
 
 @(private="file")
@@ -345,9 +661,10 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
 
 @(private="file")
 agent_read :: proc(link: ^Agent_Link, gs: ^Game_State) {
-    for agent_listening(link) && link.connected {
+    // A listen still reads, to see a client go, but holds its lines.
+    for link.connected && (agent_listening(link) || link.awaiting) {
         // A line may already be buffered behind the one just answered.
-        if nl := agent_newline(link); nl >= 0 {
+        if nl := agent_newline(link); nl >= 0 && !link.awaiting {
             line := string(link.in_buf[:nl])
             agent_handle_line(link, gs, line)
             agent_send(link, gs)
@@ -436,6 +753,15 @@ agent_record_objective :: proc(link: ^Agent_Link, gs: ^Game_State, line: string)
     os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"objective":%s}}` + "\n", gs.frame, line))
 }
 
+// One side of the talk: who and what, as strict JSON.
+@(private="file")
+agent_record_talk :: proc(link: ^Agent_Link, gs: ^Game_State, who, text: string) {
+    if !link.recording do return
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    quoted, _ := json.marshal(text, allocator = context.temp_allocator)
+    os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"%s":%s}}` + "\n", gs.frame, who, string(quoted)))
+}
+
 @(private="file")
 agent_record_mark :: proc(link: ^Agent_Link, gs: ^Game_State, mark: string) {
     if !link.recording do return
@@ -450,6 +776,7 @@ agent_drop_client :: proc(link: ^Agent_Link, gs: ^Game_State) {
     agent_record_mark(link, gs, "disconnect")
     net.close(link.client)
     link.connected   = false
+    link.awaiting    = false
     link.realtime    = false
     link.frames_left = 0
     link.reply_due   = false
@@ -592,8 +919,36 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         agent_set_objective(&link.panel, goal, step, has_goal, has_step, result == "failed")
         agent_record_objective(link, gs, agent_canonical(value))
         agent_reply_text(link, `{"ok":true}`)
+    case "say":
+        text, _ := root["text"].(json.String)
+        if len(text) == 0 {
+            agent_reply_error(link, "say needs text")
+            return
+        }
+        agent_text_set(&link.panel.say, text)
+        said := string(link.panel.say.buf[:link.panel.say.len])
+        agent_record_talk(link, gs, "say", said)
+        log_action(gs, "Agent says: %s", said)
+        agent_reply_text(link, `{"ok":true}`)
+    case "listen":
+        seconds := AGENT_LISTEN_S
+        if "seconds" in root {
+            n, _ := agent_int(root, "seconds")  // not a number reads as 0
+            if n < 1 || n > AGENT_LISTEN_MAX_S {
+                agent_reply_error(link, fmt.tprintf("seconds must be 1..%d", AGENT_LISTEN_MAX_S))
+                return
+            }
+            seconds = n
+        }
+        if link.panel.heard_len > 0 {
+            agent_reply_state(link, gs, nil)  // a line is waiting: answered now, by agent_read's send
+            return
+        }
+        link.out_len     = 0
+        link.awaiting    = true
+        link.await_until = time.tick_add(time.tick_now(), time.Duration(seconds) * time.Second)
     case:
-        agent_reply_error(link, "unknown cmd: use state, act, realtime or objective")
+        agent_reply_error(link, "unknown cmd: use state, act, plan, wait, realtime, idle, objective, say or listen")
     }
 }
 
@@ -929,7 +1284,6 @@ agent_close_windows :: proc(gs: ^Game_State) {
 }
 
 // The one key that gets past any screen holding the game up.
-@(private="file")
 agent_dismiss :: proc(gs: ^Game_State) {
     switch {
     case gs.ui.show_title:     gs.ui.show_title     = false
@@ -941,6 +1295,7 @@ agent_dismiss :: proc(gs: ^Game_State) {
             eq_push(&gs.events, Event{type = .New_Game_Request})
         }
     case gs.ui.show_book:      gs.ui.show_book      = false
+    case gs.game_won:          eq_push(&gs.events, Event{type = .New_Game_Request})
     }
 }
 
@@ -953,6 +1308,7 @@ agent_screen :: proc(gs: ^Game_State) -> string {
     case gs.ui.show_menu:       return "menu"
     case gs.player.dead:        return "dead"
     case gs.ui.show_book:       return "book"
+    case gs.game_won:           return "won"
     }
     return "play"
 }
@@ -1008,6 +1364,7 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
     agent_write_wave(&b, gs)
     if gs.agent.place_refused do strings.write_string(&b, `"refused":"place",`)
     fmt.sbprintf(&b, `"plan_left":%d,`, link.plan_len - link.plan_next)
+    agent_write_heard(&b, &link.panel)
     if link.plan_stopped.len > 0 {
         strings.write_string(&b, `"plan_stopped":`)
         json_write_string(&b, string(link.plan_stopped.buf[:link.plan_stopped.len]))
@@ -1086,6 +1443,21 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
     }
     strings.write_string(&b, "]}\n")
     link.out_len = strings.builder_len(b)
+}
+
+// The watcher's unread lines.  A reply reads them: each comes once.
+@(private="file")
+agent_write_heard :: proc(b: ^strings.Builder, p: ^Agent_Panel) {
+    strings.write_string(b, `"heard":[`)
+    for i in 0 ..< p.heard_len {
+        if i > 0 do strings.write_byte(b, ',')
+        h := &p.heard[i]
+        fmt.sbprintf(b, `{{"f":%d,"text":`, h.frame)
+        json_write_string(b, string(h.text.buf[:h.text.len]))
+        strings.write_byte(b, '}')
+    }
+    strings.write_string(b, "],")
+    p.heard_len = 0
 }
 
 // What the death screen says: the blow, and what can still be sent on.

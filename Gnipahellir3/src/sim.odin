@@ -411,6 +411,7 @@ tile_on_tick := #partial [Tile_Type]proc(gs: ^Game_State, x, y: int){
     .Flame_Turret  = tick_turret,
     .Water_Turret  = tick_turret,
     .Earth_Turret  = tick_turret,
+    .Cinders       = tick_cinders,
 }
 
 // A planted flower bed ripens over FLOWER_BED_GROW_TIME, then holds until it is
