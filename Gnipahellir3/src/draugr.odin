@@ -41,6 +41,7 @@ rise_draugr :: proc(gs: ^Game_State, i: int) {
     b.stuck_timer = 0
     b.stuck_count = 0
     b.escaping    = false
+    gs.enemy_status[i].pillar_aim = {}
     b.plan_target = {-99, -99}
     e.nav.path       = {}
     e.nav.mine_timer = 0

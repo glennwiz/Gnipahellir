@@ -140,6 +140,8 @@ Enemy_Status :: struct {
     burn_charge: f32,  // toward the next FLAME_BURN_TICK
     slow:        f32,  // seconds still at WATER_SLOW
     dig_tile:    [2]i32,  // placed block whose dig time is running (builder_dig_ready)
+    pillar_aim:   [2]i32, // target the no-route pillar in flight climbs toward; {} = none
+    pillar_spent: [2]i32, // target whose pillar reached its row, until a route (builder_pillar_toward)
 }
 
 Enemy_Store :: struct {

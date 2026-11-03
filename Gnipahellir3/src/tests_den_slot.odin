@@ -262,6 +262,30 @@ the_cut_through_its_own_wall_ends_the_escape :: proc(t: ^testing.T) {
     testing.expect_value(t, e.builder.stuck_count, 0)
 }
 
+// Every way out of an escape drops a pillar's aim (card 119 review): here the
+// cut through its own wall, and the fall that raises a draugr.
+@(test)
+the_ways_out_of_an_escape_drop_the_pillar_aim :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e, _ := pinned_den(gs, false)
+    e.builder.stuck_count = 1
+    builder_start_escape(e)
+    gs.enemy_status[0].pillar_aim = {100, 50}
+    gs.delta_time = 1.0/60.0
+    for _ in 0 ..< 60 {
+        update_enemies(gs)
+        if !e.builder.escaping do break
+    }
+    testing.expect(t, !e.builder.escaping, "the escape ends at the cut")
+    testing.expect(t, gs.enemy_status[0].pillar_aim == {}, "the cut drops the aim")
+
+    builder_start_escape(e)
+    gs.enemy_status[0].pillar_aim = {100, 50}
+    rise_draugr(gs, 0)
+    testing.expect(t, gs.enemy_status[0].pillar_aim == {}, "the draugr drops the aim")
+}
+
 // The block went to another slot and the walk to the vein has no way out of the
 // den slot under the body: the fetch strikes out, the builder cuts free, and
 // the slot it stood in ends up filled.  No block is handed in.

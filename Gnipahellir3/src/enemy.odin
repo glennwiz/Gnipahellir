@@ -1662,9 +1662,17 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     b.escape_timer += dt
     head_clear := !is_solid(&gs.world, x, y-1) && !is_solid(&gs.world, x, y-2)
-    risen      := b.escape_from - bt.y >= ESCAPE_MIN_RISE
+    // Measured standing: at the top of a hop the body is two rows above
+    // the block it lands on.  A pillar toward a target climbs to its row;
+    // every way out of the escape drops the aim, or a later plain escape
+    // would climb to an old target's row.
+    status := &gs.enemy_status[id]
+    aim    := status.pillar_aim
+    risen  := e.grounded && b.escape_from - bt.y >= ESCAPE_MIN_RISE && (aim == {} || bt.y <= aim.y + 1)
     if (head_clear && risen) || b.escape_timer >= ESCAPE_MAX_TIME {
         b.escaping = false
+        if aim != {} && risen do status.pillar_spent = aim
+        status.pillar_aim = {}
         nav.path   = {}
         log_action(gs, "Builder#%d escape ends %d up - replanning", id, b.escape_from - bt.y)
         if b.escape_from - bt.y <= 0 { builder_strike(e, id, gs, "pillar rose nothing") }
@@ -1708,12 +1716,14 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             nav.mine_timer = MINE_TIME
             if own_wall && roof_y == y - 1 {   // the cut is the way out: walk it, the slot is still open
                 b.escaping    = false
+                status.pillar_aim = {}
                 b.stuck_count = 0
                 nav.path      = {}
             }
         } else {
             // Unmineable roof — the pillar can't continue; replan from here.
             b.escaping = false
+            status.pillar_aim = {}
             builder_strike(e, id, gs, "pillar refused")
         }
         return
@@ -1913,6 +1923,12 @@ builder_pillar_toward :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, re
         b.escape_from = 0
         return false
     }
+    // A pillar climbs to its target's row.  One that got there and still
+    // left no route is not climbed again for that target until a route is
+    // found: run 7 pillared six times for one ore it never reached.
+    status := &gs.enemy_status[id]
+    if status.pillar_spent == T do return false
+    status.pillar_aim = T
     b.escaping, b.escape_timer, b.escape_from = true, 0, bt.y
     log_action(gs, "Builder#%d has no route to (%d,%d) - pillars up", id, T.x, T.y)
     return true
@@ -2015,6 +2031,8 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
         // A best-effort route means the budget ran dry: walk what it found,
         // but do not buy another full-budget search half a second from now.
         if !complete do b.replan_timer = REPLAN_BACKOFF
+        // A route: a pillar is worth trying again the next time there is none.
+        if complete do gs.enemy_status[id].pillar_spent = {}
         }
     }
 
