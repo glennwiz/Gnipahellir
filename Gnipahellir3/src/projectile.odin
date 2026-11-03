@@ -30,7 +30,8 @@ spawn_projectile :: proc(gs: ^Game_State, pos, vel: [2]f32, owner: Entity_ID, da
     for i in 0 ..< MAX_PROJECTILES {
         p := &gs.projectiles.data[i]
         if p.active { continue }
-        p^ = {pos = pos, vel = vel, owner = owner, active = true, damage = damage, drip = drip}
+        p^ = {pos = pos, vel = vel, owner = owner, active = true, damage = damage, drip = drip,
+              born = {i32(pos.x), i32(pos.y)}}
         gs.projectiles.count += 1
         if drip do return   // a drip falls in silence, no fireball whoosh
         eq_push(&gs.events, Event{
@@ -75,7 +76,10 @@ update_projectiles :: proc(gs: ^Game_State) {
         }
 
         splash := Event_Payload{int_val = 1 if p.drip else 0}
-        if is_solid(&gs.world, x, y) {
+        // The birth tile never stops the shot: a block that fell into the
+        // caster's body would otherwise eat every orb on its first frame
+        // (card 122: a Vargr at point blank took 16 orbs and no damage).
+        if is_solid(&gs.world, x, y) && ([2]i32{i32(x), i32(y)} != p.born) {
             eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {i32(x), i32(y)}, payload = splash})
             projectile_free(&gs.projectiles, i)
             continue

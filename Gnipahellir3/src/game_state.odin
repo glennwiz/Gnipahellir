@@ -395,6 +395,7 @@ Projectile :: struct {
     damage: int,
     age:    f32,   // seconds alive; dies at PROJECTILE_LIFETIME
     drip:   bool,  // a Rain Wisp's drop: soaks the player, passes through enemies
+    born:   [2]i32, // the tile it spawned in: terrain there never stops it
 }
 
 Projectile_Store :: struct {
