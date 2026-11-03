@@ -3,6 +3,7 @@
 Read this before an agent run, and update it after one. Keep it true, not long:
 replace or delete a lesson when it stops being true.
 
+From "How the bot plays" on, this file ships in the game: the brief a GET gets ends with it.
 How to run: `tools/agent_play.sh` starts the game in a new `build/agent_runs/<time>/`.
 Protocol: top of `src/agent_api.odin`. Afterwards run `tools/agent_summary.py <run>`
 first, then read `action.log` and `fight.log` only where it points.

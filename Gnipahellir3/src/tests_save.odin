@@ -168,7 +168,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"Metal", "Gold", "Runic", "Hell",
 	}},
 	{Enemy_Kind, {
-		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle",
+		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle", "Rain_Wisp",
 		"Mole",
 	}},
 	{Equip_Slot, {
@@ -269,6 +269,21 @@ saved_enum_ordinals_never_move :: proc(t: ^testing.T) {
 	}
 }
 
+// A row search, not delete_key on the found map: delete_key on a map keyed by
+// typeid hangs the odin compiler at -o:size and above (dev-2026-10).
+@(private="file")
+enum_is_pinned :: proc(id: typeid, rows: type_of(pinned_enums)) -> bool {
+	for row in rows do if row.type == id do return true
+	return false
+}
+
+@(test)
+enum_is_pinned_finds_only_its_rows :: proc(t: ^testing.T) {
+	testing.expect(t, enum_is_pinned(Tile_Type, pinned_enums), "a pinned enum has its row")
+	testing.expect(t, !enum_is_pinned(Save_Data, pinned_enums), "a type with no row is not pinned")
+	testing.expect(t, !enum_is_pinned(Tile_Type, nil), "no rows pin nothing")
+}
+
 @(test)
 every_saved_enum_is_pinned :: proc(t: ^testing.T) {
 	found, seen: map[typeid]bool
@@ -278,8 +293,7 @@ every_saved_enum_is_pinned :: proc(t: ^testing.T) {
 	defer strings.builder_destroy(&lines)
 	saved_walk(type_info_of(Save_Data), &found, &seen, &lines)
 	testing.expect(t, Tile_Type in found && Item in found && Equip_Slot in found && Tile_Flag in found, "the walk reaches the enums")
-	for row in pinned_enums do delete_key(&found, row.type)
-	for id in found do testing.expectf(t, false, "%v is saved and has no row in pinned_enums", id)
+	for id in found do testing.expectf(t, enum_is_pinned(id, pinned_enums), "%v is saved and has no row in pinned_enums", id)
 }
 
 // testdata/save_layout.txt is the name, offset, size and type of every field of

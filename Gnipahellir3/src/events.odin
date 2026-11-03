@@ -270,7 +270,14 @@ process_events :: proc(gs: ^Game_State) {
             audio_play(&gs.audio, .Fireball, audio_tile_gain(gs, e.tile))
 
         case .Projectile_Impact:
-            spawn_orb_impact(gs, e.tile)
+            if e.payload.int_val != 0 {
+                spawn_rain_splash(gs, e.tile)
+            } else {
+                spawn_orb_impact(gs, e.tile)
+            }
+
+        case .Player_Soaked:
+            gs.soak_t = RAIN_SOAK_TIME
 
         case .Play_Sound:
             // A tile-stamped Play_Sound is a world sound (a machine's puff,
@@ -522,6 +529,7 @@ enemy_kind_names := [Enemy_Kind]string{
     .Vargr       = "a Vargr",
     .Pond_Frog    = "a pond frog",
     .Ember_Beetle = "an ember beetle",
+    .Rain_Wisp    = "a rain wisp",
     .Mole         = "a mole",
 }
 

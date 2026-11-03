@@ -26,12 +26,13 @@ ORB_IGNITE_T :: f32(0.28)  // orange bloom; full fire after
 // trail reads as falling embers, never a solid laser.
 ORB_EMBER_PERIOD :: f32(0.09)
 
-spawn_projectile :: proc(gs: ^Game_State, pos, vel: [2]f32, owner: Entity_ID, damage: int) {
+spawn_projectile :: proc(gs: ^Game_State, pos, vel: [2]f32, owner: Entity_ID, damage: int, drip := false) {
     for i in 0 ..< MAX_PROJECTILES {
         p := &gs.projectiles.data[i]
         if p.active { continue }
-        p^ = {pos = pos, vel = vel, owner = owner, active = true, damage = damage}
+        p^ = {pos = pos, vel = vel, owner = owner, active = true, damage = damage, drip = drip}
         gs.projectiles.count += 1
+        if drip do return   // a drip falls in silence, no fireball whoosh
         eq_push(&gs.events, Event{
             type   = .Projectile_Fired,
             source = owner,
@@ -60,7 +61,7 @@ update_projectiles :: proc(gs: ^Game_State) {
         p.pos += p.vel * dt
 
         // Trail: only a lit orb burns — the black void phase sheds nothing.
-        if p.age > ORB_IGNITE_T &&
+        if !p.drip && p.age > ORB_IGNITE_T &&
            int(p.age / ORB_EMBER_PERIOD) != int((p.age - dt) / ORB_EMBER_PERIOD) {
             spawn_orb_ember(gs, p.pos)
         }
@@ -73,8 +74,9 @@ update_projectiles :: proc(gs: ^Game_State) {
             continue
         }
 
+        splash := Event_Payload{int_val = 1 if p.drip else 0}
         if is_solid(&gs.world, x, y) {
-            eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {i32(x), i32(y)}})
+            eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {i32(x), i32(y)}, payload = splash})
             projectile_free(&gs.projectiles, i)
             continue
         }
@@ -87,13 +89,17 @@ update_projectiles :: proc(gs: ^Game_State) {
                p.pos.x - PROJECTILE_RADIUS < pl.pos.x + PLAYER_W &&
                p.pos.y + PROJECTILE_RADIUS > pl.pos.y &&
                p.pos.y - PROJECTILE_RADIUS < pl.pos.y + PLAYER_H {
-                eq_push(&gs.events, Event{
-                    type    = .Damage_Dealt,
-                    source  = p.owner,
-                    target  = PLAYER_ID,
-                    payload = {int_val = i32(p.damage)},
-                })
-                eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {i32(x), i32(y)}})
+                if p.drip {
+                    eq_push(&gs.events, Event{type = .Player_Soaked, source = p.owner, target = PLAYER_ID})
+                } else {
+                    eq_push(&gs.events, Event{
+                        type    = .Damage_Dealt,
+                        source  = p.owner,
+                        target  = PLAYER_ID,
+                        payload = {int_val = i32(p.damage)},
+                    })
+                }
+                eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {i32(x), i32(y)}, payload = splash})
                 projectile_free(&gs.projectiles, i)
                 continue
             }
@@ -103,6 +109,7 @@ update_projectiles :: proc(gs: ^Game_State) {
         // entity map only indexes center tiles — an orb clipping Garm's flank
         // would fly straight through him (the same coarseness the melee
         // cursor-gating fix hit; ranged combat needs bodies, not centers).
+        if p.drip do continue
         for ei in 0 ..< MAX_ENEMIES {
             if !gs.enemies.active[ei] { continue }
             id := enemy_entity_id(ei)
@@ -134,11 +141,16 @@ draw_projectiles :: proc(ps: ^Projectile_Store) {
     RIM  :: rl.Color{150, 30, 20, 255}
     FIRE :: rl.Color{255, 120, 20, 255}
     CORE :: rl.Color{255, 240, 180, 255}
+    DRIP :: rl.Color{110, 175, 240, 255}
     for i in 0 ..< MAX_PROJECTILES {
         p := &ps.data[i]
         if !p.active { continue }
         px := i32(p.pos.x * CELL_SIZE)
         py := i32(p.pos.y * CELL_SIZE)
+        if p.drip {
+            rl.DrawRectangle(px - 1, py - 2, 2, 4, DRIP)
+            continue
+        }
         switch {
         case p.age < ORB_VOID_T:
             rl.DrawRectangle(px - 2, py - 2, 5, 5, VOID)
