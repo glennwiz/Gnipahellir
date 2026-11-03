@@ -41,8 +41,14 @@ def p1():
     b.walkx(97,limit=6); b.sel('Pickaxe')
     for c in((98,60),(98,61)): b.dig(*c)
     b.a(3); b.st()
-    b.a(2,craft='Plank'); b.craft('Crafting_Bench'); b.sel('Crafting_Bench'); b.a(3,place=[98,61])
-    assert b.t(98,61)=='Crafting_Bench'
+    b.a(2,craft='Plank'); b.craft('Crafting_Bench'); b.sel('Crafting_Bench')
+    # run 8: (98,61) had no floor in one world ("It needs solid ground under it"): try the cells round the feet
+    fx,fy=b.pos()
+    for c in [(98,61),(fx+1,fy),(fx-1,fy),(fx+2,fy),(fx-2,fy)]:
+        if not b.solid(*c) and b.solid(c[0],c[1]+1):
+            b.a(3,place=list(c))
+            if b.t(*c)=='Crafting_Bench': break
+    assert b.count('Crafting_Bench')==0,('bench not placed',b.r['notes'][-1:])
     b.a(2); b.craft('Fire_Wand'); b.craft('Potion_Health'); b.a(2,craft='Plank'); b.st()
     assert b.count('Fire_Wand')==1
     b.a(2,craft='Plank'); b.a(2,craft='Plank'); b.craft('Tree_Grower',3); b.st()

@@ -7,6 +7,12 @@ LOG=open(os.path.dirname(os.path.abspath(__file__))+'/play.log','a')
 def log(*a):
     s=' '.join(str(x) for x in a); print(s,flush=True); LOG.write(time.strftime('%H:%M:%S ')+s+'\n'); LOG.flush()
 W,H=192,108
+# Enemy bodies (w,h) in tiles, from enemy.odin/roamer.odin: aim at the body's centre, not the
+# player's half-height. Run 8: e['y']+.9 put the aim in the ground under every roamer.
+BODY={'Pond_Frog':(.7,.6),'Ember_Beetle':(.8,.5),'Mole':(.9,.6),'Cave_Eel':(1.1,.4),'Magma_Crawler':(.9,.5),
+      'Stone_Grub':(.9,.7),'Rain_Wisp':(.8,.6),'Rock_Harpy':(.9,.9),'Garm':(1.6,1.8)}
+def ecentre(e):
+    w,h=BODY.get(e['kind'],(.8,1.0)); return e['x']+w/2,e['y']+h/2
 NAT={'Stone','Dirt','Grass','Sand','Mossy_Stone','Cloud','Cloud_Ore','Aether_Ore','Iron_Ore','Silver_Ore','Gold_Ore','Gold_Rare_Ore','Jade_Ore','Emerald_Ore','Diamond_Ore','Hel_Gem_Ore','Runic_Sky_Ore','Clay','Wood','Leaves','Green_Cave_Mushroom'}
 class B:
     def __init__(s):
@@ -110,7 +116,7 @@ class B:
         ene=[]
         for e in r['enemies']:
             if e['kind']=='Garm': continue
-            ex,ey=e['x']+.4,e['y']+.9; d=max(abs(ex-cx),abs(ey-cy))
+            ex,ey=ecentre(e); d=max(abs(ex-cx),abs(ey-cy))
             if d<=2.6 or (d<=8 and s.slot('Fire_Wand') is not None and p['mana']>=4 and s.los(cx,cy,ex,ey)): ene.append((d,e['slot'],e))
         if not ene: return
         ene.sort(key=lambda q:q[:2]); s.fight(ene[0][2])
@@ -123,12 +129,19 @@ class B:
             if not cur: log('killed',e['kind'],'hp',s.p['hp']); break
             c=cur[0]
             if c['hp']<last: miss=0; last=c['hp']
-            cx,cy=s.p['x']+.4,s.p['y']+.9; ex,ey=c['x']+.4,c['y']+.9
+            cx,cy=s.p['x']+.4,s.p['y']+.9; ex,ey=ecentre(c)
             d=max(abs(ex-cx),abs(ey-cy))
             if d>9.5: break
             if s.p['hp']<=5 and s.slot('Potion_Health') is not None:
                 s.a(2,equip=s.slot('Potion_Health'))
+            # never fire at a solid tile: the orb dies in it
             tile=[int(ex),int(ey)]
+            if s.solid(*tile): tile=[int(ex),int(c['y'])]
+            if s.solid(*tile): log('fight: aim tile solid',tile,c['kind']); break
+            # not from inside a pit: both side cells at body height solid means climb out first
+            fx,fy=s.pos()
+            if all(s.solid(fx+dx,fy-1) or s.solid(fx+dx,fy) for dx in(-1,1)) and ey<fy-1:
+                log('fight: in a pit, not shooting',(fx,fy)); break
             sw=next((q for q in('Gold_Sword','Silver_Sword','Sword') if s.slot(q) is not None),None)
             if sw and d<=2.6:
                 s.a(1,select=s.slot(sw)); s.a(21,mine=tile); continue
@@ -136,17 +149,25 @@ class B:
                 if sw: s.a(1,select=s.slot(sw)); s.a(10); continue
                 break
             if miss>=2:
+                miss=0
+                # Run 8: digging along a low aim line tunnelled the bot into a pit. Dig only
+                # at or above the head row, and never when the target is below the feet.
+                if ey>fy+.5:
+                    log('fight: target below the feet, no dig'); break
                 k=int(max(abs(ex-cx),abs(ey-cy))*3)+1; dug=False
                 for i in range(1,k):
                     q=(int(cx+(ex-cx)*i/k),int(cy+(ey-cy)*i/k))
-                    # never the floor (run 7 death 1: dug (96,62),(97,62) toward a Draugr below, fell on him)
-                    if q[1]>s.pos()[1]: continue
+                    if q[1]>fy-1: continue  # head row (fy-1) and above only
                     # nor a pool rim (run 7: dug (39,37),(39,38) at an eel, the Deep Cave pool drained)
                     if any(s.t(q[0]+dx,q[1]+dy) in HAZ or s.t(q[0]+dx,q[1]+dy)=='Water' for dx in(-1,0,1) for dy in(-1,0,1)): continue
                     if s.solid(*q) and s.t(*q) in MINE and s.reach(*q):
                         s.a(1,select=s.slot('Pickaxe')); s.a(17,mine=list(q)); dug=True; break
-                miss=0
                 if dug: continue
+                # no clear line: step one cell toward the target's side on open ground and shoot level
+                nx=fx+(1 if ex>cx else -1)
+                if not s.solid(nx,fy) and not s.solid(nx,fy-1) and s.solid(nx,fy+1) and s.t(nx,fy) not in HAZ:
+                    s.a(8,move='right' if ex>cx else 'left'); continue
+                break
             s.a(1,select=s.slot('Fire_Wand')); s.a(12,mine=tile); miss+=1
         s.a(1,select=sel); s.noguard=False
     def sel(s,item):

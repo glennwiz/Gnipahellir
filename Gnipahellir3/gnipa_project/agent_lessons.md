@@ -84,7 +84,21 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - A Rain Wisp's drip soaks you and slows flight; a flight home ran out 3 tiles short.
 - In a walled pocket, `fight`'s line-of-sight dig still opens your own wall at foot level
   (run 7 life 3 dug (108,53) and let the Vargr in). Turn it off when walled in.
-- Golems cannot be given work over the API: a Gather or Build zone is a mouse drag.
+- Crew over the API (run 8): select the Clay_Golem and `place` anywhere to bind it, then the wand
+  and `place:[x,y]` to set it down. Wand 2 Clay + 2 Plank + 1 Iron_Bar, golem 4 Clay + 1 Iron_Bar,
+  both instant at a bench; Clay is 1 Stone_Block for 2, no station. The basic wand holds ONE golem.
+- There is no recall, roster, per-golem mode, mark-paint or drop verb. A cracked golem cannot be
+  picked up, so with the basic wand the crew is over until a new life. Keep golems away from waves.
+- A Vargr strikes golems (2 a hit), not only Draugr: run 8 life 1 lost the golem to a Draugr plus a Vargr.
+- Killing a Builder raises a Draugr at its den, and it hunts the crew. Do not kill den owners near the base.
+- Gather logs go into the smelter as fuel before any barrel; `withdraw_fuel` gets them back.
+- Bare hands mine only Wood. Without the pickaxe there is no stone, so no Fire Wand.
+- A grave lands where you die and its risen hero (12 hp, claws 3) guards 12 tiles round it. Dying
+  near the shaft puts it on the pickaxe ledge: run 8 lost lives 3 to 5 to that loop. Die far from the shaft.
+- `noguard` while walking lets an Ember Beetle chew you from 10 to 1 (run 8 life 5).
+- Watching the crew with `noguard` let a Vargr wave kill run 8 life 7 in 4 s: watch with guard on.
+- Gather zones undermine what stands in them: a bench and smelter in the zone fell to items and the
+  crew hauled them to its pile (run 8 life 7). Keep the base outside the zone and its margin.
 
 ## How the game goes
 - 10 HP, no regeneration. Falls kill. Pillar and bridge instead of jumping over voids.
@@ -144,3 +158,7 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
   The 25-frame re-mine is the builder leaving by his own wall, not a Fetch harvest.
 - A Builder can dig through the pond bed and drain it by frame 4000 (run 5 life 3).
 - Den grudges hold one at a time, so a second rob before the first is due starts no timer.
+- Golems: a worker parks idle on its own Quick Clay pillar in mid air once the tree under it is gone
+  (run 8 f15876-20210 at (111,46)); a new zone frees it.
+- A Vargr smashes a finished Clay_Hearth and it drops nothing: the Iron_Bar is lost (run 8 f18218).
+- Build fetch counts a grave Rune_Coffer as storage, and stalled 2000+ frames walking at it (run 8 f14108).
