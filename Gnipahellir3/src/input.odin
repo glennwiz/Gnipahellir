@@ -133,13 +133,7 @@ update_input :: proc(gs: ^Game_State) {
         for k := rl.GetKeyPressed(); k != .KEY_NULL; k = rl.GetKeyPressed() {
             if title_key(gs, k) do start = true
         }
-        if start {
-            if gs.ui.title_fresh {
-                eq_push(&gs.events, Event{type = .Title_Start})
-            } else {
-                gs.ui.show_title = false
-            }
-        }
+        if start do title_begin(gs)
         return
     }
 

@@ -28,6 +28,7 @@ Debug_Log :: struct {
     buf:  [DEBUG_LOG_CAP]u8,
     pos:  int,
     path: string,   // "" = buffer only, never written to disk (the test default)
+    held: bool,     // armed, but no run has started: flushes wait and the file is untouched
 }
 
 log_action :: proc(gs: ^Game_State, format: string, args: ..any) {
@@ -56,7 +57,7 @@ log_action :: proc(gs: ^Game_State, format: string, args: ..any) {
 flush_action_log :: proc(gs: ^Game_State) {
     when !GAME_DEBUG { return }
     dl := &gs.debug_log
-    if dl.pos == 0 do return
+    if dl.held || dl.pos == 0 do return
     if dl.path != "" {
         if fd, err := os.open(dl.path, os.O_WRONLY | os.O_CREATE | os.O_APPEND); err == nil {
             os.write(fd, dl.buf[:dl.pos])
@@ -98,17 +99,16 @@ entity_name :: proc(gs: ^Game_State, id: Entity_ID, buf: []u8) -> string {
     return "the world"
 }
 
-// Open the run's record: truncate the file, arm the path, write the header.
-// Called once from main before the loop — a run owns the log it writes, and
-// the previous run's log is the one the player has already read.  Loading a
+// Open the run's record: arm the path, write the header, and hold it all in the
+// buffer.  Called once from main before the loop.  The file waits for
+// action_log_release: a run owns the log it writes, and a boot that leaves by the
+// title, or hands the game to an agent's sandbox, has not started one.  Loading a
 // save mid-session does NOT come through here: it logs its own line into the
 // same file, because the record must keep the run that led up to the load.
 action_log_begin_run :: proc(gs: ^Game_State) {
     when !GAME_DEBUG { return }
-    if fd, err := os.open(ACTION_LOG_PATH, os.O_WRONLY | os.O_CREATE | os.O_TRUNC); err == nil {
-        os.close(fd)
-    }
     gs.debug_log.path = ACTION_LOG_PATH
+    gs.debug_log.held = true
 
     now := time.now()
     d_buf: [time.MIN_YYYY_DATE_LEN]u8
@@ -116,4 +116,15 @@ action_log_begin_run :: proc(gs: ^Game_State) {
     log_action(gs, "=== run start %s %s - save v%d ===",
         time.to_string_yyyy_mm_dd(now, d_buf[:]), time.to_string_hms(now, t_buf[:]),
         SAVE_VERSION)
+}
+
+// A run has started: the last run's log goes, and the held lines can reach disk.
+action_log_release :: proc(gs: ^Game_State) {
+    when !GAME_DEBUG { return }
+    dl := &gs.debug_log
+    if !dl.held do return
+    dl.held = false
+    if fd, err := os.open(dl.path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC); err == nil {
+        os.close(fd)
+    }
 }

@@ -796,7 +796,17 @@ draw_title :: proc(gs: ^Game_State) {
 	draw_stepped_panel_shape(PROMPT_X + 3, PROMPT_Y + 3, PROMPT_W - 6, PROMPT_H - 6, rl.Color{72, 50, 29, 255})
 	draw_stepped_panel_shape(PROMPT_X + 6, PROMPT_Y + 6, PROMPT_W - 12, PROMPT_H - 12, rl.Color{19, 15, 17, 255})
 	prompt_col := (tick / 5) % 4 == 0 ? rl.Color{165, 118, 54, 255} : rl.Color{255, 218, 132, 255}
+	if gs.ui.agent_port != 0 {
+		address: [64]u8
+		fmt.bprintf(address[:63], "http://127.0.0.1:%d/", gs.ui.agent_port)
+		center_text("GIVE YOUR AGENT THIS ADDRESS", PROMPT_Y + 13, 22, prompt_col)
+		center_text(cstring(raw_data(address[:])), PROMPT_Y + PROMPT_H + 18, 24, rl.Color{255, 218, 132, 255})
+		center_text("It plays in a sandbox folder; your save is safe. Watch here. [Esc] quits", PROMPT_Y + PROMPT_H + 54, 18, rl.Color{157, 144, 134, 255})
+		return
+	}
 	center_text("PRESS ANY KEY", PROMPT_Y + 13, 22, prompt_col)
+	agent_line: cstring = "No port or folder for an agent. [A] tries again" if gs.ui.agent_failed else "[A] Let an agent play"
+	center_text(agent_line, PROMPT_Y + PROMPT_H + 70, 18, rl.Color{157, 144, 134, 255})
 
 	if !gs.ui.title_fresh do return
 	seed_line: [64]u8
@@ -817,6 +827,14 @@ draw_title :: proc(gs: ^Game_State) {
 // digits and Backspace edit the seed and Y recalls the last world's.
 TITLE_SEED_DIGITS :: 10 // every u32 fits
 title_key :: proc(gs: ^Game_State, key: rl.KeyboardKey) -> bool {
+	if gs.ui.agent_port != 0 {
+		if key == .ESCAPE do eq_push(&gs.events, Event{type = .Quit_Request})
+		return false
+	}
+	if key == .A {
+		gs.ui.agent_requested = true
+		return false
+	}
 	if !gs.ui.title_fresh do return true
 	ui := &gs.ui
 	#partial switch key {
@@ -836,6 +854,17 @@ title_key :: proc(gs: ^Game_State, key: rl.KeyboardKey) -> bool {
 		return false
 	}
 	return true
+}
+
+// The title closes into a run.  While it shows an agent's address it stays: the
+// agent's first dismiss closes it, and the run is the agent's.
+title_begin :: proc(gs: ^Game_State) {
+	if gs.ui.agent_port != 0 do return
+	if gs.ui.title_fresh {
+		eq_push(&gs.events, Event{type = .Title_Start})
+	} else {
+		gs.ui.show_title = false
+	}
 }
 
 // ─── Pause / Main Menu (ESC, or shown first at startup) ───────────────────────
