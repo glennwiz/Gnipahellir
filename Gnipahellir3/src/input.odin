@@ -70,6 +70,21 @@ agent_watcher_input :: proc(gs: ^Game_State, tick: bool) {
     if !tick do update_camera(gs)  // a glide finishes while the sim waits; visual only
 }
 
+// The watcher's field while an agent plays: Enter opens it and sends, Esc
+// closes it.  Every other key is dropped, so typing never reaches the game.
+agent_chat_poll :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    for k := rl.GetKeyPressed(); k != .KEY_NULL; k = rl.GetKeyPressed() do agent_chat_key(link, gs, k)
+    for ch := rl.GetCharPressed(); ch != 0; ch = rl.GetCharPressed() do agent_chat_char(&link.panel, ch)
+}
+
+agent_chat_key :: proc(link: ^Agent_Link, gs: ^Game_State, k: rl.KeyboardKey) {
+    #partial switch k {
+    case .ENTER, .KP_ENTER: agent_chat_enter(link, gs)
+    case .ESCAPE:           agent_chat_close(&link.panel)
+    case .BACKSPACE:        agent_chat_erase(&link.panel)
+    }
+}
+
 update_input :: proc(gs: ^Game_State) {
     if gs.agent.driving {
         agent_input(gs)
@@ -133,13 +148,7 @@ update_input :: proc(gs: ^Game_State) {
         for k := rl.GetKeyPressed(); k != .KEY_NULL; k = rl.GetKeyPressed() {
             if title_key(gs, k) do start = true
         }
-        if start {
-            if gs.ui.title_fresh {
-                eq_push(&gs.events, Event{type = .Title_Start})
-            } else {
-                gs.ui.show_title = false
-            }
-        }
+        if start do title_begin(gs)
         return
     }
 

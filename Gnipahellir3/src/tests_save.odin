@@ -168,8 +168,8 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"Metal", "Gold", "Runic", "Hell",
 	}},
 	{Enemy_Kind, {
-		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle", "Rain_Wisp",
-		"Cave_Eel", "Magma_Crawler", "Stone_Grub",
+		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle", "Rain_Wisp", "Rock_Harpy",
+		"Mole", "Cave_Eel", "Magma_Crawler", "Stone_Grub",
 	}},
 	{Equip_Slot, {
 		"None", "Weapon", "Head", "Chest", "Hands", "Legs", "Feet", "Charm", "Tool", "Charm_2",
@@ -370,19 +370,24 @@ saved_layout_never_moves_inside_a_version :: proc(t: ^testing.T) {
 	}
 }
 
-// Card 112: the cave roamers came after Rain_Wisp, so a wisp saved on master
-// still loads as a wisp, and every roamer keeps its kind across a save.
+// Cards 112 and the post-Mole merge: the cave roamers come after master's Rain_Wisp,
+// Rock_Harpy and Mole, so those load as themselves, and every roamer keeps its
+// kind across a save.
 @(test)
 roamers_keep_their_kind_across_a_save :: proc(t: ^testing.T) {
 	path :: "gnipahellir_roamer_kind_scratch.dat"
 	defer os.remove(path)
 	testing.expect_value(t, int(Enemy_Kind.Rain_Wisp), 8)
-	testing.expect_value(t, int(Enemy_Kind.Cave_Eel), 9)
+	testing.expect_value(t, int(Enemy_Kind.Rock_Harpy), 9)
+	testing.expect_value(t, int(Enemy_Kind.Mole), 10)
+	testing.expect_value(t, int(Enemy_Kind.Cave_Eel), 11)
+	testing.expect_value(t, int(Enemy_Kind.Magma_Crawler), 12)
+	testing.expect_value(t, int(Enemy_Kind.Stone_Grub), 13)
 
 	gs := turret_test_state()
 	defer free(gs)
 	gs.enemies = {}
-	kinds := []Enemy_Kind{.Rain_Wisp, .Cave_Eel, .Magma_Crawler, .Stone_Grub}
+	kinds := []Enemy_Kind{.Rain_Wisp, .Rock_Harpy, .Mole, .Cave_Eel, .Magma_Crawler, .Stone_Grub}
 	for k in kinds {
 		id, _ := enemy_alloc(&gs.enemies)
 		gs.enemies.data[id] = Enemy{kind = k, hp = 1, hp_max = 1, pos = {f32(40 + id*10), 20}}

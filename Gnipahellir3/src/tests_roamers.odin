@@ -1,5 +1,6 @@
 package game
 
+import "core:os"
 import "core:testing"
 
 // ─── Roamers and the enemy behaviour table (card 64) ──────────────────────────
@@ -42,7 +43,7 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
         testing.expectf(t, row.update != nil, "%v has no update", kind)
         testing.expectf(t, row.body.x > 0 && row.body.y > 0, "%v has no body", kind)
         testing.expectf(t, row.speed > 0 && row.hp > 0, "%v has no speed or hp", kind)
-        testing.expectf(t, row.gravity > 0 || kind == .Fire_Sprite || kind == .Rain_Wisp || roamer_table[kind].swims, "%v floats", kind)
+        testing.expectf(t, row.gravity > 0 || row.update == update_fire_sprite || row.update == update_rain_wisp || row.update == update_rock_harpy || roamer_table[kind].swims, "%v floats", kind)
     }
     testing.expect_value(t, enemy_body_size(.Garm), [2]f32{GARM_W, GARM_H})
     testing.expect_value(t, enemy_body_size(.Vargr), [2]f32{BUILDER_W, BUILDER_H})
@@ -67,6 +68,7 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
     testing.expect(t, enemy_behaviour[.Fire_Sprite].update == update_fire_sprite, "sprite brain")
     testing.expect(t, enemy_behaviour[.Pond_Frog].update == update_roamer, "frog brain")
     testing.expect(t, enemy_behaviour[.Ember_Beetle].update == update_roamer, "beetle brain")
+    testing.expect(t, enemy_behaviour[.Mole].update == update_roamer, "mole brain")
     testing.expect(t, enemy_behaviour[.Cave_Eel].update == update_roamer, "eel brain")
     testing.expect(t, enemy_behaviour[.Magma_Crawler].update == update_roamer, "crawler brain")
     testing.expect(t, enemy_behaviour[.Stone_Grub].update == update_roamer, "grub brain")
@@ -75,6 +77,19 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
     testing.expect_value(t, roamer_table[.Pond_Frog].cap, 4)
     testing.expect_value(t, roamer_table[.Ember_Beetle].cap, 3)
     testing.expect_value(t, roamer_table[.Ember_Beetle].damage, 1)
+    testing.expect_value(t, roamer_table[.Mole].cap, 2)
+    testing.expect_value(t, roamer_table[.Mole].dig_every, MOLE_DIG_EVERY)
+    testing.expect(t, roamer_table[.Mole].friendly, "a mole is friendly")
+    testing.expect_value(t, roamer_table[.Mole].damage, 0)
+    testing.expect_value(t, roamer_table[.Mole].sight, i32(5))
+    testing.expect_value(t, enemy_body_size(.Mole), [2]f32{MOLE_W, MOLE_H})
+    testing.expect_value(t, enemy_speed(.Mole), MOLE_SPEED)
+    testing.expect_value(t, enemy_behaviour[.Mole].hp, MOLE_HP)
+    testing.expect_value(t, int(MOLE_HP), 3)
+    testing.expect_value(t, MOLE_W, f32(0.9))
+    testing.expect_value(t, MOLE_H, f32(0.6))
+    testing.expect_value(t, MOLE_SPEED, f32(2.0))
+    testing.expect_value(t, MOLE_DIG_EVERY, f32(90))
     testing.expect_value(t, roamer_table[.Cave_Eel].cap, 3)
     testing.expect_value(t, roamer_table[.Cave_Eel].damage, 2)
     testing.expect_value(t, roamer_table[.Cave_Eel].level, LEVEL_CAVE2)
@@ -217,6 +232,7 @@ roamers_top_up_to_their_caps_and_stop :: proc(t: ^testing.T) {
     }
     testing.expect_value(t, wave_count_kind(gs, .Pond_Frog), roamer_table[.Pond_Frog].cap)
     testing.expect_value(t, wave_count_kind(gs, .Ember_Beetle), roamer_table[.Ember_Beetle].cap)
+    testing.expect_value(t, wave_count_kind(gs, .Mole), roamer_table[.Mole].cap)
 
     for &e, s in gs.enemies.data do if gs.enemies.active[s] {
         T := builder_tile(&e)
@@ -556,6 +572,7 @@ every_kind_can_be_named_and_bleed :: proc(t: ^testing.T) {
     }
     testing.expect_value(t, enemy_kind_names[.Pond_Frog], "a pond frog")
     testing.expect_value(t, enemy_kind_names[.Ember_Beetle], "an ember beetle")
+    testing.expect_value(t, enemy_kind_names[.Mole], "a mole")
 }
 
 // Through game_update, so the step itself is what is on trial.
@@ -566,7 +583,12 @@ roamers_ride_out_a_real_surface_soak :: proc(t: ^testing.T) {
     gs.player.pos = {f32(GRID_W/2), f32(SURFACE_Y) - PLAYER_H}
     gs.delta_time = 0.05
     gs.ui.show_title = false
-    for _ in 0 ..< int(ROAMER_SPAWN_EVERY * 3 * 20) {
+    earth :: proc(gs: ^Game_State) -> (n: int) {
+        for tile in gs.world.terrain do if roamer_earth[tile] do n += 1
+        return
+    }
+    ground := earth(gs)
+    for _ in 0 ..< int((ROAMER_SPAWN_EVERY * 3 + MOLE_DIG_EVERY * 2) * 20) {
         game_update(gs)
         gs.player.hp = gs.player.hp_max
         gs.player.dead = false
@@ -575,6 +597,287 @@ roamers_ride_out_a_real_surface_soak :: proc(t: ^testing.T) {
     testing.expect(t, wave_count_kind(gs, .Pond_Frog) <= roamer_table[.Pond_Frog].cap, "capped")
     testing.expect(t, wave_count_kind(gs, .Ember_Beetle) > 0, "beetles arrive on real ground")
     testing.expect(t, wave_count_kind(gs, .Ember_Beetle) <= roamer_table[.Ember_Beetle].cap, "capped")
+    testing.expect(t, wave_count_kind(gs, .Mole) > 0, "moles arrive on real ground")
+    testing.expect(t, wave_count_kind(gs, .Mole) <= roamer_table[.Mole].cap, "capped")
+    testing.expect(t, earth(gs) < ground, "moles dig real ground")
+    testing.expect(t, ground - earth(gs) <= roamer_table[.Mole].cap * 3, "at the mole's pace")
+}
+
+// A live roamer of every row comes back from a save as it went in.  A new row
+// is covered by being in the table.
+@(test)
+a_live_roamer_survives_a_save_round_trip :: proc(t: ^testing.T) {
+    path :: "gnipahellir_roamer_scratch.dat"
+    defer os.remove(path)
+    gs := turret_test_state()
+    defer free(gs)
+    roam_ground(gs, 170)
+    x := 30
+    for kind in Enemy_Kind do if roamer_table[kind].cap > 0 {
+        e := roam_seed(gs, kind, x)
+        e.hp = enemy_behaviour[kind].hp - 1
+        e.facing = -1
+        e.builder.cooldown = 1.5
+        e.builder.has_target = true
+        e.builder.stuck_timer = 42
+        x += 8
+    }
+    want := gs.enemies
+    testing.expect(t, save_game_to(gs, path), "saved")
+    gs.enemies = {}
+    testing.expect(t, load_game_from(gs, path), "loaded")
+    testing.expect_value(t, gs.enemies.count, want.count)
+    for i in 0 ..< want.count {
+        testing.expect(t, gs.enemies.active[i], "the slot came back")
+        testing.expect_value(t, gs.enemies.data[i].kind, want.data[i].kind)
+        testing.expect_value(t, gs.enemies.data[i].hp, want.data[i].hp)
+        testing.expect_value(t, gs.enemies.data[i].hp_max, want.data[i].hp_max)
+        testing.expect_value(t, gs.enemies.data[i].pos, want.data[i].pos)
+        testing.expect_value(t, gs.enemies.data[i].facing, -1)
+        testing.expect_value(t, gs.enemies.data[i].builder.cooldown, f32(1.5))
+        testing.expect_value(t, gs.enemies.data[i].builder.has_target, true)
+        testing.expect_value(t, gs.enemies.data[i].builder.stuck_timer, f32(42))
+    }
+}
+
+// Earth floor under open air, with a mole on it and its dig clock run down.
+mole_on_earth :: proc(gs: ^Game_State, px: f32) -> ^Enemy {
+    roam_ground(gs, px)
+    for x in 50 ..= 70 {
+        set_tile(&gs.world, x, ROAM_Y + 1, .Grass)
+        set_tile(&gs.world, x, ROAM_Y + 2, .Stone)
+    }
+    e := roam_seed(gs, .Mole, 60)
+    e.builder.cooldown = 100   // standing still, by whim
+    e.builder.stuck_timer = MOLE_DIG_EVERY
+    return e
+}
+
+@(test)
+a_mole_digs_one_hole_and_climbs_out :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    {
+        mole := mole_on_earth(gs, 170)
+        update_roamer(mole, 0, gs, gs.delta_time)
+        testing.expect_value(t, is_solid(&gs.world, 60, ROAM_Y + 1), false)
+        testing.expect_value(t, gs.world.items[grid_idx(60, ROAM_Y + 1)], Item.Grass_Turf)
+        testing.expect_value(t, mole.builder.stuck_timer, f32(0))
+    }
+
+    // It drops in, and its next hole does not go deeper.
+    mole := &gs.enemies.data[0]
+    roam_step(gs, 30)
+    testing.expect(t, abs(mole.pos.y + MOLE_H - f32(ROAM_Y + 2)) < 0.05, "in the hole")
+    mole.builder.stuck_timer = MOLE_DIG_EVERY
+    roam_step(gs, 2)
+    testing.expect_value(t, get_tile(&gs.world, 60, ROAM_Y + 2), Tile_Type.Stone)
+
+    // Nor when the floor of the pit is earth: its sides are not open air.
+    set_tile(&gs.world, 60, ROAM_Y + 2, .Grass)
+    roam_step(gs, 2)
+    testing.expect_value(t, get_tile(&gs.world, 60, ROAM_Y + 2), Tile_Type.Grass)
+
+    // Wandering, it hops back out.
+    mole.builder.cooldown, mole.builder.has_target = 100, true
+    roam_step(gs, 120)
+    testing.expect(t, mole.pos.y + MOLE_H < f32(ROAM_Y + 1) + 0.05, "it climbed out")
+}
+
+@(test)
+a_mole_digs_on_its_clock_and_only_in_calm :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    mole := mole_on_earth(gs, 170)
+    mole.builder.stuck_timer = 0
+    update_roamer(mole, 0, gs, MOLE_DIG_EVERY * 0.5)
+    testing.expect_value(t, mole.builder.stuck_timer, MOLE_DIG_EVERY * 0.5)
+    testing.expect(t, is_solid(&gs.world, 60, ROAM_Y + 1), "not yet")
+    update_roamer(mole, 0, gs, MOLE_DIG_EVERY * 0.5)
+    testing.expect(t, !is_solid(&gs.world, 60, ROAM_Y + 1), "on the clock")
+
+    // In the air it waits, with the clock held ripe.
+    mole = mole_on_earth(gs, 170)
+    mole.grounded = false
+    update_roamer(mole, 0, gs, gs.delta_time)
+    testing.expect(t, is_solid(&gs.world, 60, ROAM_Y + 1), "not in the air")
+    testing.expect(t, mole.builder.stuck_timer >= MOLE_DIG_EVERY, "the clock stays ripe")
+
+    // Fleeing the player it sees, or hurt, it does not dig and its clock stops.
+    mole = mole_on_earth(gs, 63)
+    update_roamer(mole, 0, gs, gs.delta_time)
+    testing.expect(t, is_solid(&gs.world, 60, ROAM_Y + 1), "a mole in sight runs")
+    testing.expect_value(t, mole.builder.stuck_timer, MOLE_DIG_EVERY)
+    testing.expect(t, mole.vel.x < 0 || mole.vel.x > 0, "it runs")
+
+    // Other roamers never dig.
+    roam_ground(gs, 170)
+    for x in 50 ..= 70 do set_tile(&gs.world, x, ROAM_Y + 1, .Grass)
+    frog := roam_seed(gs, .Pond_Frog, 60)
+    frog.builder.cooldown = 100
+    update_roamer(frog, 0, gs, MOLE_DIG_EVERY * 2)
+    testing.expect(t, is_solid(&gs.world, 60, ROAM_Y + 1), "a frog has no spade")
+    testing.expect_value(t, frog.builder.stuck_timer, f32(0))
+}
+
+@(test)
+a_mole_leaves_what_is_not_its_to_dig :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    FX, FY :: 60, ROAM_Y + 1
+
+    check :: proc(t: ^testing.T, gs: ^Game_State, mole: ^Enemy, why: string, loc := #caller_location) {
+        before := get_tile(&gs.world, FX, FY)
+        testing.expect(t, !roamer_dig(mole, 0, gs), why, loc = loc)
+        testing.expect_value(t, get_tile(&gs.world, FX, FY), before, loc = loc)
+    }
+
+    mole := mole_on_earth(gs, 170)
+    testing.expect(t, roamer_may_dig(gs, FX, FY), "the open case digs")
+
+    set_tile(&gs.world, FX, FY, .Stone)
+    check(t, gs, mole, "stone is no earth")
+
+    mole = mole_on_earth(gs, 170)
+    gs.world.tile_flags[grid_idx(FX, FY)] += {.Placed}
+    check(t, gs, mole, "a placed block is the player's")
+    gs.world.tile_flags[grid_idx(FX, FY)] -= {.Placed}
+
+    for dx in -1 ..= 1 {
+        for above in ([]Tile_Type{.Water, .Wood, .Flower_Bed}) {
+            mole = mole_on_earth(gs, 170)
+            set_tile(&gs.world, FX + dx, FY - 1, above)
+            check(t, gs, mole, "something stands on it or beside it")
+        }
+    }
+
+    for dx in ([]int{-1, 1}) {
+        mole = mole_on_earth(gs, 170)
+        set_tile(&gs.world, FX + dx, FY, .Air)
+        check(t, gs, mole, "beside a hole: no trench")
+    }
+
+    mole = mole_on_earth(gs, 170)
+    set_tile(&gs.world, FX, FY + 1, .Void)
+    check(t, gs, mole, "over a hollow: no cave roof opened")
+
+    // A build leaning on the lip keeps its anchor: placed planks out over air,
+    // natural wood, or placed earth, beside it or under it.
+    for dx in ([]int{-1, 1}) {
+        mole = mole_on_earth(gs, 170)
+        for k in 1 ..= 4 {
+            bx := FX + dx*k
+            set_tile(&gs.world, bx, FY, .Wood)
+            gs.world.tile_flags[grid_idx(bx, FY)] += {.Placed}
+            if k > 1 do for y in FY + 1 ..= FY + 3 do set_tile(&gs.world, bx, y, .Air)
+        }
+        check(t, gs, mole, "a plank bridge leans on the lip")
+        testing.expect_value(t, get_tile(&gs.world, FX + dx*4, FY), Tile_Type.Wood)
+        for k in 1 ..= 4 do gs.world.tile_flags[grid_idx(FX + dx*k, FY)] -= {.Placed}
+        check(t, gs, mole, "a tree's root leans on it too")
+    }
+    mole = mole_on_earth(gs, 170)
+    set_tile(&gs.world, FX, FY + 1, .Wood)
+    check(t, gs, mole, "wood under it")
+    mole = mole_on_earth(gs, 170)
+    set_tile(&gs.world, FX, FY + 1, .Dirt)
+    check(t, gs, mole, "dirt under it would fall in")
+
+    // A pond holding beside the floor stays held.
+    for dx in ([]int{-1, 1}) {
+        mole = mole_on_earth(gs, 170)
+        set_tile(&gs.world, FX + dx, FY, .Water)
+        check(t, gs, mole, "beside water")
+    }
+}
+
+// Earth is no den wall and no hoard: the table alone keeps a mole off both.
+@(test)
+a_moles_earth_is_never_a_den_or_a_structure :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    testing.expect(t, !roamer_earth[.Dirt], "no Dirt: all of it in play was placed")
+    for dig, tile in roamer_earth do if dig {
+        set_tile(&gs.world, 60, ROAM_Y + 1, tile)
+        testing.expectf(t, !den_material(gs, 60, ROAM_Y + 1), "%v is den material", tile)
+        testing.expectf(t, !is_structure_tile[tile], "%v is a structure", tile)
+        testing.expectf(t, !is_rune_scroll_chest(tile), "%v is a chest", tile)
+    }
+}
+
+@(test)
+a_mole_turns_up_ore_and_pays_when_hunted :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+
+    // Over many holes the rows pay at about their odds, and always into the hole.
+    iron, silver := 0, 0
+    HOLES :: 600
+    for _ in 0 ..< HOLES {
+        mole := mole_on_earth(gs, 170)
+        gs.world.items = {}
+        gs.world.item_counts = {}
+        testing.expect(t, roamer_dig(mole, 0, gs), "dug")
+        for it, i in gs.world.items {
+            n := int(gs.world.item_counts[i])
+            if it == .Iron_Ore {
+                iron += n
+            } else if it == .Silver_Ore {
+                silver += n
+            } else {
+                testing.expectf(t, it == .None || it == .Grass_Turf, "turned up %v", it)
+            }
+        }
+    }
+    testing.expect(t, iron > HOLES/5 && iron < HOLES*2/5, "iron near its row")
+    testing.expect(t, silver > HOLES/20 && silver < HOLES*3/20, "silver near its row")
+
+    // Hunted down, it pays its dirt, and iron on the row's odds.
+    got_iron, kills := 0, 200
+    for _ in 0 ..< kills {
+        roam_ground(gs, 170)
+        gs.world.items = {}
+        gs.world.item_counts = {}
+        roam_seed(gs, .Mole, 60)
+        eq_push(&gs.events, Event{type = .Damage_Dealt, source = PLAYER_ID, target = enemy_entity_id(0), payload = {int_val = 99}})
+        process_events(gs)
+        eq_clear(&gs.events)
+        testing.expect_value(t, gs.enemies.count, 0)
+        dirt := 0
+        for it, i in gs.world.items {
+            if it == .Dirt do dirt += int(gs.world.item_counts[i])
+            if it == .Iron_Ore do got_iron += 1
+        }
+        testing.expect(t, dirt >= 1 && dirt <= 2, "its dirt")
+    }
+    testing.expect(t, got_iron > kills/3 && got_iron < kills*2/3, "iron near its row")
+}
+
+// The hole is the mole's: in the player's reach its turf still lands on the
+// ground, and the player's bag gets nothing.
+@(test)
+a_moles_hole_is_not_the_players_mine :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    mole := mole_on_earth(gs, 62)
+    before := inventory_count(&gs.player.inventory, .Grass_Turf)
+    testing.expect(t, roamer_dig(mole, 0, gs), "dug")
+    testing.expect_value(t, gs.world.items[grid_idx(60, ROAM_Y + 1)], Item.Grass_Turf)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Grass_Turf), before)
+}
+
+@(test)
+a_mole_is_friendly_to_turrets_and_runs :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    roam_ground(gs, 100)
+    mole := roam_seed(gs, .Mole, 103)
+    start := mole.pos.x
+    roam_step(gs, 30)
+    testing.expect(t, mole.pos.x > start + 0.5, "it bolts")
+    testing.expect_value(t, gs.player.hp, gs.player.hp_max)
+    _, found := turret_target(gs, 100, ROAM_Y, 100)
+    testing.expect(t, !found, "turrets leave a mole alone")
 }
 
 // ─── Cave Eel (card 66) ───────────────────────────────────────────────────────

@@ -588,12 +588,16 @@ start_new_game :: proc(gs: ^Game_State) {
 // The title's way in: the typed seed if there is one, else a fresh world.
 start_title_game :: proc(gs: ^Game_State) {
     if !gs.ui.title_fresh do return
-    seed := agent_new_game_seed(gs)
+    action_log_release(gs)  // before the reset below zeroes what it holds
+    start_new_game_with(gs, title_chosen_seed(gs))
+}
+
+title_chosen_seed :: proc(gs: ^Game_State) -> u32 {
     if gs.ui.title_seed_len > 0 {
         n, _ := strconv.parse_u64(string(gs.ui.title_seed[:gs.ui.title_seed_len]))
-        seed = u32(n)   // wraps as GNIPA_SEED does, so the two agree
+        return u32(n)   // wraps as GNIPA_SEED does, so the two agree
     }
-    start_new_game_with(gs, seed)
+    return agent_new_game_seed(gs)
 }
 
 start_new_game_with :: proc(gs: ^Game_State, seed: u32) {

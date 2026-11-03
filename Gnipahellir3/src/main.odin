@@ -79,15 +79,19 @@ main :: proc() {
     // A world from the title logs its own seed when it starts.
     if !gs.ui.title_fresh do log_action(gs, "World seed %d", gs.world_seed)
     load_settings(gs)  // after audio_init: overrides its default volumes
+    agent_boot_title(agent, gs)
 
     for !rl.WindowShouldClose() && !gs.quit_requested {
         profile_scope("frame")
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
+        if gs.ui.agent_requested do agent_title_start(agent, gs)
         tick := agent_pump(agent, gs)
         if gs.agent.driving do agent_watcher_input(gs, tick)
+        if gs.agent.driving do agent_chat_poll(agent, gs)
         if tick do game_update(gs)
         if tick do agent_after_tick(agent, gs)
+        if !gs.ui.show_title do action_log_release(gs)
 
         // Autosave after a meaningful player action (place/pickup/mine/craft),
         // debounced: the multi-MB serialize + blocking write fires at most

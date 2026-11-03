@@ -41,6 +41,13 @@ for raw in open(os.path.join(run, "acts.jsonl")):
         sock.sendall((json.dumps(rec["objective"]) + "\n").encode())
         replies.readline()
         continue
+    if "say" in rec:
+        sock.sendall((json.dumps({"cmd": "say", "text": rec["say"]}) + "\n").encode())
+        replies.readline()
+        continue
+    if "heard" in rec:  # the watcher's line: the game never saw it, so only show it
+        print(f"frame {rec['f']}, the watcher: {rec['heard']}")
+        continue
     if "played" in rec:  # a plan step the agent overrode part way
         rec["act"]["frames"] = rec["played"]
     sock.sendall((json.dumps({**rec["act"], "cmd": rec["act"].get("cmd", "act")}) + "\n").encode())

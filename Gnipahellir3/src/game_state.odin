@@ -44,6 +44,8 @@ Enemy_Kind :: enum u8 {
     Pond_Frog,
     Ember_Beetle,
     Rain_Wisp,
+    Rock_Harpy,
+    Mole,
     Cave_Eel,
     Magma_Crawler,
     Stone_Grub,
@@ -586,10 +588,17 @@ Agent_Command :: struct {
 
 AGENT_TEXT_MAX :: 96
 AGENT_LOG_MAX  :: 6
+AGENT_HEARD_MAX :: 8  // the watcher's lines the agent has not read; a full queue holds the next one in the field
 
 Agent_Text :: struct {
     buf: [AGENT_TEXT_MAX + 1]u8,  // kept NUL-terminated for raylib
     len: int,
+}
+
+// A line the watcher typed, and the frame it was sent on.
+Agent_Heard :: struct {
+    frame: u64,
+    text:  Agent_Text,
 }
 
 Agent_Past_Goal :: struct {
@@ -604,6 +613,13 @@ Agent_Panel :: struct {
     step:  Agent_Text,
     past:  [AGENT_LOG_MAX]Agent_Past_Goal,  // newest first
     count: int,
+    // The talk between the watcher and the agent.  None of it is game state.
+    say:       Agent_Text,   // the agent's last line to the watcher
+    typing:    bool,         // the watcher's field over the item bar is open
+    draft:     Agent_Text,   // what the watcher is typing
+    sent:      Agent_Text,   // the watcher's last line
+    heard:     [AGENT_HEARD_MAX]Agent_Heard,  // sent, not yet in a reply; oldest first
+    heard_len: int,
 }
 
 // Rewritten by agent_pump every frame; never saved.
@@ -646,6 +662,9 @@ UI_State :: struct {
     title_fresh:     bool,   // no run to resume: the title offers a seed and starts a world
     title_seed:      [TITLE_SEED_DIGITS]u8, // digits typed on the title
     title_seed_len:  int,
+    agent_requested: bool,   // the title's [A] was pressed; main opens the sandbox
+    agent_failed:    bool,   // that failed: no port or no folder, and the title says so
+    agent_port:      int,    // listening for an agent: the title shows this address
     tithe_slot:      int,     // bag slot chosen on the death screen (-1 = none)
     drag_barrel:     int,     // barrel slot the drag started from (-1 = drag is from the bag/tray, not a barrel)
     drag_void:       bool,    // drag source is Player.void_slot, not the bag
