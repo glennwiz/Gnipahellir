@@ -1,4 +1,4 @@
-version 29
+version 30
 Save_Data.version 0 4 i32
 Save_Data.level_index 8 8 int
 Save_Data.world 16 476928 World_Grid
@@ -14,6 +14,7 @@ Save_Data.frame 4048176 8 u64
 Save_Data.grave 4048184 96 Grave_Record
 Save_Data.risen 4048280 576 Risen_Hero
 Save_Data.world_seed 4048856 4 u32
+Save_Data.monument_cells 4048860 103680 [5][20736]Tile_Type
 World_Grid.terrain 0 20736 [20736]Tile_Type
 World_Grid.objects 20736 20736 [20736]Object_ID
 World_Grid.items 41472 20736 [20736]Item

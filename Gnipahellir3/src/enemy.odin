@@ -294,6 +294,8 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) -> (dropped: bool) {
     // A hoard is never smashed away, whoever swings; an emptied container's
     // record goes with its tile.
     if wave_target_refused(gs, T) do return
+    drop := monument_cell_take(gs, T)
+    if drop == .None && knocks_loose(old) do drop = terrain_table[old].drop_item
     if old == .Silo {
         if s := silo_at(gs, gs.level_index, T); s != nil do s^ = {}
     }
@@ -303,11 +305,9 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) -> (dropped: bool) {
     golem_remove_block_mark(gs, T)
     gs.world.tile_flags[grid_idx(x, y)] -= {.Placed, .Golem_Placed}
     gravity_check_removed(gs, x, y)
-    if knocks_loose(old) {
-        if drop := terrain_table[old].drop_item; drop != .None {
-            spawn_ground_item(&gs.world, T, drop, 1)
-            dropped = true
-        }
+    if drop != .None {
+        spawn_ground_item(&gs.world, T, drop, 1)
+        dropped = true
     }
     spill_machine(gs, T, old)
     if old == .Door do door_take_partner(gs, x, y)
@@ -1825,10 +1825,10 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
                 nav.mine_timer = MINE_TIME
             }
         } else if is_builder_mineable(gs, x, y) {
-            smash_tile(gs, x, y)
+            dropped := smash_tile(gs, x, y)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = T})
             log_action(gs, "Builder#%d carves (%d,%d)", id, x, y)
-            e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
+            if !dropped do e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
             nav.mine_timer = MINE_TIME
         } else {
             e.builder.step += 1   // unmineable obstruction — skip this step
@@ -1873,9 +1873,9 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
                 })
                 continue
             }
-            smash_tile(gs, x, y)
+            dropped := smash_tile(gs, x, y)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
-            e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
+            if !dropped do e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         }
     }
     log_action(gs, "Builder#%d digs itself free at (%.1f,%.1f)", id, e.pos.x, e.pos.y)
@@ -2354,12 +2354,14 @@ builder_fetch :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             tx := int(b.target_tile.x)
             ty := int(b.target_tile.y)
             t  := get_tile(&gs.world, tx, ty)
-            smash_tile(gs, tx, ty)
+            dropped := smash_tile(gs, tx, ty)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = b.target_tile})
             log_action(gs, "Builder#%d harvests %v at (%d,%d)", id, t, tx, ty)
             e.nav.mine_timer = MINE_TIME
-            b.carry      = t
             b.has_target = false
+            // A monument cell went to the ground whole: nothing to carry home.
+            if dropped do return
+            b.carry      = t
             b.goal       = .Encase_Den
             b.stuck_count = 0
             builder_avoid_narrow(b)

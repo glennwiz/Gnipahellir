@@ -108,6 +108,7 @@ dimension_enter :: proc(gs: ^Game_State, spawner: [2]i32, kind: Dimension_Kind) 
         gs.dimension.seed = seed
         gs.golems.work[LEVEL_DIMENSION] = {}
         gs.golems.projects[LEVEL_DIMENSION] = {}
+        gs.monument_cells[LEVEL_DIMENSION] = {}
         for &d in gs.golems.depots do if d.active && d.level == LEVEL_DIMENSION do d = {}
     }
     gs.dimension.return_level = gs.level_index

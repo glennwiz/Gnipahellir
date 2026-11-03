@@ -109,6 +109,7 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
         set_tile(&gs.world, int(x), int(y), gravity_open_tile(gs, int(y)))
         golem_remove_block_mark(gs,{x,y})
         gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed}  // the block left this cell
+        gs.monument_cells[gs.level_index][idx] = .Air
         return
     }
 }

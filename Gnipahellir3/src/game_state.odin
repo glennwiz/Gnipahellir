@@ -289,6 +289,11 @@ Golem_System :: struct {
     depots:   [MAX_GOLEM_DEPOTS]Golem_Depot_State,
 }
 
+// The tile a golem built into each monument cell, per level; .Air where none.
+// Whoever takes a marked cell gets its build item back (monument_cell_take).
+// It is kept apart from the project record, which the next monument overwrites.
+Monument_Cells :: [NUM_LEVELS][GRID_W * GRID_H]Tile_Type
+
 // Short-lived ownership for freshly placed navigation masonry. This stays
 // outside Golem_System because it is transient coordination state, not save
 // data; loading a run simply resumes without an obsolete three-second lock.
@@ -858,6 +863,7 @@ Game_State :: struct {
                              // nodes expanded + heap sift steps; reset in update_golems
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
+    monument_cells: Monument_Cells, // saved
     golem_grace: Golem_Grace_State,
     golem_marks: Golem_Mark_Index,
     golem_quick_clay: Golem_Quick_Clay_State,

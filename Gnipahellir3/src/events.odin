@@ -623,6 +623,31 @@ miner_anchor_on_taken :: proc(gs: ^Game_State, T: [2]i32, old_tile: Tile_Type) {
     }
 }
 
+// The item a golem built the monument cell at T from, or .None.  Whoever
+// takes the cell gets that item back - a pick or a golem on the masonry, or an
+// enemy's smash, the only way a core ever comes out.  Only a golem's own
+// placement marks a cell, so natural rock in the footprint and a block the
+// player laid there keep their own drop.
+monument_cell_item :: proc(gs: ^Game_State, T: [2]i32) -> Item {
+    built := gs.monument_cells[gs.level_index][grid_idx(int(T.x), int(T.y))]
+    if built != get_tile(&gs.world, int(T.x), int(T.y)) do return .None
+    return monument_build_item(built)
+}
+
+// The cell at T is being taken: its build item, and the cell forgets its mark.
+monument_cell_take :: proc(gs: ^Game_State, T: [2]i32) -> Item {
+    it := monument_cell_item(gs, T)
+    gs.monument_cells[gs.level_index][grid_idx(int(T.x), int(T.y))] = .Air
+    return it
+}
+
+// What a golem builds a monument tile from.  Every plan builds a tile from the
+// same item (monument_tiles_have_one_build_item).
+monument_build_item :: proc(t: Tile_Type) -> Item {
+    for info in golem_plan_table do for c in info.cells do if c.tile == t do return c.item
+    return .None
+}
+
 handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     x := int(e.tile.x)
     y := int(e.tile.y)
@@ -676,6 +701,7 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
     if pct := terrain_table[old_tile].drop_pct; pct > 0 {
         if whash(u32(idx)*2246822519 + 101) % 100 >= u32(pct) do drop = .None
     }
+    if it := monument_cell_take(gs, e.tile); it != .None do drop = it
 
     // The loose stratum the cave mouth cuts through pays a clod of dirt on top
     // of the tile's normal drop — a small starter reward for digging right
