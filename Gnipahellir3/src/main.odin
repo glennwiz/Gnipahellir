@@ -88,6 +88,7 @@ main :: proc() {
         if gs.ui.agent_requested do agent_title_start(agent, gs)
         tick := agent_pump(agent, gs)
         if gs.agent.driving do agent_watcher_input(gs, tick)
+        if gs.agent.driving do agent_chat_poll(agent, gs)
         if tick do game_update(gs)
         if tick do agent_after_tick(agent, gs)
         if !gs.ui.show_title do action_log_release(gs)
