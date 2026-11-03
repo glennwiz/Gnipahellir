@@ -37,15 +37,25 @@ holds_hoard :: proc(gs: ^Game_State, x, y: int) -> bool {
     return wave_target_refused(gs, tile)
 }
 
-is_undermined :: proc(gs: ^Game_State, x, y: int) -> bool {
-    return needs_ground(get_tile(&gs.world, x, y)) && !is_solid(&gs.world, x, y + 1) &&
-           !holds_hoard(gs, x, y)
+ground_gone :: proc(gs: ^Game_State, x, y: int) -> bool {
+    return !is_solid(&gs.world, x, y + 1) && !holds_hoard(gs, x, y)
 }
 
-// Pushes Tile_Mined, so it must precede process_events.
+is_undermined :: proc(gs: ^Game_State, x, y: int) -> bool {
+    return needs_ground(get_tile(&gs.world, x, y)) && ground_gone(gs, x, y)
+}
+
+// Pushes Tile_Mined, so it must precede process_events.  It stays a scan: a
+// hoard can fall with no tile changing, when it is emptied.  So the cost is
+// kept down per cell, deciding each tile type once and not each tile.
 update_undermined :: proc(gs: ^Game_State) {
-    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
-        if !is_undermined(gs, x, y) do continue
+    profile_scope("update_undermined")
+    needs: [Tile_Type]bool
+    for t in Tile_Type do needs[t] = needs_ground(t)
+    for t, i in gs.world.terrain {
+        if !needs[t] do continue
+        x, y := i % GRID_W, i / GRID_W
+        if !ground_gone(gs, x, y) do continue
         eq_push(&gs.events, Event{type = .Tile_Mined, source = WORLD_ID, tile = {i32(x), i32(y)}})
     }
 }

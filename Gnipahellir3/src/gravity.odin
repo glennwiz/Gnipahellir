@@ -103,25 +103,59 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
 
 // A tile at (rx,ry) just left the grid.  Any faller that leaned on it may have
 // lost its last path to ground — check each neighbour's component and drop it if
-// it no longer touches an anchor.  Called once per removal, not per frame.
+// it no longer touches an anchor.  A loaded hoard stands with no ground but holds
+// nothing up, so whatever leans on the stack above the hole is checked too.
+// Called once per removal, not per frame.
+//
+// A detached piece can leave a stack behind, which is one more hole to check.
+// Those go on a list, not the call stack: the Windows stack is small and each
+// check holds a whole-grid array.  One entry per block lifted, so it can't fill.
 gravity_check_removed :: proc(gs: ^Game_State, rx, ry: int) {
-    visited: [GRID_W * GRID_H]bool
+    holes: [MAX_FALLING + 1][2]i32
+    holes[0] = {i32(rx), i32(ry)}
+    n := 1
     dirs := [4][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}}
-    for d in dirs {
-        gravity_detach_if_floating(gs, rx + d[0], ry + d[1], &visited)
+    visited: [GRID_W * GRID_H]bool
+    for i := 0; i < n; i += 1 {
+        x := int(holes[i].x)
+        for y := int(holes[i].y); ; y -= 1 {
+            for d in dirs {
+                gravity_detach_if_floating(gs, x + d[0], y + d[1], &visited, holes[:], &n)
+            }
+            if !needs_ground(get_tile(&gs.world, x, y - 1)) do break
+        }
     }
 }
 
-// Does the stack at (x,y) come to rest on something solid outside comp?
-structure_rests_outside :: proc(w: ^World_Grid, x, y: int, comp: [][2]i32) -> bool {
-    rest := y
-    for needs_ground(get_tile(w, x, rest)) do rest += 1
-    if !is_solid(w, x, rest) do return false
-    for c in comp do if c == {i32(x), i32(rest)} do return false
-    return true
+// Is this piece held up?  By an anchor it touches, or by a structure it touches
+// whose stack rests on solid ground.  A stack resting on another piece is only
+// as good as that piece, so the search carries on through it; a stack resting
+// on a piece already searched adds nothing, so floating pieces cannot hold each
+// other up.  A search too big to finish leaves the piece standing.
+gravity_piece_held :: proc(w: ^World_Grid, sx, sy: int) -> bool {
+    dirs := [4][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}}
+    seen:  [GRID_W * GRID_H]bool
+    cells: [MAX_FALLING][2]i32
+    cells[0] = {i32(sx), i32(sy)}
+    seen[grid_idx(sx, sy)] = true
+    n := 1
+
+    for i := 0; i < n; i += 1 {
+        for d in dirs {
+            x := int(cells[i].x) + d[0]
+            y := int(cells[i].y) + d[1]
+            for needs_ground(get_tile(w, x, y)) do y += 1
+            if is_anchor_cell(w, x, y) do return true
+            if !is_faller(w, x, y) || seen[grid_idx(x, y)] do continue
+            if n == MAX_FALLING do return true
+            seen[grid_idx(x, y)] = true
+            cells[n] = {i32(x), i32(y)}; n += 1
+        }
+    }
+    return false
 }
 
-gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID_W * GRID_H]bool) {
+gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID_W * GRID_H]bool, holes: [][2]i32, n_holes: ^int) {
     w := &gs.world
     if !in_bounds(sx, sy) do return
     if visited[grid_idx(sx, sy)] do return
@@ -132,8 +166,6 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
     comp:  [MAX_FALLING][2]i32   // the connected faller component
     queue: [MAX_FALLING]int      // BFS frontier, as grid indices
     n, qh, qt := 0, 0, 0
-    supported := false
-    overflow  := false
 
     si := grid_idx(sx, sy)
     visited[si] = true
@@ -147,36 +179,32 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
         for d in dirs {
             nx := cx + d[0]
             ny := cy + d[1]
-            // A structure only counts once the whole piece is known, below.
-            if is_anchor_cell(w, nx, ny) && !needs_ground(get_tile(w, nx, ny)) do supported = true
             if !in_bounds(nx, ny) do continue
             ni := grid_idx(nx, ny)
             if visited[ni] do continue
             if !is_faller(w, nx, ny) do continue
             visited[ni] = true
-            if n >= MAX_FALLING { overflow = true; continue }
+            if n >= MAX_FALLING do continue  // the search below finds it too big
             comp[n] = {i32(nx), i32(ny)}; n += 1
             queue[qt] = ni; qt += 1
         }
     }
 
-    // A structure standing on this piece hangs with it, so it holds nothing up.
-    // One standing on anything else is an anchor, as a hung beam expects.
-    for i in 0 ..< n {
-        for d in dirs {
-            nx := int(comp[i].x) + d[0]
-            ny := int(comp[i].y) + d[1]
-            if structure_rests_outside(w, nx, ny, comp[:n]) do supported = true
-        }
-    }
-
-    if supported do return               // still tied to the ground — nothing falls
-    if overflow  do return               // too big to lift cleanly — leave it standing
+    if gravity_piece_held(w, sx, sy) do return  // tied to the ground, or too big to tell
     if n > gravity_free_slots(gs) do return  // no room in the pool right now
 
     for i in 0 ..< n {
         cx, cy := int(comp[i].x), int(comp[i].y)
         gravity_spawn(gs, comp[i].x, comp[i].y, get_tile(w, cx, cy))
+    }
+
+    // A loaded hoard on this piece stays behind in the air.
+    for i in 0 ..< n {
+        cx, cy := int(comp[i].x), int(comp[i].y)
+        if needs_ground(get_tile(w, cx, cy - 1)) {
+            holes[n_holes^] = comp[i]
+            n_holes^ += 1
+        }
     }
 }
 
