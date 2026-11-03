@@ -15,11 +15,13 @@ ROAMER_SPAWN_EVERY :: f32(15)   // seconds between top-ups, one per row
 ROAMER_SPAWN_CLEAR :: i32(30)   // tiles from the player: nothing pops in on screen
 ROAMER_WHIM_TIME   :: f32(2.5)  // seconds between wandering choices
 ROAMER_HOP         :: f32(-7)   // apex ~1.2 tiles: over a one-tile step
+ROAMER_SCATTER     :: 7919      // prime, so find_cave_home's walk meets every cell
 ROAMER_MAX_DROP    :: 3         // a wanderer walks off nothing taller: a surface
                                 // creature stays out of the shafts
 ROAMER_AIR_TOP     :: 10        // rows a flyer spawns and drifts in, on the sky
 ROAMER_AIR_BOTTOM  :: 76        // level: above the void the player falls out of
 ROAMER_AIR_ROAM    :: 6         // tiles a drifting flyer's whim reaches sideways
+BITE_SLOW          :: f32(0.6)  // the player's speed while a bite's slow runs
 
 POND_FROG_HP    :: 2
 POND_FROG_W     :: f32(0.7)
@@ -60,14 +62,35 @@ MOLE_W         :: f32(0.9)
 MOLE_H         :: f32(0.6)
 MOLE_SPEED     :: f32(2.0)
 MOLE_DIG_EVERY :: f32(90)   // seconds of calm between holes
+CAVE_EEL_HP        :: 4
+CAVE_EEL_W         :: f32(1.1)
+CAVE_EEL_H         :: f32(0.4)
+CAVE_EEL_SPEED     :: f32(4.0)
+CAVE_EEL_BITE_SLOW :: f32(2.0)  // seconds
+
+MAGMA_CRAWLER_HP    :: 6
+MAGMA_CRAWLER_W     :: f32(0.9)
+MAGMA_CRAWLER_H     :: f32(0.5)
+MAGMA_CRAWLER_SPEED :: f32(2.0)
+CINDERS_LIFE        :: f32(6)   // seconds a burning tile stays alight
+
+STONE_GRUB_HP       :: 12
+STONE_GRUB_W        :: f32(0.9)
+STONE_GRUB_H        :: f32(0.7)
+STONE_GRUB_SPEED    :: f32(1.5)
+STONE_GRUB_EAT_TIME :: f32(3)   // seconds a bite of wall takes
 
 Roamer_Spec :: struct {
-    level:    int,   // a walker's floor comes from find_surface_floor, surface rows only
+    level:    int,   // flyers spawn in the air; walkers on the surface use find_surface_floor, elsewhere find_cave_home
     cap:      int,   // 0 = not a roamer
     friendly: bool,  // runs on sight and turrets leave it alone
     sight:    i32,   // tiles at which it reacts to the player
     damage:   int,   // bite; only an unhurt hostile comes to use it
     dig_every: f32,  // seconds of calm between holes; 0 = never digs
+    swims:    bool,  // lives in water and notices only a player who is in it
+    slows:    f32,   // seconds of BITE_SLOW a bite leaves on the player
+    burns:    bool,  // sets the open cave floor it stands on alight
+    eats:     bool,  // a wanderer chews through the natural wall it meets
 }
 
 @(rodata)
@@ -77,6 +100,9 @@ roamer_table := #partial [Enemy_Kind]Roamer_Spec{
     .Rain_Wisp    = {level = LEVEL_SKY, cap = 3, sight = 10},
     .Rock_Harpy   = {level = LEVEL_SKY, cap = 2, sight = 14, damage = 2},
     .Mole         = {level = LEVEL_SURFACE, cap = 2, friendly = true, sight = 5, dig_every = MOLE_DIG_EVERY},
+    .Cave_Eel     = {level = LEVEL_CAVE2, cap = 3, sight = 8, damage = 2, swims = true, slows = CAVE_EEL_BITE_SLOW},
+    .Magma_Crawler = {level = LEVEL_CAVE2, cap = 3, sight = 6, damage = 2, burns = true},
+    .Stone_Grub   = {level = LEVEL_CAVE2, cap = 3, sight = 5, damage = 1, eats = true},
 }
 
 // What a digging roamer will open.  Never den material or a chest, so a den and
@@ -100,14 +126,40 @@ update_roamers :: proc(gs: ^Game_State) {
     }
 }
 
-// One roamer on open ground out of the player's sight.  A bad roll (too near,
-// standing in water or lava) spends the beat; the next one tries again.
+// A cave creature's home, out of the player's sight: the first water cell for a
+// swimmer, or open floor for a walker, on a scattered walk through the grid, so
+// a lone pool is found however little water the level holds.
+find_cave_home :: proc(gs: ^Game_State, spec: Roamer_Spec, hash: u32) -> (tx, ty: int, ok: bool) {
+    w := &gs.world
+    n := GRID_W * GRID_H
+    for i in 0 ..< n {
+        c := (int(hash % u32(n)) + i*ROAMER_SCATTER) % n
+        x, y := c % GRID_W, c / GRID_W
+        home := swimmable(w, x, y) if spec.swims else get_tile(w, x, y) == .Void && is_solid(w, x, y + 1)
+        if home && abs(i32(x) - player_tile(&gs.player).x) >= ROAMER_SPAWN_CLEAR do return x, y, true
+    }
+    return 0, 0, false
+}
+
+swimmable :: proc(w: ^World_Grid, x, y: int) -> bool {
+    return .Swimmable in terrain_table[get_tile(w, x, y)].flags
+}
+
+// One roamer on open ground, or at its home in a cave, out of the player's
+// sight.  A bad roll (too near, standing in water or lava) spends the beat; the
+// next one tries again.
 spawn_roamer :: proc(gs: ^Game_State, kind: Enemy_Kind) -> bool {
     hash := whash(u32(gs.frame)*31 + u32(kind)*613)
     hint := CAVE_LEFT + int(hash % u32(CAVE_RIGHT - CAVE_LEFT))
     tx, ty, found := hint, ROAMER_AIR_TOP + int((hash >> 8) % (ROAMER_AIR_BOTTOM - ROAMER_AIR_TOP)), true
-    if enemy_behaviour[kind].gravity != 0 do tx, ty, found = find_surface_floor(&gs.world, hint)
-    if !found || get_tile(&gs.world, tx, ty) != .Air do return false
+    walks := enemy_behaviour[kind].gravity != 0
+    if roamer_table[kind].swims || walks && roamer_table[kind].level != LEVEL_SURFACE {
+        tx, ty, found = find_cave_home(gs, roamer_table[kind], hash)
+    } else {
+        if walks do tx, ty, found = find_surface_floor(&gs.world, hint)
+        found &&= get_tile(&gs.world, tx, ty) == .Air
+    }
+    if !found do return false
     if abs(i32(tx) - player_tile(&gs.player).x) < ROAMER_SPAWN_CLEAR do return false
 
     id, ok := enemy_alloc(&gs.enemies)
@@ -121,6 +173,59 @@ spawn_roamer :: proc(gs: ^Game_State, kind: Enemy_Kind) -> bool {
     }
     entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
     log_action(gs, "%v#%d wanders in at (%d,%d)", kind, id, tx, ty)
+    return true
+}
+
+// Cinders burn out where they lie (tile_on_tick).  Only .Void is ever lit, so
+// .Void is what comes back.
+tick_cinders :: proc(gs: ^Game_State, x, y: int) {
+    sd := &gs.world.sim_data[grid_idx(x, y)]
+    sd.growth_timer += gs.delta_time
+    if sd.growth_timer < CINDERS_LIFE do return
+    sd.growth_timer = 0
+    set_tile(&gs.world, x, y, .Void)
+}
+
+// Swim one way, and `climb` rows' way, staying inside the water.  Says whether
+// any of it was open, so a wanderer can turn round at the bank.
+roamer_swim :: proc(e: ^Enemy, gs: ^Game_State, dir, climb: int) -> bool {
+    size := enemy_body_size(e.kind)
+    mid  := e.pos + size*0.5
+    e.facing = dir
+    e.vel    = {}
+    if swimmable(&gs.world, int(mid.x + f32(dir)*(size.x*0.5 + 0.2)), int(mid.y)) {
+        e.vel.x = f32(dir) * enemy_speed(e.kind)
+    }
+    if swimmable(&gs.world, int(mid.x), int(mid.y + f32(climb)*(size.y*0.5 + 0.2))) {
+        e.vel.y = f32(climb) * enemy_speed(e.kind)
+    }
+    return e.vel != {}
+}
+
+// What a grub's teeth may take: natural rock only.  is_builder_mineable keeps it
+// off chests, loaded containers and anything holding water back.
+roamer_may_eat :: proc(gs: ^Game_State, x, y: int) -> bool {
+    return is_builder_mineable(gs, x, y) && !den_protected(gs, x, y) &&
+           !is_structure_tile[get_tile(&gs.world, x, y)] &&
+           .Placed not_in gs.world.tile_flags[grid_idx(x, y)]
+}
+
+// Chew the wall at the feet, one bite each STONE_GRUB_EAT_TIME, never the
+// border columns.  Stone is eaten;
+// anything else it spits out where it stood, so no ore or gem is lost to it.
+// False when there is nothing here it may eat.
+roamer_eat :: proc(e: ^Enemy, id: int, gs: ^Game_State) -> bool {
+    size := enemy_body_size(e.kind)
+    x := int(e.pos.x + size.x*0.5 + f32(e.facing)*(size.x*0.5 + 0.2))
+    y := int(e.pos.y + size.y - 0.01)
+    if x < CAVE_LEFT || x >= CAVE_RIGHT || !roamer_may_eat(gs, x, y) do return false
+    if e.builder.attack_timer > 0 do return true
+    e.builder.attack_timer = STONE_GRUB_EAT_TIME
+    old  := get_tile(&gs.world, x, y)
+    drop := terrain_table[old].drop_item
+    // smash_tile already drops what knocks loose (a door): never twice.
+    if !smash_tile(gs, x, y) && old != .Stone && drop != .None do spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
+    log_action(gs, "%v#%d eats the %v at (%d,%d)", e.kind, id, old, x, y)
     return true
 }
 
@@ -336,21 +441,49 @@ roamer_dig :: proc(e: ^Enemy, id: int, gs: ^Game_State) -> bool {
 
 // Friendlies run on sight.  A hurt roamer runs from further off and through
 // walls: it knows who hit it.  An unhurt hostile comes for the player it can
-// see and bites, and the rest of the time everyone wanders.
+// see and bites, and the rest of the time everyone wanders.  A swimmer does all
+// that in water and hears nothing outside it; with the water gone it falls and
+// lies there until water comes back.
 update_roamer :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     spec := roamer_table[e.kind]
     b    := &e.builder
     b.attack_timer = max(b.attack_timer - dt, 0)
 
     away, dist, seen := roamer_sense(e, gs, spec.sight)
+    bt    := builder_tile(e)
+    pt    := player_tile(&gs.player)
+    below := 1 if bt.y >= pt.y else -1   // away, up and down
+
+    if spec.burns && get_tile(&gs.world, int(bt.x), int(bt.y)) == .Void && is_solid(&gs.world, int(bt.x), int(bt.y) + 1) {
+        set_tile(&gs.world, int(bt.x), int(bt.y), .Cinders)
+        gs.world.sim_data[grid_idx(int(bt.x), int(bt.y))].growth_timer = 0
+    }
+
+    if spec.swims {
+        if !swimmable(&gs.world, int(bt.x), int(bt.y)) {
+            e.vel.x = 0
+            e.vel.y = min(e.vel.y + BUILDER_GRAVITY*dt, BUILDER_MAX_FALL)
+            return
+        }
+        e.vel.y = 0
+        seen &&= player_in_water(gs)
+    }
 
     if !gs.player.dead && e.hp < e.hp_max && dist <= i32(HUNT_LOSE_DIST) || seen && spec.friendly {
-        roamer_walk(e, gs, away)
+        if spec.swims {
+            roamer_swim(e, gs, away, below)
+        } else {
+            roamer_walk(e, gs, away)
+        }
         return
     }
     if seen {
         if dist > 1 {
-            roamer_walk(e, gs, -away)
+            if spec.swims {
+                roamer_swim(e, gs, -away, pt.y == bt.y ? 0 : -below)
+            } else {
+                roamer_walk(e, gs, -away)
+            }
             return
         }
         e.vel.x  = 0
@@ -363,6 +496,9 @@ update_roamer :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
                 target  = PLAYER_ID,
                 payload = {int_val = i32(spec.damage)},
             })
+            if spec.slows > 0 {
+                eq_push(&gs.events, Event{type = .Player_Slowed, target = PLAYER_ID, payload = {float_val = spec.slows}})
+            }
             log_action(gs, "%v#%d bites the player", e.kind, id)
         }
         return
@@ -383,5 +519,7 @@ update_roamer :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         if whim == 1 do e.facing = -e.facing
     }
     e.vel.x = 0
-    if b.has_target && !roamer_walk(e, gs, e.facing, careful = true) do e.facing = -e.facing
+    if !b.has_target do return
+    open := roamer_swim(e, gs, e.facing, 0) if spec.swims else roamer_walk(e, gs, e.facing, careful = true)
+    if !open && !(spec.eats && roamer_eat(e, id, gs)) do e.facing = -e.facing
 }

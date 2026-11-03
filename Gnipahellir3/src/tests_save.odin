@@ -169,7 +169,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 	}},
 	{Enemy_Kind, {
 		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle", "Rain_Wisp", "Rock_Harpy",
-		"Mole",
+		"Mole", "Cave_Eel", "Magma_Crawler", "Stone_Grub",
 	}},
 	{Equip_Slot, {
 		"None", "Weapon", "Head", "Chest", "Hands", "Legs", "Feet", "Charm", "Tool", "Charm_2",
@@ -209,7 +209,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"GreenBerrie", "Green_Cave_Mushroom", "Magic_Kettle", "Mana_Wheel", "Mana_Pipe", "Mossy_Stone",
 		"Fire_Wand", "Rainbow_Laser", "Turret_Pillar", "Flame_Head", "Water_Head", "Earth_Head",
 		"Sky_Egg",
-		"Slime", "Coal",
+		"Slime", "Coal", "Eel_Skin",
 	}},
 	{Tile_Flag, {
 		"Fire", "Poison", "Corrupted", "Lit", "Placed", "Golem_Placed", "Golem_Marked", "Piped",
@@ -226,7 +226,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"World_Anchor", "Quick_Clay", "Sand", "Rune_Coffer", "Steam", "Boiler", "Steam_Engine",
 		"Gem_Replicator", "Green_Cave_Mushroom", "Mossy_Stone", "Magic_Kettle", "Mana_Wheel",
 		"Mana_Mist", "Hell_Gate", "Final_Seal", "Rainbow_Laser", "Rune_Stone", "Scoria", "Turret_Pillar",
-		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest",
+		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest", "Cinders",
 	}},
 }
 
@@ -367,5 +367,36 @@ saved_layout_never_moves_inside_a_version :: proc(t: ^testing.T) {
 			testing.expectf(t, false, "saved layout moved, read the note above this test:\n  now %s\n  was %s", now, was)
 			break
 		}
+	}
+}
+
+// Cards 112 and the post-Mole merge: the cave roamers come after master's Rain_Wisp,
+// Rock_Harpy and Mole, so those load as themselves, and every roamer keeps its
+// kind across a save.
+@(test)
+roamers_keep_their_kind_across_a_save :: proc(t: ^testing.T) {
+	path :: "gnipahellir_roamer_kind_scratch.dat"
+	defer os.remove(path)
+	testing.expect_value(t, int(Enemy_Kind.Rain_Wisp), 8)
+	testing.expect_value(t, int(Enemy_Kind.Rock_Harpy), 9)
+	testing.expect_value(t, int(Enemy_Kind.Mole), 10)
+	testing.expect_value(t, int(Enemy_Kind.Cave_Eel), 11)
+	testing.expect_value(t, int(Enemy_Kind.Magma_Crawler), 12)
+	testing.expect_value(t, int(Enemy_Kind.Stone_Grub), 13)
+
+	gs := turret_test_state()
+	defer free(gs)
+	gs.enemies = {}
+	kinds := []Enemy_Kind{.Rain_Wisp, .Rock_Harpy, .Mole, .Cave_Eel, .Magma_Crawler, .Stone_Grub}
+	for k in kinds {
+		id, _ := enemy_alloc(&gs.enemies)
+		gs.enemies.data[id] = Enemy{kind = k, hp = 1, hp_max = 1, pos = {f32(40 + id*10), 20}}
+	}
+	testing.expect(t, save_game_to(gs, path), "save written")
+	gs.enemies = {}
+	testing.expect(t, load_game_from(gs, path), "save loads")
+	for k, i in kinds {
+		testing.expect(t, gs.enemies.active[i], "slot came back")
+		testing.expect_value(t, gs.enemies.data[i].kind, k)
 	}
 }

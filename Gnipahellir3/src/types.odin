@@ -242,6 +242,9 @@ Tile_Type :: enum u8 {
 	// Twigs on a sky island, cradling eggs or a lump of Cloud Ore.  (appended:
 	// terrain ordinals are serialized)
 	Nest,
+	// What a Magma Crawler leaves behind: open ground alight for a few seconds,
+	// then Void again (tick_cinders).  (appended: terrain ordinals are serialized)
+	Cinders,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -405,6 +408,7 @@ Item :: enum u8 {
 	Sky_Egg, // (appended: item ordinals are serialized)
 	Slime,
 	Coal,
+	Eel_Skin,
 	// <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 
@@ -600,6 +604,7 @@ Event_Type :: enum u8 {
 	Tithe_Choose, // int_val = bag slot; the death screen's one item carried on
 	Title_Start, // the title closed on no saved run: start the world it chose
 	Smelter_Withdraw_Fuel, // tile = furnace; pulls the unburnt wood back into the bag
+	Player_Slowed, // float_val = seconds of BITE_SLOW; a bite that lingers
 }
 
 Event_Payload :: struct #raw_union {
@@ -616,6 +621,7 @@ Damage_Cause :: enum u8 {
 	Magic_Lava,
 	Void_Sky,
 	Steam,
+	Cinders,
 }
 
 Event :: struct {

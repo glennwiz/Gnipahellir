@@ -46,6 +46,9 @@ Enemy_Kind :: enum u8 {
     Rain_Wisp,
     Rock_Harpy,
     Mole,
+    Cave_Eel,
+    Magma_Crawler,
+    Stone_Grub,
 }
 
 Enemy_Nav :: struct {
@@ -860,6 +863,7 @@ Game_State :: struct {
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     leaf_fall_t: f32,             // GreenBerrie slow-fall buff seconds left (player.odin); transient, not saved
     soak_t:      f32,             // Rain Wisp drip slow seconds left (events.odin grants, player.odin ticks); transient, not saved
+    bite_slow_t: f32,             // eel-bite slow seconds left (events.odin grants, player.odin spends); transient, not saved
     flight_t:    f32,             // altar-swirl flight buff seconds left (levels.odin grants, player.odin ticks); transient, not saved
     fluid:       Fluid_State,     // water/lava flow clocks (fluid.odin); transient, not saved
     power:       Power_State,     // live engine charge field (sim.odin); transient, not saved

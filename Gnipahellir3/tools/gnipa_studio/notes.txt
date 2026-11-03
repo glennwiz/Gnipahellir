@@ -204,3 +204,4 @@ glow	Earth_Turret	warm clay
 icon	Sky_Egg	Sky Egg - pale and speckled.
 icon	Slime	Slime - a wet green dollop, one bright glint.
 icon	Coal	Coal - a black lump, faceted, one grey edge.
+icon	Eel_Skin	Eel Skin - a slick strip, curled at both ends.

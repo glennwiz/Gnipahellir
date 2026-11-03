@@ -119,6 +119,7 @@ item_table := [Item]Item_Info{
 	.Sky_Egg = { "Sky Egg", {235, 225, 200, 255}, .Air, "Warm from a sky nest. Eat it for a little health." },
 	.Slime = { "Slime", {120, 190, 90, 255}, .Air, "A cold green handful off a pond frog." },
 	.Coal = { "Coal", {52, 50, 56, 255}, .Air, "A lump of black coal, still warm from an ember beetle." },
+	.Eel_Skin = { "Eel Skin", {70, 110, 120, 255}, .Air, "A slick grey-green strip off a cave eel." },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.

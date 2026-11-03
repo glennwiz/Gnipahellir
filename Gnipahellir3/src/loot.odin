@@ -38,6 +38,9 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     .Rain_Wisp    = {{.Cloud_Stone, 1, 1, 0.5}, {}, {}},
     .Rock_Harpy   = {{.Stone_Block, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.35}, {}},
     .Mole         = {{.Dirt, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.5}, {}},
+    .Cave_Eel     = {{.Eel_Skin, 1, 1, 1.0}, {}, {}},
+    .Magma_Crawler = {{.Coal, 1, 2, 1.0}, {}, {}},
+    .Stone_Grub   = {{.Stone_Block, 1, 2, 1.0}, {.Iron_Ore, 1, 1, 0.25}, {}},
 }
 
 // What a digging roamer turns up with each hole, on top of the tile's own drop.

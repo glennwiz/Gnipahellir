@@ -105,6 +105,9 @@ enemy_blood := [Enemy_Kind]rl.Color{
     .Rain_Wisp    = {150, 200, 240, 255},
     .Rock_Harpy   = {130, 105, 85, 255},
     .Mole         = {150, 60, 60, 255},
+    .Cave_Eel     = {70, 110, 120, 255},
+    .Magma_Crawler = {235, 90, 26, 255},
+    .Stone_Grub   = {128, 128, 128, 255},
 }
 
 // A landed blow sprays the victim's blood away from the hit — the fan gives

@@ -112,6 +112,7 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Earth_Turret = { "Earth Turret", {.Solid, .Mineable, .Placeable}, {130, 100, 70, 255}, 0, 0, .Earth_Head, 0 },
 	.Rainbow_Bridge = { "Rainbow Bridge", {.Solid}, {200, 170, 230, 255}, 0, 0, .None, 0 },
 	.Nest = { "Nest", {.Walkable, .Mineable}, {150, 115, 70, 255}, 1, 0, .None, 0 },
+	.Cinders = { "Cinders", {.Walkable, .Damaging}, {235, 90, 26, 255}, 1, 1, .None, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -162,6 +163,7 @@ terrain_desc := #partial [Tile_Type]string{
 	.Scoria = "Lava water has killed. It bears your weight and is worth nothing.",
 	.Rainbow_Bridge = "Light that bears your weight. No pick has ever marked it.",
 	.Nest = "Twigs woven far from any tree. Whatever built it may come back.",
+	.Cinders = "A Magma Crawler went this way. It burns your feet, and it will not burn for long.",
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact
