@@ -2771,3 +2771,193 @@ agent_brief_names_the_crew_verbs_and_the_death_wait :: proc(t: ^testing.T) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
 }
+
+// ─── Aim within a tile, and each enemy's body (card 126) ────────────────────
+//
+//  Run 8: the API aimed only at a tile's centre, and a 0.4-tall eel straddling
+//  two rows sat out of reach of the fire wand.  A mouse aims at any pixel.
+
+// The cursor after one act's first tick.
+@(private="file")
+agent_test_cursor :: proc(line: string, wand := false) -> (tile: [2]i32, world: [2]f32) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    if wand do agent_test_wand(gs)
+    agent_handle_line(link, gs, line)
+    agent_drive(link, gs)
+    agent_input(gs)
+    return gs.input.mouse_tile, gs.input.mouse_world
+}
+
+@(private="file")
+agent_test_near :: proc(a, b: [2]f32) -> bool {
+    return abs(a.x - b.x) < 0.001 && abs(a.y - b.y) < 0.001
+}
+
+@(test)
+agent_whole_numbers_still_aim_at_the_tile_centre :: proc(t: ^testing.T) {
+    tile, world := agent_test_cursor(`{"cmd":"act","mine":[20,70]}`)
+    testing.expect_value(t, tile, [2]i32{20, 70})
+    testing.expect_value(t, world, [2]f32{205, 705})
+}
+
+// The aim is the cursor verbs' alone: no verb and a zone keep their tile centres.
+@(test)
+agent_acts_without_a_point_keep_the_tile_centre :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    T := player_tile(&gs.player)
+    agent_handle_line(link, gs, `{"cmd":"act","move":"left"}`)
+    agent_drive(link, gs)
+    agent_input(gs)
+    testing.expect_value(t, gs.input.mouse_world, [2]f32{(f32(T.x) + 0.5) * CELL_SIZE, (f32(T.y) + 0.5) * CELL_SIZE})
+
+    tile, world := agent_test_cursor(`{"cmd":"act","zone":[10,20,14,22]}`, wand = true)
+    testing.expect_value(t, tile, [2]i32{14, 22})
+    testing.expect_value(t, world, [2]f32{145, 225})
+}
+
+@(test)
+agent_a_fraction_aims_within_the_tile :: proc(t: ^testing.T) {
+    for key in ([]string{"mine", "place", "use", "reclaim", "at"}) {
+        // at goes with monument, and that with a command wand
+        extra := `"monument":"Clay_Hearth",` if key == "at" else ""
+        tile, world := agent_test_cursor(fmt.tprintf(`{{"cmd":"act",%s"%s":[10.2,20.8]}}`, extra, key), key == "at")
+        testing.expectf(t, tile == {10, 20}, "%s: tile %v", key, tile)
+        testing.expectf(t, agent_test_near(world, {102, 208}), "%s: world %v", key, world)
+    }
+    // 10.0 is a fraction to a client that sends floats: the tile's corner.
+    tile, world := agent_test_cursor(`{"cmd":"act","use":[10.0,20.0]}`)
+    testing.expect_value(t, tile, [2]i32{10, 20})
+    testing.expect_value(t, world, [2]f32{100, 200})
+    // One whole, one fraction: each axis on its own.
+    tile, world = agent_test_cursor(`{"cmd":"act","mine":[10,20.25]}`)
+    testing.expect_value(t, tile, [2]i32{10, 20})
+    testing.expect(t, agent_test_near(world, {105, 202.5}))
+    // The map's last sliver is still inside it.
+    tile, _ = agent_test_cursor(fmt.tprintf(`{{"cmd":"act","mine":[%v.99,%v.99]}}`, GRID_W - 1, GRID_H - 1))
+    testing.expect_value(t, tile, [2]i32{GRID_W - 1, GRID_H - 1})
+}
+
+@(test)
+agent_a_point_off_the_map_is_refused :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    lines := []string{
+        `{"cmd":"act","mine":[-0.5,20]}`,   // truncation would have made it tile 0
+        `{"cmd":"act","mine":[10,-0.01]}`,
+        fmt.tprintf(`{{"cmd":"act","use":[%v.0,20]}}`, GRID_W),
+        fmt.tprintf(`{{"cmd":"act","use":[10,%v.5]}}`, GRID_H),
+        `{"cmd":"act","mine":[NaN,20]}`,
+        `{"cmd":"act","at":[10,NaN]}`,
+        `{"cmd":"act","mine":[Infinity,20]}`,
+        `{"cmd":"act","mine":[10,-Infinity]}`,
+        `{"cmd":"act","mine":[1e300,20]}`,
+        `{"cmd":"act","mine":[10,"20"]}`,
+    }
+    for line in lines {
+        agent_test_refused(t, link, gs, line)
+        testing.expectf(t, strings.contains(agent_test_reply(link), "inside the map"), "%s -> %s", line, agent_test_reply(link))
+    }
+}
+
+@(test)
+agent_a_plan_keeps_whole_numbers_and_fractions_apart :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"mine":[20,70]},{"mine":[10.0,20.5]}]}`)
+    want := [][2]f32{{205, 705}, {100, 205}}
+    for w in want {
+        for !agent_drive(link, gs) {}
+        agent_input(gs)
+        testing.expect_value(t, gs.input.mouse_world, w)
+        agent_after_tick(link, gs)
+    }
+}
+
+// Run 8's shape: a Cave_Eel straddling rows 50 and 51, sixteen tiles off.
+@(private="file")
+agent_test_shoot_eel :: proc(line: string) -> (hurt: bool) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.delta_time = 1.0 / 60.0
+    for y in 44 ..= 52 do for x in 30 ..= 80 {
+        set_tile(&gs.world, x, y, .Stone if y == 52 else .Air)
+    }
+    gs.player.pos = {40 - PLAYER_W * 0.5, 52 - PLAYER_H}
+    gs.player.mana = 100
+    gs.player.inventory.slots[TEST_HAND] = {item = .Fire_Wand, count = 1}
+    gs.player.inventory.selected = TEST_HAND
+
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    e := &gs.enemies.data[id]
+    e.kind   = .Cave_Eel
+    e.hp     = 100
+    e.hp_max = 100
+    e.pos    = {56 - CAVE_EEL_W * 0.5, 51 - CAVE_EEL_H * 0.5}
+
+    agent_handle_line(link, gs, line)
+    agent_drive(link, gs)
+    agent_input(gs)
+    update_player(gs)
+    gs.input.mine = false
+    for _ in 0 ..< 120 {
+        update_projectiles(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    return e.hp < 100
+}
+
+@(test)
+agent_a_fraction_hits_the_eel_a_whole_tile_misses :: proc(t: ^testing.T) {
+    testing.expect(t, agent_test_shoot_eel(`{"cmd":"act","mine":[56.0,51.0]}`), "aimed at the eel's centre")
+    testing.expect(t, !agent_test_shoot_eel(`{"cmd":"act","mine":[56,51]}`), "the centre of the tile below it")
+    testing.expect(t, !agent_test_shoot_eel(`{"cmd":"act","mine":[56,50]}`), "the centre of the tile above it")
+}
+
+@(test)
+agent_state_gives_each_enemy_its_body :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    spawn :: proc(gs: ^Game_State, kind: Enemy_Kind, pos: [2]f32) {
+        id, _ := enemy_alloc(&gs.enemies)
+        gs.enemies.data[id].kind = kind
+        gs.enemies.data[id].pos  = pos
+    }
+    spawn(gs, .Cave_Eel, {30.5, 60.8})
+    spawn(gs, .Undead, {34, 60})
+
+    enemies := agent_test_state(link, gs, `{"cmd":"state","x":20,"y":50,"w":40,"h":20}`)["enemies"].(json.Array)
+    seen := 0
+    for v in enemies {
+        o := v.(json.Object)
+        kind := o["kind"].(json.String)
+        if kind != "Cave_Eel" && kind != "Undead" do continue  // the level's own roamers
+        seen += 1
+        want := enemy_body_size(.Cave_Eel if kind == "Cave_Eel" else .Undead)
+        got := [2]f32{f32(o["w"].(json.Float)), f32(o["h"].(json.Float))}
+        testing.expectf(t, agent_test_near(got, want), "%s: %v, want %v", kind, got, want)
+    }
+    testing.expect_value(t, seen, 2)
+    testing.expect(t, agent_test_near(enemy_body_size(.Cave_Eel), {1.1, 0.4}))
+    testing.expect(t, agent_test_near(enemy_body_size(.Undead), {BUILDER_W, BUILDER_H}))
+}
+
+@(test)
+agent_brief_says_how_to_aim_within_a_tile :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    brief := agent_write_brief(link, gs)
+    for want in ([]string{"fractions aim at that point within it", "x,y the top-left of a w x h body"}) {
+        testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
+    }
+}

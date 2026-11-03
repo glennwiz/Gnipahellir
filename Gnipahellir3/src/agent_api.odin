@@ -95,6 +95,7 @@ package game
 import "base:runtime"
 import "core:encoding/json"
 import "core:fmt"
+import "core:math"
 import "core:net"
 import "core:os"
 import "core:strconv"
@@ -499,6 +500,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "{{\"cmd\":\"act\",...,\"frames\":30}}  plays 1..%d ticks at 60 a second, then replies with state\n", AGENT_MAX_FRAMES)
     fmt.sbprintf(w, "  move: left, right, none. jump, down, interact, dismiss, warp: true\n")
     fmt.sbprintf(w, "  one of mine, place, use, reclaim: [x,y] in tiles. Tiles are %dx%d; state's player x,y are tiles too\n", GRID_W, GRID_H)
+    fmt.sbprintf(w, "    whole numbers aim at the tile's centre; fractions aim at that point within it (10.0 is the tile's left edge)\n")
     fmt.sbprintf(w, "  one of select, equip, feed (with count), store, take: bag slot. select -1 is an empty hand\n")
     fmt.sbprintf(w, "  craft: item name, from state's craftable. collect, withdraw, withdraw_fuel: true, on the smelter a use opened\n")
     fmt.sbprintf(w, "  store and take work on the barrel a use opened. tithe: slot, on the death screen; then dismiss moves on\n")
@@ -511,7 +513,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "{{\"cmd\":\"wait\",\"frames\":30}}  ticks with no input. {{\"cmd\":\"idle\",\"on\":false}}  no idle ticks between acts\n")
     fmt.sbprintf(w, "{{\"cmd\":\"realtime\",\"on\":true}}  the game stops waiting for you\n")
     fmt.sbprintf(w, "A refused request answers ok:false with error. State's notes hold the toasts, the only reason some refusals give.\n")
-    fmt.sbprintf(w, "A view's rows are one character per tile: legend names them, solid stops you, floor holds you up. enemies lists only what is inside the view.\n")
+    fmt.sbprintf(w, "A view's rows are one character per tile: legend names them, solid stops you, floor holds you up. enemies lists only what is inside the view, x,y the top-left of a w x h body in tiles.\n")
     fmt.sbprintf(w, "screen is title, settings, snapshots, menu, dead, book, won or play. dismiss gets past any but play, and starts the next life after dead or won.\n")
 
     fmt.sbprintf(w, "\nFIRST STEPS\n")
@@ -635,7 +637,7 @@ agent_plan_step :: proc(link: ^Agent_Link, gs: ^Game_State) {
     context.allocator = context.temp_allocator
 
     step := &link.plan[link.plan_next]
-    value, _ := json.parse_string(string(step.line[:step.len]))
+    value, _ := json.parse_string(string(step.line[:step.len]), parse_integers = true)
     o, _ := value.(json.Object)
     c, _, problem := agent_parse_act(gs, o)
     if problem != "" {
@@ -835,7 +837,7 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     context.allocator = context.temp_allocator
 
-    value, err := json.parse_string(line)
+    value, err := json.parse_string(line, parse_integers = true)
     root, is_obj := value.(json.Object)
     if err != .None || !is_obj {
         agent_reply_error(link, "request is not a JSON object")
@@ -1033,17 +1035,26 @@ agent_flag :: proc(o: json.Object, key: string) -> bool {
     return v
 }
 
-// key:[x,y] in tile coordinates.  present says the key was there at all.
+// key:[x,y] in tiles.  A whole number aims at the tile's centre, as it always
+// has; a fraction (10.0 included) aims at that point, as a mouse can.  point
+// is in tiles.  present says the key was there at all.
 @(private="file")
-agent_tile :: proc(o: json.Object, key: string) -> (tile: [2]i32, present, ok: bool) {
+agent_tile :: proc(o: json.Object, key: string) -> (tile: [2]i32, point: [2]f32, present, ok: bool) {
     if key not_in o do return
     present = true
     a, is_arr := o[key].(json.Array)
     if !is_arr || len(a) != 2 do return
-    x, xok := agent_num(a[0])
-    y, yok := agent_num(a[1])
-    if !xok || !yok || !in_bounds(x, y) do return
-    return {i32(x), i32(y)}, true, true
+    for v, i in a {
+        #partial switch n in v {
+        case json.Integer: point[i] = f32(n) + 0.5
+        case json.Float:   point[i] = f32(n)
+        case: return
+        }
+    }
+    f := [2]f32{math.floor(point.x), math.floor(point.y)}
+    // Written so NaN fails it: NaN compares false both ways.
+    if !(f.x >= 0 && f.x < GRID_W && f.y >= 0 && f.y < GRID_H) do return
+    return {i32(f.x), i32(f.y)}, point, true, true
 }
 
 @(private="file")
@@ -1096,11 +1107,12 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
     tile_ok := true
     present: bool
     ok: bool
-    c.mine,  present, ok = agent_tile(o, "mine");  c.has_mine  = ok; tile_ok &&= ok || !present
-    c.place, present, ok = agent_tile(o, "place"); c.has_place = ok; tile_ok &&= ok || !present
-    c.use,   present, ok = agent_tile(o, "use");   c.has_use   = ok; tile_ok &&= ok || !present
-    c.reclaim, present, ok = agent_tile(o, "reclaim"); c.has_reclaim = ok; tile_ok &&= ok || !present
-    c.at,    present, ok = agent_tile(o, "at");    c.has_at    = ok; tile_ok &&= ok || !present
+    aim: [2]f32
+    c.mine,  aim, present, ok = agent_tile(o, "mine");  c.has_mine  = ok; tile_ok &&= ok || !present; if ok do c.aim = aim
+    c.place, aim, present, ok = agent_tile(o, "place"); c.has_place = ok; tile_ok &&= ok || !present; if ok do c.aim = aim
+    c.use,   aim, present, ok = agent_tile(o, "use");   c.has_use   = ok; tile_ok &&= ok || !present; if ok do c.aim = aim
+    c.reclaim, aim, present, ok = agent_tile(o, "reclaim"); c.has_reclaim = ok; tile_ok &&= ok || !present; if ok do c.aim = aim
+    c.at,    aim, present, ok = agent_tile(o, "at");    c.has_at    = ok; tile_ok &&= ok || !present; if ok do c.aim = aim
     if !tile_ok {
         problem = "mine, place, use, reclaim and at take [x,y] inside the map"
         return
@@ -1330,6 +1342,7 @@ agent_input :: proc(gs: ^Game_State) {
     if c.has_at   do tile = c.at
     inp.mouse_tile   = tile
     inp.mouse_world  = {(f32(tile.x) + 0.5) * CELL_SIZE, (f32(tile.y) + 0.5) * CELL_SIZE}
+    if c.has_mine || c.has_place || c.has_use || c.has_reclaim || c.has_at do inp.mouse_world = c.aim * CELL_SIZE
     gs.ui.hover_tile = tile
 
     inp.move_left  = c.move < 0
@@ -1540,9 +1553,10 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
         if !gs.enemies.active[i] do continue
         e := &gs.enemies.data[i]
         if int(e.pos.x) < v.x || int(e.pos.x) >= v.x + v.w || int(e.pos.y) < v.y || int(e.pos.y) >= v.y + v.h do continue
+        size := enemy_body_size(e.kind)
         if comma do strings.write_byte(&b, ',')
         comma = true
-        fmt.sbprintf(&b, `{{"slot":%d,"kind":"%v","x":%.2f,"y":%.2f,"hp":%d}}`, i, e.kind, e.pos.x, e.pos.y, e.hp)
+        fmt.sbprintf(&b, `{{"slot":%d,"kind":"%v","x":%.2f,"y":%.2f,"w":%.2f,"h":%.2f,"hp":%d}}`, i, e.kind, e.pos.x, e.pos.y, size.x, size.y, e.hp)
     }
     strings.write_string(&b, `],"dens":[`)
     comma = false
