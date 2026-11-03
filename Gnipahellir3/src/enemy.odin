@@ -676,6 +676,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     // tile, and what that parent carved decides what is refused after it.
     // Then it searches again, the rise priced like any walk over its own hole.
     reached, starved := false, false
+    held_memo_reset(&gs.held_memo)  // the world stands still for both passes
     ok := astar_dig_pass(gs, from, to, stop_within, bridge_budget, out, owner, allow_mining, &reached, protect_placed, false, &starved)
     if starved {
         ok = astar_dig_pass(gs, from, to, stop_within, bridge_budget, out, owner, allow_mining, &reached, protect_placed, true, nil)
@@ -784,15 +785,17 @@ astar_dig_pass :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, brid
     }
 
     // protect_placed marks a golem plan, and golem_mine_tile refuses player
-    // masonry AND structures outright — so a golem route must never dig
+    // masonry, structures and the ground under either outright — so a golem route must never dig
     // through either, or the worker stalls forever at the waypoint it can't
     // clear (seen live: a plan through a rune scroll chest, .Mineable for the
     // player's reclaim but a structure the golem may not touch).
-    dig_allowed :: proc(w: ^World_Grid, x, y: int, protect_placed: bool) -> bool {
+    dig_allowed :: proc(gs: ^Game_State, x, y: int, protect_placed: bool) -> bool {
+        w := &gs.world
         if !in_bounds(x, y) { return false }
         if !protect_placed { return true }
         flags := w.tile_flags[grid_idx(x, y)]
         if .Placed in flags && .Golem_Placed not_in flags { return false }
+        if .Golem_Marked not_in flags && removal_undermines(gs, x, y, true) { return false }
         return !is_structure_tile[w.terrain[grid_idx(x, y)]]
     }
 
@@ -832,7 +835,7 @@ astar_dig_pass :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, brid
         nt := 0
 
         // Dig through the floor (only when landing one tile down).
-        floor_mineable := dig_allowed(w, x, y+1, protect_placed)
+        floor_mineable := dig_allowed(gs, x, y+1, protect_placed)
         if allow_mining && floor_mineable && is_builder_mineable(gs, x, y+1) && is_solid(w, x, y+2) && !den_blocks(gs, &dens, x, y+1, owner) {
             push_trans(&trans, &nt, i32(x), i32(y+1), mine_cost(gs, x, y+1, flat_digs))
         }
@@ -897,7 +900,7 @@ astar_dig_pass :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, brid
             }
 
             // Tunnel into a mineable wall (needs a floor under the mined tile).
-            wall_mineable := dig_allowed(w, nx, y, protect_placed)
+            wall_mineable := dig_allowed(gs, nx, y, protect_placed)
             if allow_mining && wall_mineable && is_builder_mineable(gs, nx, y) && is_solid(w, nx, y+1) && !den_blocks(gs, &dens, nx, y, owner) {
                 push_trans(&trans, &nt, i32(nx), i32(y), mine_cost(gs, nx, y, flat_digs))
             }
@@ -915,7 +918,7 @@ astar_dig_pass :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, brid
                 climbable := true
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
-                    cell_mineable := dig_allowed(w, c.x, c.y, protect_placed)
+                    cell_mineable := dig_allowed(gs, c.x, c.y, protect_placed)
                     if cell_mineable && is_builder_mineable(gs, c.x, c.y) && !den_blocks(gs, &dens, c.x, c.y, owner) {
                         mines += 1
                         carve += mine_cost(gs, c.x, c.y, flat_digs)

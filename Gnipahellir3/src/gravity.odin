@@ -145,23 +145,69 @@ gravity_check_removed :: proc(gs: ^Game_State, rx, ry: int) {
 // as good as that piece, so the search carries on through it; a stack resting
 // on a piece already searched adds nothing, so floating pieces cannot hold each
 // other up.  A search too big to finish leaves the piece standing.
-gravity_piece_held :: proc(w: ^World_Grid, sx, sy: int) -> bool {
+//
+// A held answer is kept: the cells it searched and the anchor it found.  While
+// the world stands still, a later search that meets one of those cells is
+// held too, unless the cell emptied for it (`gone`) was part of that answer.
+// The caller says when the world moved: held_memo_reset.  An answer is kept
+// only whole: one that leaned on a stack, whose cells it does not list, or
+// that met an older answer's cell, which it may not take over, is not kept.
+held_memo_reset :: proc(m: ^Held_Memo) {
+    m.floor = held_memo_next(m)
+}
+
+// A fresh id; at the end of the range the memo starts over, so no id is
+// ever met twice.
+held_memo_next :: proc(m: ^Held_Memo) -> u32 {
+    if m.id >= max(u32) - 1 do m^ = {}
+    m.id += 1
+    return m.id
+}
+
+gravity_piece_held :: proc(gs: ^Game_State, sx, sy: int, gone := [2]int{-1, -1}) -> bool {
+    w := &gs.world
+    m := &gs.held_memo
+    id := held_memo_next(m)
+    gone_in := in_bounds(gone.x, gone.y) ? m.held_in[grid_idx(gone.x, gone.y)] : 0
     dirs := [4][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}}
-    seen:  [GRID_W * GRID_H]bool
     cells: [MAX_FALLING][2]i32
     cells[0] = {i32(sx), i32(sy)}
-    seen[grid_idx(sx, sy)] = true
+    m.seen[grid_idx(sx, sy)] = id
     n := 1
+    whole := true
+    older := proc(m: ^Held_Memo, i: int) -> u32 {
+        v := m.held_in[i]
+        return v if v != 0 && v >= m.floor else 0
+    }
+    keep := proc(m: ^Held_Memo, id: u32, cells: [][2]i32, anchor: int) {
+        for c in cells do m.held_in[grid_idx(int(c.x), int(c.y))] = id
+        if anchor >= 0 do m.held_in[anchor] = id
+    }
 
     for i := 0; i < n; i += 1 {
         for d in dirs {
             x := int(cells[i].x) + d[0]
             y := int(cells[i].y) + d[1]
-            for needs_ground(get_tile(w, x, y)) do y += 1
-            if is_anchor_cell(w, x, y) do return true
-            if !is_faller(w, x, y) || seen[grid_idx(x, y)] do continue
-            if n == MAX_FALLING do return true
-            seen[grid_idx(x, y)] = true
+            for needs_ground(get_tile(w, x, y)) {
+                y += 1
+                whole = false
+            }
+            if is_anchor_cell(w, x, y) {
+                anchor := grid_idx(x, y) if in_bounds(x, y) else -1
+                if anchor >= 0 && older(m, anchor) != 0 do whole = false
+                if whole do keep(m, id, cells[:n], anchor)
+                return true
+            }
+            if !is_faller(w, x, y) || m.seen[grid_idx(x, y)] == id do continue
+            if v := older(m, grid_idx(x, y)); v != 0 {
+                if v != gone_in do return true
+                whole = false
+            }
+            if n == MAX_FALLING {
+                if whole do keep(m, id, cells[:n], -1)
+                return true
+            }
+            m.seen[grid_idx(x, y)] = id
             cells[n] = {i32(x), i32(y)}; n += 1
         }
     }
@@ -203,7 +249,8 @@ gravity_detach_if_floating :: proc(gs: ^Game_State, sx, sy: int, visited: ^[GRID
         }
     }
 
-    if gravity_piece_held(w, sx, sy) do return  // tied to the ground, or too big to tell
+    held_memo_reset(&gs.held_memo)  // blocks move between these calls
+    if gravity_piece_held(gs, sx, sy) do return  // tied to the ground, or too big to tell
     if n > gravity_free_slots(gs) do return  // no room in the pool right now
 
     for i in 0 ..< n {

@@ -805,6 +805,8 @@ golem_find_resource :: proc(gs: ^Game_State, id: int, skipped: [][2]i32) -> ([2]
 		if cleanup && golem_block_grace_protected(gs, id, T) do continue
 		if terrain_table[gs.world.terrain[idx]].drop_item != .None && !golem_pack_has_room(&gs.golems.data[id]) do continue
 		if den_protected(gs, x, y, -1) do continue
+		// The rectangle may cover the player's base: its footing stays.
+		if removal_undermines(gs, x, y) do continue
 		score := chebyshev(from, T) + i32((8-priority)*32)
 		// Navigation masonry is real material and should not litter an exhausted
 		// work order forever. A deliberately marked Gather rectangle also clears
@@ -1324,6 +1326,8 @@ golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := 
 	// A Gather target is explicit permission to remove ordinary player masonry
 	// inside the rectangle. Incidental path clearing still protects it.
 	if (path_clear && .Placed in flags && .Golem_Placed not_in flags) || den_blocks_path || is_structure_tile[t] do return false
+	// A marked block is the player's own order; anything else under the base stays.
+	if .Golem_Marked not_in flags && removal_undermines(gs, x, y) do return false
 	if path_clear {
 		if .Mineable not_in terrain_table[t].flags do return false
 	} else if golem_resource_priority(t) == 0 && .Golem_Marked not_in flags do return false
