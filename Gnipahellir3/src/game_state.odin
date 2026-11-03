@@ -40,6 +40,9 @@ Enemy_Kind :: enum u8 {
     // The GROUND wave: an outlaw-wolf that runs the surface and takes the
     // base apart structure by structure. Appended for save compatibility.
     Vargr,
+    // Roamers (roamer.odin): they live on a level, not in a wave.
+    Pond_Frog,
+    Ember_Beetle,
 }
 
 Enemy_Nav :: struct {
@@ -781,6 +784,7 @@ Game_State :: struct {
     wave:        Wave_State, // transient wave director (wave.odin)
     enemy_status: [MAX_ENEMIES]Enemy_Status, // transient, indexed like gs.enemies (sim.odin)
     den_revenge: Den_Revenge, // transient robbed-den grudge (enemy.odin)
+    roamer_timer: f32,        // transient, toward the next top-up (roamer.odin)
     nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
                              // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)

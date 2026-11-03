@@ -5,6 +5,7 @@ import "core:slice"
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+BUILDER_HP       :: 6
 BUILDER_W        :: f32(0.8)
 BUILDER_H        :: f32(1.0)
 BUILDER_SPEED    :: f32(4.0)
@@ -333,25 +334,38 @@ chebyshev :: proc(a, b: [2]i32) -> i32 {
     return max(abs(a.x - b.x), abs(a.y - b.y))
 }
 
-// Body size by kind — Garm is bigger than a builder.
-enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
-    #partial switch kind {
-    case .Garm: return {GARM_W, GARM_H}
-    }
-    return {BUILDER_W, BUILDER_H}
+// One row per kind: what update_enemies moves and runs, and what a spawn gives
+// it.  The risen hero alone is an .Undead with hp of its own (grave.odin).
+Enemy_Behaviour :: struct {
+    body:     [2]f32,
+    speed:    f32,
+    hp:       int,
+    gravity:  f32,
+    update:   proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32),
 }
 
-// Ground speed by kind — the boss must outpace a walking builder.
+@(rodata)
+enemy_behaviour := [Enemy_Kind]Enemy_Behaviour{
+    .Garm         = {{GARM_W, GARM_H}, GARM_SPEED, GARM_HP, BUILDER_GRAVITY, update_garm},
+    .Undead       = {{BUILDER_W, BUILDER_H}, DRAUGR_SPEED, DRAUGR_HP, BUILDER_GRAVITY, update_undead},
+    // Zero gravity: it flies through the shared mover, so
+    // collision and the entity map stay everyone else's code.
+    .Fire_Sprite  = {{BUILDER_W, BUILDER_H}, FIRE_SPRITE_SPEED, FIRE_SPRITE_HP, 0, update_fire_sprite},
+    .Builder      = {{BUILDER_W, BUILDER_H}, BUILDER_SPEED, BUILDER_HP, BUILDER_GRAVITY, update_builder},
+    .Raider       = {{BUILDER_W, BUILDER_H}, RAIDER_SPEED, RAIDER_HP, BUILDER_GRAVITY, update_raider},
+    // The wolf IS the raider brain: same body, same travel, and .Wave_Hunt is
+    // what makes it hunt the whole base.
+    .Vargr        = {{BUILDER_W, BUILDER_H}, RAIDER_SPEED, VARGR_HP, BUILDER_GRAVITY, update_raider},
+    .Pond_Frog    = {{POND_FROG_W, POND_FROG_H}, POND_FROG_SPEED, POND_FROG_HP, BUILDER_GRAVITY, update_roamer},
+    .Ember_Beetle = {{EMBER_BEETLE_W, EMBER_BEETLE_H}, EMBER_BEETLE_SPEED, EMBER_BEETLE_HP, BUILDER_GRAVITY, update_roamer},
+}
+
+enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {
+    return enemy_behaviour[kind].body
+}
+
 enemy_speed :: proc(kind: Enemy_Kind) -> f32 {
-    #partial switch kind {
-    case .Garm:        return GARM_SPEED
-    case .Undead:      return DRAUGR_SPEED
-    case .Raider:      return RAIDER_SPEED
-    // A wolf runs the surface at a tunneller's pace; a sprite flies its own.
-    case .Vargr:       return RAIDER_SPEED
-    case .Fire_Sprite: return FIRE_SPRITE_SPEED
-    }
-    return BUILDER_SPEED
+    return enemy_behaviour[kind].speed
 }
 
 // Nearest live enemy body under a world pixel, or -1.  A small halo around the
@@ -945,8 +959,8 @@ spawn_builder :: proc(gs: ^Game_State, start_x: int) {
 
     e := &gs.enemies.data[id]
     e.kind   = .Builder
-    e.hp     = 6
-    e.hp_max = 6
+    e.hp     = enemy_behaviour[.Builder].hp
+    e.hp_max = e.hp
 
     tx, ty, found := find_cave_floor(&gs.world, start_x, 3)
     if !found {
@@ -1028,8 +1042,8 @@ spawn_raider :: proc(gs: ^Game_State, target: [2]i32, hint_x: int, goal := Build
 
     e := &gs.enemies.data[id]
     e.kind   = .Raider
-    e.hp     = RAIDER_HP
-    e.hp_max = RAIDER_HP
+    e.hp     = enemy_behaviour[.Raider].hp
+    e.hp_max = e.hp
     e.facing = 1 if target.x >= i32(tx) else -1
     e.pos    = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1}
     e.builder.goal        = goal
@@ -1222,7 +1236,7 @@ spawn_flyer_at :: proc(gs: ^Game_State, x, y: int) -> bool {
 
     e := &gs.enemies.data[id]
     e^ = Enemy{
-        kind = .Fire_Sprite, hp = FIRE_SPRITE_HP, hp_max = FIRE_SPRITE_HP,
+        kind = .Fire_Sprite, hp = enemy_behaviour[.Fire_Sprite].hp, hp_max = enemy_behaviour[.Fire_Sprite].hp,
         facing = 1 if x < GRID_W/2 else -1,
         pos = {f32(x) + (1 - BUILDER_W)*0.5, f32(y)},
     }
@@ -1244,7 +1258,7 @@ spawn_wave_walker :: proc(gs: ^Game_State, n: int) -> bool {
     }
     e := &gs.enemies.data[id]
     e^ = Enemy{
-        kind = .Vargr, hp = VARGR_HP, hp_max = VARGR_HP,
+        kind = .Vargr, hp = enemy_behaviour[.Vargr].hp, hp_max = enemy_behaviour[.Vargr].hp,
         facing = 1 if tx < GRID_W/2 else -1,
         pos = {f32(tx) + (1 - BUILDER_W)*0.5, f32(ty) - BUILDER_H + 1},
     }
@@ -2561,39 +2575,12 @@ update_enemies :: proc(gs: ^Game_State) {
         e := &gs.enemies.data[i]
         prev := builder_tile(e)
         move_dt := enemy_move_dt(gs, i)
-        switch e.kind {
-        case .Builder:
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
-                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
-            update_builder(e, i, gs, dt)
-        case .Garm:
-            move_body(&gs.world, &e.pos, &e.vel, {GARM_W, GARM_H}, move_dt,
-                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
-            update_garm(e, i, gs, dt)
-        case .Undead:
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
-                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
-            update_undead(e, i, gs, dt)
-        case .Raider:
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
-                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
-            update_raider(e, i, gs, dt)
-        case .Vargr:
-            // The wolf IS the raider brain: same body, same travel, and
-            // .Wave_Hunt is what makes it hunt the whole base.
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
-                BUILDER_GRAVITY, BUILDER_MAX_FALL, &e.grounded)
-            update_raider(e, i, gs, dt)
-        case .Fire_Sprite:
-            // Zero gravity, zero max-fall: it flies through the shared mover,
-            // so collision and the entity map stay everyone else's code.
-            move_body(&gs.world, &e.pos, &e.vel, {BUILDER_W, BUILDER_H}, move_dt,
-                0, 0, &e.grounded)
-            update_fire_sprite(e, i, gs, dt)
-            if !gs.enemies.active[i] {   // it gutted out
-                entity_map_clear(&gs.world, enemy_entity_id(i), prev)
-                continue
-            }
+        row := enemy_behaviour[e.kind]
+        move_body(&gs.world, &e.pos, &e.vel, row.body, move_dt, row.gravity, BUILDER_MAX_FALL, &e.grounded)
+        row.update(e, i, gs, dt)
+        if !gs.enemies.active[i] {   // it gutted out
+            entity_map_clear(&gs.world, enemy_entity_id(i), prev)
+            continue
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }

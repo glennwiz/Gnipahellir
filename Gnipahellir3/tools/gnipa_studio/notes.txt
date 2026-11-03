@@ -201,3 +201,5 @@ icon	Water_Head	Water Head - the same iron cup, brimming.
 glow	Water_Turret	deep pool
 icon	Earth_Head	Earth Head - the same iron cup, a boulder sitting in it.
 glow	Earth_Turret	warm clay
+icon	Slime	Slime - a wet green dollop, one bright glint.
+icon	Coal	Coal - a black lump, faceted, one grey edge.

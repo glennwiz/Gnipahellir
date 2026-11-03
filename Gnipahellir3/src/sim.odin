@@ -257,7 +257,7 @@ tick_engine :: proc(gs: ^Game_State, x, y: int) {
     }
 }
 
-// A turret's aim: the nearest live enemy whose body center lies inside range of
+// A turret's aim: the nearest live enemy, friendly creatures aside, whose body center lies inside range of
 // this tile's center with nothing solid between them but other turrets, or
 // ok=false.  A walled-off enemy is not a target at all, so the turret passes
 // it over for a farther one it can see, and beam and motes follow.  PURE — render re-runs it
@@ -270,6 +270,7 @@ turret_target :: proc(gs: ^Game_State, x, y: int, range: f32) -> (best: int, ok:
     for ei in 0 ..< MAX_ENEMIES {
         if !gs.enemies.active[ei] do continue
         e    := &gs.enemies.data[ei]
+        if roamer_table[e.kind].friendly do continue
         size := enemy_body_size(e.kind)
         dx   := e.pos.x + size.x*0.5 - cx
         dy   := e.pos.y + size.y*0.5 - cy

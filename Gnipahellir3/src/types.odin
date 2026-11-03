@@ -396,6 +396,8 @@ Item :: enum u8 {
 	Flame_Head,
 	Water_Head,
 	Earth_Head,
+	Slime,
+	Coal,
 	// <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

@@ -2380,7 +2380,27 @@ draw_enemy :: proc(e: ^Enemy, t: f32) {
 		draw_builder(e, .Vargr)
 	case .Fire_Sprite:
 		draw_fire_sprite(e, t)
+	case .Pond_Frog, .Ember_Beetle:
+		draw_roamer(e)
 	}
+}
+
+// Roamer palette: shell, belly, eye.  Hard-edged, no art yet.
+@(rodata)
+roamer_colors := #partial [Enemy_Kind][3]rl.Color{
+	.Pond_Frog    = {{62, 130, 58, 255}, {150, 200, 110, 255}, {240, 220, 90, 255}},
+	.Ember_Beetle = {{44, 34, 34, 255}, {235, 90, 26, 255}, {255, 190, 60, 255}},
+}
+
+draw_roamer :: proc(e: ^Enemy) {
+	size := enemy_body_size(e.kind) * CELL_SIZE
+	px := e.pos.x * CELL_SIZE
+	py := e.pos.y * CELL_SIZE
+	c := roamer_colors[e.kind]
+	rl.DrawRectangleRec({px, py, size.x, size.y}, c[0])
+	rl.DrawRectangleRec({px + 1, py + size.y - 2, size.x - 2, 2}, c[1])
+	eye_x := e.facing >= 0 ? px + size.x - 2 : px + 1
+	rl.DrawRectangleRec({eye_x, py + 1, 1, 1}, c[2])
 }
 
 // A small hard-stepped flame: an ember body whose two inner layers blink
