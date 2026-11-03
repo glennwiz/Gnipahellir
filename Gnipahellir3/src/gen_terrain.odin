@@ -110,6 +110,8 @@ terrain_table := #partial [Tile_Type]Terrain_Behavior{
 	.Flame_Turret = { "Flame Turret", {.Solid, .Mineable, .Placeable}, {200, 90, 40, 255}, 0, 0, .Flame_Head, 0 },
 	.Water_Turret = { "Water Turret", {.Solid, .Mineable, .Placeable}, {50, 120, 200, 255}, 0, 0, .Water_Head, 0 },
 	.Earth_Turret = { "Earth Turret", {.Solid, .Mineable, .Placeable}, {130, 100, 70, 255}, 0, 0, .Earth_Head, 0 },
+	.Rainbow_Bridge = { "Rainbow Bridge", {.Solid}, {200, 170, 230, 255}, 0, 0, .None, 0 },
+	.Nest = { "Nest", {.Walkable, .Mineable}, {150, 115, 70, 255}, 1, 0, .None, 0 },
 }
 
 // One line of "what am I pointing at" prose per tile, read by the cursor hover
@@ -158,6 +160,8 @@ terrain_desc := #partial [Tile_Type]string{
 	.Final_Seal = "The last door. Break it with the Hell Key and the long night ends.",
 	.Rune_Stone = "A fallen hero's name. Press E beside it.",
 	.Scoria = "Lava water has killed. It bears your weight and is worth nothing.",
+	.Rainbow_Bridge = "Light that bears your weight. No pick has ever marked it.",
+	.Nest = "Twigs woven far from any tree. Whatever built it may come back.",
 }
 
 // Player-built machines, stations, spawners and altars — tiles you interact

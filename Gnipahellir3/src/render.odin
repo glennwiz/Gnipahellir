@@ -85,6 +85,8 @@ Draw_Style :: enum u8 {
 	Pixel_Mushroom,
 	Pixel_Mossy_Stone,
 	Pixel_Mana_Mist,
+	Pixel_Rainbow_Bridge,
+	Pixel_Nest,
 }
 
 @(rodata)
@@ -111,6 +113,8 @@ tile_draw_style := #partial [Tile_Type]Draw_Style {
 	.Green_Cave_Mushroom   = .Pixel_Mushroom,
 	.Mossy_Stone           = .Pixel_Mossy_Stone,
 	.Mana_Mist             = .Pixel_Mana_Mist,
+	.Rainbow_Bridge        = .Pixel_Rainbow_Bridge,
+	.Nest                  = .Pixel_Nest,
 	// all others default to .Solid (zero value)
 }
 
@@ -350,9 +354,26 @@ draw_world :: proc(gs: ^Game_State) {
 	// neighboring cloud puffs rather than disappear into their broad bulges.
 	draw_sky_altars(gs)
 	if gs.level_index == LEVEL_SKY do draw_sky_apparition(gs)
+	if gs.birds.seeded do draw_birds(gs)
 	// Pipe casing over everything — it dresses whatever fluid/gas is already
 	// there, so it must draw last to sit visibly on top.
 	draw_mana_pipes(gs)
+}
+
+BIRD_COL :: rl.Color{38, 42, 58, 225} // dark against the bright sky; Glenn's to tune
+
+// Each bird is a flapping V: two wing lines from the body.  Read-only.
+draw_birds :: proc(gs: ^Game_State) {
+	for fi in 0 ..< MAX_BIRD_FLOCKS {
+		f := &gs.birds.flocks[fi]
+		for j in 0 ..< BIRDS_PER_FLOCK {
+			body := f.birds[j].pos * CELL_SIZE
+			lift := bird_wing_lift(f, j, gs.elapsed_time) * CELL_SIZE
+			span := BIRD_WING_SPAN * CELL_SIZE
+			rl.DrawLineV(body, body + {-span, -lift}, BIRD_COL)
+			rl.DrawLineV(body, body + {span, -lift}, BIRD_COL)
+		}
+	}
 }
 
 // ─── Clay-golem automation visuals ───────────────────────────────────────────
@@ -775,6 +796,38 @@ draw_altar_eternal_swirl :: proc(gs: ^Game_State, altar_x, altar_y: int) {
 	}
 }
 
+// One tile of the sky's rainbow: red over violet, the stripes filling the cell.
+RAINBOW_STRIPES := [?]struct {
+	h:   i32,
+	col: rl.Color,
+} {
+	{2, {235, 70, 70, 255}},
+	{1, {245, 150, 60, 255}},
+	{2, {250, 225, 90, 255}},
+	{1, {90, 210, 110, 255}},
+	{2, {80, 170, 240, 255}},
+	{1, {90, 90, 210, 255}},
+	{1, {165, 90, 215, 255}},
+}
+
+draw_pixel_rainbow_bridge :: proc(bx, by: i32) {
+	y := by
+	for s in RAINBOW_STRIPES {
+		rl.DrawRectangle(bx, y, CELL_SIZE, s.h, s.col)
+		y += s.h
+	}
+}
+
+// A bowl of twigs on the cloud, open at the top so what it holds shows.
+draw_pixel_nest :: proc(bx, by: i32) {
+	twig := terrain_table[.Nest].color
+	dark := rl.Color{105, 78, 45, 255}
+	rl.DrawRectangle(bx, by, CELL_SIZE, CELL_SIZE, terrain_table[.Air].color)
+	rl.DrawRectangle(bx, by + 6, CELL_SIZE, 4, twig)
+	rl.DrawRectangle(bx + 1, by + 7, 3, 1, dark)
+	rl.DrawRectangle(bx + 6, by + 8, 3, 1, dark)
+}
+
 // ─── Sky apparition — a wordless tease at the top of the world ────────────────
 //
 //  gen_sky_level fills rows 0-27 with pure Air above the topmost cloud band
@@ -989,6 +1042,10 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
 		draw_pixel_mushroom(gs, px, py, x, y)
 	case .Pixel_Mossy_Stone:
 		draw_pixel_mossy_stone(gs, px, py, x, y)
+	case .Pixel_Rainbow_Bridge:
+		draw_pixel_rainbow_bridge(px, py)
+	case .Pixel_Nest:
+		draw_pixel_nest(px, py)
 	case .Pixel_Rune_Scroll_Chest:
 		bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
 		rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)

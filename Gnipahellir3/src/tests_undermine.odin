@@ -204,6 +204,168 @@ a_floating_hoard_holds_no_beam_up :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, UX + 2, UY), Tile_Type.Void)
 }
 
+// Card 106: A holds up a bench that B leans on, B a bench that A leans on, and
+// the only real support is A's stilt.
+@(test)
+two_floating_pieces_do_not_hold_each_other_up :: proc(t: ^testing.T) {
+    gs := under_site(); defer free(gs)
+    under_build(gs, {{68, 71, .Stone}, {68, 70, .Wood}, {69, 70, .Wood}, {68, 69, .Wood},
+        {68, 68, .Wood}, {69, 68, .Wood}, {69, 69, .Crafting_Bench},
+        {70, 69, .Wood}, {71, 69, .Wood}, {70, 68, .Crafting_Bench}})
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {68, 71}})
+    under_frames(gs, 300)
+    for c in ([][2]int{{69, 70}, {68, 68}, {69, 69}, {70, 69}, {71, 69}, {70, 68}}) {
+        testing.expect_value(t, get_tile(&gs.world, c.x, c.y), Tile_Type.Void)
+    }
+    testing.expect_value(t, ground_count(&gs.world, .Crafting_Bench), 2)
+}
+
+// A structure on a piece is as good as the piece: this one reaches ground.
+@(test)
+a_structure_on_a_grounded_piece_still_holds_a_hung_beam :: proc(t: ^testing.T) {
+    gs := under_site(); defer free(gs)
+    set_tile(&gs.world, UX, UY + 1, .Wood)
+    set_tile(&gs.world, UX, UY + 2, .Stone)
+    for x in UX + 1 ..= UX + 3 do set_tile(&gs.world, x, UY, .Wood)
+    set_tile(&gs.world, UX + 3, UY + 1, .Stone)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX + 3, UY + 1}})
+    under_frames(gs, 120)
+    testing.expect_value(t, get_tile(&gs.world, UX + 3, UY), Tile_Type.Wood)
+}
+
+// Review of card 106: a two-tile piece on a prop keeps standing by the one
+// anchor left, whichever side of the piece that anchor is on.
+@(test)
+a_piece_holds_on_by_an_anchor_on_any_side :: proc(t: ^testing.T) {
+    sides := [?]struct{ anchor, prop: [2]int }{
+        {{70, 69}, {71, 71}},  // above: hung from a ceiling
+        {{70, 71}, {71, 71}},  // below
+        {{69, 70}, {71, 71}},  // left
+        {{72, 70}, {70, 71}},  // right
+    }
+    for s in sides {
+        gs := under_site(); defer free(gs)
+        under_build(gs, {{70, 70, .Wood}, {71, 70, .Wood},
+            {s.anchor.x, s.anchor.y, .Stone}, {s.prop.x, s.prop.y, .Stone}})
+        eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {i32(s.prop.x), i32(s.prop.y)}})
+        under_frames(gs, 120)
+        testing.expect_value(t, get_tile(&gs.world, 70, 70), Tile_Type.Wood)
+        testing.expect_value(t, get_tile(&gs.world, 71, 70), Tile_Type.Wood)
+    }
+}
+
+// The ground is further off than the search goes, so the beam is left standing.
+@(test)
+a_support_too_far_to_search_leaves_the_beam_up :: proc(t: ^testing.T) {
+    gs := under_site(); defer free(gs)
+    for y in 64 ..= 65 do for x in 20 ..= 170 do set_tile(&gs.world, x, y, .Wood)
+    set_tile(&gs.world, 170, 66, .Stone)
+    set_tile(&gs.world, 25, 63, .Wood)
+    set_tile(&gs.world, 25, 62, .Wood)
+    set_tile(&gs.world, 25, 61, .Crafting_Bench)
+    for x in 26 ..= 28 do set_tile(&gs.world, x, 61, .Wood)
+    set_tile(&gs.world, 28, 62, .Stone)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {28, 62}})
+    under_frames(gs, 120)
+    testing.expect_value(t, get_tile(&gs.world, 28, 61), Tile_Type.Wood)
+}
+
+// The pool takes exactly MAX_FALLING: a piece that size falls, one more stands.
+@(test)
+a_piece_at_the_cap_falls_and_one_over_stands :: proc(t: ^testing.T) {
+    gs := under_site(); defer free(gs)
+    for y in 64 ..= 65 do for x in 20 ..< 20 + MAX_FALLING / 2 do set_tile(&gs.world, x, y, .Wood)
+    set_tile(&gs.world, 20, 66, .Stone)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {20, 66}})
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, 21, 65), gravity_open_tile(gs, 65))
+
+    big := under_site(); defer free(big)
+    for y in 64 ..= 65 do for x in 20 ..< 20 + MAX_FALLING / 2 do set_tile(&big.world, x, y, .Wood)
+    set_tile(&big.world, 20 + MAX_FALLING / 2, 64, .Wood)
+    set_tile(&big.world, 20, 66, .Stone)
+    eq_push(&big.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {20, 66}})
+    process_events(big)
+    testing.expect_value(t, get_tile(&big.world, 21, 65), Tile_Type.Wood)
+}
+
+// A pool with room for only part of a piece lifts none of it, not half.
+@(test)
+a_piece_the_pool_cannot_take_stays_whole :: proc(t: ^testing.T) {
+    gs := under_site(); defer free(gs)
+    for i in 0 ..< MAX_FALLING - 1 do gs.gravity.blocks[i].active = true
+    under_build(gs, {{70, 70, .Wood}, {71, 70, .Wood}, {71, 71, .Stone}})
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {71, 71}})
+    process_events(gs)
+    testing.expect_value(t, get_tile(&gs.world, 70, 70), Tile_Type.Wood)
+    testing.expect_value(t, get_tile(&gs.world, 71, 70), Tile_Type.Wood)
+}
+
+// Each step hangs on a bench on the step below, so one mined prop takes the
+// whole chain in one call.  Run under `ulimit -s 1024` this also proves the
+// chain costs no stack per step.
+@(test)
+a_long_chain_of_pieces_comes_down_in_one_call :: proc(t: ^testing.T) {
+    STEPS :: 60
+    gs := under_site(); defer free(gs)
+    for i in 0 ..< STEPS {
+        set_tile(&gs.world, 20 + i, 100 - i, .Wood)
+        set_tile(&gs.world, 20 + i, 99 - i, .Crafting_Bench)
+    }
+    set_tile(&gs.world, 20, 101, .Stone)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {20, 101}})
+    process_events(gs)
+    for i in 0 ..< STEPS {
+        testing.expect_value(t, get_tile(&gs.world, 20 + i, 100 - i), gravity_open_tile(gs, 100 - i))
+    }
+}
+
+// Card 106: the hoard stays when its ground goes.  A beam hung on it must not.
+@(private = "file")
+under_hoard_site :: proc() -> ^Game_State {
+    gs := under_site(.Barrel)
+    barrel_on_placed(gs, {UX, UY})
+    barrel_at(gs, gs.level_index, {UX, UY}).slots[0] = {.Dirt, 5}
+    return gs
+}
+
+@(test)
+a_beam_on_a_hoard_falls_when_the_ground_goes :: proc(t: ^testing.T) {
+    gs := under_hoard_site(); defer free(gs)
+    set_tile(&gs.world, UX + 1, UY, .Wood)
+    set_tile(&gs.world, UX + 2, UY, .Wood)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX, UY + 1}})
+    under_frames(gs, 120)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Barrel)
+    testing.expect_value(t, get_tile(&gs.world, UX + 1, UY), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, UX + 2, UY), Tile_Type.Void)
+}
+
+@(test)
+a_beam_on_a_stack_over_a_hoard_falls_when_the_ground_goes :: proc(t: ^testing.T) {
+    gs := under_hoard_site(); defer free(gs)
+    set_tile(&gs.world, UX, UY - 1, .Crafting_Bench)
+    set_tile(&gs.world, UX + 1, UY - 1, .Wood)
+    set_tile(&gs.world, UX + 2, UY - 1, .Wood)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX, UY + 1}})
+    under_frames(gs, 120)
+    testing.expect_value(t, get_tile(&gs.world, UX + 1, UY - 1), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, UX + 2, UY - 1), Tile_Type.Void)
+}
+
+// The ground that goes is itself a faller, lifted out without a mine event.
+@(test)
+a_beam_on_a_hoard_falls_when_a_piece_under_it_falls :: proc(t: ^testing.T) {
+    gs := under_hoard_site(); defer free(gs)
+    set_tile(&gs.world, UX, UY + 1, .Wood)
+    set_tile(&gs.world, UX, UY + 2, .Stone)
+    set_tile(&gs.world, UX + 1, UY, .Wood)
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX, UY + 2}})
+    under_frames(gs, 120)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Barrel)
+    testing.expect_value(t, get_tile(&gs.world, UX + 1, UY), Tile_Type.Void)
+}
+
 @(test)
 a_stack_comes_down_a_tile_at_a_time :: proc(t: ^testing.T) {
     gs := under_site(); defer free(gs)

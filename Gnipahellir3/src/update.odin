@@ -129,6 +129,9 @@ game_update :: proc(gs: ^Game_State) {
     // 8. Ambience — spawns drifting motes / station sparks (visual only)
     update_ambience(gs)
 
+    // 8b. Bird flocks — sky scenery, scatter from the player (visual only)
+    update_birds(gs)
+
     // 9. Particles (visual only, pushes no events)
     update_particles(gs)
 
