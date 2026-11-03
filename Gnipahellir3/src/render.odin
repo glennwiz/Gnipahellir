@@ -352,9 +352,26 @@ draw_world :: proc(gs: ^Game_State) {
 	// neighboring cloud puffs rather than disappear into their broad bulges.
 	draw_sky_altars(gs)
 	if gs.level_index == LEVEL_SKY do draw_sky_apparition(gs)
+	if gs.birds.seeded do draw_birds(gs)
 	// Pipe casing over everything — it dresses whatever fluid/gas is already
 	// there, so it must draw last to sit visibly on top.
 	draw_mana_pipes(gs)
+}
+
+BIRD_COL :: rl.Color{38, 42, 58, 225} // dark against the bright sky; Glenn's to tune
+
+// Each bird is a flapping V: two wing lines from the body.  Read-only.
+draw_birds :: proc(gs: ^Game_State) {
+	for fi in 0 ..< MAX_BIRD_FLOCKS {
+		f := &gs.birds.flocks[fi]
+		for j in 0 ..< BIRDS_PER_FLOCK {
+			body := f.birds[j].pos * CELL_SIZE
+			lift := bird_wing_lift(f, j, gs.elapsed_time) * CELL_SIZE
+			span := BIRD_WING_SPAN * CELL_SIZE
+			rl.DrawLineV(body, body + {-span, -lift}, BIRD_COL)
+			rl.DrawLineV(body, body + {span, -lift}, BIRD_COL)
+		}
+	}
 }
 
 // ─── Clay-golem automation visuals ───────────────────────────────────────────
