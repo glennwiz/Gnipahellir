@@ -103,6 +103,7 @@ enemy_blood := [Enemy_Kind]rl.Color{
     .Pond_Frog    = {120, 190, 90, 255},
     .Ember_Beetle = {235, 110, 26, 255},
     .Cave_Eel     = {70, 110, 120, 255},
+    .Magma_Crawler = {235, 90, 26, 255},
 }
 
 // A landed blow sprays the victim's blood away from the hit — the fan gives

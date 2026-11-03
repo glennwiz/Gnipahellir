@@ -314,6 +314,7 @@ hazard_cause := #partial [Tile_Type]Damage_Cause{
     .Magic_Lava = .Magic_Lava,
     .Void_Sky   = .Void_Sky,
     .Steam      = .Steam,
+    .Cinders    = .Cinders,
 }
 
 // Damaging tiles (lava, void sky) hurt while the body overlaps them: the

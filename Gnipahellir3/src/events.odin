@@ -513,6 +513,7 @@ damage_cause_names := [Damage_Cause]string{
     .Magic_Lava = "magic lava",
     .Void_Sky   = "the void",
     .Steam      = "steam",
+    .Cinders    = "cinders",
 }
 
 @(rodata)
@@ -526,6 +527,7 @@ enemy_kind_names := [Enemy_Kind]string{
     .Pond_Frog    = "a pond frog",
     .Ember_Beetle = "an ember beetle",
     .Cave_Eel     = "a cave eel",
+    .Magma_Crawler = "a magma crawler",
 }
 
 // Who or what dealt a Damage_Dealt, in words.  A projectile can outlive its

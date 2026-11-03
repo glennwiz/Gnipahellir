@@ -13,7 +13,7 @@ ROAMER_SPAWN_EVERY :: f32(15)   // seconds between top-ups, one per row
 ROAMER_SPAWN_CLEAR :: i32(30)   // tiles from the player: nothing pops in on screen
 ROAMER_WHIM_TIME   :: f32(2.5)  // seconds between wandering choices
 ROAMER_HOP         :: f32(-7)   // apex ~1.2 tiles: over a one-tile step
-ROAMER_SCATTER     :: 7919      // prime, so find_water's walk meets every cell
+ROAMER_SCATTER     :: 7919      // prime, so find_cave_home's walk meets every cell
 ROAMER_MAX_DROP    :: 3         // a wanderer walks off nothing taller: a surface
                                 // creature stays out of the shafts
 BITE_SLOW          :: f32(0.6)  // the player's speed while a bite's slow runs
@@ -34,6 +34,12 @@ CAVE_EEL_H         :: f32(0.4)
 CAVE_EEL_SPEED     :: f32(4.0)
 CAVE_EEL_BITE_SLOW :: f32(2.0)  // seconds
 
+MAGMA_CRAWLER_HP    :: 6
+MAGMA_CRAWLER_W     :: f32(0.9)
+MAGMA_CRAWLER_H     :: f32(0.5)
+MAGMA_CRAWLER_SPEED :: f32(2.0)
+CINDERS_LIFE        :: f32(6)   // seconds a burning tile stays alight
+
 Roamer_Spec :: struct {
     level:    int,
     cap:      int,   // 0 = not a roamer
@@ -42,6 +48,7 @@ Roamer_Spec :: struct {
     damage:   int,   // bite; only an unhurt hostile comes to use it
     swims:    bool,  // lives in water and notices only a player who is in it
     slows:    f32,   // seconds of BITE_SLOW a bite leaves on the player
+    burns:    bool,  // sets the open cave floor it stands on alight
 }
 
 @(rodata)
@@ -49,6 +56,7 @@ roamer_table := #partial [Enemy_Kind]Roamer_Spec{
     .Pond_Frog    = {level = LEVEL_SURFACE, cap = 4, friendly = true, sight = 7},
     .Ember_Beetle = {level = LEVEL_SURFACE, cap = 3, sight = 6, damage = 1},
     .Cave_Eel     = {level = LEVEL_CAVE2, cap = 3, sight = 8, damage = 2, swims = true, slows = CAVE_EEL_BITE_SLOW},
+    .Magma_Crawler = {level = LEVEL_CAVE2, cap = 3, sight = 6, damage = 2, burns = true},
 }
 
 // Step 5b1b.
@@ -64,14 +72,17 @@ update_roamers :: proc(gs: ^Game_State) {
     }
 }
 
-// A swimmer's home: the first water cell on a scattered walk through the grid,
-// so a lone pool is found however little water the level holds.
-find_water :: proc(gs: ^Game_State, hash: u32) -> (tx, ty: int, ok: bool) {
+// A cave creature's home, out of the player's sight: the first water cell for a
+// swimmer, or open floor for a walker, on a scattered walk through the grid, so
+// a lone pool is found however little water the level holds.
+find_cave_home :: proc(gs: ^Game_State, spec: Roamer_Spec, hash: u32) -> (tx, ty: int, ok: bool) {
+    w := &gs.world
     n := GRID_W * GRID_H
     for i in 0 ..< n {
         c := (int(hash % u32(n)) + i*ROAMER_SCATTER) % n
         x, y := c % GRID_W, c / GRID_W
-        if swimmable(&gs.world, x, y) && abs(i32(x) - player_tile(&gs.player).x) >= ROAMER_SPAWN_CLEAR do return x, y, true
+        home := swimmable(w, x, y) if spec.swims else get_tile(w, x, y) == .Void && is_solid(w, x, y + 1)
+        if home && abs(i32(x) - player_tile(&gs.player).x) >= ROAMER_SPAWN_CLEAR do return x, y, true
     }
     return 0, 0, false
 }
@@ -80,15 +91,15 @@ swimmable :: proc(w: ^World_Grid, x, y: int) -> bool {
     return .Swimmable in terrain_table[get_tile(w, x, y)].flags
 }
 
-// One roamer on open ground, or in water for a swimmer, out of the player's
+// One roamer on open ground, or at its home in a cave, out of the player's
 // sight.  A bad roll (too near, standing in water or lava) spends the beat; the
 // next one tries again.
 spawn_roamer :: proc(gs: ^Game_State, kind: Enemy_Kind) -> bool {
     hash := whash(u32(gs.frame)*31 + u32(kind)*613)
     tx, ty: int
     found: bool
-    if roamer_table[kind].swims {
-        tx, ty, found = find_water(gs, hash)
+    if roamer_table[kind].level != LEVEL_SURFACE {
+        tx, ty, found = find_cave_home(gs, roamer_table[kind], hash)
     } else {
         tx, ty, found = find_surface_floor(&gs.world, CAVE_LEFT + int(hash % u32(CAVE_RIGHT - CAVE_LEFT)))
         found &&= get_tile(&gs.world, tx, ty) == .Air
@@ -108,6 +119,16 @@ spawn_roamer :: proc(gs: ^Game_State, kind: Enemy_Kind) -> bool {
     entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
     log_action(gs, "%v#%d wanders in at (%d,%d)", kind, id, tx, ty)
     return true
+}
+
+// Cinders burn out where they lie (tile_on_tick).  Only .Void is ever lit, so
+// .Void is what comes back.
+tick_cinders :: proc(gs: ^Game_State, x, y: int) {
+    sd := &gs.world.sim_data[grid_idx(x, y)]
+    sd.growth_timer += gs.delta_time
+    if sd.growth_timer < CINDERS_LIFE do return
+    sd.growth_timer = 0
+    set_tile(&gs.world, x, y, .Void)
 }
 
 // Swim one way, and `climb` rows' way, staying inside the water.  Says whether
@@ -168,6 +189,11 @@ update_roamer :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     seen := !gs.player.dead && dist <= spec.sight && sight_line_clear(&gs.world,
         {f32(bt.x) + 0.5, f32(bt.y) + 0.5}, {f32(pt.x) + 0.5, f32(pt.y) + 0.5}, skip_ends = true)
     below := 1 if bt.y >= pt.y else -1   // away, up and down
+
+    if spec.burns && get_tile(&gs.world, int(bt.x), int(bt.y)) == .Void && is_solid(&gs.world, int(bt.x), int(bt.y) + 1) {
+        set_tile(&gs.world, int(bt.x), int(bt.y), .Cinders)
+        gs.world.sim_data[grid_idx(int(bt.x), int(bt.y))].growth_timer = 0
+    }
 
     if spec.swims {
         if !swimmable(&gs.world, int(bt.x), int(bt.y)) {

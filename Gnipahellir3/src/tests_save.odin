@@ -169,7 +169,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 	}},
 	{Enemy_Kind, {
 		"Garm", "Undead", "Fire_Sprite", "Builder", "Raider", "Vargr", "Pond_Frog", "Ember_Beetle",
-		"Cave_Eel",
+		"Cave_Eel", "Magma_Crawler",
 	}},
 	{Equip_Slot, {
 		"None", "Weapon", "Head", "Chest", "Hands", "Legs", "Feet", "Charm", "Tool", "Charm_2",
@@ -226,7 +226,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"World_Anchor", "Quick_Clay", "Sand", "Rune_Coffer", "Steam", "Boiler", "Steam_Engine",
 		"Gem_Replicator", "Green_Cave_Mushroom", "Mossy_Stone", "Magic_Kettle", "Mana_Wheel",
 		"Mana_Mist", "Hell_Gate", "Final_Seal", "Rainbow_Laser", "Rune_Stone", "Scoria", "Turret_Pillar",
-		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest",
+		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge", "Nest", "Cinders",
 	}},
 }
 

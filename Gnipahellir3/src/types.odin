@@ -242,6 +242,9 @@ Tile_Type :: enum u8 {
 	// Twigs on a sky island, cradling eggs or a lump of Cloud Ore.  (appended:
 	// terrain ordinals are serialized)
 	Nest,
+	// What a Magma Crawler leaves behind: open ground alight for a few seconds,
+	// then Void again (tick_cinders).  (appended: terrain ordinals are serialized)
+	Cinders,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -617,6 +620,7 @@ Damage_Cause :: enum u8 {
 	Magic_Lava,
 	Void_Sky,
 	Steam,
+	Cinders,
 }
 
 Event :: struct {

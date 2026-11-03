@@ -36,6 +36,7 @@ enemy_drop_table := [Enemy_Kind][MAX_DROP_ROLLS]Drop_Entry{
     .Pond_Frog    = {{.Slime, 1, 1, 1.0}, {}, {}},
     .Ember_Beetle = {{.Coal, 1, 1, 1.0}, {}, {}},
     .Cave_Eel     = {{.Eel_Skin, 1, 1, 1.0}, {}, {}},
+    .Magma_Crawler = {{.Coal, 1, 2, 1.0}, {}, {}},
 }
 
 // xorshift64 step.  Zero-guards so a zeroed test state still rolls.
