@@ -562,7 +562,7 @@ Input_State :: struct {
 
 // ─── Agent drive (agent_api.odin) ─────────────────────────────────────────────
 
-Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe }
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe, Monument, Crew }
 
 // One act: held input for its frames, one-shots on the first.  Tiles are only
 // meaningful under their has_ flag.
@@ -576,11 +576,16 @@ Agent_Command :: struct {
     has_place: bool,
     has_use:   bool,
     has_reclaim: bool,
+    has_zone:  bool,  // a command-wand drag from zone_from to zone_to
+    has_at:    bool,  // the monument anchor a command-wand click marks
     warp:      bool,
     mine:      [2]i32,
     place:     [2]i32,
     use:       [2]i32,
     reclaim:   [2]i32,
+    zone_from: [2]i32,
+    zone_to:   [2]i32,
+    at:        [2]i32,
     verb:      Agent_Verb,
     verb_arg:  i32,
     feed_count: i32,  // 0: the whole stack
