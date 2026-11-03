@@ -26,6 +26,8 @@ MAX_GOLEM_SEARCHES_PER_FRAME :: 2 // the first worker of a frame must be able to
 GOLEM_PLAYER_CLEANUP_PENALTY :: i32(768)
 GOLEM_BLOCK_GRACE_TIME :: f32(3.0)
 GOLEM_QUICK_CLAY_LINGER :: i32(2) // chebyshev tiles a worker may stray before its old foothold dissolves
+GOLEM_TRANSFER_STALL_TIME :: f32(10.0) // seconds a fetch or delivery may go without getting closer before it drops that target
+GOLEM_TRANSFER_RETRY_TIME :: f32(60.0) // seconds before dropped sources and stores are tried again
 
 Golem_Build_Cell :: struct {
 	off:  [2]i32,
@@ -333,6 +335,7 @@ golem_deploy :: proc(gs: ^Game_State, tile: [2]i32) -> bool {
 		g.has_target = false
 		g.path   = {}
 		g.project_cell = -1
+		golem_transfer_forget(gs, golem_index(gs, &g))
 		gs.save_dirty = true
 		audio_play(&gs.audio, .Place)
 		if g.mode == .Gather && !gs.golems.work[gs.level_index].active {
@@ -355,6 +358,7 @@ debug_golem_deploy :: proc(gs:^Game_State, tile:[2]i32) -> bool {
 	for &g in gs.golems.data do if g.status==.Empty {
 		g={status=.Deployed,hp=GOLEM_HP,mode=.Gather,facing=1,level=gs.level_index,
 			pos={f32(x)+(1-GOLEM_W)*.5,f32(y+1)-GOLEM_H},grounded=true,project_cell=-1}
+		golem_transfer_forget(gs, golem_index(gs, &g))
 		gs.save_dirty=true
 		notify(gs,"Debug: Clay Golem deployed - use the Command Wand to give orders")
 		return true
@@ -405,6 +409,7 @@ golem_recall :: proc(gs: ^Game_State, id: int) {
 	g.carry = .None
 	g.recovering = false
 	golem_reset_job(g)
+	golem_transfer_forget(gs, id)
 	gs.golem_calls[id] = .None
 	gs.save_dirty = true
 	if broken do notify(gs, "The cracked golem returns to the wand - repair it at a Clay Hearth")
@@ -816,11 +821,18 @@ golem_find_resource :: proc(gs: ^Game_State, id: int, skipped: [][2]i32) -> ([2]
 	return best, ok
 }
 
+// A Rune_Coffer is the player's: the grave's holds the tithe.  The crew
+// never stores into one (golem_deposit_possible), and never takes from one.
+golem_crew_barrel :: proc(gs: ^Game_State, tile: [2]i32) -> ^Barrel_State {
+	if get_tile(&gs.world, int(tile.x), int(tile.y)) == .Rune_Coffer do return nil
+	return barrel_at(gs, gs.level_index, tile)
+}
+
 golem_storage_has_item :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> bool {
 	if d := golem_depot_at(gs, gs.level_index, tile); d != nil {
 		for s in d.slots do if s.item == item && s.count > 0 do return true
 	}
-	if b := barrel_at(gs, gs.level_index, tile); b != nil {
+	if b := golem_crew_barrel(gs, tile); b != nil {
 		for s in b.slots do if s.item == item && s.count > 0 do return true
 	}
 	if s := silo_at(gs, gs.level_index, tile); s != nil {
@@ -830,11 +842,11 @@ golem_storage_has_item :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> boo
 	return gs.world.items[idx] == item && gs.world.item_counts[idx] > 0
 }
 
-golem_find_item_source :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i32, bool) {
+golem_find_item_source :: proc(gs: ^Game_State, from: [2]i32, item: Item, skipped: [][2]i32) -> ([2]i32, bool) {
 	best, dist, ok := [2]i32{}, max(i32), false
 	for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
 		T := [2]i32{i32(x), i32(y)}
-		if !golem_storage_has_item(gs, T, item) do continue
+		if !golem_storage_has_item(gs, T, item) || golem_resource_skipped(T, skipped) do continue
 		d := chebyshev(from, T)
 		if d < dist {best, dist, ok = T, d, true}
 	}
@@ -849,7 +861,7 @@ golem_take_item_at :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> bool {
 		return true
 	}
 	if d := golem_depot_at(gs, gs.level_index, tile); d != nil do return golem_depot_take(d, item)
-	if b := barrel_at(gs, gs.level_index, tile); b != nil {
+	if b := golem_crew_barrel(gs, tile); b != nil {
 		for &s in b.slots do if s.item == item && s.count > 0 {
 			s.count -= 1; if s.count == 0 do s.item = .None
 			return true
@@ -900,7 +912,7 @@ golem_ground_pile_room :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> boo
 
 // A Barrel/Depot is an efficiency upgrade, not a prerequisite.  Before one
 // exists, workers make visible piles just outside the marked work rectangle.
-golem_find_stockpile :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i32, bool) {
+golem_find_stockpile :: proc(gs: ^Game_State, from: [2]i32, item: Item, skipped: [][2]i32) -> ([2]i32, bool) {
 	w := gs.golems.work[gs.level_index]
 	if !w.active do return {}, false
 	best, best_score, ok := [2]i32{}, max(i32), false
@@ -910,7 +922,7 @@ golem_find_stockpile :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i
 	max_y := min(i32(GRID_H-2), w.max.y+GOLEM_STOCKPILE_MARGIN)
 	for y in int(min_y) ..= int(max_y) do for x in int(min_x) ..= int(max_x) {
 		T := [2]i32{i32(x), i32(y)}
-		if golem_in_work_zone(gs, T) || !golem_ground_pile_room(gs, T, item) do continue
+		if golem_in_work_zone(gs, T) || !golem_ground_pile_room(gs, T, item) || golem_resource_skipped(T, skipped) do continue
 		idx := grid_idx(x, y)
 		score := chebyshev(from, T)
 		if gs.world.items[idx] == item && gs.world.item_counts[idx] > 0 do score -= GOLEM_STOCKPILE_MARGIN
@@ -919,11 +931,11 @@ golem_find_stockpile :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i
 	return best, ok
 }
 
-golem_find_deposit :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i32, bool) {
+golem_find_deposit :: proc(gs: ^Game_State, from: [2]i32, item: Item, skipped: [][2]i32) -> ([2]i32, bool) {
 	best := [2]i32{}; best_score := max(i32); ok := false
 	for y in 0 ..< GRID_H do for x in 0 ..< GRID_W {
 		T := [2]i32{i32(x), i32(y)}
-		if !golem_deposit_possible(gs, T, item) do continue
+		if !golem_deposit_possible(gs, T, item) || golem_resource_skipped(T, skipped) do continue
 		t := get_tile(&gs.world, x, y)
 		class := i32(4)
 		if t == .Smelter do class = 0
@@ -934,7 +946,7 @@ golem_find_deposit :: proc(gs: ^Game_State, from: [2]i32, item: Item) -> ([2]i32
 		if score < best_score {best, best_score, ok = T, score, true}
 	}
 	if ok do return best, true
-	return golem_find_stockpile(gs, from, item)
+	return golem_find_stockpile(gs, from, item, skipped)
 }
 
 golem_deposit_at :: proc(gs: ^Game_State, tile: [2]i32, item: Item) -> bool {
@@ -1000,7 +1012,73 @@ golem_nav_spent :: proc(gs: ^Game_State) -> bool {
 	return gs.golem_searches >= MAX_GOLEM_SEARCHES_PER_FRAME
 }
 
+// The roster slot of a worker, for the per-golem tables beside the roster.
+golem_index :: proc(gs: ^Game_State, g: ^Golem) -> int {
+	return int(uintptr(g) - uintptr(&gs.golems.data[0])) / size_of(Golem)
+}
+
+golem_transfer_skips :: proc(gs: ^Game_State, id: int) -> [][2]i32 {
+	w := &gs.golem_transfer[id]
+	return w.dropped[:min(w.n, len(w.dropped))]
+}
+
+// A dropped list belongs to one worker on one level: a recall, a deploy into
+// the slot, or the player changing level starts it over.
+golem_transfer_forget :: proc(gs: ^Game_State, id: int) {
+	gs.golem_transfer[id] = {}
+}
+
+golem_transfer_forget_all :: proc(gs: ^Game_State) {
+	gs.golem_transfer = {}
+}
+
+// A build source or store this worker cannot get to: leave it for the next.
+golem_transfer_drop :: proc(gs: ^Game_State, id: int, tile: [2]i32) {
+	w := &gs.golem_transfer[id]
+	if w.n == 0 do w.age = 0
+	w.dropped[w.n % len(w.dropped)] = tile
+	w.n += 1
+}
+
+// A fetch or delivery that goes GOLEM_TRANSFER_STALL_TIME without getting
+// closer to its target drops it (run 8: a worker dug at a far coffer for 35 s,
+// another walked between a ledge chest it never reached and its stockpile).
+// The dropped list clears after GOLEM_TRANSFER_RETRY_TIME, so a store the
+// player opens a way to is used again.
+golem_watch_transfer :: proc(gs: ^Game_State, g: ^Golem, id: int) {
+	w := &gs.golem_transfer[id]
+	if w.n > 0 {
+		w.age += gs.delta_time
+		if w.age >= GOLEM_TRANSFER_RETRY_TIME do w.n = 0
+	}
+	// Watched by job and target, not has_target: a route that keeps failing
+	// over (a recovery climb that ends, a replan that loses the target)
+	// blinks has_target while the worker stays on the same errand.
+	if g.job != .Fetch_Build && g.job != .Deliver {
+		w.watching = false
+		return
+	}
+	T := golem_tile(g)
+	d := abs(g.target.x-T.x) + abs(g.target.y-T.y)
+	if !w.watching || w.target != g.target || d < w.best || chebyshev(T, g.target) <= GOLEM_TRANSFER_REACH {
+		w.watching, w.target, w.best, w.stall = true, g.target, d, 0
+		return
+	}
+	w.stall += gs.delta_time
+	if w.stall < GOLEM_TRANSFER_STALL_TIME do return
+	golem_transfer_drop(gs, id, g.target)
+	w.watching = false
+	if g.recovering do golem_end_recovery(g)
+	golem_reset_job(g)
+}
+
 golem_set_target :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, vertical_recovery := true) -> bool {
+	ok := golem_set_target_route(gs, g, tile, vertical_recovery)
+	if !ok && (g.job == .Fetch_Build || g.job == .Deliver) do golem_transfer_drop(gs, golem_index(gs, g), tile)
+	return ok
+}
+
+golem_set_target_route :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, vertical_recovery: bool) -> bool {
 	g.target = tile
 	g.has_target = true
 	g.path = {}
@@ -1074,12 +1152,14 @@ golem_start_delivery :: proc(gs: ^Game_State, g: ^Golem) -> bool {
 	if g.carry == .None do g.carry = golem_pack_pop(g)
 	if g.carry == .None do return false
 	g.job = .Deliver
-	if dest, ok := golem_find_deposit(gs, golem_tile(g), g.carry); ok && golem_set_target(gs, g, dest, false) do return true
+	id := golem_index(gs, g)
+	if dest, ok := golem_find_deposit(gs, golem_tile(g), g.carry, golem_transfer_skips(gs, id)); ok && golem_set_target(gs, g, dest, false) do return true
 	if golem_nav_spent(gs) do return false
 	// Preferred storage may be across an unbridged shaft or sealed tunnel.  A
 	// loaded worker cannot mine another block, so keep the material productive
 	// by returning it to the nearest reachable edge stockpile instead.
-	if pile, ok := golem_find_stockpile(gs, golem_tile(g), g.carry); ok && golem_set_target(gs, g, pile) do return true
+	// The search above may have just dropped dest: read the list again.
+	if pile, ok := golem_find_stockpile(gs, golem_tile(g), g.carry, golem_transfer_skips(gs, id)); ok && golem_set_target(gs, g, pile) do return true
 	// If an old route already stranded a loaded worker behind rock, set the
 	// block down as a visible field cache. Empty hands can excavate a way out.
 	golem_cache_cargo(gs, g)
@@ -1441,7 +1521,7 @@ golem_project_reserve :: proc(gs: ^Game_State, id: int) -> bool {
 			known_dry := false
 			for i in 0 ..< n_failed do if failed[i] == item {known_dry = true; break}
 			if known_dry do continue
-			if _, ok := golem_find_item_source(gs, golem_tile(g), item); !ok {
+			if _, ok := golem_find_item_source(gs, golem_tile(g), item, golem_transfer_skips(gs, id)); !ok {
 				if n_failed < len(failed) {failed[n_failed] = item; n_failed += 1}
 				continue
 			}
@@ -1529,7 +1609,7 @@ golem_assign_build :: proc(gs: ^Game_State, id: int) {
 		_ = golem_set_target(gs,g,dest)
 		return
 	}
-	if src, ok := golem_find_item_source(gs, golem_tile(g), c.item); ok {
+	if src, ok := golem_find_item_source(gs, golem_tile(g), c.item, golem_transfer_skips(gs, id)); ok {
 		g.job = .Fetch_Build
 		_ = golem_set_target(gs, g, src)
 	} else {
@@ -1607,6 +1687,7 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 	if g.mine_timer > 0 do g.mine_timer = max(0, g.mine_timer-gs.delta_time)
 	golem_update_hazard(gs, g, id)
 	if g.status != .Deployed do return
+	golem_watch_transfer(gs, g, id)
 	if g.recovering {
 		golem_update_recovery(gs,g,id)
 		move_body(&gs.world, &g.pos, &g.vel, {GOLEM_W, GOLEM_H}, gs.delta_time,

@@ -234,6 +234,19 @@ Golem_Skips :: struct {
     n:     int,
 }
 
+// A worker's watch on its build fetch or delivery.  A target it finds no
+// route to, or walks at without getting closer, goes on its dropped list, so
+// the next search picks the next source or store instead of the same one.
+Golem_Transfer :: struct {
+    watching: bool,
+    target:   [2]i32,     // the transfer target the stall timer watches
+    best:     i32,        // closest Manhattan distance to it so far
+    stall:    f32,        // seconds without getting closer than best
+    dropped:  [8][2]i32,  // targets given up on, oldest overwritten first
+    n:        int,        // drops so far; the list holds min(n, len(dropped))
+    age:      f32,        // seconds since the first drop; the list clears at GOLEM_TRANSFER_RETRY_TIME
+}
+
 GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
 GOLEM_QUICK_CLAY_CAP  :: MAX_GOLEMS * 4
 
@@ -860,6 +873,7 @@ Game_State :: struct {
     golem_searches: int,     // the same for golems; reset in update_golems,
                              // capped by MAX_GOLEM_SEARCHES_PER_FRAME
     golem_skips: [MAX_GOLEMS]Golem_Skips, // transient: resource choices each golem found no route to
+    golem_transfer: [MAX_GOLEMS]Golem_Transfer, // transient: build sources and stores each golem gave up on
     nav_work:    int,        // astar_dig work this frame, golems and enemies:
                              // nodes expanded + heap sift steps; reset in update_golems
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)

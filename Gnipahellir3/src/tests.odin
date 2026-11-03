@@ -8638,6 +8638,314 @@ a_missing_material_does_not_stall_the_rest_of_the_build :: proc(t: ^testing.T) {
 	testing.expect_value(t,get_tile(&gs.world,int(anchor.x),int(anchor.y)),Tile_Type.Clay_Hearth)
 }
 
+// The Clay Hearth site the card 145 tests share: a cleared strip on the
+// surface, the project started, Stone, Plank and Clay stocked in a barrel at
+// x=116 and one Build golem beside it.  Everything but the Iron Bar capstone.
+@(private = "file")
+hearth_site_without_iron :: proc(gs: ^Game_State) -> (p: ^Golem_Project, store: ^Barrel_State) {
+	gs.delta_time = .05
+	test_hold(gs, .Command_Wand)
+	gs.player.pos = {119, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-8 ..< SURFACE_Y do for x in 70 ..= 140 do set_tile(&gs.world, x, y, .Air)
+	for x in 70 ..= 140 do set_tile(&gs.world, x, SURFACE_Y, .Grass)
+	anchor := [2]i32{120, i32(SURFACE_Y - 1)}
+	golem_project_start(gs, .Clay_Hearth, anchor)
+	at := [2]i32{116, i32(SURFACE_Y - 1)}
+	set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+	barrel_on_placed(gs, at)
+	store = barrel_at(gs, gs.level_index, at)
+	barrel_deposit(store, .Stone_Block, 4)
+	barrel_deposit(store, .Plank, 4)
+	barrel_deposit(store, .Clay, 3)
+	gs.golems.data[0] = {status = .Deployed, level = gs.level_index, pos = {117, f32(SURFACE_Y) - GOLEM_H},
+		hp = GOLEM_HP, mode = .Build, facing = 1, project_cell = -1}
+	return &gs.golems.projects[gs.level_index], store
+}
+
+@(private = "file")
+crew_need_notices :: proc(gs: ^Game_State) -> (n: int) {
+	for i in 0 ..< gs.notify.count {
+		it := &gs.notify.items[i]
+		if strings.contains(string(it.text[:it.len]), "the crew needs") do n += 1
+	}
+	return
+}
+
+// Run until the hearth's eleven stocked cells are up, then a settled wait.
+@(private = "file")
+hearth_build_stocked :: proc(gs: ^Game_State, p: ^Golem_Project, settle: int) {
+	info := &golem_plan_table[p.plan]
+	for _ in 0 ..< 8000 {
+		update_golems(gs)
+		update_gravity(gs)
+		n := 0
+		for ci in 0 ..< len(info.cells) do if golem_project_cell_done(gs, p, ci) do n += 1
+		if n == len(info.cells) - 1 do break
+	}
+	for _ in 0 ..< settle {
+		update_golems(gs)
+		update_gravity(gs)
+	}
+}
+
+@(test)
+a_grave_coffer_is_not_crew_storage :: proc(t: ^testing.T) {
+	// Run 8 life 7: the only Iron Bar sat in the grave's Rune_Coffer, which
+	// the storage lookup read as a barrel.  The worker dug at it for 35 s and
+	// the crew never said it needed one.  The coffer is the player's tithe.
+	gs := test_state(); defer free(gs)
+	p, store := hearth_site_without_iron(gs)
+	coffer := [2]i32{110, i32(SURFACE_Y - 1)}
+	set_tile(&gs.world, int(coffer.x), int(coffer.y), .Rune_Coffer)
+	barrel_on_placed(gs, coffer)
+	tithe := barrel_at(gs, gs.level_index, coffer)
+	barrel_deposit(tithe, .Iron_Bar, 1)
+	testing.expect(t, !golem_storage_has_item(gs, coffer, .Iron_Bar), "a coffer is not a crew source")
+	testing.expect(t, !golem_take_item_at(gs, coffer, .Iron_Bar), "nor can the crew take from one")
+
+	hearth_build_stocked(gs, p, 200)
+	testing.expect(t, !p.complete, "the capstone waits for an Iron Bar the crew may take")
+	testing.expect_value(t, barrel_total(tithe), 1)
+	testing.expect_value(t, gs.golem_need_n, 1)
+	testing.expect_value(t, gs.golem_need[0], Item.Iron_Bar)
+	testing.expect_value(t, crew_need_notices(gs), 1)
+
+	// A bar in the crew's own barrel finishes it, and the tithe stays put.
+	barrel_deposit(store, .Iron_Bar, 1)
+	for _ in 0 ..< 4000 {
+		update_golems(gs)
+		update_gravity(gs)
+		if p.complete do break
+	}
+	testing.expect(t, p.complete, "a bar in the barrel lets the crew finish")
+	testing.expect_value(t, barrel_total(tithe), 1)
+}
+
+// A barrel on top of a six-high natural stone ledge west of the site: the
+// golem walks up to its foot and finds no route the rest of the way.
+@(private = "file")
+ledge_barrel :: proc(gs: ^Game_State, item: Item) -> (^Barrel_State, [2]i32) {
+	for y in SURFACE_Y-6 ..< SURFACE_Y do for x in 70 ..= 86 do set_tile(&gs.world, x, y, .Stone)
+	at := [2]i32{80, i32(SURFACE_Y - 7)}
+	set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+	barrel_on_placed(gs, at)
+	b := barrel_at(gs, gs.level_index, at)
+	barrel_deposit(b, item, 1)
+	return b, at
+}
+
+@(test)
+a_build_fetch_with_no_route_takes_the_next_source :: proc(t: ^testing.T) {
+	// Run 8 life 7: a fetch at a source it could not reach never re-picked
+	// and never filed the starve notice, since a source "existed".
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	far, far_at := ledge_barrel(gs, .Iron_Bar)
+	hearth_build_stocked(gs, p, 400)
+	testing.expect(t, !p.complete, "the only bar is out of reach")
+	testing.expect_value(t, barrel_total(far), 1)
+	testing.expect(t, golem_resource_skipped(far_at, golem_transfer_skips(gs, 0)), "the worker gave that source up")
+	testing.expect_value(t, gs.golem_need_n, 1)
+	testing.expect_value(t, gs.golem_need[0], Item.Iron_Bar)
+	testing.expect_value(t, crew_need_notices(gs), 1)
+
+	// A second bar, farther off but on open ground: the crew takes that one.
+	at := [2]i32{138, i32(SURFACE_Y - 1)}
+	set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+	barrel_on_placed(gs, at)
+	near := barrel_at(gs, gs.level_index, at)
+	barrel_deposit(near, .Iron_Bar, 1)
+	for _ in 0 ..< 4000 {
+		update_golems(gs)
+		update_gravity(gs)
+		if p.complete do break
+	}
+	testing.expect(t, p.complete, "the reachable bar finishes the hearth")
+	testing.expect_value(t, barrel_total(near), 0)
+	testing.expect_value(t, barrel_total(far), 1)
+}
+
+@(test)
+a_build_fetch_that_gets_no_closer_gives_up :: proc(t: ^testing.T) {
+	// The stall half, in the world: the bar sits on a pillar above a ceiling
+	// the crew cannot dig.  The search hands back a climb, the climb ends at
+	// the ceiling, and the worker picks the same source again, forever, with
+	// a source that "exists" and no notice.  No headway for
+	// GOLEM_TRANSFER_STALL_TIME drops it and the crew says what it needs.
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	for x in 100 ..= 140 do set_tile(&gs.world, x, SURFACE_Y - 4, .Rune_Stone)
+	for y in SURFACE_Y-7 ..= SURFACE_Y-5 do set_tile(&gs.world, 117, y, .Rune_Stone)
+	at := [2]i32{117, i32(SURFACE_Y - 8)}
+	set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+	barrel_on_placed(gs, at)
+	high := barrel_at(gs, gs.level_index, at)
+	barrel_deposit(high, .Iron_Bar, 1)
+	stall_frames := int(GOLEM_TRANSFER_STALL_TIME / gs.delta_time)
+	hearth_build_stocked(gs, p, 3 * stall_frames)
+	testing.expect(t, !p.complete, "the bar is out of reach")
+	testing.expect_value(t, barrel_total(high), 1)
+	testing.expect(t, golem_resource_skipped(at, golem_transfer_skips(gs, 0)), "the stalled source is dropped")
+	testing.expect_value(t, gs.golem_need_n, 1)
+	testing.expect_value(t, crew_need_notices(gs), 1)
+}
+
+@(test)
+a_dropped_source_is_forgotten_on_level_change_recall_and_deploy :: proc(t: ^testing.T) {
+	// A source dropped on one level, or by the last golem in a roster slot,
+	// must not be skipped on another level or by the slot's next golem.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	gs.player.pos = {120, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-4 ..< SURFACE_Y do for x in 115 ..= 125 do set_tile(&gs.world, x, y, .Air)
+	for x in 115 ..= 125 do set_tile(&gs.world, x, SURFACE_Y, .Grass)
+	src := [2]i32{140, 94}
+
+	// Level change: every worker's list starts over.
+	golem_transfer_drop(gs, 0, src)
+	golem_transfer_drop(gs, 5, src)
+	gs.progression.sky_altar_pos = {40, 52}
+	sky_portal := sky_gate_portal(gs)
+	level_transition(gs, &sky_portal)
+	testing.expect_value(t, gs.level_index, LEVEL_SKY)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 5)), 0)
+	home := Portal{dest_level = LEVEL_SURFACE, dest_pos = {120, f32(SURFACE_Y) - PLAYER_H}}
+	level_transition(gs, &home)
+	gs.player.pos = {120, f32(SURFACE_Y) - PLAYER_H}
+
+	// Recall: the golem back on the wand forgets.
+	test_hold(gs, .Command_Wand)
+	gs.golems.data[2] = {status = .Deployed, level = gs.level_index, pos = {121, f32(SURFACE_Y) - GOLEM_H},
+		hp = GOLEM_HP, mode = .Gather, project_cell = -1}
+	golem_transfer_drop(gs, 2, src)
+	golem_recall(gs, 2)
+	testing.expect_value(t, gs.golems.data[2].status, Golem_Status.Carried)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 2)), 0)
+
+	// Deploy into the slot: the new worker starts clean, even if the list
+	// was written while the slot sat on the wand.
+	golem_transfer_drop(gs, 2, src)
+	testing.expect(t, golem_deploy(gs, {122, i32(SURFACE_Y - 1)}), "the carried golem deploys")
+	testing.expect_value(t, gs.golems.data[2].status, Golem_Status.Deployed)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 2)), 0)
+
+	// The debug deploy reuses an empty slot the same way.
+	for i in 0 ..< MAX_GOLEMS do if gs.golems.data[i].status == .Empty do gs.golems.data[i].status = .Carried
+	gs.golems.data[7] = {}
+	golem_transfer_drop(gs, 7, src)
+	testing.expect(t, debug_golem_deploy(gs, {118, i32(SURFACE_Y - 1)}), "the debug golem deploys")
+	testing.expect_value(t, gs.golems.data[7].status, Golem_Status.Deployed)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 7)), 0)
+}
+
+@(test)
+a_delivery_with_no_route_to_the_chest_uses_the_stockpile :: proc(t: ^testing.T) {
+	// Run 8: deliveries walked ~40 tiles to an opened scroll chest and back
+	// without depositing.  A chest the worker cannot reach is dropped, and the
+	// block goes to the edge stockpile with no second trip to the chest.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = 1.0 / 60.0
+	test_hold(gs, .Command_Wand)
+	gs.player.pos = {150, f32(SURFACE_Y) - PLAYER_H}
+	for y in SURFACE_Y-8 ..< SURFACE_Y do for x in 70 ..= 140 do set_tile(&gs.world, x, y, .Air)
+	for x in 70 ..= 140 do set_tile(&gs.world, x, SURFACE_Y, .Grass)
+	for y in SURFACE_Y-6 ..< SURFACE_Y do for x in 70 ..= 86 do set_tile(&gs.world, x, y, .Stone)
+	chest := [2]i32{80, i32(SURFACE_Y - 7)}
+	set_tile(&gs.world, int(chest.x), int(chest.y), .Sky_Rune_Scroll_Chest)
+	b := rune_scroll_chest_record(gs, chest, .Sky_Rune_Scroll_Chest)
+	gs.golems.work[gs.level_index] = {active = true, min = {118, i32(SURFACE_Y - 4)}, max = {124, i32(SURFACE_Y - 1)}}
+	gs.golems.data[0] = {status = .Deployed, level = gs.level_index, pos = {121, f32(SURFACE_Y) - GOLEM_H},
+		hp = GOLEM_HP, mode = .Gather, facing = 1, project_cell = -1, carry = .Stone_Block}
+	g := &gs.golems.data[0]
+	stored_at := -1
+	chest_trips := 0
+	was_chest := false
+	for f in 0 ..< 2400 {   // 40 s, inside GOLEM_TRANSFER_RETRY_TIME
+		update_golems(gs)
+		update_gravity(gs)
+		on_chest := g.target == chest   // a replan blinks has_target; the target is the trip
+		if on_chest && !was_chest do chest_trips += 1
+		was_chest = on_chest
+		if stored_at < 0 && g.carry == .None do stored_at = f
+	}
+	testing.expect(t, stored_at >= 0, "the block is set down")
+	testing.expect_value(t, chest_trips, 1)
+	testing.expect_value(t, barrel_total(b), 1)   // only the scroll
+	// The block, and the ledge stone dug on the way, all land on the edge
+	// stockpile beside the work zone.
+	testing.expect_value(t, golem_pack_count(g), 0)
+	pile := grid_idx(114, SURFACE_Y - 1)
+	testing.expect_value(t, gs.world.items[pile], Item.Stone_Block)
+	testing.expect(t, gs.world.item_counts[pile] >= 1, "the stockpile holds the block")
+}
+
+@(test)
+a_transfer_that_gets_no_closer_drops_its_target :: proc(t: ^testing.T) {
+	// The stall watch on its own: what resets it, what trips it, what it keeps.
+	gs := test_state(); defer free(gs)
+	gs.delta_time = .05
+	steps := int(GOLEM_TRANSFER_STALL_TIME / gs.delta_time)
+	g := &gs.golems.data[0]
+	far := [2]i32{140, 94}
+	for job in ([2]Golem_Job{.Fetch_Build, .Deliver}) {
+		gs.golem_transfer[0] = {}
+		g^ = {status = .Deployed, level = gs.level_index, pos = {100, 60}, hp = GOLEM_HP,
+			mode = .Build, project_cell = -1, job = job, target = far, has_target = true}
+		for _ in 0 ..< steps - 2 do golem_watch_transfer(gs, g, 0)
+		testing.expect(t, g.has_target, "not yet")
+		g.pos.x += 1   // a step closer starts the clock again
+		for _ in 0 ..< steps - 2 do golem_watch_transfer(gs, g, 0)
+		testing.expect(t, g.has_target, "progress resets the stall")
+		g.target = far + {5, 5}   // a new, farther target starts its own clock
+		for _ in 0 ..< steps - 2 do golem_watch_transfer(gs, g, 0)
+		testing.expect(t, g.has_target, "a new target resets the stall")
+		g.recovering = true
+		for _ in 0 ..< 4 do golem_watch_transfer(gs, g, 0)
+		testing.expect(t, !g.has_target, "no progress for the stall time drops the target")
+		testing.expect(t, !g.recovering, "and ends a climb toward it")
+		testing.expect_value(t, g.job, Golem_Job.Idle)
+		testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 1)
+		testing.expect(t, golem_resource_skipped(far + {5, 5}, golem_transfer_skips(gs, 0)), "the target is on the dropped list")
+	}
+
+	// A new errand to an old target starts a fresh clock.
+	gs.golem_transfer[0] = {}
+	g.job, g.target, g.has_target = .Fetch_Build, far, true
+	for _ in 0 ..< steps - 2 do golem_watch_transfer(gs, g, 0)
+	g.job = .Idle
+	golem_watch_transfer(gs, g, 0)
+	g.job = .Fetch_Build
+	for _ in 0 ..< steps - 2 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, g.has_target, "the old errand's stall is not carried over")
+
+	// Only a fetch or a delivery is watched.
+	gs.golem_transfer[0] = {}
+	g.job, g.target, g.has_target = .Mine, far, true
+	for _ in 0 ..< steps * 2 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, g.has_target, "a mine is not a transfer")
+
+	// Standing in reach is not a stall: a worker waiting at the door keeps it.
+	g.job, g.target, g.has_target = .Deliver, golem_tile(g) + {GOLEM_TRANSFER_REACH, 0}, true   // the arrival edge
+	for _ in 0 ..< steps * 2 do golem_watch_transfer(gs, g, 0)
+	testing.expect(t, g.has_target, "in reach never stalls")
+
+	// The list keeps the newest drops when it overflows.
+	g.job, g.has_target = .Idle, false
+	for i in 0 ..< 10 do golem_transfer_drop(gs, 0, {i32(i), 0})
+	skips := golem_transfer_skips(gs, 0)
+	testing.expect_value(t, len(skips), 8)
+	testing.expect(t, golem_resource_skipped({9, 0}, skips), "the newest drop is kept")
+	testing.expect(t, !golem_resource_skipped({0, 0}, skips), "the oldest is overwritten")
+
+	// It clears after the retry time, and a fresh drop starts a fresh clock.
+	for _ in 0 ..< int(GOLEM_TRANSFER_RETRY_TIME / gs.delta_time) + 1 do golem_watch_transfer(gs, g, 0)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)
+	golem_transfer_drop(gs, 0, far)
+	golem_watch_transfer(gs, g, 0)
+	testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 1)
+}
+
 @(test)
 broken_golem_is_recalled_and_repaired :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
