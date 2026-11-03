@@ -530,6 +530,7 @@ enemy_kind_names := [Enemy_Kind]string{
     .Pond_Frog    = "a pond frog",
     .Ember_Beetle = "an ember beetle",
     .Rain_Wisp    = "a rain wisp",
+    .Rock_Harpy   = "a rock harpy",
 }
 
 // Who or what dealt a Damage_Dealt, in words.  A projectile can outlive its

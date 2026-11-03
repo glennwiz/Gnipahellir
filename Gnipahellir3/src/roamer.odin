@@ -19,6 +19,7 @@ ROAMER_MAX_DROP    :: 3         // a wanderer walks off nothing taller: a surfac
                                 // creature stays out of the shafts
 ROAMER_AIR_TOP     :: 10        // rows a flyer spawns and drifts in, on the sky
 ROAMER_AIR_BOTTOM  :: 76        // level: above the void the player falls out of
+ROAMER_AIR_ROAM    :: 6         // tiles a drifting flyer's whim reaches sideways
 
 POND_FROG_HP    :: 2
 POND_FROG_W     :: f32(0.7)
@@ -38,10 +39,21 @@ RAIN_WISP_HOVER      :: f32(5)    // tiles it holds over the player's head
 RAIN_WISP_REACH      :: f32(1.5)  // sideways tiles off the head it still drips
 RAIN_WISP_DRIP_TIME  :: f32(1.5)  // seconds between drips
 RAIN_WISP_DRIP_SPEED :: f32(9)    // tiles a second, straight down
-RAIN_WISP_ROAM       :: 6         // tiles a drifting whim reaches sideways
 RAIN_WISP_FLEE       :: f32(8)    // tiles a hurt wisp aims away
 RAIN_SOAK_TIME       :: f32(3)    // seconds one drip drags the player
 RAIN_SOAK_DRAG       :: f32(0.6)  // stride while soaked
+
+ROCK_HARPY_HP         :: 6
+ROCK_HARPY_W          :: f32(0.9)
+ROCK_HARPY_H          :: f32(0.9)
+ROCK_HARPY_SPEED      :: f32(4)
+ROCK_HARPY_PERCH      :: f32(9)    // tiles it climbs to over the player's head
+ROCK_HARPY_MIN_DROP   :: f32(6)    // the least height a dive starts from
+ROCK_HARPY_LINEUP     :: f32(6)    // sideways tiles off the head a dive starts from
+ROCK_HARPY_DIVE_SPEED :: f32(14)
+ROCK_HARPY_DIVE_LIMIT :: f32(2)    // seconds before a dive that got nowhere gives up
+ROCK_HARPY_DIVE_TIME  :: f32(4)    // seconds between dives
+ROCK_HARPY_STUN       :: f32(2)    // seconds dazed after diving into the ground
 
 Roamer_Spec :: struct {
     level:    int,   // a walker's floor comes from find_surface_floor, surface rows only
@@ -56,6 +68,7 @@ roamer_table := #partial [Enemy_Kind]Roamer_Spec{
     .Pond_Frog    = {level = LEVEL_SURFACE, cap = 4, friendly = true, sight = 7},
     .Ember_Beetle = {level = LEVEL_SURFACE, cap = 3, sight = 6, damage = 1},
     .Rain_Wisp    = {level = LEVEL_SKY, cap = 3, sight = 10},
+    .Rock_Harpy   = {level = LEVEL_SKY, cap = 2, sight = 14, damage = 2},
 }
 
 // Step 5b1b.
@@ -185,13 +198,96 @@ update_rain_wisp :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         return
     }
 
-    // Drift: target_tile is the whim's spot in the air.
+    roamer_drift(e, id, gs, dt)
+}
+
+// Climbs over the player it sees, then falls on the spot they stood on: a body
+// that gets hit bites them, a dive that misses climbs back, and one that meets
+// the ground is dazed and open.  has_target is "diving", target_tile the aim,
+// stuck_timer the daze, cooldown the dive's own clock.
+update_rock_harpy :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
+    b := &e.builder
+    b.attack_timer = max(b.attack_timer - dt, 0)
+    if b.stuck_timer > 0 {
+        b.stuck_timer -= dt
+        e.vel = {}
+        return
+    }
+    if b.has_target {
+        if !gs.player.dead {
+            harpy_dive(e, id, gs, dt)
+            return
+        }
+        b.has_target = false
+        b.cooldown = 0
+    }
+    _, _, seen := roamer_sense(e, gs, roamer_table[e.kind].sight)
+    if !seen {
+        roamer_drift(e, id, gs, dt)
+        return
+    }
+    head := gs.player.pos + {PLAYER_W*0.5, 0}
+    roamer_fly(e, gs, head - {0, ROCK_HARPY_PERCH})
+    if b.attack_timer <= 0 && e.pos.y <= head.y - ROCK_HARPY_MIN_DROP &&
+       abs(e.pos.x + ROCK_HARPY_W*0.5 - head.x) <= ROCK_HARPY_LINEUP {
+        b.has_target  = true
+        b.cooldown    = ROCK_HARPY_DIVE_LIMIT
+        b.target_tile = player_tile(&gs.player)
+        log_action(gs, "%v#%d dives at (%d,%d)", e.kind, id, b.target_tile.x, b.target_tile.y)
+    }
+}
+
+// One frame of a dive: the bite, the ground and the aim, in that order.
+harpy_dive :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
+    b := &e.builder
+    p := &gs.player
+    end_dive := proc(e: ^Enemy) {
+        e.vel = {}
+        e.builder.has_target   = false
+        e.builder.attack_timer = ROCK_HARPY_DIVE_TIME
+        e.builder.cooldown     = 0
+    }
+    b.cooldown -= dt
+    if e.pos.x < p.pos.x + PLAYER_W && e.pos.x + ROCK_HARPY_W > p.pos.x &&
+       e.pos.y < p.pos.y + PLAYER_H && e.pos.y + ROCK_HARPY_H > p.pos.y {
+        eq_push(&gs.events, Event{
+            type    = .Damage_Dealt,
+            source  = enemy_entity_id(id),
+            target  = PLAYER_ID,
+            payload = {int_val = i32(roamer_table[e.kind].damage)},
+        })
+        log_action(gs, "%v#%d strikes the player", e.kind, id)
+        end_dive(e)
+        return
+    }
+    center := e.pos + [2]f32{ROCK_HARPY_W, ROCK_HARPY_H}*0.5
+    d := [2]f32{f32(b.target_tile.x) + 0.5, f32(b.target_tile.y) + 0.5} - center
+    l := math.sqrt(d.x*d.x + d.y*d.y)
+    if l < 0.5 || b.cooldown <= 0 {
+        end_dive(e)
+        return
+    }
+    dir  := d / l
+    next := center + dir*(ROCK_HARPY_H*0.5 + 0.3)
+    if is_solid(&gs.world, int(next.x), int(next.y)) {
+        end_dive(e)
+        b.stuck_timer = ROCK_HARPY_STUN
+        log_action(gs, "%v#%d hits the ground", e.kind, id)
+        return
+    }
+    e.vel    = dir * ROCK_HARPY_DIVE_SPEED
+    e.facing = 1 if dir.x >= 0 else -1
+}
+
+// Wander the air: target_tile is the whim's spot.
+roamer_drift :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
+    b := &e.builder
     b.cooldown -= dt
     if b.cooldown <= 0 {
         b.cooldown = ROAMER_WHIM_TIME
         whim := whash(u32(gs.frame)*17 + u32(id)*7919)
-        reach := u32(RAIN_WISP_ROAM*2 + 1)
-        b.target_tile = builder_tile(e) + {i32(whim % reach) - RAIN_WISP_ROAM, i32((whim >> 8) % 5) - 2}
+        reach := u32(ROAMER_AIR_ROAM*2 + 1)
+        b.target_tile = builder_tile(e) + {i32(whim % reach) - ROAMER_AIR_ROAM, i32((whim >> 8) % 5) - 2}
     }
     roamer_fly(e, gs, {f32(b.target_tile.x) + 0.5, f32(b.target_tile.y) + 0.5})
 }
