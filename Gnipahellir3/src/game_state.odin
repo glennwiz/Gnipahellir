@@ -921,6 +921,7 @@ Game_State :: struct {
 
     input:       Input_State,
     agent:       Agent_Drive,     // an outside agent's input this frame (agent_api.odin); transient, not saved
+    hero:        Hero_Brain,      // the agent-driven hero's senses and behaviour (agent_exec.odin); transient, not saved
     bindings:    [Action]rl.KeyboardKey,   // rebindable keys (settings screen)
     ui:          UI_State,
     notify:      Notification_State,
