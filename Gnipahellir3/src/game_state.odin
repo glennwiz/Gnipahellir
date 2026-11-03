@@ -589,6 +589,7 @@ Agent_Command :: struct {
     zone_from: [2]i32,
     zone_to:   [2]i32,
     at:        [2]i32,
+    aim:       [2]f32,  // the cursor point in tiles that mine, place, use, reclaim or at names
     verb:      Agent_Verb,
     verb_arg:  i32,
     feed_count: i32,  // 0: the whole stack
