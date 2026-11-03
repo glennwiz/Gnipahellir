@@ -26,9 +26,7 @@ BUILDER_REACH   :: i32(3)     // chebyshev tile distance for mining/placing
 // and his MAX_NAV_PATH plan budget.  Only Garm gets it (builder_build_den).
 GARM_BUILD_REACH :: i32(9)
 REPLAN_MIN      :: f32(0.5)   // min seconds between path computations
-MAX_NAV_SEARCHES_PER_FRAME :: 3   // ~1.2-1.4 ms per long or exhausted search
-                                  // (release build), so this bounds pathing
-                                  // at ~4 ms a frame whatever the enemy count;
+MAX_NAV_SEARCHES_PER_FRAME :: 3   // bounds pathing whatever the enemy count;
                                   // a hunter over budget simply asks again
                                   // next frame
 REPLAN_BACKOFF  :: f32(3.0)   // wait after a search that found no route, or
@@ -59,6 +57,7 @@ ESCAPE_MAX_TIME :: f32(15.0)  // hard cap — never pillar forever
 COST_WALK  :: f32(1)
 COST_PLACE :: f32(4)   // bridge: place a block underfoot
 COST_MINE  :: f32(6)   // tunnel: mine a solid tile
+COST_SELF_UNDONE :: COST_PLACE + COST_MINE   // standing on a tile the plan carves: the block, and the next trip's carve
 
 // Bridge blocks are not conjured: every tile a builder mines credits its
 // pocket, and every bridge block spends from it.
@@ -414,6 +413,7 @@ enemy_behaviour := [Enemy_Kind]Enemy_Behaviour{
     .Vargr        = {{BUILDER_W, BUILDER_H}, RAIDER_SPEED, VARGR_HP, BUILDER_GRAVITY, update_raider},
     .Pond_Frog    = {{POND_FROG_W, POND_FROG_H}, POND_FROG_SPEED, POND_FROG_HP, BUILDER_GRAVITY, update_roamer},
     .Ember_Beetle = {{EMBER_BEETLE_W, EMBER_BEETLE_H}, EMBER_BEETLE_SPEED, EMBER_BEETLE_HP, BUILDER_GRAVITY, update_roamer},
+    .Rain_Wisp    = {{RAIN_WISP_W, RAIN_WISP_H}, RAIN_WISP_SPEED, RAIN_WISP_HP, 0, update_rain_wisp},
     // Zero gravity: water holds it up, and update_roamer drops it when none does.
     .Cave_Eel     = {{CAVE_EEL_W, CAVE_EEL_H}, CAVE_EEL_SPEED, CAVE_EEL_HP, 0, update_roamer},
     .Magma_Crawler = {{MAGMA_CRAWLER_W, MAGMA_CRAWLER_H}, MAGMA_CRAWLER_SPEED, MAGMA_CRAWLER_HP, BUILDER_GRAVITY, update_roamer},
@@ -599,7 +599,52 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 //  If the found path exceeds MAX_NAV_PATH, the prefix nearest the start is
 //  kept — the builder walks it and replans from there.
 
-PLAN_CARVE_LOOKBACK :: 5   // steps back a climb checks its support against the plan
+PLAN_CARVE_LOOKBACK :: 5   // steps back a move checks its support against the plan
+
+// An open-set entry.  f travels with the node, so a sift never reaches back
+// into nodes[] or takes a square root.
+A_Open :: struct {
+    f:    f32,
+    node: i16,
+}
+
+// Lowest f first; the older node wins a tie, so a search is deterministic.
+astar_open_before :: proc(a, b: A_Open) -> bool {
+    return a.f < b.f || (a.f == b.f && a.node < b.node)
+}
+
+// Binary min-heap over open[:size].  Each sift step costs one unit of work.
+astar_open_push :: proc(open: []A_Open, size: ^int, item: A_Open, work: ^int) {
+    i := size^
+    size^ += 1
+    for i > 0 {
+        work^ += 1
+        parent := (i - 1) / 2
+        if !astar_open_before(item, open[parent]) { break }
+        open[i] = open[parent]
+        i = parent
+    }
+    open[i] = item
+}
+
+astar_open_pop :: proc(open: []A_Open, size: ^int, work: ^int) -> A_Open {
+    top := open[0]
+    size^ -= 1
+    n := size^
+    item := open[n]
+    i := 0
+    for {
+        c := 2*i + 1
+        if c >= n { break }
+        work^ += 1
+        if c + 1 < n && astar_open_before(open[c + 1], open[c]) { c += 1 }
+        if !astar_open_before(open[c], item) { break }
+        open[i] = open[c]
+        i = c
+    }
+    open[i] = item
+    return top
+}
 
 astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1, allow_mining := true, complete: ^bool = nil, protect_placed := false) -> bool {
     w := &gs.world
@@ -637,11 +682,11 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         bridges: u8,    // bridge moves on the path to this node
     }
 
-    // Does the plan so far carve (x,y)?  A rise mines its landing, its own
-    // headroom and the landing's headroom, so a later climb that needs that
-    // tile as support contradicts its own plan: the builder carves it, then
-    // bridges it back, on every commute.  flip_after_rise only sees one step
-    // back; a walk between the two climbs hid the rest.
+    // Does the plan so far carve (x,y)?  Every step mines the solid tile it
+    // enters, and a rise also its own headroom and the landing's headroom, so
+    // a later move that needs that tile as support contradicts its own plan:
+    // the builder carves it, then bridges it back, on every commute.
+    // flip_after_rise only sees one step back; a walk between hid the rest.
     plan_carves :: proc(nodes: []A_Node, from: int, x, y: int) -> bool {
         T := [2]i32{i32(x), i32(y)}
         c := from
@@ -649,8 +694,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             pi := int(nodes[c].parent)
             if pi < 0 { return false }
             a, b := nodes[pi].pos, nodes[c].pos
+            if T == b { return true }
             if b.y == a.y - 1 && b.x != a.x {
-                if T == b || T == {a.x, a.y - 1} || T == {b.x, b.y - 1} { return true }
+                if T == {a.x, a.y - 1} || T == {b.x, b.y - 1} { return true }
             }
             c = pi
         }
@@ -676,8 +722,8 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
     closed: [GRID_W * GRID_H]bool
 
-    // Open set: node indices.  Linear scan for min-f (budget is small enough).
-    open:      [MAX_ASTAR_NODES]i16
+    // Open set: a binary heap on f.
+    open:      [MAX_ASTAR_NODES]A_Open
     open_size: int
 
     // Best-effort fallback: expanded node closest to the goal.  If the search
@@ -712,7 +758,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     // Seed the open set with the start node.
     nodes[0]  = {pos = sf, g = 0, parent = -1}
     g_cost[grid_idx(fx, fy)] = 0
-    open[0]   = 0
+    open[0]   = {node = 0}
     n_count   = 1
     open_size = 1
     found     := i16(-1)
@@ -720,19 +766,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     trans: [24]A_Trans
 
     outer: for open_size > 0 {
-        // Pick the open node with the lowest f = g + h.
-        best_f  := max(f32)
-        best_oi := 0
-        for oi in 0 ..< open_size {
-            ni := int(open[oi])
-            f  := nodes[ni].g + ASTAR_H_WEIGHT * heuristic(nodes[ni].pos, to)
-            if f < best_f { best_f = f; best_oi = oi }
-        }
-
-        // Pop it (swap with last).
-        cur_idx := int(open[best_oi])
-        open[best_oi] = open[open_size - 1]
-        open_size -= 1
+        // Take the open node with the lowest f = g + h.
+        cur_idx := int(astar_open_pop(open[:], &open_size, &gs.nav_work).node)
+        gs.nav_work += 1
 
         cur := nodes[cur_idx]
         vi  := grid_idx(int(cur.pos.x), int(cur.pos.y))
@@ -891,6 +927,13 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             if closed[nvi] { continue }
 
             tentative_g := cur.g + trans[i].cost
+            // A floor this plan carved reads solid now and costs a block at
+            // run time.  Priced, not refused: crossing one's own hole can be
+            // the only way.  Garm conjures his stone free.
+            if bridge_budget < MAX_NAV_PATH && is_solid(w, nxi, nyi + 1) &&
+               plan_carves(nodes[:], int(cur_idx), nxi, nyi + 1) {
+                tentative_g += COST_SELF_UNDONE
+            }
             if tentative_g >= g_cost[nvi] { continue }   // not an improvement
             g_cost[nvi] = tentative_g
 
@@ -899,9 +942,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             }
             bridges := cur.bridges + (u8(1) if trans[i].bridge else u8(0))
             nodes[n_count] = {pos = np, g = tentative_g, parent = i16(cur_idx), bridges = bridges}
-            open[open_size] = i16(n_count)
-            open_size += 1
-            n_count   += 1
+            f := tentative_g + ASTAR_H_WEIGHT * heuristic(np, to)
+            astar_open_push(open[:], &open_size, {f = f, node = i16(n_count)}, &gs.nav_work)
+            n_count += 1
 
             if chebyshev(np, to) <= stop_within {
                 found = i16(n_count - 1)
@@ -1426,7 +1469,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     // Grounded only: while airborne the builder tile fluctuates and the
     // carves land on the wrong rows.
     bt := builder_tile(e)
-    if target.y < bt.y && e.grounded {
+    if target.y < bt.y && e.grounded && abs(target.x - bt.x) <= 1 {
         climb := [2][2]i32{{bt.x, bt.y - 1}, {target.x, target.y - 1}}
         for c in climb {
             cx := int(c.x)
@@ -1683,7 +1726,7 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
                 nav.mine_timer = MINE_TIME
             }
         } else if is_builder_mineable(gs, x, y) {
-            set_tile(w, x, y, .Void)
+            smash_tile(gs, x, y)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = T})
             log_action(gs, "Builder#%d carves (%d,%d)", id, x, y)
             e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
@@ -1731,7 +1774,7 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
                 })
                 continue
             }
-            set_tile(&gs.world, x, y, .Void)
+            smash_tile(gs, x, y)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
             e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         }

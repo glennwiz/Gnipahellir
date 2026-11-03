@@ -539,6 +539,7 @@ Event_Type :: enum u8 {
 	// Projectiles
 	Projectile_Fired,
 	Projectile_Impact,
+	Player_Soaked,
 
 	// Audio
 	Play_Sound,

@@ -22,6 +22,7 @@ GOLEM_ZONE_MAX_H :: i32(24)
 GOLEM_STOCKPILE_MARGIN :: i32(4)
 GOLEM_STUCK_TIME :: f32(3.0)
 GOLEM_NAV_CLEANUP_PENALTY :: i32(512)
+MAX_GOLEM_SEARCHES_PER_FRAME :: 2 // the first worker of a frame must be able to try deposit then stockpile
 GOLEM_PLAYER_CLEANUP_PENALTY :: i32(768)
 GOLEM_BLOCK_GRACE_TIME :: f32(3.0)
 GOLEM_QUICK_CLAY_LINGER :: i32(2) // chebyshev tiles a worker may stray before its old foothold dissolves
@@ -992,11 +993,19 @@ golem_job_reach :: proc(g: ^Golem) -> i32 {
 	return GOLEM_REACH
 }
 
+// Searches are spent for this frame.  Every caller of golem_set_target asks
+// first and, if so, waits for a later frame: a search it never ran says nothing
+// about the route, so it must not take the "unreachable" branch.
+golem_nav_spent :: proc(gs: ^Game_State) -> bool {
+	return gs.golem_searches >= MAX_GOLEM_SEARCHES_PER_FRAME
+}
+
 golem_set_target :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, vertical_recovery := true) -> bool {
 	g.target = tile
 	g.has_target = true
 	g.path = {}
 	g.replan_timer = 0
+	gs.golem_searches += 1
 	stop_within := golem_job_reach(g)
 	can_mine_path := golem_pack_has_room(g)
 	// Bridging is free Quick Clay, not real material — budget it by path
@@ -1061,10 +1070,12 @@ golem_cache_cargo :: proc(gs: ^Game_State, g: ^Golem) {
 }
 
 golem_start_delivery :: proc(gs: ^Game_State, g: ^Golem) -> bool {
+	if golem_nav_spent(gs) do return false
 	if g.carry == .None do g.carry = golem_pack_pop(g)
 	if g.carry == .None do return false
 	g.job = .Deliver
 	if dest, ok := golem_find_deposit(gs, golem_tile(g), g.carry); ok && golem_set_target(gs, g, dest, false) do return true
+	if golem_nav_spent(gs) do return false
 	// Preferred storage may be across an unbridged shaft or sealed tunnel.  A
 	// loaded worker cannot mine another block, so keep the material productive
 	// by returning it to the nearest reachable edge stockpile instead.
@@ -1081,17 +1092,26 @@ golem_start_delivery :: proc(gs: ^Game_State, g: ^Golem) -> bool {
 // claimed so following workers naturally spread out.
 golem_assign_resource :: proc(gs: ^Game_State, id: int) -> bool {
 	g := &gs.golems.data[id]
-	skipped: [16][2]i32
-	for attempt in 0 ..< len(skipped) {
-		target, ok := golem_find_resource(gs, id, skipped[:attempt])
+	skips := &gs.golem_skips[id]
+	for {
+		// Before the end-of-list test: a full list on a spent frame is still
+		// next frame's answer, and the caller must not hear it as this one's.
+		if golem_nav_spent(gs) do return false
+		if skips.n >= len(skips.tiles) do break
+		target, ok := golem_find_resource(gs, id, skips.tiles[:skips.n])
 		if !ok do break
 		g.job = .Mine
 		// Gathering should only reserve a target with a real route. Vertical
 		// recovery is for escaping a fall; it cannot solve a sideways pocket
 		// whose headroom is protected player masonry.
-		if golem_set_target(gs, g, target, false) do return true
-		skipped[attempt] = target
+		if golem_set_target(gs, g, target, false) {
+			skips.n = 0
+			return true
+		}
+		skips.tiles[skips.n] = target
+		skips.n += 1
 	}
+	skips.n = 0
 	golem_reset_job(g)
 	return false
 }
@@ -1473,6 +1493,7 @@ golem_project_finish_if_done :: proc(gs: ^Game_State, p: ^Golem_Project) {
 }
 
 golem_assign_build :: proc(gs: ^Game_State, id: int) {
+	if golem_nav_spent(gs) do return
 	g := &gs.golems.data[id]
 	if g.project_cell < 0 && !golem_project_reserve(gs, id) {
 		golem_project_finish_if_done(gs, &gs.golems.projects[g.level])
@@ -1569,7 +1590,7 @@ golem_recover_or_replan :: proc(gs: ^Game_State, g: ^Golem, reset_replan_timer: 
 		g.path = {}
 		g.vel.x = 0
 		if reset_replan_timer do g.replan_timer = 0
-	} else if !golem_set_target(gs, g, target) {
+	} else if !golem_nav_spent(gs) && !golem_set_target(gs, g, target) {
 		g.has_target = false
 		g.vel.x = 0
 		if reset_replan_timer do g.replan_timer = 0
@@ -1604,6 +1625,12 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 			gs.golem_calls[id] = .Waiting
 			golem_reset_job(g)
 		} else if call != .Waiting && !g.has_target {
+			if golem_nav_spent(gs) {
+				g.vel.x = 0
+				move_body(&gs.world, &g.pos, &g.vel, {GOLEM_W, GOLEM_H}, gs.delta_time,
+					GRAVITY, MAX_FALL_SPEED, &g.grounded, step_up = true)
+				return
+			}
 			g.job = .Seek
 			if !golem_set_target(gs, g, pt) {
 				gs.golem_calls[id] = .None
@@ -1641,6 +1668,7 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 			g.vel.x=0
 		}
 	}
+	if !g.has_target && golem_nav_spent(gs) do g.vel.x = 0
 	if g.recovering {
 		golem_update_recovery(gs,g,id)
 		move_body(&gs.world, &g.pos, &g.vel, {GOLEM_W, GOLEM_H}, gs.delta_time,
@@ -1663,6 +1691,12 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 			case .Seek:       golem_reset_job(g)
 			case .Mine:       golem_pick_resource(gs, g, id)
 			case .Deliver:
+				// What follows this block takes a search: with none left, wait
+				// at the door with the block in hand, or the rest leaves too.
+				if golem_nav_spent(gs) {
+					g.vel.x = 0
+					break
+				}
 				stored:=golem_store_carried(gs,g,g.target)
 				continues:=false
 				if !stored || golem_pack_count(g)>0 do continues=golem_start_delivery(gs,g)
@@ -1689,7 +1723,7 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 					GRAVITY,MAX_FALL_SPEED,&g.grounded,step_up=true)
 				return
 			}
-			if golem_path_obstructed(gs,g) && !golem_clear_path_obstruction(gs,g,id) {
+			if golem_path_obstructed(gs,g) && !golem_clear_path_obstruction(gs,g,id) && !golem_nav_spent(gs) {
 				target := g.target
 				if !golem_set_target(gs, g, target) {
 					g.has_target = false
@@ -1702,7 +1736,7 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 				return
 			}
 			if !golem_exec_path_bridge(gs,g,id) && !golem_clear_path_obstruction(gs, g,id) {
-				if g.path.cursor >= g.path.len {
+				if g.path.cursor >= g.path.len && !golem_nav_spent(gs) {
 					target := g.target
 					if !golem_set_target(gs, g, target) do g.has_target = false
 				}
@@ -1716,7 +1750,11 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 }
 
 update_golems :: proc(gs: ^Game_State) {
-	for i in 0 ..< MAX_GOLEMS do golem_update_one(gs, i)
+	gs.golem_searches = 0
+	gs.nav_work = 0
+	// The first worker of a frame moves round the crew, so one that cannot
+	// find a route never holds the searches away from the slots after it.
+	for i in 0 ..< MAX_GOLEMS do golem_update_one(gs, (int(gs.frame) + i) % MAX_GOLEMS)
 	golem_tick_quick_clay(gs)
 }
 

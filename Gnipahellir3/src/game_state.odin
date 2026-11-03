@@ -43,6 +43,7 @@ Enemy_Kind :: enum u8 {
     // Roamers (roamer.odin): they live on a level, not in a wave.
     Pond_Frog,
     Ember_Beetle,
+    Rain_Wisp,
     Cave_Eel,
     Magma_Crawler,
     Stone_Grub,
@@ -222,6 +223,13 @@ GOLEM_PROJECT_CELLS :: 128
 MAX_GOLEM_DEPOTS     :: 8
 GOLEM_DEPOT_SLOTS    :: 12
 GOLEM_PACK_CAP       :: 8
+// Resource choices a worker found no route to, kept across frames so an
+// assignment the search budget interrupts picks up at the next choice.
+Golem_Skips :: struct {
+    tiles: [16][2]i32,
+    n:     int,
+}
+
 GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
 GOLEM_QUICK_CLAY_CAP  :: MAX_GOLEMS * 4
 
@@ -384,6 +392,7 @@ Projectile :: struct {
     active: bool,
     damage: int,
     age:    f32,   // seconds alive; dies at PROJECTILE_LIFETIME
+    drip:   bool,  // a Rain Wisp's drop: soaks the player, passes through enemies
 }
 
 Projectile_Store :: struct {
@@ -814,6 +823,11 @@ Game_State :: struct {
     roamer_timer: f32,        // transient, toward the next top-up (roamer.odin)
     nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
                              // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME
+    golem_searches: int,     // the same for golems; reset in update_golems,
+                             // capped by MAX_GOLEM_SEARCHES_PER_FRAME
+    golem_skips: [MAX_GOLEMS]Golem_Skips, // transient: resource choices each golem found no route to
+    nav_work:    int,        // astar_dig work this frame, golems and enemies:
+                             // nodes expanded + heap sift steps; reset in update_golems
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,
@@ -829,6 +843,7 @@ Game_State :: struct {
     tile_fx:     Tile_Fx_Store,   // reusable tile-overlay telegraphs (fx.odin); transient, not saved
     gravity:     Gravity_State,   // structural blocks in mid-fall (gravity.odin)
     leaf_fall_t: f32,             // GreenBerrie slow-fall buff seconds left (player.odin); transient, not saved
+    soak_t:      f32,             // Rain Wisp drip slow seconds left (events.odin grants, player.odin ticks); transient, not saved
     bite_slow_t: f32,             // eel-bite slow seconds left (events.odin grants, player.odin spends); transient, not saved
     flight_t:    f32,             // altar-swirl flight buff seconds left (levels.odin grants, player.odin ticks); transient, not saved
     fluid:       Fluid_State,     // water/lava flow clocks (fluid.odin); transient, not saved
