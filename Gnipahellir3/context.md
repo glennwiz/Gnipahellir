@@ -6,7 +6,7 @@ history lives in git log and `gnipa_project/Work_done.md` (the full pre-2026-11-
 text of this file is archived verbatim at its end). Where this file disagrees with
 older docs, trust it; where it disagrees with the code or git log, they win.
 
-- **Branch:** master · **Build:** green (`odin build src`) · **Tests:** 881 green in both configs (`odin test src` and `odin test src -define:GAME_DEBUG=false`; a test that reads logs or debug tools carries a `when GAME_DEBUG` guard — includes the conservation fuzzer, GREEN since 372c30f; if it ever goes red again, a handler is leaking items — fix the handler, never the harness)
+- **Branch:** master · **Build:** green (`odin build src`) · **Tests:** 883 green in both configs (`odin test src` and `odin test src -define:GAME_DEBUG=false`; a test that reads logs or debug tools carries a `when GAME_DEBUG` guard — includes the conservation fuzzer, GREEN since 372c30f; if it ever goes red again, a handler is leaking items — fix the handler, never the harness)
 - **Last updated:** 2026-11-03
 - **Save:** `SAVE_VERSION` 29 (`save.odin`). v28 is frozen and read by fixed offsets (`save_data_from_v28`); v23-v27 read through the frozen 1024-enemy layout and shrink to 256. Enums are pinned by `saved_enum_ordinals_never_move` and `every_saved_enum_is_pinned` (`tests_save.odin`).
 - **Board:** Thingvellir, http://127.0.0.1:41070, board `gnipahellir`. Task state lives there. Glenn's design decisions: `gnipa_project/design_review.md` section 6.

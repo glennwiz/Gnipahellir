@@ -1859,8 +1859,13 @@ builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
         b.stuck_count = 0
         builder_dig_free(e, id, gs)
         // Only builders shuffle goals on a strikeout; the boss and the draugr
-        // have a single fixed purpose — dig free and keep hunting.
-        if e.kind != .Builder { return }
+        // have a single fixed purpose — dig free and keep hunting.  A draugr
+        // with no road up to its prey pillars toward it, as a builder does
+        // toward a job overhead (card 121: an empty pocket plans no climb).
+        if e.kind != .Builder {
+            if e.kind == .Undead do builder_pillar_toward(e, id, gs, b.plan_target, reason)
+            return
+        }
         #partial switch b.goal {
         case .Build_Den:
             log_action(gs, "Builder#%d abandons den site (%d,%d)", id, b.anchor.x, b.anchor.y)
