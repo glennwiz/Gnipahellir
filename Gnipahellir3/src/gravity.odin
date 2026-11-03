@@ -53,11 +53,23 @@ gravity_blocked :: proc(w: ^World_Grid, x, y: int) -> bool {
     return t != .Air && t != .Void
 }
 
-gravity_golem_occupies :: proc(gs:^Game_State, x,y:int) -> bool {
+// Does a body stand in cell (x,y)?  A block landing there would wall the body
+// in, so it crumbles to its item instead of settling as a tile.
+gravity_body_occupies :: proc(gs:^Game_State, x,y:int) -> bool {
 	for &g in gs.golems.data {
 		if g.status==.Deployed && g.level==gs.level_index && golem_overlaps_cell(&g,x,y) do return true
 	}
+	if box_overlaps_cell(gs.player.pos, {PLAYER_W, PLAYER_H}, x, y) do return true
+	for &e, i in gs.enemies.data {
+		if gs.enemies.active[i] && box_overlaps_cell(e.pos, enemy_body_size(e.kind), x, y) do return true
+	}
 	return false
+}
+
+@(private = "file")
+box_overlaps_cell :: proc(pos, size: [2]f32, x, y: int) -> bool {
+	return pos.x < f32(x+1) && pos.x+size.x > f32(x) &&
+	       pos.y < f32(y+1) && pos.y+size.y > f32(y)
 }
 
 // What an emptied cell becomes: open air above the surface line / in the sky,
@@ -225,7 +237,7 @@ update_gravity :: proc(gs: ^Game_State) {
 
         ny := b.y + FALL_SPEED * dt
         if ny >= rest {
-            occupied:=gravity_golem_occupies(gs,int(b.x),r-1)
+            occupied:=gravity_body_occupies(gs,int(b.x),r-1)
             if .Settles in terrain_table[b.tile].flags && !occupied {
                 // Sand-style: the block becomes a tile again where it lands.  r
                 // is recomputed each frame off the live grid, and stacked fallers
