@@ -63,7 +63,7 @@ wisps_top_up_in_open_sky_and_only_there :: proc(t: ^testing.T) {
     testing.expect_value(t, wave_count_kind(gs, .Rain_Wisp), roamer_table[.Rain_Wisp].cap)
     rows_differ := false
     first_y := f32(-1)
-    for &e, s in gs.enemies.data do if gs.enemies.active[s] {
+    for &e, s in gs.enemies.data do if gs.enemies.active[s] && e.kind == .Rain_Wisp {
         T := builder_tile(&e)
         testing.expect(t, abs(T.x - player_tile(&gs.player).x) >= ROAMER_SPAWN_CLEAR, "spawned on the player")
         testing.expect(t, int(T.y) >= ROAMER_AIR_TOP && int(T.y) <= ROAMER_AIR_BOTTOM, "in the sky band")
@@ -144,7 +144,7 @@ a_wisps_whim_waits_and_reaches :: proc(t: ^testing.T) {
         gs.frame += 37
         update_rain_wisp(e, 0, gs, gs.delta_time)
         d := e.builder.target_tile - home
-        testing.expect(t, abs(d.x) <= RAIN_WISP_ROAM && abs(d.y) <= 2, "a whim stays near")
+        testing.expect(t, abs(d.x) <= ROAMER_AIR_ROAM && abs(d.y) <= 2, "a whim stays near")
         if d.x < 0 do left += 1
         if d.x > 0 do right += 1
     }
@@ -493,4 +493,321 @@ wisps_ride_out_a_real_sky_soak :: proc(t: ^testing.T) {
     }
     n := wave_count_kind(gs, .Rain_Wisp)
     testing.expect(t, n > 0 && n <= roamer_table[.Rain_Wisp].cap, "they arrive, capped")
+}
+
+harpy_seed :: proc(gs: ^Game_State, x, y: int) -> ^Enemy {
+    e := roam_seed(gs, .Rock_Harpy, x)
+    e.pos.y = f32(y)
+    e.grounded = false
+    return e
+}
+
+@(test)
+a_rock_harpy_is_a_sky_row :: proc(t: ^testing.T) {
+    row := enemy_behaviour[.Rock_Harpy]
+    testing.expect(t, row.update == update_rock_harpy, "harpy brain")
+    testing.expect_value(t, row.gravity, f32(0))
+    testing.expect_value(t, row.hp, ROCK_HARPY_HP)
+    testing.expect_value(t, row.speed, ROCK_HARPY_SPEED)
+    testing.expect_value(t, row.body, [2]f32{ROCK_HARPY_W, ROCK_HARPY_H})
+    spec := roamer_table[.Rock_Harpy]
+    testing.expect_value(t, spec.level, LEVEL_SKY)
+    testing.expect_value(t, spec.cap, 2)
+    testing.expect_value(t, spec.sight, i32(14))
+    testing.expect_value(t, spec.damage, 2)
+    testing.expect(t, !spec.friendly, "hostile")
+    testing.expect_value(t, enemy_kind_names[.Rock_Harpy], "a rock harpy")
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][0].item, Item.Stone_Block)
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][1].item, Item.Iron_Ore)
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][0].min, 1)
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][0].max, 2)
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][0].chance, f32(1.0))
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][1].max, 1)
+    testing.expect_value(t, enemy_drop_table[.Rock_Harpy][1].chance, f32(0.35))
+}
+
+// The brain reads its row's sight: it sees at the edge, not one past it.  An
+// unseen harpy drifts and runs its whim clock; a seen one leaves it alone.
+@(test)
+a_harpy_sees_as_far_as_its_row :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 100)
+    sight := roamer_table[.Rock_Harpy].sight
+    pt := player_tile(&gs.player)
+    e := harpy_seed(gs, 60, 30)
+    for dx in ([]i32{sight - 1, sight, sight + 1, -sight, -sight - 1}) {
+        e.pos = {f32(pt.x + dx) + (1 - ROCK_HARPY_W)*0.5, f32(pt.y) + (1 - ROCK_HARPY_H)*0.5}
+        e.builder.cooldown, e.builder.attack_timer, e.builder.has_target = 10, 10, false
+        update_rock_harpy(e, 0, gs, 0.25)
+        seen := e.builder.cooldown == 10
+        testing.expectf(t, seen == (abs(dx) <= sight), "%d tiles off: seen %v", dx, seen)
+    }
+}
+
+// The whole loop through the real mover: climb, dive, strike, climb, and the
+// next dive waits its time.
+@(test)
+a_harpy_climbs_dives_strikes_and_waits :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 100)
+    e := harpy_seed(gs, 104, ROAM_Y - 3)
+    hp := gs.player.hp
+    head := gs.player.pos.y
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, e.vel.y < 0, "too low: it climbs first")
+    testing.expect(t, !e.builder.has_target, "no dive from down here")
+
+    struck := -1
+    for f in 0 ..< 400 {
+        roam_step(gs, 1)
+        if gs.player.hp < hp {
+            struck = f
+            break
+        }
+    }
+    testing.expect(t, struck >= 0, "the dive lands")
+    testing.expect_value(t, hp - gs.player.hp, roamer_table[.Rock_Harpy].damage)
+    testing.expect(t, !e.builder.has_target, "the dive is over")
+    testing.expect(t, e.builder.attack_timer > ROCK_HARPY_DIVE_TIME - 0.1, "and on its clock")
+    testing.expect(t, e.pos.y > head - 1, "it came down to the player")
+
+    // One strike a dive: it climbs off, and no second one before the clock.
+    hp = gs.player.hp
+    roam_step(gs, int(ROCK_HARPY_DIVE_TIME / gs.delta_time) - 5)
+    testing.expect_value(t, gs.player.hp, hp)
+    testing.expect(t, e.pos.y < head - 2, "it climbed back")
+    testing.expectf(t, abs(e.pos.y + ROCK_HARPY_H*0.5 - (head - ROCK_HARPY_PERCH)) < 1,
+        "it holds at its perch, %.2f over the head", head - e.pos.y - ROCK_HARPY_H*0.5)
+}
+
+@(test)
+a_dive_starts_only_high_and_lined_up_and_ready :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 100)
+    head := gs.player.pos + {PLAYER_W*0.5, 0}
+    e := harpy_seed(gs, 100, 30)
+    place :: proc(e: ^Enemy, x, y: f32) {
+        e.pos = {x - ROCK_HARPY_W*0.5, y}
+        e.builder.has_target = false
+    }
+    place(e, head.x, head.y - ROCK_HARPY_MIN_DROP)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, e.builder.has_target, "high enough")
+    testing.expect_value(t, e.builder.target_tile, player_tile(&gs.player))
+    testing.expect_value(t, e.builder.cooldown, ROCK_HARPY_DIVE_LIMIT)
+
+    place(e, head.x, head.y - ROCK_HARPY_MIN_DROP + 0.5)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, !e.builder.has_target, "too low")
+
+    place(e, head.x + ROCK_HARPY_LINEUP - 0.2, head.y - ROCK_HARPY_PERCH)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, e.builder.has_target, "lined up")
+
+    place(e, head.x + ROCK_HARPY_LINEUP + 0.2, head.y - ROCK_HARPY_PERCH)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, !e.builder.has_target, "too far off")
+
+    // The same on the player's left.
+    place(e, head.x - ROCK_HARPY_LINEUP + 0.2, head.y - ROCK_HARPY_PERCH)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, e.builder.has_target, "lined up on the left")
+
+    place(e, head.x - ROCK_HARPY_LINEUP - 0.2, head.y - ROCK_HARPY_PERCH)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, !e.builder.has_target, "too far off on the left")
+
+    place(e, head.x, head.y - ROCK_HARPY_PERCH)
+    e.builder.attack_timer = 1
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, !e.builder.has_target, "the clock holds it")
+    testing.expect(t, e.builder.attack_timer < 1, "the clock runs")
+
+    // Unseen, it drifts: a roof between them, or a dead player, or too far.
+    e.builder.attack_timer, e.builder.cooldown = 0, 0
+    for x in 90 ..= 110 do set_tile(&gs.world, x, ROAM_Y - 4, .Stone)
+    place(e, head.x, head.y - ROCK_HARPY_PERCH)
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, !e.builder.has_target, "the roof hides the player")
+    testing.expect_value(t, e.builder.cooldown, ROAMER_WHIM_TIME)
+}
+
+@(test)
+a_dive_aims_where_the_player_stood :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 100)
+    e := harpy_seed(gs, 100, ROAM_Y - 10)
+    aim := player_tile(&gs.player)
+    e.builder.has_target, e.builder.target_tile, e.builder.cooldown = true, aim, ROCK_HARPY_DIVE_LIMIT
+    gs.player.pos.x = 130
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect_value(t, e.builder.target_tile, aim)
+    l := e.vel.x*e.vel.x + e.vel.y*e.vel.y
+    testing.expect(t, abs(l - ROCK_HARPY_DIVE_SPEED*ROCK_HARPY_DIVE_SPEED) < 0.01, "at dive speed")
+    testing.expect(t, e.vel.y > 0, "down")
+
+    // A sideways dive faces the way it goes.
+    e.pos = {f32(aim.x) + 8, f32(aim.y)}
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect_value(t, e.facing, -1)
+    e.pos = {f32(aim.x) - 8, f32(aim.y)}
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect_value(t, e.facing, 1)
+
+    // A miss: it arrives on an empty spot, climbs back, no daze, no bite.
+    hp := gs.player.hp
+    e.pos = {f32(aim.x) + 0.05, f32(aim.y) + 0.05}
+    update_rock_harpy(e, 0, gs, gs.delta_time)
+    testing.expect(t, !e.builder.has_target, "the dive ends")
+    testing.expect_value(t, e.vel, [2]f32{})
+    testing.expect_value(t, e.builder.stuck_timer, f32(0))
+    testing.expect_value(t, e.builder.attack_timer, ROCK_HARPY_DIVE_TIME)
+    testing.expect_value(t, e.builder.cooldown, f32(0))
+    testing.expect_value(t, gs.events.size, 0)
+    testing.expect_value(t, gs.player.hp, hp)
+}
+
+@(test)
+a_dive_into_the_ground_dazes_and_a_long_one_gives_up :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 100)
+    e := harpy_seed(gs, 60, ROAM_Y - 5)
+    e.builder.has_target, e.builder.cooldown = true, ROCK_HARPY_DIVE_LIMIT
+    e.builder.target_tile = {60, ROAM_Y + 5}
+    for _ in 0 ..< 60 {
+        roam_step(gs, 1)
+        if !e.builder.has_target do break
+    }
+    testing.expect(t, !e.builder.has_target, "it stopped")
+    testing.expect(t, e.builder.stuck_timer > 0, "dazed")
+    testing.expect(t, e.pos.y + ROCK_HARPY_H <= f32(ROAM_Y + 1), "above the ground")
+    testing.expect(t, f32(ROAM_Y + 1) - (e.pos.y + ROCK_HARPY_H) < 0.5, "dazed on the ground, not over it")
+    testing.expect_value(t, e.builder.attack_timer, ROCK_HARPY_DIVE_TIME)
+
+    // Dazed it hangs still, for its time, then flies again.
+    p := e.pos
+    e.vel = {1, 1}
+    update_rock_harpy(e, 0, gs, 0.5)
+    testing.expect_value(t, e.vel, [2]f32{})
+    testing.expect_value(t, e.pos, p)
+    testing.expect_value(t, e.builder.stuck_timer, ROCK_HARPY_STUN - 0.5)
+    e.builder.stuck_timer = 0.01
+    update_rock_harpy(e, 0, gs, 0.02)
+    e.builder.cooldown = 0
+    update_rock_harpy(e, 0, gs, 0.02)
+    testing.expect(t, e.vel != {}, "it comes round")
+
+    // A dive that gets nowhere gives up, undazed.
+    e.pos = {60, f32(ROAM_Y - 20)}
+    e.builder.has_target, e.builder.target_tile, e.builder.cooldown = true, {80, ROAM_Y - 20}, 0.01
+    e.builder.stuck_timer = 0
+    update_rock_harpy(e, 0, gs, 0.02)
+    testing.expect(t, !e.builder.has_target, "it gave up")
+    testing.expect_value(t, e.builder.stuck_timer, f32(0))
+
+    // The clock is the dive's own: it runs down.
+    e.builder.has_target, e.builder.cooldown = true, 1
+    update_rock_harpy(e, 0, gs, 0.25)
+    testing.expect_value(t, e.builder.cooldown, f32(0.75))
+
+    // A dead player ends a dive where it is, with no bite.
+    gs.player.dead = true
+    hp := gs.player.hp
+    e.pos = gs.player.pos
+    e.builder.has_target = true
+    e.builder.target_tile = player_tile(&gs.player)
+    update_rock_harpy(e, 0, gs, 0.02)
+    testing.expect(t, !e.builder.has_target, "nothing to dive at")
+    testing.expect_value(t, e.builder.cooldown, ROAMER_WHIM_TIME)
+    testing.expect_value(t, gs.events.size, 0)
+    testing.expect_value(t, gs.player.hp, hp)
+}
+
+// The bite is a body overlap on all four sides: a graze counts, a near miss not.
+@(test)
+a_dive_bites_only_on_contact :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 100)
+    e := harpy_seed(gs, 60, 30)
+    p := gs.player.pos
+    tries := [][2]f32{
+        {p.x + PLAYER_W + 0.05, p.y}, {p.x - ROCK_HARPY_W - 0.05, p.y},
+        {p.x, p.y + PLAYER_H + 0.05}, {p.x, p.y - ROCK_HARPY_H - 0.05},
+    }
+    for at in tries {
+        e.pos = at
+        e.builder.has_target, e.builder.cooldown, e.builder.stuck_timer = true, 1, 0
+        e.builder.target_tile = {0, 0}
+        update_rock_harpy(e, 0, gs, 0.001)
+        testing.expect_value(t, gs.events.size, 0)
+    }
+    hits := [][2]f32{
+        {p.x + PLAYER_W - 0.05, p.y}, {p.x - ROCK_HARPY_W + 0.05, p.y},
+        {p.x, p.y + PLAYER_H - 0.05}, {p.x, p.y - ROCK_HARPY_H + 0.05},
+    }
+    for at in hits {
+        e.pos = at
+        e.builder.has_target, e.builder.cooldown, e.builder.stuck_timer = true, 1, 0
+        e.builder.target_tile = {150, 20}   // open sky: a strike that flew on would show
+        update_rock_harpy(e, 0, gs, 0.001)
+        testing.expect_value(t, gs.events.size, 1)
+        ev := gs.events.events[gs.events.head]
+        testing.expect_value(t, ev.source, enemy_entity_id(0))
+        testing.expect_value(t, ev.target, PLAYER_ID)
+        testing.expect_value(t, e.vel, [2]f32{})
+        testing.expect(t, !e.builder.has_target, "one strike ends the dive")
+        eq_clear(&gs.events)
+    }
+}
+
+@(test)
+harpies_spawn_in_the_sky_drop_on_the_floor_and_ride_a_soak :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    sky_ground(gs, 170)
+    harpy_seed(gs, 60, 30)
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = PLAYER_ID, target = enemy_entity_id(0), payload = {int_val = 99}})
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.world.items[grid_idx(60, ROAM_Y)], Item.Stone_Block)
+
+    gen_sky_level(&gs.world, 12345)
+    gs.enemies = {}
+    gs.player.pos = {95, 79 - PLAYER_H}
+    gs.delta_time = 0.05
+    gs.ui.show_title = false
+    for _ in 0 ..< int(ROAMER_SPAWN_EVERY * 8 * 20) {
+        game_update(gs)
+        gs.player.hp = gs.player.hp_max
+        gs.player.dead = false
+        gs.player.pos = {95, 79 - PLAYER_H}
+        for &e, s in gs.enemies.data do if gs.enemies.active[s] && e.kind == .Rock_Harpy {
+            T := builder_tile(&e)
+            testing.expect(t, int(T.x) >= CAVE_LEFT && int(T.x) < CAVE_RIGHT, "on the map")
+            testing.expect(t, int(T.y) < SKY_FALL_Y, "out of the void")
+        }
+    }
+    n := wave_count_kind(gs, .Rock_Harpy)
+    testing.expect(t, n > 0 && n <= roamer_table[.Rock_Harpy].cap, "they arrive, capped")
+
+    // One that meets the player on the real base platform does dive.
+    gs.enemies = {}
+    gs.world.entity_map = {}
+    near := harpy_seed(gs, 95, 68)
+    testing.expect_value(t, get_tile(&gs.world, 95, 68), Tile_Type.Air)
+    dives := 0
+    for _ in 0 ..< 200 {
+        game_update(gs)
+        gs.player.hp = gs.player.hp_max
+        gs.player.dead = false
+        gs.player.pos = {95, 79 - PLAYER_H}
+        if near.builder.has_target do dives += 1
+    }
+    testing.expect(t, dives > 0, "on real ground it finds the player and dives")
 }
