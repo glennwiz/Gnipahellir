@@ -139,6 +139,10 @@ class B:
                 k=int(max(abs(ex-cx),abs(ey-cy))*3)+1; dug=False
                 for i in range(1,k):
                     q=(int(cx+(ex-cx)*i/k),int(cy+(ey-cy)*i/k))
+                    # never the floor (run 7 death 1: dug (96,62),(97,62) toward a Draugr below, fell on him)
+                    if q[1]>s.pos()[1]: continue
+                    # nor a pool rim (run 7: dug (39,37),(39,38) at an eel, the Deep Cave pool drained)
+                    if any(s.t(q[0]+dx,q[1]+dy) in HAZ or s.t(q[0]+dx,q[1]+dy)=='Water' for dx in(-1,0,1) for dy in(-1,0,1)): continue
                     if s.solid(*q) and s.t(*q) in MINE and s.reach(*q):
                         s.a(1,select=s.slot('Pickaxe')); s.a(17,mine=list(q)); dug=True; break
                 miss=0
@@ -218,6 +222,7 @@ class B:
     def cost(s,x,y,digok):
         """cost to clear a cell; None if impossible"""
         t=s.t(x,y)
+        if t=='Water' and getattr(s,'waterok',False): return 1  # run 7: a body standing in spilt water found no path at all
         if t in HAZ or t=='Water': return None
         if t in SOLID:
             if not digok or t not in NAT: return None
@@ -512,8 +517,12 @@ class B:
             ok=s.fly(st-(1 if xs[0]==x0 else -1),T)
             s.tunnel(xs,T,want,tmax=tmax)
     def walkj(s,x,limit=60):
+        last=None; stuck=0
         for _ in range(12):
             if s.walkx(x,limit=limit): return True
+            # stuck check (run 7): the same x after a jump twice running means a wall, not a step
+            px=round(s.p['x'],1); stuck=stuck+1 if px==last else 0; last=px
+            if stuck>=2: log('walkj stuck at',px,'toward',x); return False
             d='right' if x+.5>s.p['x']+.4 else 'left'
             s.a(1,jump=True,move=d); s.a(16,move=d)
         return False

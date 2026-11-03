@@ -68,6 +68,23 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Check the level after every portal step: run 6 life 3 ran the sky script on L0 and flew into the shaft, 32 tiles, dead.
 - Scroll C sits at (12,101) on Cave 3. A smashed L0 altar goes back on the Stone base until Scroll C is found.
 - Do not let flight lapse over an island: 21 tiles is 9 damage. Over void you fall to L0 free.
+- Run 7: `fight` dug toward enemies for line of sight and took the floor (fell on a Draugr, dead)
+  and a pool rim (the Deep Cave pool drained). It now skips cells below the feet or by water/lava.
+- A plan is blind: run 7 life 1 idled a 300-tick plan beside a hunting Builder, 10 to 3 hp.
+  Do not think long with a Builder in the view; scripts set `GNIPA_AGENT_TURBO=1` to skip `endplan`.
+- Walks need a stuck check: p1 jumped 30 s at a trunk at x 88. `walkj` now gives up after two
+  jumps that do not move x.
+- `path` refuses water; standing in spilt water there is no path at all. Set `b.waterok=True`.
+  A block cannot go into a water cell ("Something is already there"), and water is no
+  neighbour for placing ("It needs something solid beside it").
+- Walls: a Vargr goes for natural rock first. Run 7 life 2 walled the chamber in placed stone
+  and wood, and both Vargr dug in under the natural floor (placed stone took them about 4 s).
+- The death screen refuses `tithe` for about 90 frames ("not ready yet"): wait, then retry.
+- Sky Egg: 2 per nest, no regrowth, `equip` eats it for +2 hp.
+- A Rain Wisp's drip soaks you and slows flight; a flight home ran out 3 tiles short.
+- In a walled pocket, `fight`'s line-of-sight dig still opens your own wall at foot level
+  (run 7 life 3 dug (108,53) and let the Vargr in). Turn it off when walled in.
+- Golems cannot be given work over the API: a Gather or Build zone is a mouse drag.
 
 ## How the game goes
 - 10 HP, no regeneration. Falls kill. Pillar and bridge instead of jumping over voids.
