@@ -85,6 +85,7 @@ Draw_Style :: enum u8 {
 	Pixel_Mushroom,
 	Pixel_Mossy_Stone,
 	Pixel_Mana_Mist,
+	Pixel_Rainbow_Bridge,
 }
 
 @(rodata)
@@ -111,6 +112,7 @@ tile_draw_style := #partial [Tile_Type]Draw_Style {
 	.Green_Cave_Mushroom   = .Pixel_Mushroom,
 	.Mossy_Stone           = .Pixel_Mossy_Stone,
 	.Mana_Mist             = .Pixel_Mana_Mist,
+	.Rainbow_Bridge        = .Pixel_Rainbow_Bridge,
 	// all others default to .Solid (zero value)
 }
 
@@ -775,6 +777,28 @@ draw_altar_eternal_swirl :: proc(gs: ^Game_State, altar_x, altar_y: int) {
 	}
 }
 
+// One tile of the sky's rainbow: red over violet, the stripes filling the cell.
+RAINBOW_STRIPES := [?]struct {
+	h:   i32,
+	col: rl.Color,
+} {
+	{2, {235, 70, 70, 255}},
+	{1, {245, 150, 60, 255}},
+	{2, {250, 225, 90, 255}},
+	{1, {90, 210, 110, 255}},
+	{2, {80, 170, 240, 255}},
+	{1, {90, 90, 210, 255}},
+	{1, {165, 90, 215, 255}},
+}
+
+draw_pixel_rainbow_bridge :: proc(bx, by: i32) {
+	y := by
+	for s in RAINBOW_STRIPES {
+		rl.DrawRectangle(bx, y, CELL_SIZE, s.h, s.col)
+		y += s.h
+	}
+}
+
 // ─── Sky apparition — a wordless tease at the top of the world ────────────────
 //
 //  gen_sky_level fills rows 0-27 with pure Air above the topmost cloud band
@@ -989,6 +1013,8 @@ draw_tile :: proc(gs: ^Game_State, t: Tile_Type, x, y: int) {
 		draw_pixel_mushroom(gs, px, py, x, y)
 	case .Pixel_Mossy_Stone:
 		draw_pixel_mossy_stone(gs, px, py, x, y)
+	case .Pixel_Rainbow_Bridge:
+		draw_pixel_rainbow_bridge(px, py)
 	case .Pixel_Rune_Scroll_Chest:
 		bg := terrain_table[rune_scroll_chest_backdrop(gs.level_index, y)].color
 		rl.DrawRectangle(px, py, CELL_SIZE, CELL_SIZE, bg)

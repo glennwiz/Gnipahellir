@@ -223,7 +223,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"World_Anchor", "Quick_Clay", "Sand", "Rune_Coffer", "Steam", "Boiler", "Steam_Engine",
 		"Gem_Replicator", "Green_Cave_Mushroom", "Mossy_Stone", "Magic_Kettle", "Mana_Wheel",
 		"Mana_Mist", "Hell_Gate", "Final_Seal", "Rainbow_Laser", "Rune_Stone", "Scoria", "Turret_Pillar",
-		"Flame_Turret", "Water_Turret", "Earth_Turret",
+		"Flame_Turret", "Water_Turret", "Earth_Turret", "Rainbow_Bridge",
 	}},
 }
 
