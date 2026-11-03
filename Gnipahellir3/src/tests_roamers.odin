@@ -42,7 +42,7 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
         testing.expectf(t, row.update != nil, "%v has no update", kind)
         testing.expectf(t, row.body.x > 0 && row.body.y > 0, "%v has no body", kind)
         testing.expectf(t, row.speed > 0 && row.hp > 0, "%v has no speed or hp", kind)
-        testing.expectf(t, row.gravity > 0 || kind == .Fire_Sprite, "%v floats", kind)
+        testing.expectf(t, row.gravity > 0 || kind == .Fire_Sprite || kind == .Rain_Wisp, "%v floats", kind)
     }
     testing.expect_value(t, enemy_body_size(.Garm), [2]f32{GARM_W, GARM_H})
     testing.expect_value(t, enemy_body_size(.Vargr), [2]f32{BUILDER_W, BUILDER_H})
