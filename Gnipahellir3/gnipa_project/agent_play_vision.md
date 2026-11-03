@@ -59,3 +59,5 @@ Decided 2026-11-02: "their own board" is a local board in the game, listing your
 Decided 2026-11-02: agents see the full world, as a player does fully zoomed out. That is not a map reveal.
 
 Decided 2026-11-03 (Glenn): the game runs in real time and the agent only sends goals. This replaces "The world waits" and step mode as the baseline. The game never pauses for the agent; only the death screen and menus stop play, as for a human. An executor inside the game turns each goal into the same per-frame input a keyboard and mouse give, so it can do nothing a player cannot. The game reports when a goal is done, fails or is interrupted. The raw act stays, as one goal kind ("hold right for 30 frames"), and it does not pause the game either. One binary does everything: no Python bot, no bridge, no Python tools. Cards 137 to 142.
+
+Decided 2026-11-03 (Glenn): windows are worked like a human would. The hero never moves while a window is open: stop, open it, work it with a visible cursor that drags stacks and clicks at a person's pace, close it, then move. No window flashes open and shut in one tick. Cards 137 and 139.
