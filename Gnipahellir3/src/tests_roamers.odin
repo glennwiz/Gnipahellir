@@ -780,6 +780,51 @@ a_hurt_eel_flees_through_the_water :: proc(t: ^testing.T) {
     gs.player.pos.y = 46
     roam_step(gs, 1)
     testing.expect_value(t, e.vel.y, -CAVE_EEL_SPEED)
+
+    // Level with him it goes down, away from the air.
+    pt := player_tile(&gs.player)
+    e.pos = {50, f32(pt.y) + 0.3}
+    roam_step(gs, 1)
+    testing.expect_value(t, builder_tile(e).y, pt.y)
+    testing.expect_value(t, e.vel.y, CAVE_EEL_SPEED)
+}
+
+// A bank of open air holds it in as surely as stone: its nose stays wet.
+@(test)
+an_eel_keeps_its_body_in_the_water_at_an_air_bank :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 170)
+    for y in EEL_Y0 ..= ROAM_Y do set_tile(&gs.world, EEL_X1 + 1, y, .Air)
+    e := eel_seed(gs, EEL_X1 - 3, 45)
+    e.builder.has_target = true
+    e.builder.cooldown = 100
+    turned := false
+    for _ in 0 ..< 240 {
+        roam_step(gs, 1)
+        testing.expect(t, e.pos.x + CAVE_EEL_W <= f32(EEL_X1 + 1), "its nose left the water")
+        turned ||= e.facing == -1
+    }
+    testing.expect(t, turned, "it turned at the bank")
+}
+
+// Each beat's roll picks its own start, so eels scatter through a pool.
+@(test)
+eels_scatter_through_the_pool :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_dry(gs)
+    eel_tank(gs, 170)
+    gs.level_index = LEVEL_CAVE2
+    seen: map[[2]i32]bool
+    defer delete(seen)
+    for f in 0 ..< 20 {
+        gs.enemies = {}
+        gs.frame = u64(f)
+        testing.expect(t, spawn_roamer(gs, .Cave_Eel), "no eel")
+        seen[builder_tile(&gs.enemies.data[0])] = true
+    }
+    testing.expect(t, len(seen) >= 5, "the eels all start in one place")
 }
 
 @(test)
