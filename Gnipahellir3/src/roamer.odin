@@ -182,20 +182,21 @@ roamer_may_eat :: proc(gs: ^Game_State, x, y: int) -> bool {
            .Placed not_in gs.world.tile_flags[grid_idx(x, y)]
 }
 
-// Chew the wall at the feet, one bite each STONE_GRUB_EAT_TIME.  Stone is eaten;
+// Chew the wall at the feet, one bite each STONE_GRUB_EAT_TIME, never the
+// border columns.  Stone is eaten;
 // anything else it spits out where it stood, so no ore or gem is lost to it.
 // False when there is nothing here it may eat.
 roamer_eat :: proc(e: ^Enemy, id: int, gs: ^Game_State) -> bool {
     size := enemy_body_size(e.kind)
     x := int(e.pos.x + size.x*0.5 + f32(e.facing)*(size.x*0.5 + 0.2))
     y := int(e.pos.y + size.y - 0.01)
-    if !roamer_may_eat(gs, x, y) do return false
+    if x < CAVE_LEFT || x >= CAVE_RIGHT || !roamer_may_eat(gs, x, y) do return false
     if e.builder.attack_timer > 0 do return true
     e.builder.attack_timer = STONE_GRUB_EAT_TIME
     old  := get_tile(&gs.world, x, y)
     drop := terrain_table[old].drop_item
-    smash_tile(gs, x, y)
-    if old != .Stone && drop != .None do spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
+    // smash_tile already drops what knocks loose (a door): never twice.
+    if !smash_tile(gs, x, y) && old != .Stone && drop != .None do spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
     log_action(gs, "%v#%d eats the %v at (%d,%d)", e.kind, id, old, x, y)
     return true
 }

@@ -1289,3 +1289,61 @@ grubs_spawn_on_cave_floors_and_drop_stone :: proc(t: ^testing.T) {
     testing.expect_value(t, enemy_kind_names[.Stone_Grub], "a stone grub")
 }
 
+
+// Nor while it hunts: an unhurt grub that sees the player up past a wall does
+// not chew its way there.
+@(test)
+a_hunting_grub_does_not_chew :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e := grub_wall(gs, .Stone)
+    for y in 1 ..< ROAM_Y - 1 do set_tile(&gs.world, GRUB_WALL, y, .Void)
+    // Hung high over the wall top, so the line of sight clears it even from
+    // the grub's nose at the wall.
+    gs.player.pos = {f32(GRUB_WALL) + 0.5 - PLAYER_W*0.5, f32(ROAM_Y - 5) + 0.5 - PLAYER_H*0.5}
+    for _ in 0 ..< 300 {
+        roam_step(gs, 1)
+        _, dist, seen := roamer_sense(e, gs, roamer_table[.Stone_Grub].sight)
+        testing.expectf(t, seen && dist > 1, "the setup: it must see the player out of reach (seen %v, dist %d)", seen, dist)
+        if !seen do break
+    }
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y), Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y - 1), Tile_Type.Stone)
+    testing.expect(t, e.pos.x > 62.5, "it came up to the wall")
+}
+
+// A tile smash_tile already drops (an unflagged door) lands once, not twice.
+@(test)
+a_grub_drops_a_knocked_loose_tile_once :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    grub_wall(gs, .Door)
+    testing.expect(t, roamer_may_eat(gs, GRUB_WALL, ROAM_Y), "the setup: a door it may eat")
+    roam_step(gs, 90)
+    testing.expect(t, !is_solid(&gs.world, GRUB_WALL, ROAM_Y), "it ate the door")
+    n := 0
+    for i in 0 ..< len(gs.world.items) do if gs.world.items[i] == .Door do n += int(gs.world.item_counts[i])
+    testing.expect_value(t, n, 1)
+}
+
+// The map's edge columns are never chewed, whatever they are made of.
+@(test)
+a_grub_never_chews_the_border :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    crawl_cave(gs, 100)
+    gs.world.tile_flags = {}
+    for x in ([]int{0, GRID_W - 1}) do for y in 1 ..= ROAM_Y do set_tile(&gs.world, x, y, .Stone)
+    for side in ([]int{-1, 1}) {
+        gs.enemies = {}
+        e := roam_seed(gs, .Stone_Grub, 1 if side < 0 else GRID_W - 2)
+        e.facing = side
+        e.builder.has_target = true
+        e.builder.cooldown = 1000
+        e.pos.x = side < 0 ? f32(CAVE_LEFT) : f32(CAVE_RIGHT) - STONE_GRUB_W
+        testing.expect(t, !roamer_eat(e, 0, gs), "chewed the border")
+        roam_step(gs, 120)
+    }
+    testing.expect_value(t, get_tile(&gs.world, 0, ROAM_Y), Tile_Type.Stone)
+    testing.expect_value(t, get_tile(&gs.world, GRID_W - 1, ROAM_Y), Tile_Type.Stone)
+}
