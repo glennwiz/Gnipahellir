@@ -1525,6 +1525,8 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         nav.path   = {}
         log_action(gs, "Builder#%d escape ends %d up - replanning", id, b.escape_from - bt.y)
         if b.escape_from - bt.y <= 0 { builder_strike(e, id, gs, "pillar rose nothing") }
+        // Left set, it marks a pillar that gained nothing (builder_pillar_toward).
+        if risen do b.escape_from = 0
         return
     }
 
@@ -1746,6 +1748,26 @@ builder_return_to_work :: proc(e: ^Enemy) {
     e.nav.path    = {}
 }
 
+// A* has no way up through open air: a target overhead with no route would be
+// struck at, dropped and picked again for ever.  Pillar toward it instead, which
+// changes the map the next search reads.  Refused under a roof it cannot mine.
+builder_pillar_toward :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, reason: string) -> bool {
+    bt := builder_tile(e)
+    if reason != "no path" || T.y >= bt.y do return false
+    x, y := int(bt.x), int(bt.y) - 1
+    if is_solid(&gs.world, x, y) && (!is_builder_mineable(gs, x, y) || den_protected(gs, x, y, id)) do return false
+    b := &e.builder
+    // The pillar that just ended here gained nothing: another is the same loop.
+    // Refuse once, so the caller gives the job up, and let a later no-route try.
+    if b.escape_from != 0 && abs(bt.y - b.escape_from) < ESCAPE_MIN_RISE {
+        b.escape_from = 0
+        return false
+    }
+    b.escaping, b.escape_timer, b.escape_from = true, 0, bt.y
+    log_action(gs, "Builder#%d has no route to (%d,%d) - pillars up", id, T.x, T.y)
+    return true
+}
+
 builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
     b := &e.builder
     b.stuck_count += 1
@@ -1768,6 +1790,7 @@ builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
             b.step   = 0
             builder_pause(b, JOB_COOLDOWN, .Build_Den)
         case .Fetch_Mineral:
+            if builder_pillar_toward(e, id, gs, b.target_tile, reason) do return
             log_action(gs, "Builder#%d gives up on (%d,%d)", id, b.target_tile.x, b.target_tile.y)
             b.avoid[b.avoid_n % len(b.avoid)] = b.target_tile
             b.avoid_n += 1
@@ -1778,8 +1801,9 @@ builder_strike :: proc(e: ^Enemy, id: int, gs: ^Game_State, reason: string) {
                 builder_start_escape(e)
             }
         case .Encase_Den:
-            // Couldn't get home — drop the block and fetch elsewhere rather
-            // than freeze in a retry loop.
+            if builder_pillar_toward(e, id, gs, b.anchor, reason) do return
+            // Couldn't get home — set the block down at its feet, whole, and
+            // fetch elsewhere rather than freeze in a retry loop.
             log_action(gs, "Builder#%d can't get home - drops %v", id, b.carry)
             drop := terrain_table[b.carry].drop_item
             if drop != .None do spawn_ground_item(&gs.world, builder_tile(e), drop, 1)
@@ -1952,6 +1976,17 @@ builder_pick_den_site :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
 
 // Nearest harvestable mineral (ore first, plain stone as fallback), skipping
 // every builder's den + shell zone so nobody eats a den.
+// The ring holds four give-ups, so a cluster of five bad targets would cycle for
+// ever.  Each lap of the ring with nothing fetched widens the blacklist, until
+// the whole cluster is off the list; a harvest, or an empty search, narrows it.
+builder_avoid_radius :: proc(b: ^Builder_State) -> i32 {
+    return AVOID_RADIUS * i32(max(b.avoid_n / len(b.avoid), 1))
+}
+
+builder_avoid_narrow :: proc(b: ^Builder_State) {
+    if b.avoid_n >= len(b.avoid) do b.avoid_n = b.avoid_n % len(b.avoid) + len(b.avoid)
+}
+
 builder_find_mineral :: proc(e: ^Enemy, gs: ^Game_State) -> (best: [2]i32, ok: bool) {
     b  := &e.builder
     bt := builder_tile(e)
@@ -1970,6 +2005,7 @@ builder_find_mineral :: proc(e: ^Enemy, gs: ^Game_State) -> (best: [2]i32, ok: b
         }
     }
 
+    avoid_r := builder_avoid_radius(b)
     best_d := max(i64)
     for pass in 0 ..< 2 {
         for y in CAVE_TOP ..< CAVE_BOT {
@@ -1980,7 +2016,7 @@ builder_find_mineral :: proc(e: ^Enemy, gs: ^Game_State) -> (best: [2]i32, ok: b
                 cand := [2]i32{i32(x), i32(y)}
                 avoided := false
                 for k in 0 ..< min(b.avoid_n, len(b.avoid)) {
-                    if chebyshev(cand, b.avoid[k]) <= AVOID_RADIUS { avoided = true; break }
+                    if chebyshev(cand, b.avoid[k]) <= avoid_r { avoided = true; break }
                 }
                 if avoided { continue }
                 near_den := false
@@ -2130,6 +2166,7 @@ builder_fetch :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     if !b.has_target {
         T, found := builder_find_mineral(e, gs)
         if !found {
+            builder_avoid_narrow(b)
             builder_pause(b, 2.0, .Fetch_Mineral)
             return
         }
@@ -2151,6 +2188,7 @@ builder_fetch :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             b.carry      = t
             b.has_target = false
             b.goal       = .Encase_Den
+            builder_avoid_narrow(b)
         }
     }
 }
