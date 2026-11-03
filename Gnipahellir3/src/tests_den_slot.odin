@@ -207,7 +207,25 @@ an_unstruck_builder_in_its_slot_may_not_eat_its_wall :: proc(t: ^testing.T) {
     e.builder.stuck_count = 1
     testing.expect(t, builder_may_eat_roof(gs, e, 0, int(roof.x), int(roof.y)), "a strike opens it")
     e.pos = {f32(A.x) - 8, f32(A.y)}
+    e.builder.goal = .Fetch_Mineral   // a struck haul home is let in (card 111)
     testing.expect(t, !builder_may_eat_roof(gs, e, 0, int(roof.x), int(roof.y)), "from outside it holds")
+}
+
+// Seed 424242: a neighbour took each block from under the pillar, so each rose
+// one tile, never struck, and the next began at once, 21 times in an hour.
+@(test)
+a_last_slot_pillar_that_gained_nothing_is_not_repeated :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e, _ := pinned_den(gs, false)
+    gs.delta_time = 1.0/60.0
+    e.builder.stuck_count = 1
+    e.builder.escape_from = builder_tile(e).y - 1
+    update_enemies(gs)
+    testing.expect(t, !e.builder.escaping, "the last pillar rose one: no second")
+    e.builder.escape_from = builder_tile(e).y + ESCAPE_MIN_RISE
+    update_enemies(gs)
+    testing.expect(t, e.builder.escaping, "one that rose goes on")
 }
 
 // A pillar that ran out its clock without rising failed: that is a strike.

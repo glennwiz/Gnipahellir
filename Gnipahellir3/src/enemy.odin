@@ -506,7 +506,8 @@ den_owner_index :: proc(gs: ^Game_State, T: [2]i32) -> int {
 // is a coffin (the bounce loop from playtest 2026-07-16), and the encase loop
 // repairs the hole on the next haul.  Only from inside: outside, the world is natural diggable rock
 // (never a cage), and an outside exemption turns every commute into a
-// break-in/repair treadmill that eats all the hauled ore.
+// break-in/repair treadmill that eats all the hauled ore.  The one outside
+// exemption is a haul home that has struck: then the wall is the way in.
 den_protected :: proc(gs: ^Game_State, x, y: int, owner: int = -1) -> bool {
     if !in_bounds(x, y) { return false }
     if !den_material(gs, x, y) { return false }
@@ -551,12 +552,19 @@ den_protected_in :: proc(gs: ^Game_State, dl: ^Den_List, x, y: int, owner: int =
         o := &gs.enemies.data[i]
         if !den_structure_slot(&o.builder, T) { continue }
         if i == owner {
+            // Struck on the way home: the wall stands between it and the den,
+            // and a home over open air has no other way in.
+            if o.builder.goal == .Encase_Den && o.builder.stuck_count > 0 { continue }
             // Same interior box as the trespass check (den + door corridor).
             // Home has a door: the wall opens only when that door will not do,
             // or the repair pass refills the slot and the next haul never banks.
-            rel := builder_tile(o) - o.builder.anchor
-            if rel.x >= -1 && rel.x <= 2 && rel.y >= -2 && rel.y <= 0 &&
-               (o.builder.stuck_count > 0 || den_door_blocked(gs, dl, &o.builder)) { continue }
+            // Struck, the box is the den's rows through its shell: a body in
+            // the cut it made through a wall is still on its way out, and one in
+            // the door corridor under its own shell is still at home.
+            rel  := builder_tile(o) - o.builder.anchor
+            rows := rel.y >= -2 && rel.y <= 0
+            if rows && rel.x >= -1 && rel.x <= 2 && den_door_blocked(gs, dl, &o.builder) { continue }
+            if rows && abs(rel.x) <= 2 + DEN_SHELL_LAYERS && o.builder.stuck_count > 0 { continue }
         }
         return true
     }
@@ -1610,13 +1618,20 @@ builder_escape_pillar :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
 
     if nav.mine_timer > 0 { return }   // update_builder ticks it down
     // Ceiling in the way: eat it, both rows, since a hop rises through two and
-    // the escape only ends with both clear.  Otherwise hop.
-    roof_y := y - 1 if is_solid(&gs.world, x, y-1) else y - 2
-    if is_solid(&gs.world, x, roof_y) {
-        if builder_may_eat_roof(gs, e, id, x, roof_y) {
-            own_wall := den_protected(gs, x, roof_y, id)
-            dropped := smash_tile(gs, x, roof_y)
-            eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(roof_y)}})
+    // the escape only ends with both clear.  Otherwise hop.  A body over two
+    // columns hits its head on either, so the roof goes over both, or each hop
+    // stops a hair short of the tile and nothing goes in underfoot.
+    left  := int(e.pos.x)
+    right := int(e.pos.x + BUILDER_W - BODY_EPS)
+    roof_x, roof_y := x, y - 1
+    find: for row in ([2]int{y - 1, y - 2}) do for cx in left ..= right {
+        if is_solid(&gs.world, cx, row) { roof_x, roof_y = cx, row; break find }
+    }
+    if is_solid(&gs.world, roof_x, roof_y) {
+        if builder_may_eat_roof(gs, e, id, roof_x, roof_y) {
+            own_wall := den_protected(gs, roof_x, roof_y)   // eaten, so its own
+            dropped := smash_tile(gs, roof_x, roof_y)
+            eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(roof_x), i32(roof_y)}})
             if !dropped do b.pocket = min(b.pocket + 1, POCKET_MAX)
             nav.mine_timer = MINE_TIME
             if own_wall && roof_y == y - 1 {   // the cut is the way out: walk it, the slot is still open
@@ -2244,13 +2259,14 @@ builder_fetch :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
             tx := int(b.target_tile.x)
             ty := int(b.target_tile.y)
             t  := get_tile(&gs.world, tx, ty)
-            set_tile(&gs.world, tx, ty, .Void)
+            smash_tile(gs, tx, ty)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = b.target_tile})
             log_action(gs, "Builder#%d harvests %v at (%d,%d)", id, t, tx, ty)
             e.nav.mine_timer = MINE_TIME
             b.carry      = t
             b.has_target = false
             b.goal       = .Encase_Den
+            b.stuck_count = 0
             builder_avoid_narrow(b)
         }
     }
@@ -2352,7 +2368,9 @@ builder_encase :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     // touches the anchor, so from there it is clear to place.  No walk out
     // takes the pillar, and a pillar that is refused is a strike.
     T, found, under_body := den_next_build_tile(e, gs)
-    if !found && under_body && b.stuck_count > 0 {
+    // Not straight after a pillar here that gained nothing: that one is the
+    // same loop, a neighbour taking each block from under it (seed 424242).
+    if !found && under_body && b.stuck_count > 0 && abs(builder_tile(e).y - b.escape_from) >= ESCAPE_MIN_RISE {
         builder_start_escape(e)
         log_action(gs, "Builder#%d is under its last slot - pillars up and out", id)
         return
