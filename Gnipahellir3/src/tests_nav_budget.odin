@@ -473,3 +473,58 @@ a_spent_frame_does_not_call_a_worker_lost :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.golem_calls[0], Golem_Call.Come)
     testing.expect_value(t, gs.golem_searches, MAX_GOLEM_SEARCHES_PER_FRAME)
 }
+
+@(test)
+only_a_failed_fetch_or_delivery_drops_its_target :: proc(t: ^testing.T) {
+    // Card 145: a transfer target with no route goes on the worker's dropped
+    // list.  A mine or a walk with no route is the gather skip list's business.
+    gs := nav_state()
+    defer free(gs)
+    // Roster slot 3, so the list is the worker's own and not slot 0's.
+    g := &gs.golems.data[3]
+    g^ = nav_pocket(gs)^
+    gs.golems.data[0] = {}
+    for golem_pack_add(g, .Stone_Block) {}   // a full pack cannot dig the wall
+    beyond := [2]i32{26, 59}   // past even a Place's reach
+    for job in Golem_Job {
+        gs.golem_transfer[3] = {}
+        g.job = job
+        testing.expect(t, !golem_set_target(gs, g, beyond, false), "the far side is sealed")
+        testing.expect_value(t, len(golem_transfer_skips(gs, 0)), 0)
+        dropped := golem_resource_skipped(beyond, golem_transfer_skips(gs, 3))
+        testing.expect_value(t, dropped, job == .Fetch_Build || job == .Deliver)
+    }
+}
+
+@(test)
+a_stockpile_with_no_route_is_not_picked_twice :: proc(t: ^testing.T) {
+    // With no store on the level the deposit search hands back a stockpile
+    // cell.  When that cell has no route, the stockpile retry in the same call
+    // must skip it and try the next, not search the same one again.
+    gs := nav_state()
+    defer free(gs)
+    g := nav_pocket(gs)
+    g.pos.x = 25.2   // east of the wall; every pile cell is west of it
+    for golem_pack_add(g, .Stone_Block) {}
+    g.carry = .Stone_Block
+    // Its stockpile ring ends at x=17, beyond a transfer's reach of the wall.
+    gs.golems.work[gs.level_index] = {active = true, min = {11, 59}, max = {13, 59}}
+    near, ok := golem_find_stockpile(gs, golem_tile(g), .Stone_Block, nil)
+    testing.expect(t, ok && near.x <= 17, "the nearest pile is past the wall")
+    testing.expect(t, !golem_start_delivery(gs, g), "no pile has a route")
+    skips := golem_transfer_skips(gs, 0)
+    testing.expect_value(t, len(skips), 2)
+    if len(skips) == 2 {
+        testing.expect_value(t, skips[0], near)
+        testing.expect(t, skips[1] != near, "the retry searched another pile")
+    }
+
+    // The next block: the deposit search, which falls back to the stockpile
+    // with no store about, skips both dropped piles as well.
+    g.carry = .Stone_Block
+    gs.golem_searches = 0
+    testing.expect(t, !golem_start_delivery(gs, g), "still no route")
+    skips = golem_transfer_skips(gs, 0)
+    testing.expect_value(t, len(skips), 4)
+    for a, i in skips do for b in skips[i+1:] do testing.expect(t, a != b, "each search tried a new pile")
+}
