@@ -320,5 +320,6 @@ than 64, and 1024 has only ever had a load test, not a frame-time one.
 - **2026-11-02, undermined structures:** a structure with nothing solid under it breaks into its item, which falls and lands. Altars, portals and scroll chests are exempt.
 - **2026-11-02, mined drops:** blocks the player mines go straight into the bag when in reach. Enemy drops still fall.
 - **2026-11-02, agent play vision:** the game ships a built-in, local, documented agent API that any tool able to make HTTP requests can use to observe and act, such as Claude Code, Codex, Copilot CLI or curl. The player's agent of choice becomes a new way to play.
+- **2026-11-03, walls as defence, the rule (card 59):** dig time. A digger works a player-placed block before it breaks: dirt, sand, wood and the like 1.5 s, stone 4 s, door 6 s, natural rock as before. Plans pay the same scale, so a wave goes for the weak spot. Each digger times its own, and nothing is refused. Garm ignores it. Hearth, Depot and World Anchor stay undiggable; no new anchor block. Numbers in one table for Glenn to tune.
 - **Also carded:** I5, I6, I9, and I2 alongside the tithe, not instead of it.
 - **Polish:** the first-hour pass plus the slice's wave gauge and sounds. Cards 9-27 are Draft and held until Glenn starts them.
