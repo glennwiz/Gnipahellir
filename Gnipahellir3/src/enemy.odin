@@ -414,6 +414,7 @@ enemy_behaviour := [Enemy_Kind]Enemy_Behaviour{
     .Vargr        = {{BUILDER_W, BUILDER_H}, RAIDER_SPEED, VARGR_HP, BUILDER_GRAVITY, update_raider},
     .Pond_Frog    = {{POND_FROG_W, POND_FROG_H}, POND_FROG_SPEED, POND_FROG_HP, BUILDER_GRAVITY, update_roamer},
     .Ember_Beetle = {{EMBER_BEETLE_W, EMBER_BEETLE_H}, EMBER_BEETLE_SPEED, EMBER_BEETLE_HP, BUILDER_GRAVITY, update_roamer},
+    .Rain_Wisp    = {{RAIN_WISP_W, RAIN_WISP_H}, RAIN_WISP_SPEED, RAIN_WISP_HP, 0, update_rain_wisp},
 }
 
 enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {

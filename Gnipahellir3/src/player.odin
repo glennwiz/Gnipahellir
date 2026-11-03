@@ -121,10 +121,15 @@ update_player :: proc(gs: ^Game_State) {
         if inp.move_right { p.vel.x =  FLY_SPEED; p.facing =  1 }
         if inp.fly_up     { p.vel.y = -FLY_SPEED }
         if inp.fly_down   { p.vel.y =  FLY_SPEED }
+        if gs.soak_t > 0 do p.vel *= RAIN_SOAK_DRAG
     } else {
         // ── Horizontal intent (Speed stat: base + equipment) ──────
         speed := f32(player_stat(p, .Speed))
-        if submerged do speed *= WATER_DRAG
+        if submerged {
+            speed *= WATER_DRAG
+        } else if gs.soak_t > 0 {
+            speed *= RAIN_SOAK_DRAG   // not stacked with water, like leaf fall
+        }
         p.vel.x = 0
         if inp.move_left  { p.vel.x = -speed; p.facing = -1 }
         if inp.move_right { p.vel.x =  speed; p.facing =  1 }
@@ -151,6 +156,7 @@ update_player :: proc(gs: ^Game_State) {
 
     if gs.leaf_fall_t > 0 do gs.leaf_fall_t -= dt
     if gs.flight_t > 0 do gs.flight_t -= dt
+    if gs.soak_t > 0 do gs.soak_t -= dt
 
     gravity  := flying ? f32(0) : GRAVITY
     max_fall := MAX_FALL_SPEED
