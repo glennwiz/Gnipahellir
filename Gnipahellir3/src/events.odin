@@ -775,7 +775,14 @@ handle_tile_mined :: proc(gs: ^Game_State, e: Event) {
 // input AND its fuel — nothing in the machine is lost.  (The replicator's
 // in_* is its seed gem; its fuel_count is always 0, a harmless no-op.)
 // Timers and buffers die with the tile so a future machine starts fresh.
+// A Golem Depot gone from T spills its cargo and its record goes with it.
 spill_machine :: proc(gs: ^Game_State, T: [2]i32, old_tile: Tile_Type) {
+    if old_tile == .Golem_Depot {
+        if d := golem_depot_at(gs, gs.level_index, T); d != nil {
+            for s in d.slots do spawn_ground_item(&gs.world, T, s.item, int(s.count))
+            d^ = {}
+        }
+    }
     sd := &gs.world.sim_data[grid_idx(int(T.x), int(T.y))]
     boiler_rule, is_boiler := boiler_rule_for(old_tile)
     if old_tile == .Smelter || old_tile == .Gem_Replicator || is_boiler {

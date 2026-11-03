@@ -56,8 +56,8 @@ fz_range :: proc(s: ^u64, lo, hi: int) -> int { // inclusive
     return lo + int(fz_next(s) % u64(hi - lo + 1))
 }
 
-// Every place an item count lives.  Barrels/silos/depots are not exercised
-// by this stream (the arena holds none), so their records stay zero.
+// Every place an item count lives.  Barrels/silos are not exercised by this
+// stream (the arena holds none), so their records stay zero.
 @(private = "file")
 fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     tot: [Item]int
@@ -82,6 +82,9 @@ fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     }
     for s in gs.risen.kit {
         if s.item != .None && s.count > 0 do tot[s.item] += s.count
+    }
+    for d in gs.golems.depots do if d.active {
+        for s in d.slots do tot[s.item] += int(s.count)
     }
     tot[.None] = 0
     return tot
@@ -143,8 +146,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [11]int
-    action_names := [11]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash"}
+    viol_by: [12]int
+    action_names := [12]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash", "depot smash"}
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -198,8 +201,10 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         placed_old: Tile_Type
         furnace_at:  [2]int  // the furnace a smelter action borrows, and what stood there
         furnace_old: Tile_Type
+        depot_at:  [2]i32  // the depot a depot smash raises, and what stood there
+        depot_old: Tile_Type
 
-        action := fz_range(&rng, 0, 10)
+        action := fz_range(&rng, 0, 11)
         switch action {
         case 0:
             name = "pickup"
@@ -352,6 +357,31 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
                 handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
             }
             gs.golems.projects[gs.level_index] = {}
+
+        case 11:
+            // An enemy takes a stocked Golem Depot: refused while it holds
+            // cargo, or, by a direct mine, the cargo spills and its Emerald lands.
+            name = "depot smash"
+            c: Golem_Build_Cell
+            for cell in golem_plan_table[.Golem_Depot].cells do if cell.tile == .Golem_Depot do c = cell
+            depot_at = {i32(px + fz_range(&rng, -2, 2)), i32(py + fz_range(&rng, -2, 2))}
+            depot_old = get_tile(&gs.world, int(depot_at.x), int(depot_at.y))
+            gs.golems.projects[gs.level_index] = {active = true, plan = .Golem_Depot, level = gs.level_index, anchor = depot_at - c.off}
+            set_tile(&gs.world, int(depot_at.x), int(depot_at.y), .Golem_Depot)
+            gs.monument_cells[gs.level_index][grid_idx(int(depot_at.x), int(depot_at.y))] = .Golem_Depot
+            golem_depot_on_built(gs, depot_at)
+            d := golem_depot_at(gs, gs.level_index, depot_at)
+            for _ in 0 ..< fz_range(&rng, 0, 3) {
+                golem_depot_add(d, fuzz_pool[fz_range(&rng, 0, len(fuzz_pool) - 1)], u32(fz_range(&rng, 1, 3 * MAX_STACK)))
+            }
+            want[c.item] += 1
+            before = fuzz_ledger(gs)
+            if fz_range(&rng, 0, 1) == 0 {
+                smash_tile(gs, int(depot_at.x), int(depot_at.y))
+            } else {
+                handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = depot_at})
+            }
+            gs.golems.projects[gs.level_index] = {}
         }
 
         process_events(gs)
@@ -363,6 +393,12 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         if action == 7 || action == 8 {  // the arena gets its tile back; totals may move freely here
             set_tile(&gs.world, furnace_at.x, furnace_at.y, furnace_old)
             gs.world.sim_data[grid_idx(furnace_at.x, furnace_at.y)] = {}
+        }
+        if action == 11 && get_tile(&gs.world, int(depot_at.x), int(depot_at.y)) == .Golem_Depot {
+            // A refused depot gives the arena its tile back, record and all.
+            if d := golem_depot_at(gs, gs.level_index, depot_at); d != nil do d^ = {}
+            gs.monument_cells[gs.level_index][grid_idx(int(depot_at.x), int(depot_at.y))] = .Air
+            set_tile(&gs.world, int(depot_at.x), int(depot_at.y), depot_old)
         }
 
         ok: bool

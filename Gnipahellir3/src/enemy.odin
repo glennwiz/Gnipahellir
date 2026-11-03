@@ -1331,7 +1331,8 @@ update_raids :: proc(gs: ^Game_State) {
 // ─── Wave hunting (shared by every wave enemy) ──────────────────────────────
 
 // Would handle_tile_mined turn this tile away?  It refuses a loaded silo, a
-// loaded barrel/coffer, and any scroll chest (enemies never break one).  A wave
+// loaded barrel/coffer, and any scroll chest (enemies never break one).  A
+// loaded Golem Depot is a hoard too: no hunter targets it, no dig smashes it.  A wave
 // hunter must know that BEFORE it picks a target: discovering it by failing
 // at the tile is a livelock — the hunter arrives, swings forever, the tile
 // never falls, and the wave never resolves.  So refused containers are
@@ -1347,6 +1348,10 @@ wave_target_refused :: proc(gs: ^Game_State, T: [2]i32) -> bool {
     if is_rune_scroll_chest(tile) do return true
     if tile == .Barrel || tile == .Rune_Coffer {
         if b := barrel_at(gs, gs.level_index, T); b != nil do return barrel_total(b) > 0
+        return false
+    }
+    if tile == .Golem_Depot {
+        if d := golem_depot_at(gs, gs.level_index, T); d != nil do for s in d.slots do if s.count > 0 do return true
         return false
     }
     return false
