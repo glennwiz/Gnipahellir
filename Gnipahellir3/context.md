@@ -98,7 +98,7 @@ One line per system; the long form of each is in the archive at the end of `Work
 - **Garm:** a hound boss that builds a 10x8 lair vault, floods it with lava, cages the player and breaks into his own cage. Lava is static except where Garm pours it.
 - **Roamers** (`roamer_table`): Pond Frog, Mole, Ember Beetle on the surface; Cave Eel, Magma Crawler, Stone Grub in cave 2; Rain Wisp, Rock Harpy in the sky.
 - **Industry:** Bench, Smelter (ore buffer, wood fuel, auto-pull), Tree Grower, Storage Barrel, Silo, Auto-Miner (dimensions only), Gem Replicator, Steam (Boiler, Engine) and Magic (Kettle, Mana Wheel, Mana Mist, Mana Pipes) feeding one track-agnostic `powered()`. Turrets built in the world: Turret Pillar plus a head (Flame, Rainbow Laser with line of sight); any block destroyed breaks the whole turret into items.
-- **Clay golems:** Command Wand, roster window, Gather/Build modes, eight-block packs, Quick Clay footholds, monument templates. Only Draugr can hurt a golem (deliberate).
+- **Clay golems:** Command Wand, roster window, Gather/Build modes, eight-block packs, Quick Clay footholds, monument templates. Builders and Garm never hurt a golem (deliberate); Draugr, raid Tunnellers/Vargr and fire sprites do.
 - **Physics and terrain:** placed-block gravity (a block landing in a player, enemy or golem body crumbles to its item), falling trees, water and lava flow, springs, quench (water on lava makes `Scoria`), undermined structures break into their item. Enemy digs conserve items (`smash_tile` spills machines and both door halves).
 - **Saves:** write to `<path>.tmp` then rename; a refused save moves to a `.N.bak` slot; stats file is versioned and an unreadable one goes to `.unread`.
 - **Agent play:** `agent_api.odin` serves a local HTTP API; the title's `[A] Let an agent play` runs in a sandbox folder under `agent_runs/`. Verbs include `tithe:slot` on the death screen (state's `tithe.ready_in` counts the screen's 1.2 s wait down) and, with a command wand selected, `zone`, `crew` and `monument`+`at` for the golem crew; state lists the crew (golems, the level's zone and monument) and the sky flocks in view. Glenn can chat to the agent with Enter. `GNIPA_AGENT_TURBO=1` for fast runs; `tools/agent_play.sh` (port 7777), `tools/agent_pacing.py` and `tools/agent_bot/` for pacing.
@@ -130,8 +130,8 @@ Garm's cage and lair; older Aug items (tree grower motes, tile ambience, Garm's 
 - **Polish:** collect motes home to the player, not the hotbar; the door ghost previews one cell; Hell_Gate and Final_Seal are flat red cells.
 
 ### Deliberate (don't file as bugs)
-Golems are not attackable by Builders or Garm, only by Draugr; base defence is for a
-future dedicated enemy. The `.Cave_Entrance` tile is dead and kept for save compat.
+Golems are not attackable by Builders or Garm. Draugr hit them, and so do the raid
+enemies (Tunnellers/Vargr, fire sprites), which came later as the base-defence threat. The `.Cave_Entrance` tile is dead and kept for save compat.
 `life.odin` is a debug toy.
 
 ---
