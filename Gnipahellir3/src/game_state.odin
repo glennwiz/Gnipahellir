@@ -130,6 +130,7 @@ Enemy_Status :: struct {
     burn:        f32,  // seconds still alight
     burn_charge: f32,  // toward the next FLAME_BURN_TICK
     slow:        f32,  // seconds still at WATER_SLOW
+    dig_tile:    [2]i32,  // placed block whose dig time is running (builder_dig_ready)
 }
 
 Enemy_Store :: struct {
@@ -404,6 +405,29 @@ Particle_Store :: struct {
     data:  [MAX_PARTICLES]Particle,
     count: int,
     shed_count: int,   // of those, live turret shed pixels
+}
+
+// ─── Bird flocks ──────────────────────────────────────────────────────────────
+
+MAX_BIRD_FLOCKS :: 4
+BIRDS_PER_FLOCK :: 7
+
+Bird :: struct {
+    pos: [2]f32,   // tile units, like particles
+    vel: [2]f32,
+}
+
+Bird_Flock :: struct {
+    center:    [2]f32,  // the V's point
+    heading:   f32,     // +1 east, -1 west
+    phase:     f32,     // keeps flocks out of step with each other
+    scatter_t: f32,     // seconds left scattered; 0 = in formation
+    birds:     [BIRDS_PER_FLOCK]Bird,
+}
+
+Bird_Store :: struct {
+    flocks: [MAX_BIRD_FLOCKS]Bird_Flock,
+    seeded: bool,
 }
 
 // ─── Floating Combat Text ─────────────────────────────────────────────────────
@@ -804,6 +828,7 @@ Game_State :: struct {
     ritual:      Ritual_State,    // the Sky Altar offering animation (levels.odin); transient, not saved
     reclaim:     Reclaim_State,   // Shift+hold pickaxe dismantle; transient, not saved
     ambience_timer: f32,   // countdown to the next ambient-mote probe pass
+    birds:       Bird_Store,      // sky scenery (birds.odin); transient, not saved
     mining:      Mining_Action,
     events:      Event_Queue,
 

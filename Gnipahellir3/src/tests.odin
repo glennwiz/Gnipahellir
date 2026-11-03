@@ -5875,9 +5875,12 @@ builder_soak_cave2_economy :: proc(t: ^testing.T) {
 
     SOAK_MINUTES :: 60
     WINDOW       :: 3600   // one simulated minute of frames
+    MAX_TARGET_GIVE_UPS :: 8
 
     prev_carry:  [MAX_ENEMIES]Tile_Type
     last_pickup: [MAX_ENEMIES]int
+    prev_avoid:  [MAX_ENEMIES]int
+    give_ups:    [GRID_W * GRID_H]u16    // times a target was given up on
     for i in 0 ..< MAX_ENEMIES { last_pickup[i] = -1 }
     trip_total, trip_count: int
 
@@ -5909,6 +5912,12 @@ builder_soak_cave2_economy :: proc(t: ^testing.T) {
                 last_pickup[bi] = frame
             }
             prev_carry[bi] = c
+            bb := &gs.enemies.data[bi].builder
+            if bb.avoid_n != prev_avoid[bi] {
+                prev_avoid[bi] = bb.avoid_n
+                A := bb.avoid[(bb.avoid_n - 1) % len(bb.avoid)]
+                give_ups[grid_idx(int(A.x), int(A.y))] += 1
+            }
         }
 
         if (frame + 1) % WINDOW == 0 {
@@ -5941,6 +5950,12 @@ builder_soak_cave2_economy :: proc(t: ^testing.T) {
         }
     }
     testing.expect(t, loot > 0, "den floors should hold stockpiled loot")
+
+    // Run 6's carousel: the same target struck out at and picked again for ever.
+    top_give_ups := u16(0)
+    for g in give_ups do top_give_ups = max(top_give_ups, g)
+    log.infof("soak: most give-ups on one target %d", top_give_ups)
+    testing.expect(t, top_give_ups <= MAX_TARGET_GIVE_UPS, "a target is retried for ever")
 
     testing.expect(t, trip_count > 0, "builders should complete fetch round trips")
     if trip_count > 0 {
@@ -14737,7 +14752,7 @@ a_pillar_escape_mines_both_rows_and_rises :: proc(t: ^testing.T) {
         eq_clear(&gs.events)
         if !b.escaping do break
     }
-    testing.expect(t, b.escape_from - builder_tile(e).y >= ESCAPE_MIN_RISE, "the pillar rose")
+    testing.expect(t, 80 - builder_tile(e).y >= ESCAPE_MIN_RISE, "the pillar rose")
 }
 
 // An unmineable second row ends the escape instead of hopping at it for ever.
@@ -14833,4 +14848,253 @@ no_hop_is_planned_under_a_low_ceiling :: proc(t: ^testing.T) {
     testing.expect(t, plan({{61, 78}}, 62, 79), "a body steps up one under a ceiling")
     testing.expect(t, plan({}, 63, 79), "the far hop is there with headroom")
     testing.expect(t, !plan({{61, 78}, {62, 78}}, 63, 79), "no hop under a ceiling")
+}
+
+// ─── No route ─────────────────────────────────────────────────────────────────
+
+// An open cavern with ore only in its roof and nothing in reach to dig for a
+// bridge: the shape of the ceiling carousel in run 6.
+@(private = "file")
+no_route_cavern :: proc(gs: ^Game_State) -> (id: int) {
+    id = route_room(gs, 50, 90, 62, 80)
+    for x := 60; x <= 80; x += 5 do set_tile(&gs.world, x, 61, .Iron_Ore)
+    e := &gs.enemies.data[id]
+    e.pos.x = 70.1
+    b := &e.builder
+    b.anchor, b.den_built, b.goal = {70, 80}, true, .Fetch_Mineral
+    return
+}
+
+@(private = "file")
+no_route_run :: proc(gs: ^Game_State, seconds: int, stop_on_carry := true) -> bool {
+    b := &gs.enemies.data[0].builder
+    for _ in 0 ..< seconds * 60 {
+        gs.player.hp = 1000
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if stop_on_carry && b.carry != .Air do return true
+    }
+    return false
+}
+
+// Run 6 loop 1: a ~55 s cycle of strikes through a cluster it could never reach.
+@(test)
+a_builder_with_no_route_pillars_up_to_the_ore :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := no_route_cavern(gs)
+    testing.expect(t, no_route_run(gs, 300), "the ore in the roof is reached")
+    testing.expect_value(t, gs.enemies.data[id].builder.avoid_n, 0)
+}
+
+// A pillar runs its own clock, not what the last escape left on the timer.
+@(test)
+a_no_route_pillar_gets_its_full_time :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 70, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.escape_timer = ESCAPE_MAX_TIME
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "it pillars")
+    for _ in 0 ..< 60 * 16 {
+        if !b.escaping do break
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, 80 - builder_tile(e).y >= ESCAPE_MIN_RISE, "the pillar rose")
+}
+
+// A pillar that rose is not held against the next no-route, lower down: only
+// one that gained nothing, right where it ended, is refused.
+@(test)
+a_pillar_that_rose_leaves_the_next_free :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 60, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "the first pillar")
+    for _ in 0 ..< 60 * 16 {
+        if !b.escaping do break
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, 80 - builder_tile(e).y >= ESCAPE_MIN_RISE, "the pillar rose")
+    e.pos.y = 80
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "a lower no-route pillars")
+    b.escaping, b.escape_from = false, 50
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "a failed pillar far off is no bar")
+}
+
+// The ring holds four: five bad targets in a row once cycled for ever while a
+// good ore sat across the room.  Scene from the review of card 99.
+@(private = "file")
+wide_cluster :: proc(gs: ^Game_State, n: int) -> (id: int) {
+    id = route_room(gs, 40, 160, 70, 80)
+    for y in 81 ..= 91 do for x in 58 ..= 66 + (n - 1)*6 do set_tile(&gs.world, x, y, .Rune_Stone)
+    for i in 0 ..< n do set_tile(&gs.world, 62 + i*6, 86, .Iron_Ore)
+    set_tile(&gs.world, 158, 80, .Iron_Ore)
+    e := &gs.enemies.data[id]
+    e.pos.x = 62.1
+    b := &e.builder
+    b.anchor, b.den_built, b.goal = {42, 80}, true, .Fetch_Mineral
+    return
+}
+
+@(test)
+a_cluster_wider_than_the_ring_is_left_behind :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    for n in ([]int{5, 6, 9}) {
+        id := wide_cluster(gs, n)
+        testing.expectf(t, no_route_run(gs, 600), "%d bad targets kept it from the good ore", n)
+        testing.expect_value(t, gs.enemies.data[id].builder.carry, Tile_Type.Iron_Ore)
+    }
+}
+
+// The blacklist widens only while nothing is fetched.  A harvest takes it back
+// to size, and so does a search it left empty, or a builder would idle for ever.
+@(test)
+a_wide_blacklist_narrows_again :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 79, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.goal = .Fetch_Mineral
+    for y in CAVE_TOP ..< CAVE_BOT do for x in CAVE_LEFT ..< CAVE_RIGHT {
+        if get_tile(&gs.world, x, y) == .Stone do set_tile(&gs.world, x, y, .Rune_Stone)
+    }
+    set_tile(&gs.world, 62, 80, .Iron_Ore)
+
+    b.avoid_n = 2
+    testing.expect_value(t, builder_avoid_radius(b), AVOID_RADIUS)
+    b.avoid_n = 7
+    testing.expect_value(t, builder_avoid_radius(b), AVOID_RADIUS)
+    b.avoid_n = 13
+    testing.expect_value(t, builder_avoid_radius(b), 3*AVOID_RADIUS)
+    b.avoid = {{62, 80}, {62, 80}, {62, 80}, {62, 80}}
+    builder_fetch(e, id, gs, 1.0/60)   // the ring sits on the only ore: nothing found
+    testing.expect_value(t, b.avoid_n, 5)
+    testing.expect(t, !b.has_target, "nothing to fetch")
+
+    b.goal, b.resume, b.cooldown, b.avoid_n = .Fetch_Mineral, .Fetch_Mineral, 0, 13
+    b.has_target, b.target_tile = true, {62, 80}
+    e.pos.x = 61.1
+    testing.expect(t, no_route_run(gs, 10), "the ore in reach is taken")
+    testing.expect_value(t, b.avoid_n, 5)
+    testing.expect_value(t, builder_avoid_radius(b), AVOID_RADIUS)
+}
+
+// Run 6 loop 2: 29% of hauls destroyed.  A builder that cannot get home sets the
+// block down, and a pillar is not tried with home below it.
+@(test)
+a_haul_that_cannot_get_home_lands_at_its_feet :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 79, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.goal, b.carry, b.anchor, b.den_built = .Encase_Den, .Iron_Ore, {64, 90}, true
+    set_tile(&gs.world, 64, 90, .Void)   // open, so a drop at home would stay there
+    b.stuck_count = MAX_STRIKES - 1
+    builder_strike(e, id, gs, "no path")
+    testing.expect_value(t, b.carry, Tile_Type.Air)
+    testing.expect(t, !b.escaping, "no pillar for a home below")
+    testing.expect_value(t, turret_ground_count(gs, .Iron_Ore), 1)
+    bt := builder_tile(e)
+    testing.expect_value(t, gs.world.items[grid_idx(int(bt.x), int(bt.y))], Item.Iron_Ore)
+    testing.expect_value(t, gs.world.items[grid_idx(64, 90)], Item.None)
+}
+
+// A pillar that gained nothing is not tried again straight away: run by the
+// soak, an unbounded retry here pillared for 67% of a builder's hour.
+@(test)
+a_pillar_that_gained_nothing_is_not_repeated :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 70, 80)
+    e := &gs.enemies.data[id]
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "the first pillar")
+    e.builder.escaping = false
+    testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "no rise, no second pillar")
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "a later no-route may try")
+    e.builder.escaping = false
+    e.pos.y -= f32(ESCAPE_MIN_RISE)
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "a pillar that rose goes on")
+}
+
+// The same bound through the real end of a pillar: one that ran out of time short
+// of the rise stays marked.  Cleared, the soak fell from 285 trips to 174.
+@(test)
+a_pillar_that_ended_short_stays_marked :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 60, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.goal = .Fetch_Mineral
+    for rose in i32(0) ..= 2 {
+        b.escaping, b.escape_from, b.escape_timer = true, builder_tile(e).y + rose, ESCAPE_MAX_TIME
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        testing.expect(t, !b.escaping, "the clock ends it")
+        testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "no second pillar")
+    }
+}
+
+// An ore overhead with no route is climbed toward, not blacklisted.
+@(test)
+a_fetch_with_the_ore_overhead_pillars_and_keeps_the_target :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := no_route_cavern(gs)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.target_tile, b.has_target = {70, 61}, true
+    b.stuck_count = MAX_STRIKES - 1
+    builder_strike(e, id, gs, "no path")
+    testing.expect(t, b.escaping, "it pillars")
+    testing.expect_value(t, b.avoid_n, 0)
+    testing.expect(t, b.has_target, "the target stands")
+}
+
+// A home overhead is climbed toward, the haul still in hand.
+@(test)
+a_haul_with_home_overhead_is_carried_up :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 70, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    b.goal, b.carry, b.anchor, b.den_built = .Encase_Den, .Iron_Ore, {64, 60}, true
+    b.stuck_count = MAX_STRIKES - 1
+    builder_strike(e, id, gs, "no path")
+    testing.expect_value(t, b.carry, Tile_Type.Iron_Ore)
+    testing.expect(t, b.escaping, "it pillars")
+}
+
+// Only a route failure pillars, and never under a roof it cannot mine.
+@(test)
+a_pillar_is_refused_unless_it_can_help :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 79, 80)
+    e := &gs.enemies.data[id]
+    testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 60}, "can't place"), "another strike reason")
+    testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 80}, "no path"), "level with it")
+    set_tile(&gs.world, 60, 79, .Rune_Stone)
+    testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "an unmineable roof")
+    set_tile(&gs.world, 60, 79, .Wood)
+    b := &gs.enemies.data[id].builder
+    b.anchor, b.den_built, b.build = {60, 82}, true, .Shelter
+    testing.expect(t, den_structure_slot(b, {60, 79}), "the roof is a den slot")
+    testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "a den's roof")
+    set_tile(&gs.world, 60, 79, .Stone)
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "rock overhead is dug")
 }
