@@ -178,6 +178,7 @@ player_equip :: proc(gs: ^Game_State, inv_slot: int) {
 }
 
 POTION_HEAL :: 5   // hp restored by one Health Potion
+SKY_EGG_HEAL :: 2  // hp restored by one Sky Egg
 
 // Flower farming: a harvested flower yields this many seeds; a planted bed
 // grows this many flowers, each harvested for its own seeds.
@@ -187,7 +188,7 @@ FLOWER_BED_BLOOMS :: 5
 
 // A consumable is used (drunk or eaten) from the bag rather than equipped.
 item_is_consumable :: proc(it: Item) -> bool {
-    return it == .Potion_Health || it == .GreenBerrie
+    return it == .Potion_Health || it == .GreenBerrie || it == .Sky_Egg
 }
 
 // A readable opens the tome overlay from the bag instead of equipping.  It is
@@ -227,6 +228,15 @@ player_consume :: proc(gs: ^Game_State, inv_slot: int) {
         p.hp += heal
         spawn_damage_number(&gs.floating_text, {p.pos.x + PLAYER_W*0.5, p.pos.y}, heal, HEAL_COLOR)
         log_action(gs, "Player drinks a Health Potion (+%d hp)", heal)
+    case .Sky_Egg:
+        if p.hp >= p.hp_max {
+            notify(gs, "Already at full health")
+            return
+        }
+        heal := min(SKY_EGG_HEAL, p.hp_max - p.hp)
+        p.hp += heal
+        spawn_damage_number(&gs.floating_text, {p.pos.x + PLAYER_W*0.5, p.pos.y}, heal, HEAL_COLOR)
+        log_action(gs, "Player eats a Sky Egg (+%d hp)", heal)
     case .GreenBerrie:
         gs.leaf_fall_t = LEAF_FALL_TIME
         notify(gs, "You feel light as a falling leaf")

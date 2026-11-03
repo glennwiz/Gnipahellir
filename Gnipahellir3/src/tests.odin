@@ -2070,7 +2070,7 @@ plain_clouds_chance_drop_cloud_stone :: proc(t: ^testing.T) {
 
     // The guaranteed vein supply survives the puffy gen: the win path's
     // 40 Cloud Stone (+6 Rune Altar) stays covered by ore alone.
-    testing.expect_value(t, count_tile(&gs.world, .Cloud_Ore), 42)
+    testing.expect_value(t, count_tile(&gs.world, .Cloud_Ore), 43)
 
     // Strip-mine every plain cloud: the per-tile hash makes the harvest
     // deterministic, and it must clear the remaining crafting demand

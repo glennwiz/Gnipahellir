@@ -803,7 +803,8 @@ carve_box :: proc(w: ^World_Grid, x0, y0, x1, y1: int) {
 // ─── Generation: low sky ──────────────────────────────────────────────────────
 //
 //  Open air with cloud platforms; Cloud_Ore pockets sit on the platforms.
-//  The base platform holds the return portal.  A rainbow arcs over it all.
+//  The base platform holds the return portal.  A rainbow arcs over it all, and
+//  islands with a tree, a pond and nests float under it.
 
 // Falling below this row on the sky level returns the player to the surface
 // (the base platform sits at row 80; see gen_sky_level).
@@ -852,6 +853,46 @@ gen_rainbow_bridge :: proc(w: ^World_Grid) {
     }
 }
 
+// Four islands stand in the gaps between the bands, under the rainbow and above
+// row 63, so the base platform and the portal stay clear of them.  The hash
+// nudges each one and deals the four kinds out once, so every sky has them all.
+Sky_Island_Kind :: enum { Tree, Pond, Egg_Nest, Ore_Nest }
+
+SKY_ISLAND_SPOTS := [len(Sky_Island_Kind)][2]int{{62, 48}, {116, 48}, {46, 60}, {134, 60}}
+SKY_ISLAND_W      :: 13
+SKY_ISLAND_NUDGE  :: 5  // columns of hashed drift
+SKY_TREE_HEIGHT   :: 3  // trunk rows; the crown stops short of the band above
+SKY_POND_REACH    :: 2  // columns of water each side of the middle
+SKY_POND_DEPTH    :: 2
+SKY_NEST_EGGS     :: 2  // first guess, Glenn's to tune
+
+gen_sky_islands :: proc(w: ^World_Grid, seed: u32) {
+    deal := int(whash(seed + 6151) % len(Sky_Island_Kind))
+    for spot, i in SKY_ISLAND_SPOTS {
+        x0  := spot.x + int(whash(seed + u32(i) * 3571) % SKY_ISLAND_NUDGE)
+        row := spot.y
+        stamp_cloud(w, x0, x0 + SKY_ISLAND_W, row)
+        mid := x0 + SKY_ISLAND_W / 2
+
+        switch Sky_Island_Kind((i + deal) % len(Sky_Island_Kind)) {
+        case .Tree:
+            place_tree(w, mid, row, SKY_TREE_HEIGHT)
+        case .Pond:
+            for x in mid - SKY_POND_REACH ..= mid + SKY_POND_REACH {
+                for d in 0 ..< SKY_POND_DEPTH do set_tile(w, x, row + d, .Water)
+                set_tile(w, x, row + SKY_POND_DEPTH, .Cloud)
+            }
+        case .Egg_Nest:
+            for x in mid - 1 ..= mid + 1 do set_tile(w, x, row - 1, .Nest)
+            idx := grid_idx(mid, row - 1)
+            w.items[idx], w.item_counts[idx] = .Sky_Egg, SKY_NEST_EGGS
+        case .Ore_Nest:
+            for x in mid - 1 ..= mid + 1 do set_tile(w, x, row - 1, .Nest)
+            set_tile(w, mid, row - 1, .Cloud_Ore)
+        }
+    }
+}
+
 gen_sky_level :: proc(w: ^World_Grid, seed: u32 = 0) {
     w^ = {}
     for i in 0 ..< GRID_W * GRID_H {
@@ -893,6 +934,7 @@ gen_sky_level :: proc(w: ^World_Grid, seed: u32 = 0) {
     }
 
     gen_rainbow_bridge(w)
+    gen_sky_islands(w, seed)
 
     // Base platform with the return portal — puffy underside like the bands
     for x in 88 ..= 104 do set_tile(w, x, 80, .Cloud)

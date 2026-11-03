@@ -239,6 +239,9 @@ Tile_Type :: enum u8 {
 	// The sky's rainbow arc: stands on nothing, walked and never mined.
 	// (appended: terrain ordinals are serialized)
 	Rainbow_Bridge,
+	// Twigs on a sky island, cradling eggs or a lump of Cloud Ore.  (appended:
+	// terrain ordinals are serialized)
+	Nest,
 }
 
 // ─── Item IDs ─────────────────────────────────────────────────────────────────
@@ -399,6 +402,7 @@ Item :: enum u8 {
 	Flame_Head,
 	Water_Head,
 	Earth_Head,
+	Sky_Egg, // (appended: item ordinals are serialized)
 	// <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 
