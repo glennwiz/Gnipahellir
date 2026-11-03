@@ -583,10 +583,17 @@ Agent_Command :: struct {
 
 AGENT_TEXT_MAX :: 96
 AGENT_LOG_MAX  :: 6
+AGENT_HEARD_MAX :: 8  // the watcher's lines the agent has not read; a full queue holds the next one in the field
 
 Agent_Text :: struct {
     buf: [AGENT_TEXT_MAX + 1]u8,  // kept NUL-terminated for raylib
     len: int,
+}
+
+// A line the watcher typed, and the frame it was sent on.
+Agent_Heard :: struct {
+    frame: u64,
+    text:  Agent_Text,
 }
 
 Agent_Past_Goal :: struct {
@@ -601,6 +608,13 @@ Agent_Panel :: struct {
     step:  Agent_Text,
     past:  [AGENT_LOG_MAX]Agent_Past_Goal,  // newest first
     count: int,
+    // The talk between the watcher and the agent.  None of it is game state.
+    say:       Agent_Text,   // the agent's last line to the watcher
+    typing:    bool,         // the watcher's field over the item bar is open
+    draft:     Agent_Text,   // what the watcher is typing
+    sent:      Agent_Text,   // the watcher's last line
+    heard:     [AGENT_HEARD_MAX]Agent_Heard,  // sent, not yet in a reply; oldest first
+    heard_len: int,
 }
 
 // Rewritten by agent_pump every frame; never saved.

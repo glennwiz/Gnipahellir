@@ -1886,6 +1886,37 @@ draw_ui :: proc(gs: ^Game_State) {
 	// tooltips, dragged icons, books, menus, and every full-screen modal.
 	draw_notifications(gs)
 	if gs.agent.panel != nil do draw_agent_panel(gs.agent.panel)
+	if gs.agent.panel != nil do draw_agent_chat(gs.agent.panel)
+}
+
+AGENT_CHAT_W :: i32(640)  // fits AGENT_TEXT_MAX characters of the 11 px font
+AGENT_CHAT_X :: (i32(UI_W) - AGENT_CHAT_W) / 2
+AGENT_CHAT_Y :: i32(HOTBAR_Y) - 50  // the field, just over the held item's name
+AGENT_CHAT_SAY :: rl.Color{150, 200, 235, 255}
+
+// The talk over the item bar: the agent's last line, then the watcher's own,
+// or the field while it is open.
+draw_agent_chat :: proc(p: ^Agent_Panel) {
+	line: [AGENT_TEXT_MAX + 32]u8
+	if p.say.len > 0 {
+		fmt.bprintf(line[:len(line) - 1], "Agent: %s", string(p.say.buf[:p.say.len]))
+		rl.DrawText(cstring(raw_data(line[:])), AGENT_CHAT_X + 6, AGENT_CHAT_Y - 18, 11, AGENT_CHAT_SAY)
+	}
+	if !p.typing {
+		line = {}
+		if p.sent.len > 0 {
+			fmt.bprintf(line[:len(line) - 1], "You: %s  (%s)", string(p.sent.buf[:p.sent.len]), "waiting" if p.heard_len > 0 else "read")
+		} else {
+			fmt.bprintf(line[:len(line) - 1], "[Enter] talk to the agent")
+		}
+		rl.DrawText(cstring(raw_data(line[:])), AGENT_CHAT_X + 6, AGENT_CHAT_Y + 4, 11, rl.Color{157, 144, 134, 200})
+		return
+	}
+	rl.DrawRectangle(AGENT_CHAT_X, AGENT_CHAT_Y, AGENT_CHAT_W, 20, rl.Color{10, 9, 12, 230})
+	rl.DrawRectangleLinesEx({f32(AGENT_CHAT_X), f32(AGENT_CHAT_Y), f32(AGENT_CHAT_W), 20}, 1, NORSE_GOLD)
+	draft := cstring(raw_data(p.draft.buf[:]))
+	rl.DrawText(draft, AGENT_CHAT_X + 6, AGENT_CHAT_Y + 4, 11, rl.RAYWHITE)
+	rl.DrawRectangle(AGENT_CHAT_X + 8 + rl.MeasureText(draft, 11), AGENT_CHAT_Y + 4, 2, 12, NORSE_GOLD_HOT)
 }
 
 // The agent's own account of what it is doing, for whoever is watching.
@@ -1912,8 +1943,9 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 		}
 	}
 
-	if p.goal.len == 0 && p.step.len == 0 do return
+	if p.goal.len == 0 && p.step.len == 0 && p.say.len == 0 do return
 	lines := i32(2) + (i32(p.goal.len) / (WRAP / 2) + 1) + (i32(p.step.len) / (WRAP / 2) + 1) + i32(p.count) * 2
+	if p.say.len > 0 do lines += i32(p.say.len) / (WRAP / 2) + 1
 	rl.DrawRectangle(PANEL_X, PANEL_Y, PANEL_W, lines * LINE + 12, NORSE_PANEL)
 	rl.DrawRectangleLinesEx({f32(PANEL_X), f32(PANEL_Y), f32(PANEL_W), f32(lines * LINE + 12)}, 2, NORSE_BORDER)
 
@@ -1924,6 +1956,9 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 	wrapped(&p.goal, x, &y, NORSE_GOLD_HOT)
 	if p.step.len > 0 {
 		wrapped(&p.step, x, &y, rl.RAYWHITE)
+	}
+	if p.say.len > 0 {
+		wrapped(&p.say, x, &y, AGENT_CHAT_SAY)
 	}
 	y += 4
 	for i in 0 ..< p.count {
