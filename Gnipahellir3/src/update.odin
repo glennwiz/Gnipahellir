@@ -5,6 +5,10 @@ game_update :: proc(gs: ^Game_State) {
     gs.delta_time = clamp(gs.delta_time, 0, 0.05)  // cap at 50ms
     gs.frame     += 1
 
+    // 0. Agent goals — while an agent drives, the executor turns its running goal
+    //    into this tick's gs.agent.cmd, which update_input reads (agent_exec.odin)
+    update_agent_goals(gs)
+
     // 1. Input — always polled so ESC and menu clicks work while paused
     update_input(gs)
 

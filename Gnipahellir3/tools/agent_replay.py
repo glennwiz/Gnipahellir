@@ -30,6 +30,8 @@ replies.readline()
 done, status = 0, 0
 for raw in open(os.path.join(run, "acts.jsonl")):
     rec = json.loads(raw)
+    if "goal" in rec or "cancel" in rec or "clear" in rec:  # the goal queue's rows: the act lines replay a waiting run
+        continue
     if "mark" in rec:
         print(f"stopped at frame {rec['f']}: {rec['mark']} let wall time in, so the rest cannot be replayed")
         break

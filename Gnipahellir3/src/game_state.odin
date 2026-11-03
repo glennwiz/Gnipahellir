@@ -641,6 +641,7 @@ Agent_Drive :: struct {
     driving: bool,
     first:   bool,
     panel:   ^Agent_Panel,
+    goals:   ^Agent_Goals,  // the link's queue, which update_agent_goals plays from
     framed:  bool,  // the view is set; a New Game or a reconnect zeroes this, so the framing is applied again
     cmd:     Agent_Command,
     place_refused: bool,  // the game turned the last act's place away; the next act clears it
@@ -911,6 +912,7 @@ Game_State :: struct {
     world_seed:   u32,    // seed mixed into level generation; set per run, saved since v27
     loot_rng:     u64,    // xorshift state for drop rolls; not saved, reseeded per run
     death_by:     string, // what landed the killing blow, from a static table — not saved; read by the death screen
+    hurt_by:      string, // what landed the last blow, the same way — not saved; the agent's hurt event reads it
     game_won:     bool,   // run complete — not saved; a won run ends like a death
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved

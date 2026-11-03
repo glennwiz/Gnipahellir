@@ -82,6 +82,7 @@ process_events :: proc(gs: ^Game_State) {
                     }
                     if dmg > 0 {
                         gs.player.hp -= dmg
+                        gs.hurt_by    = damage_source_name(gs, e)
                         audio_play(&gs.audio, .Hurt)
                         // The world has no body to blame, so its hits say what they are.
                         world_hit := e.source == INVALID_ENTITY

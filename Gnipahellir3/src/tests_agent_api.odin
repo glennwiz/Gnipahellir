@@ -31,17 +31,23 @@ agent_test_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
 @(private="file")
 agent_test_run_act :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
     agent_handle_line(link, gs, line)
-    for link.frames_left > 0 {
-        tick := agent_drive(link, gs)
-        if tick {
-            agent_input(gs)
+    for agent_goals_busy(&link.goals) {
+        if agent_test_input(link, gs) {
             process_events(gs)
             eq_clear(&gs.events)
             gs.frame += 1
-            link.frames_left -= 1
+            agent_after_tick(link, gs)
         }
     }
-    link.cmd = {}
+}
+
+// What main's frame does for the agent's input: the drive, then on a tick the
+// executor and the input it feeds.
+agent_test_input :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
+    tick = agent_drive(link, gs)
+    update_agent_goals(gs)
+    agent_input(gs)
+    return
 }
 
 @(test)
@@ -103,8 +109,8 @@ agent_bad_requests_are_refused_and_change_nothing :: proc(t: ^testing.T) {
     }
     for line in bad {
         agent_handle_line(link, gs, line)
-        testing.expectf(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), "%s -> %s", line, agent_test_reply(link))
-        testing.expect_value(t, link.frames_left, 0)
+        testing.expectf(t, strings.contains(agent_test_reply(link), `"ok":false`), "%s -> %s", line, agent_test_reply(link))
+        testing.expect(t, !agent_goals_busy(&link.goals))
     }
 }
 
@@ -121,7 +127,7 @@ agent_game_waits_until_it_is_told_to_act :: proc(t: ^testing.T) {
     agent_handle_line(link, gs, `{"cmd":"act","frames":3}`)
     testing.expect_value(t, link.out_len, 0)  // no reply until the frames have run
     for i in 0 ..< 3 {
-        testing.expect(t, agent_drive(link, gs))
+        testing.expect(t, agent_test_input(link, gs))
         testing.expect_value(t, gs.agent.first, i == 0)
         agent_after_tick(link, gs)
     }
@@ -139,13 +145,11 @@ agent_held_input_holds_and_one_shots_fire_once :: proc(t: ^testing.T) {
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"act","move":"right","jump":true,"frames":2}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect(t, gs.input.move_right)
     testing.expect(t, gs.input.jump)
 
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect(t, gs.input.move_right, "move is held")
     testing.expect(t, !gs.input.jump, "a jump is a press")
     testing.expect(t, gs.input.fly_up, "flying is a hold")
@@ -158,8 +162,7 @@ agent_cursor_lands_on_the_tile_it_names :: proc(t: ^testing.T) {
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"act","mine":[20,70]}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.input.mouse_tile, [2]i32{20, 70})
     testing.expect_value(t, i32(gs.input.mouse_world.x) / CELL_SIZE, 20)
     testing.expect_value(t, i32(gs.input.mouse_world.y) / CELL_SIZE, 70)
@@ -175,8 +178,7 @@ agent_mining_a_structure_does_not_mine_it :: proc(t: ^testing.T) {
 
     set_tile(&gs.world, 20, 70, .Crafting_Bench)
     agent_handle_line(link, gs, `{"cmd":"act","mine":[20,70]}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect(t, !gs.input.mine, "the same rule update_input applies to a click")
 }
 
@@ -187,12 +189,10 @@ agent_place_goes_through_the_event_queue :: proc(t: ^testing.T) {
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"act","place":[30,40],"frames":2}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.events.size, 1)
     eq_clear(&gs.events)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.events.size, 0)  // one placement per act, however long
 }
 
@@ -215,7 +215,7 @@ agent_cannot_craft_what_the_player_could_not :: proc(t: ^testing.T) {
 
     gs.progression.recipe_unlocked = {}
     agent_handle_line(link, gs, `{"cmd":"act","craft":"Crafting_Bench"}`)
-    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), "a hidden recipe is not offered")
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`), "a hidden recipe is not offered")
 }
 
 @(test)
@@ -240,8 +240,7 @@ agent_death_screen_gives_no_orders :: proc(t: ^testing.T) {
 
     gs.player.dead = true
     agent_handle_line(link, gs, `{"cmd":"act","move":"left","place":[30,40]}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect(t, !gs.input.move_left)
     testing.expect_value(t, gs.events.size, 0)
 }
@@ -260,7 +259,7 @@ agent_act_plays_through_the_real_game_update :: proc(t: ^testing.T) {
     }
     start := gs.player.pos
     agent_handle_line(link, gs, `{"cmd":"act","move":"right","frames":30}`)
-    for link.frames_left > 0 {
+    for agent_goals_busy(&link.goals) {
         testing.expect(t, agent_drive(link, gs))
         game_update(gs)
         agent_after_tick(link, gs)
@@ -276,12 +275,12 @@ agent_client_gone_mid_act_leaves_nothing_to_replay :: proc(t: ^testing.T) {
 
     // The state a client leaves behind when it dies right after a 1-frame act.
     agent_handle_line(link, gs, `{"cmd":"act","move":"right","jump":true}`)
-    agent_drive(link, gs)
+    agent_test_input(link, gs)
     testing.expect(t, gs.agent.first)
 
     link.listening = true  // agent_pump's early out; the socket is never touched
     link.connected = false
-    link.frames_left = 0
+    link.goals = {}
     link.listener = net.TCP_Socket(-1)
     testing.expect(t, agent_pump(link, gs), "the game runs on")
     testing.expect(t, !gs.agent.driving)
@@ -316,8 +315,7 @@ agent_a_window_closes_with_its_machine :: proc(t: ^testing.T) {
     gs.ui.show_smelter = true
     gs.ui.smelter_tile = {20, 40}
     agent_handle_line(link, gs, `{"cmd":"act"}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect(t, !gs.ui.show_barrel)
     testing.expect(t, !gs.ui.show_smelter)
 }
@@ -334,15 +332,13 @@ agent_windows_close_unless_the_act_works_on_them :: proc(t: ^testing.T) {
     gs.ui.smelter_tile   = {20, 40}
 
     agent_handle_line(link, gs, `{"cmd":"act","collect":true}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     eq_clear(&gs.events)
     testing.expect(t, gs.ui.show_smelter, "a window verb keeps its window")
-    link.frames_left = 0
+    link.goals = {}
 
     agent_handle_line(link, gs, `{"cmd":"act","move":"left"}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect(t, !gs.ui.show_smelter, "any other act closes it")
     testing.expect(t, !gs.ui.show_inventory)
 }
@@ -354,8 +350,7 @@ agent_frames_the_view_for_a_watcher_again_after_a_new_game :: proc(t: ^testing.T
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"act"}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.zoom_target, AGENT_VIEW_ZOOM)
 
     gs.zoom_target = 3  // the wheel's choice stands for the rest of the game
@@ -363,8 +358,7 @@ agent_frames_the_view_for_a_watcher_again_after_a_new_game :: proc(t: ^testing.T
     testing.expect_value(t, gs.zoom_target, f32(3))
 
     game_state_init(gs)  // what New Game does: zooms out and forgets
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.zoom_target, AGENT_VIEW_ZOOM)
 }
 
@@ -375,9 +369,8 @@ agent_view_glide_finishes_while_the_game_waits :: proc(t: ^testing.T) {
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"act"}`)
-    agent_drive(link, gs)
-    agent_input(gs)
-    link.frames_left = 0
+    agent_test_input(link, gs)
+    link.goals = {}
     frame := gs.frame
 
     for _ in 0 ..< 60 {
@@ -420,7 +413,7 @@ agent_same_acts_same_seed_same_world :: proc(t: ^testing.T) {
         }
         for line in script {
             agent_handle_line(link, gs, line)
-            for link.frames_left > 0 {
+            for agent_goals_busy(&link.goals) {
                 agent_drive(link, gs)
                 game_update(gs)
                 agent_after_tick(link, gs)
@@ -471,22 +464,20 @@ agent_warp_needs_the_ring_and_reclaim_holds :: proc(t: ^testing.T) {
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
-    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`))
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`))
 
     gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
     gs.level_index = 1  // the surface refuses: home already
     agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
-    testing.expect_value(t, link.frames_left, 1)
-    agent_drive(link, gs)
-    agent_input(gs)
+    testing.expect(t, agent_goals_busy(&link.goals))
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.events.size, 1)
     eq_clear(&gs.events)
-    link.frames_left = 0
+    link.goals = {}
 
     agent_handle_line(link, gs, `{"cmd":"act","reclaim":[20,40],"frames":2}`)
     for _ in 0 ..< 2 {
-        agent_drive(link, gs)
-        agent_input(gs)
+        agent_test_input(link, gs)
         testing.expect(t, gs.input.reclaim)
         testing.expect_value(t, gs.input.mouse_tile, [2]i32{20, 40})
     }
@@ -502,13 +493,13 @@ agent_refused_warp_says_so_and_plays_nothing :: proc(t: ^testing.T) {
     gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
     gs.level_index = LEVEL_SURFACE
     agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
-    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), agent_test_reply(link))
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`), agent_test_reply(link))
     testing.expect(t, strings.contains(agent_test_reply(link), "Already on the surface"), agent_test_reply(link))
-    testing.expect_value(t, link.frames_left, 0)
+    testing.expect(t, !agent_goals_busy(&link.goals))
 
     gs.level_index = 1
     agent_handle_line(link, gs, `{"cmd":"act","warp":true}`)
-    testing.expect_value(t, link.frames_left, 1)
+    testing.expect(t, agent_goals_busy(&link.goals))
 }
 
 @(test)
@@ -522,7 +513,7 @@ agent_plan_judges_a_warp_when_its_step_starts :: proc(t: ^testing.T) {
     gs.level_index = LEVEL_SURFACE
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"warp":true}]}`)
     testing.expect(t, strings.contains(agent_test_reply(link), `"steps":1`), agent_test_reply(link))
-    for _ in 0 ..< AGENT_IDLE_EVERY * 3 do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    for _ in 0 ..< AGENT_IDLE_EVERY * 3 do if agent_test_input(link, gs) do agent_after_tick(link, gs)
     agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
     testing.expect(t, strings.contains(agent_test_reply(link), "warp refused"), agent_test_reply(link))
 }
@@ -589,7 +580,7 @@ agent_withdraw_pulls_the_ore_through_the_key_handler :: proc(t: ^testing.T) {
     T := player_tile(&gs.player)
     sx, sy := int(T.x) + 1, int(T.y)
     agent_handle_line(link, gs, `{"cmd":"act","withdraw":true}`)
-    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), "withdraw needs the window")
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`), "withdraw needs the window")
 
     set_tile(&gs.world, sx, sy, .Smelter)
     sd := &gs.world.sim_data[grid_idx(sx, sy)]
@@ -678,7 +669,7 @@ agent_objectives_stack_up_for_the_watcher :: proc(t: ^testing.T) {
     testing.expect_value(t, link.panel.count, AGENT_LOG_MAX)
 
     agent_handle_line(link, gs, `{"cmd":"objective"}`)
-    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`))
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`))
 }
 
 @(test)
@@ -753,10 +744,10 @@ agent_idles_slowly_then_holds :: proc(t: ^testing.T) {
 
     // An act starts a new wait.
     agent_handle_line(link, gs, `{"cmd":"act"}`)
-    agent_drive(link, gs)
+    agent_test_input(link, gs)
     agent_after_tick(link, gs)
     testing.expect_value(t, link.idle_ticks, 0)
-    for _ in 0 ..< AGENT_IDLE_EVERY do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    for _ in 0 ..< AGENT_IDLE_EVERY do if agent_test_input(link, gs) do agent_after_tick(link, gs)
     testing.expect_value(t, link.idle_ticks, 1)
 
     agent_handle_line(link, gs, `{"cmd":"idle","on":false}`)
@@ -764,7 +755,7 @@ agent_idles_slowly_then_holds :: proc(t: ^testing.T) {
 }
 
 @(test)
-agent_plan_plays_slowly_and_an_act_overrides_it :: proc(t: ^testing.T) {
+agent_plan_plays_at_full_speed_and_an_act_overrides_it :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
@@ -773,23 +764,29 @@ agent_plan_plays_slowly_and_an_act_overrides_it :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"ticks":5`))
     link.out_len = 0
 
-    ticks := 0
-    for _ in 0 ..< AGENT_IDLE_EVERY * 4 {
-        if agent_drive(link, gs) {
-            ticks += 1
-            agent_after_tick(link, gs)
-        }
+    for _ in 0 ..< 4 {
+        testing.expect(t, agent_test_input(link, gs), "a plan's goals tick every frame")
+        agent_after_tick(link, gs)
     }
-    testing.expect_value(t, ticks, 4)
-    testing.expect_value(t, link.frames_left, 1)
+    h := agent_goals_head(&link.goals)
+    testing.expect(t, h != nil && h.via == .Plan && h.step == 1 && h.frames_left == 1)
     testing.expect_value(t, link.out_len, 0)  // nobody is waiting on a plan step
     testing.expect(t, link.reply_due == false)
     testing.expect(t, agent_listening(link))
 
     agent_handle_line(link, gs, `{"cmd":"act","frames":2}`)
-    testing.expect(t, !link.planning)
-    testing.expect_value(t, link.frames_left, 2)
-    testing.expect_value(t, link.plan_len, 0)
+    h = agent_goals_head(&link.goals)
+    testing.expect(t, h != nil && h.via == .Act && h.status == .Queued)
+    testing.expect_value(t, agent_test_pending(link), 1)
+    state := agent_test_state(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    testing.expect_value(t, state["plan_left"].(json.Float), 0)
+}
+
+// The goals that have yet to finish.
+@(private="file")
+agent_test_pending :: proc(link: ^Agent_Link) -> (n: int) {
+    for &g in link.goals.slots[:link.goals.n] do if g.status == .Queued || g.status == .Running do n += 1
+    return
 }
 
 @(test)
@@ -798,10 +795,11 @@ agent_override_keeps_its_own_input :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":50}]}`)
-    for _ in 0 ..< AGENT_IDLE_EVERY do if agent_drive(link, gs) do agent_after_tick(link, gs)
+    if agent_test_input(link, gs) do agent_after_tick(link, gs)
     agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":30}`)
-    testing.expect_value(t, link.cmd.move, -1)
-    testing.expect(t, link.first)
+    agent_test_input(link, gs)
+    testing.expect(t, gs.input.move_left && !gs.input.move_right)
+    testing.expect(t, gs.agent.first)
 }
 
 // A plan is a promise about a world that has not happened yet, so what depends
@@ -814,10 +812,9 @@ agent_plan_judges_state_verbs_when_the_step_starts :: proc(t: ^testing.T) {
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"frames":1},{"feed":0},{"frames":5}]}`)
     testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"steps":3`))
 
-    for _ in 0 ..< AGENT_IDLE_EVERY * 3 do if agent_drive(link, gs) do agent_after_tick(link, gs)
-    testing.expect_value(t, link.plan_len, 0)
-    testing.expect_value(t, link.frames_left, 0)
-    testing.expect(t, link.plan_stopped.len > 0)
+    for _ in 0 ..< 3 do if agent_test_input(link, gs) do agent_after_tick(link, gs)
+    testing.expect(t, !agent_goals_busy(&link.goals))
+    testing.expect(t, link.goals.plan_stopped.len > 0)
     agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
     testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"plan_stopped":"step 1: no smelter`))
 }
@@ -828,9 +825,8 @@ agent_wait_has_no_first_frame :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     agent_handle_line(link, gs, `{"cmd":"wait","frames":3}`)
-    testing.expect_value(t, link.frames_left, 3)
-    testing.expect(t, !link.first)
-    agent_drive(link, gs)
+    testing.expect(t, agent_goals_busy(&link.goals))
+    agent_test_input(link, gs)
     testing.expect(t, !gs.agent.first)
 }
 
@@ -842,10 +838,10 @@ agent_plan_is_all_or_nothing :: proc(t: ^testing.T) {
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"}]}`)
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"},{"frames":0}]}`)
     testing.expect(t, strings.contains(string(link.out[:link.out_len]), "step 1"))
-    testing.expect_value(t, link.plan_len, 1)  // the good plan stands
+    testing.expect_value(t, agent_test_pending(link), 1)  // the good plan stands
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"cmd":"wait","frames":5}]}`)
     testing.expect(t, strings.contains(string(link.out[:link.out_len]), "only be an act"))
-    testing.expect_value(t, link.plan_len, 1)
+    testing.expect_value(t, agent_test_pending(link), 1)
 }
 
 // What a replay does with a recording must be what the plan did: this plays the
@@ -918,6 +914,7 @@ agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
             if row == "" do continue
             value, _ := json.parse_string(row)
             rec := value.(json.Object)
+            if "goal" in rec || "clear" in rec || "cancel" in rec do continue  // the goal replay's rows, as agent_replay.py skips them
             if n, ok := agent_int(rec, "idle"); ok {
                 append(&replay, Replay_Row{fmt.aprintf(`{{"cmd":"wait","frames":%d}}`, n, allocator = heap), n})
                 continue
@@ -934,7 +931,7 @@ agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
     }
     for r in replay {
         agent_handle_line(link2, gs2, r.line)
-        testing.expect(t, link2.frames_left == r.ticks, r.line)
+        testing.expect(t, agent_goals_busy(&link2.goals), r.line)
         run(link2, gs2, r.ticks)
     }
     testing.expect_value(t, gs2.frame, gs.frame)
@@ -956,7 +953,7 @@ agent_idle_ticks_equal_an_empty_act :: proc(t: ^testing.T) {
         link.connected = true
         link.idle_off = !idle
         run :: proc(link: ^Agent_Link, gs: ^Game_State) {
-            for link.frames_left > 0 {
+            for agent_goals_busy(&link.goals) {
                 agent_drive(link, gs)
                 game_update(gs)
                 agent_after_tick(link, gs)
@@ -1021,7 +1018,7 @@ agent_lines_arrive_over_a_real_socket :: proc(t: ^testing.T) {
         if newlines == 2 do break
     }
     testing.expect_value(t, newlines, 2)
-    testing.expect(t, strings.has_prefix(string(reply[:got]), `{"ok":true`))
+    testing.expect(t, strings.contains(string(reply[:got]), `"ok":true`))
 
     net.close(client)
     for _ in 0 ..< 2000 {
@@ -1061,7 +1058,7 @@ a_flame_turret_burns_through_the_real_game_update :: proc(t: ^testing.T) {
 @(private="file")
 agent_test_play :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
     agent_handle_line(link, gs, line)
-    for link.frames_left > 0 {
+    for agent_goals_busy(&link.goals) {
         if agent_drive(link, gs) {
             game_update(gs)
             agent_after_tick(link, gs)
@@ -1081,8 +1078,8 @@ agent_test_state :: proc(link: ^Agent_Link, gs: ^Game_State, line := `{"cmd":"st
 @(private="file")
 agent_test_refused :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State, line: string, loc := #caller_location) {
     agent_handle_line(link, gs, line)
-    testing.expectf(t, strings.has_prefix(agent_test_reply(link), `{"ok":false`), "%s -> %s", line, agent_test_reply(link), loc = loc)
-    testing.expect_value(t, link.frames_left, 0, loc = loc)
+    testing.expectf(t, strings.contains(agent_test_reply(link), `"ok":false`), "%s -> %s", line, agent_test_reply(link), loc = loc)
+    testing.expect(t, !agent_goals_busy(&link.goals), loc = loc)
 }
 
 // The furnace beside the player, its window open as a `use` leaves it.
@@ -1161,8 +1158,7 @@ agent_tithe_and_dismiss_in_one_act_send_the_item_first :: proc(t: ^testing.T) {
     gs.stats.grave.active = true
 
     agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d,"dismiss":true}}`, slot))
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.events.size, 2)
     testing.expect_value(t, gs.events.events[gs.events.head].type, Event_Type.Tithe_Choose)
 }
@@ -1605,7 +1601,7 @@ a_get_gets_the_brief_and_a_socket_client_plays_on_the_same_port :: proc(t: ^test
     client, _ := net.dial_tcp(at)
     defer net.close(client)
     out := agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
-    testing.expect(t, strings.has_prefix(out, `{"ok":true`))
+    testing.expect(t, strings.contains(out, `"ok":true`))
     testing.expect(t, link.connected, "a JSON first line is the client")
 }
 
@@ -1661,7 +1657,7 @@ the_brief_is_served_while_a_client_plays_and_a_second_client_is_turned_away :: p
     testing.expect_value(t, link.pending_n, 0)
 
     out := agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
-    testing.expect(t, strings.has_prefix(out, `{"ok":true`), "the first client never noticed")
+    testing.expect(t, strings.contains(out, `"ok":true`), "the first client never noticed")
 }
 
 @(test)
@@ -1676,9 +1672,9 @@ a_first_line_that_is_not_json_is_refused_and_closed :: proc(t: ^testing.T) {
     defer net.close(web)
     body := "POST / HTTP/1.1\r\n\r\n" + `{"cmd":"act","move":"left"}` + "\n"
     reply := agent_test_ask(gs, link, web, body, -1, buf[:])
-    testing.expect(t, strings.has_prefix(reply, `{"ok":false`), reply)
+    testing.expect(t, strings.contains(reply, `"ok":false`), reply)
     testing.expect(t, !link.connected, "a page's POST body does not get to play")
-    testing.expect_value(t, link.frames_left, 0)
+    testing.expect(t, !agent_goals_busy(&link.goals))
 }
 
 @(test)
@@ -1716,14 +1712,20 @@ a_client_connecting_on_the_title_starts_the_frame_clock :: proc(t: ^testing.T) {
     gs.ui.show_title = true
     gs.frame = 500
     link.idle_off = true
-    link.realtime = true
+    link.realtime = false
     link.panel.goal.len = 3
+    agent_goals_push(&link.goals, .Act, .Goal, `{"do":"act"}`)
+    link.events_on = true
 
     client, _ := net.dial_tcp(at)
     defer net.close(client)
     agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
     testing.expect_value(t, gs.frame, 0)
-    testing.expect(t, !link.idle_off && !link.realtime, "a new client starts from the waiting game")
+    testing.expect(t, !link.idle_off && link.realtime, "a new client starts in real time")
+    testing.expect(t, link.goals.n == 0 && !link.events_on, "with no goals of the last one's, and no events yet")
+    frame := gs.frame
+    testing.expect(t, agent_pump(link, gs) && agent_pump(link, gs), "and the game ticks with nobody sending")
+    testing.expect_value(t, gs.frame, frame)  // agent_pump only says so: main's game_update moves the clock
     testing.expect_value(t, link.panel.goal.len, 0)
 }
 
@@ -1898,6 +1900,7 @@ a_won_run_is_a_screen_an_agent_can_read_and_leave :: proc(t: ^testing.T) {
     // The last act of a run, through the same seam as every other.
     agent_handle_line(link, gs, `{"cmd":"act","interact":true,"frames":1}`)
     agent_drive(link, gs)
+    update_agent_goals(gs)
     update_input(gs)
     process_events(gs)
     update_player(gs)
@@ -1908,11 +1911,11 @@ a_won_run_is_a_screen_an_agent_can_read_and_leave :: proc(t: ^testing.T) {
     update_ritual(gs)
     process_events(gs)
     testing.expect(t, gs.game_won)
-    agent_reply_state(link, gs, nil)
+    agent_reply_state(link, gs, nil, "state")
     testing.expect(t, strings.contains(agent_test_reply(link), `"screen":"book"`), "the saga comes first")
 
     agent_dismiss(gs)
-    agent_reply_state(link, gs, nil)
+    agent_reply_state(link, gs, nil, "state")
     testing.expect(t, strings.contains(agent_test_reply(link), `"screen":"won"`), agent_test_reply(link)[:60])
 
     gs.agent.driving = true
@@ -2039,7 +2042,7 @@ agent_a_typed_line_reaches_the_client_once :: proc(t: ^testing.T) {
     // An act's reply reads them too.
     agent_test_type(link, gs, "a \"quoted\" \\ line")
     agent_handle_line(link, gs, `{"cmd":"act","frames":1}`)
-    agent_drive(link, gs)
+    agent_test_input(link, gs)
     agent_after_tick(link, gs)
     heard = agent_test_heard(t, agent_test_reply(link))
     testing.expect_value(t, len(heard), 1)
@@ -2094,7 +2097,7 @@ agent_say_reaches_the_screen_state :: proc(t: ^testing.T) {
     defer free(link)
 
     agent_handle_line(link, gs, `{"cmd":"say","text":"Heading down\tto the gold"}`)
-    testing.expect_value(t, agent_test_reply(link), `{"ok":true}` + "\n")
+    testing.expect_value(t, agent_test_reply(link), `{"re":"say","ok":true}` + "\n")
     agent_drive(link, gs)
     testing.expect(t, gs.agent.panel == &link.panel, "render reads the say through gs.agent.panel")
     say := &gs.agent.panel.say
@@ -2135,7 +2138,7 @@ agent_listen_answers_when_the_watcher_speaks_or_time_is_up :: proc(t: ^testing.T
     testing.expect(t, !link.awaiting && link.reply_due)
     heard := agent_test_heard(t, agent_test_reply(link))
     testing.expect_value(t, len(heard), 1)
-    testing.expect(t, strings.has_prefix(agent_test_reply(link), `{"ok":true,"frame"`), "the answer is state")
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":true,"frame"`), "the answer is state")
     testing.expect(t, agent_listening(link))
     link.reply_due = false
 
@@ -2209,7 +2212,7 @@ agent_talk_is_recorded_and_the_replay_matches :: proc(t: ^testing.T) {
     }
     play :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         agent_handle_line(link, gs, line)
-        for link.frames_left > 0 {
+        for agent_goals_busy(&link.goals) {
             if agent_drive(link, gs) {
                 game_update(gs)
                 agent_after_tick(link, gs)
@@ -2242,8 +2245,20 @@ agent_talk_is_recorded_and_the_replay_matches :: proc(t: ^testing.T) {
     data, read_err := os.read_entire_file(path, context.allocator)
     testing.expect(t, read_err == nil)
     defer delete(data)
-    rows := strings.split_lines(strings.trim_right_space(string(data)))
+    all_rows := strings.split_lines(strings.trim_right_space(string(data)))
+    defer delete(all_rows)
+    // The goal queue's own rows are for the goal replay; this is the old one.
+    rows := make([dynamic]string)
     defer delete(rows)
+    goal_rows := 0
+    for row in all_rows {
+        if strings.contains(row, `,"goal":`) || strings.contains(row, `,"clear":true}`) {
+            goal_rows += 1
+            continue
+        }
+        append(&rows, row)
+    }
+    testing.expect_value(t, goal_rows, 3)
     testing.expect_value(t, len(rows), 6)
     testing.expect_value(t, rows[1], `{"f":20,"heard":"go \"left\""}`)
     testing.expect_value(t, rows[2], `{"f":20,"say":"going left"}`)
@@ -2294,7 +2309,7 @@ a_listening_client_hears_the_watcher_over_the_socket :: proc(t: ^testing.T) {
     out = agent_test_ask(gs, link, client, "", 2, buf[:])
     testing.expect(t, strings.contains(out, `"heard":[{"f":`), out[:min(len(out), 80)])
     testing.expect(t, strings.contains(out, `"text":"are you there"`))
-    testing.expect(t, strings.has_suffix(out, `{"ok":true}` + "\n"), "then the held line is answered")
+    testing.expect(t, strings.has_suffix(out, `{"re":"say","ok":true}` + "\n"), "then the held line is answered")
     testing.expect_value(t, string(link.panel.say.buf[:link.panel.say.len]), "queued")
 
     // A line typed during an act is waiting when the listen comes: one answer, at once.
@@ -2304,7 +2319,7 @@ a_listening_client_hears_the_watcher_over_the_socket :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(out, `"text":"typed while you played"`))
     testing.expect(t, !link.awaiting)
     out = agent_test_ask(gs, link, client, `{"cmd":"say","text":"next"}` + "\n", 1, buf[:200])
-    testing.expect_value(t, out, `{"ok":true}` + "\n")  // and the next reply is the next request's
+    testing.expect_value(t, out, `{"re":"say","ok":true}` + "\n")  // and the next reply is the next request's
 
     agent_test_ask(gs, link, client, `{"cmd":"listen","seconds":30}` + "\n", 1, buf[:200])
     testing.expect(t, link.awaiting)
@@ -2363,7 +2378,7 @@ a_get_and_a_connect_in_one_frame_are_both_answered :: proc(t: ^testing.T) {
     testing.expect(t, closed[0], "the brief is sent and closed")
     testing.expect(t, strings.has_prefix(reply, "HTTP/1.0 200 OK\r\n"), reply[:min(len(reply), 40)])
     testing.expect(t, strings.contains(reply, "HOW THE GAME WAITS"), "the whole brief")
-    testing.expect(t, strings.has_prefix(string(play_buf[:got[1]]), `{"ok":true`), "and the socket client plays")
+    testing.expect(t, strings.contains(string(play_buf[:got[1]]), `"ok":true`), "and the socket client plays")
     testing.expect(t, link.connected)
     testing.expect_value(t, link.pending_n, 0)
 }
@@ -2386,7 +2401,7 @@ two_clients_in_one_frame_the_first_plays_the_second_is_turned_away :: proc(t: ^t
     time.sleep(50 * time.Millisecond)
 
     got, _ := agent_test_collect(gs, link, {first, second}, {1, -1}, {bufs[0][:], bufs[1][:]})
-    testing.expect_value(t, string(bufs[0][:got[0]]), `{"ok":true}` + "\n")
+    testing.expect_value(t, string(bufs[0][:got[0]]), `{"re":"objective","ok":true}` + "\n")
     testing.expect(t, strings.contains(string(bufs[1][:got[1]]), "another agent is playing"), string(bufs[1][:got[1]]))
     testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "first")
 }
@@ -2464,7 +2479,7 @@ one_frame_serves_every_waiting_connection :: proc(t: ^testing.T) {
     testing.expect(t, closed[0] && closed[1])
     testing.expect(t, strings.has_prefix(string(bufs[0][:got[0]]), "HTTP/1.0 200 OK"))
     testing.expect(t, strings.has_prefix(string(bufs[1][:got[1]]), "HTTP/1.0 200 OK"))
-    testing.expect_value(t, string(bufs[2][:got[2]]), `{"ok":true}` + "\n")
+    testing.expect_value(t, string(bufs[2][:got[2]]), `{"re":"objective","ok":true}` + "\n")
 
     // One that leaves without a word gives its place back.
     gone, _ := net.dial_tcp(at)
@@ -2785,8 +2800,7 @@ agent_test_cursor :: proc(line: string, wand := false) -> (tile: [2]i32, world: 
     defer free(link)
     if wand do agent_test_wand(gs)
     agent_handle_line(link, gs, line)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     return gs.input.mouse_tile, gs.input.mouse_world
 }
 
@@ -2810,8 +2824,7 @@ agent_acts_without_a_point_keep_the_tile_centre :: proc(t: ^testing.T) {
     defer free(link)
     T := player_tile(&gs.player)
     agent_handle_line(link, gs, `{"cmd":"act","move":"left"}`)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     testing.expect_value(t, gs.input.mouse_world, [2]f32{(f32(T.x) + 0.5) * CELL_SIZE, (f32(T.y) + 0.5) * CELL_SIZE})
 
     tile, world := agent_test_cursor(`{"cmd":"act","zone":[10,20,14,22]}`, wand = true)
@@ -2872,8 +2885,7 @@ agent_a_plan_keeps_whole_numbers_and_fractions_apart :: proc(t: ^testing.T) {
     agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"mine":[20,70]},{"mine":[10.0,20.5]}]}`)
     want := [][2]f32{{205, 705}, {100, 205}}
     for w in want {
-        for !agent_drive(link, gs) {}
-        agent_input(gs)
+        testing.expect(t, agent_test_input(link, gs))
         testing.expect_value(t, gs.input.mouse_world, w)
         agent_after_tick(link, gs)
     }
@@ -2903,8 +2915,7 @@ agent_test_shoot_eel :: proc(line: string) -> (hurt: bool) {
     e.pos    = {56 - CAVE_EEL_W * 0.5, 51 - CAVE_EEL_H * 0.5}
 
     agent_handle_line(link, gs, line)
-    agent_drive(link, gs)
-    agent_input(gs)
+    agent_test_input(link, gs)
     update_player(gs)
     gs.input.mine = false
     for _ in 0 ..< 120 {
@@ -2960,4 +2971,127 @@ agent_brief_says_how_to_aim_within_a_tile :: proc(t: ^testing.T) {
     for want in ([]string{"fractions aim at that point within it", "x,y the top-left of a w x h body"}) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
+}
+
+// Over the socket: a goal's end comes unasked, ahead of the next reply, and a
+// client that goes takes its queue with it.
+@(test)
+a_socket_client_hears_its_goal_end_unasked :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+
+    client, _ := net.dial_tcp(at)
+    out := agent_test_ask(gs, link, client, `{"cmd":"goals","add":[{"do":"act","frames":3},{"do":"act","frames":600}]}` + "\n", 1, buf[:])
+    testing.expect_value(t, out, `{"re":"goals","ok":true,"ids":[1,2]}` + "\n")
+    testing.expect(t, link.realtime && link.events_on)
+
+    got := 0
+    for _ in 0 ..< 2000 {
+        if agent_pump(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+        n, err := net.recv_tcp(client, buf[got:])
+        if err == nil do got += n
+        if strings.contains(string(buf[:got]), "\n") do break
+    }
+    testing.expect_value(t, string(buf[:got]), `{"event":"goal_done","f":3,"id":1}` + "\n")
+
+    net.close(client)
+    for _ in 0 ..< 2000 {
+        agent_pump(link, gs)
+        if !link.connected do break
+    }
+    testing.expect(t, !link.connected)
+    testing.expect(t, link.goals.n == 0 && !link.events_on && link.push_len == 0, "the queue went with the client")
+}
+
+@(test)
+agent_idle_off_holds_even_a_real_time_game :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    link.realtime = true
+    link.idle_off = false
+    testing.expect(t, agent_drive(link, gs))
+    agent_handle_line(link, gs, `{"cmd":"idle","on":false}`)
+    testing.expect(t, !link.realtime && !agent_drive(link, gs), "the old tools' first line still holds the game")
+}
+
+@(test)
+agent_a_goal_too_long_to_record_is_refused :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    pad := strings.repeat("x", AGENT_GOAL_LINE, context.temp_allocator)
+    for line in ([]string{
+        fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","pad":"%s"}}]}}`, pad),
+        fmt.tprintf(`{{"cmd":"act","pad":"%s"}}`, pad),
+        fmt.tprintf(`{{"cmd":"plan","acts":[{{"pad":"%s"}}]}}`, pad),
+    }) {
+        agent_test_refused(t, link, gs, line)
+        testing.expect(t, strings.contains(agent_test_reply(link), "too long to record"), agent_test_reply(link))
+    }
+    testing.expect_value(t, link.goals.n, 0)
+}
+
+// The first goals command starts the events from the game as it stands, not
+// from whatever the last tick of an earlier client left.
+@(test)
+agent_events_start_from_the_game_as_it_stands :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.level_index = 2
+    gs.player.hp   = 4
+    agent_handle_line(link, gs, `{"cmd":"goals","clear":true}`)
+    agent_after_tick(link, gs)
+    testing.expect_value(t, string(link.push[:link.push_len]), "")
+}
+
+// Events waiting go out ahead of the reply that follows them, and a client that
+// goes mid-plan leaves how much of the step it played.
+@(test)
+a_socket_client_hears_events_before_the_reply_and_its_plan_step_is_cut :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+    path := "agent_cut_test.jsonl"
+    defer os.remove(path)
+    f, err := os.open(path, {.Write, .Create, .Trunc}, os.Permissions_Default_File)
+    testing.expect(t, err == nil)
+    link.acts_file = f
+    link.recording = true
+
+    client, _ := net.dial_tcp(at)
+    agent_test_ask(gs, link, client, `{"cmd":"goals","add":[{"do":"act","frames":50}]}` + "\n", 1, buf[:])
+    out := agent_test_ask(gs, link, client, `{"cmd":"goals","clear":true}` + "\n", 2, buf[:])
+    testing.expect_value(t, out, `{"event":"goal_failed","f":0,"id":1,"reason":"cancelled"}` + "\n" + `{"re":"goals","ok":true}` + "\n")
+
+    agent_test_ask(gs, link, client, `{"cmd":"plan","acts":[{"move":"right","frames":100}]}` + "\n", 1, buf[:])
+    for _ in 0 ..< 5 {
+        testing.expect(t, agent_pump(link, gs))
+        game_update(gs)
+        agent_after_tick(link, gs)
+    }
+    net.close(client)
+    for _ in 0 ..< 2000 {
+        agent_pump(link, gs)
+        if !link.connected do break
+    }
+    testing.expect(t, !link.connected)
+    link.recording = false
+    os.close(f)
+    data, read_err := os.read_entire_file(path, context.allocator)
+    testing.expect(t, read_err == nil)
+    defer delete(data)
+    for row in strings.split_lines(string(data)) do if strings.contains(row, `"played"`) do testing.expect(t, strings.contains(row, `"played":5,"act":{`) && strings.contains(row, `"move":"right"`), row)
+    testing.expect(t, strings.contains(string(data), `"played":5,`), "the cut step is recorded")
 }
