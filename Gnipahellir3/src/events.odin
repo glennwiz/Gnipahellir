@@ -42,7 +42,6 @@ eq_clear :: proc(eq: ^Event_Queue) {
 @(rodata)
 event_log_skip := #partial [Event_Type]bool{
     .Play_Sound        = true,  // audio cue, nothing else
-    .Projectile_Impact = true,  // spawns an impact burst, nothing else
 }
 
 process_events :: proc(gs: ^Game_State) {
