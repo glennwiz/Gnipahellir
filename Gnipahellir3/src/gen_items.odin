@@ -117,6 +117,8 @@ item_table := [Item]Item_Info{
 	.Water_Head = { "Water Head", {50, 120, 200, 255}, .Water_Turret, "Place it on top of a Turret Pillar and they fuse into a Water Turret: a hard jet that slows the nearest enemy it can see and does it little harm. Turrets fire past other turrets, never through walls." },
 	.Earth_Head = { "Earth Head", {130, 100, 70, 255}, .Earth_Turret, "Place it on top of a Turret Pillar and they fuse into an Earth Turret: one slow, heavy blow on the nearest enemy it can see. Turrets fire past other turrets, never through walls." },
 	.Sky_Egg = { "Sky Egg", {235, 225, 200, 255}, .Air, "Warm from a sky nest. Eat it for a little health." },
+	.Slime = { "Slime", {120, 190, 90, 255}, .Air, "A cold green handful off a pond frog." },
+	.Coal = { "Coal", {52, 50, 56, 255}, .Air, "A lump of black coal, still warm from an ember beetle." },
 }
 
 // Which equip slot an item occupies; absent (= .None) is not equippable.

@@ -105,8 +105,8 @@ spawn_garm :: proc(gs: ^Game_State) {
 
     e := &gs.enemies.data[id]
     e.kind          = .Garm
-    e.hp            = GARM_HP
-    e.hp_max        = GARM_HP
+    e.hp            = enemy_behaviour[.Garm].hp
+    e.hp_max        = e.hp
     e.builder.build = .Lair   // his den, raised before the hunt begins
 
     // Arena center floor; the room is carved to ARENA_Y1 with stone below.

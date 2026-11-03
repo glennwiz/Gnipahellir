@@ -21,8 +21,8 @@ rise_draugr :: proc(gs: ^Game_State, i: int) {
     b := &e.builder
 
     e.kind   = .Undead
-    e.hp     = DRAUGR_HP
-    e.hp_max = DRAUGR_HP
+    e.hp     = enemy_behaviour[.Undead].hp
+    e.hp_max = e.hp
     e.vel    = {}
 
     // Respawn at the home den (anchor is a standable floor tile), moving the

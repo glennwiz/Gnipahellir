@@ -403,6 +403,8 @@ Item :: enum u8 {
 	Water_Head,
 	Earth_Head,
 	Sky_Egg, // (appended: item ordinals are serialized)
+	Slime,
+	Coal,
 	// <gen:item-append> — gnipa_studio's new-item wizard inserts above this line
 }
 

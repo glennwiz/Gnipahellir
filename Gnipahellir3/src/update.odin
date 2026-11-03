@@ -68,6 +68,10 @@ game_update :: proc(gs: ^Game_State) {
     //       process_events too.
     update_waves(gs)
 
+    // 5b1b. Roamers — tops each level's creatures back up to their caps.
+    //        Spawns enemies only; after the director so a wave lands first.
+    update_roamers(gs)
+
     // 5b2. Auto-Miner — the dimension snake advances (dimension level only);
     //      notifies/sounds, so it must also precede process_events
     update_miner(gs)
