@@ -1551,7 +1551,7 @@ agent_turbo_draws_once_a_second_and_only_while_driven :: proc(t: ^testing.T) {
 agent_test_listening :: proc(t: ^testing.T) -> (gs: ^Game_State, link: ^Agent_Link, at: net.Endpoint) {
     gs, link = agent_test_world()
     link.connected = false
-    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, 1)
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, AGENT_PENDING_MAX)
     testing.expect_value(t, err, nil)
     bound, berr := net.bound_endpoint(sock)
     testing.expect_value(t, berr, nil)
@@ -1600,7 +1600,7 @@ a_get_gets_the_brief_and_a_socket_client_plays_on_the_same_port :: proc(t: ^test
     testing.expect(t, strings.contains(reply[:head], fmt.tprintf("Content-Length: %d\r\n", len(reply) - head - 4)))
     testing.expect(t, !link.connected, "reading the brief does not take the game")
     testing.expect(t, !gs.agent.driving)
-    testing.expect(t, !link.pending_open, "and the connection is closed")
+    testing.expect(t, link.pending_n == 0, "and the connection is closed")
 
     client, _ := net.dial_tcp(at)
     defer net.close(client)
@@ -1658,7 +1658,7 @@ the_brief_is_served_while_a_client_plays_and_a_second_client_is_turned_away :: p
     reply = agent_test_ask(gs, link, second, `{"cmd":"state"}` + "\n", -1, buf[:])
     net.close(second)
     testing.expect(t, strings.contains(reply, "another agent is playing"), reply)
-    testing.expect(t, !link.pending_open)
+    testing.expect_value(t, link.pending_n, 0)
 
     out := agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
     testing.expect(t, strings.has_prefix(out, `{"ok":true`), "the first client never noticed")
@@ -1694,9 +1694,9 @@ a_silent_connection_does_not_drive_the_game_or_block_the_next :: proc(t: ^testin
     defer net.close(silent)
     for _ in 0 ..< 200 {
         testing.expect(t, agent_pump(link, gs), "the keyboard keeps the game")
-        if link.pending_open do break
+        if link.pending_n > 0 do break
     }
-    testing.expect(t, link.pending_open)
+    testing.expect_value(t, link.pending_n, 1)
     testing.expect(t, !link.connected)
 
     web, _ := net.dial_tcp(at)
@@ -2312,4 +2312,222 @@ a_listening_client_hears_the_watcher_over_the_socket :: proc(t: ^testing.T) {
     }
     testing.expect(t, !link.connected, "a client gone during a listen is dropped")
     testing.expect(t, !link.awaiting)
+}
+
+// Pumps until each client has its want lines or the far side closed (want -1).
+@(private="file")
+agent_test_collect :: proc(gs: ^Game_State, link: ^Agent_Link, clients: []net.TCP_Socket, wants: []int, bufs: [][]u8) -> (got: [4]int, closed: [4]bool) {
+    for c in clients do net.set_blocking(c, false)
+    for _ in 0 ..< 20000 {
+        agent_pump(link, gs)
+        done := true
+        for c, i in clients {
+            if closed[i] do continue
+            n, err := net.recv_tcp(c, bufs[i][got[i]:])
+            if err == nil && n == 0 { closed[i] = true; continue }
+            if err != nil && err != .Would_Block && err != .Timeout { closed[i] = true; continue }
+            got[i] += n
+            lines := strings.count(string(bufs[i][:got[i]]), "\n")
+            if wants[i] < 0 || lines < wants[i] do done = false
+        }
+        if done do break
+    }
+    return
+}
+
+@(test)
+a_get_and_a_connect_in_one_frame_are_both_answered :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    web_buf := new([AGENT_BRIEF_MAX + 1024]u8)
+    defer free(web_buf)
+    play_buf := new([AGENT_REPLY_MAX]u8)
+    defer free(play_buf)
+
+    // Both connect and speak before the game's next frame looks.
+    web, _ := net.dial_tcp(at)
+    defer net.close(web)
+    net.send_tcp(web, transmute([]u8)string("GET / HTTP/1.0\r\n\r\n"))
+    client, _ := net.dial_tcp(at)
+    defer net.close(client)
+    net.send_tcp(client, transmute([]u8)string(`{"cmd":"state"}` + "\n"))
+    time.sleep(50 * time.Millisecond)
+
+    got, closed := agent_test_collect(gs, link, {web, client}, {-1, 1}, {web_buf[:], play_buf[:]})
+    reply := string(web_buf[:got[0]])
+    testing.expect(t, closed[0], "the brief is sent and closed")
+    testing.expect(t, strings.has_prefix(reply, "HTTP/1.0 200 OK\r\n"), reply[:min(len(reply), 40)])
+    testing.expect(t, strings.contains(reply, "HOW THE GAME WAITS"), "the whole brief")
+    testing.expect(t, strings.has_prefix(string(play_buf[:got[1]]), `{"ok":true`), "and the socket client plays")
+    testing.expect(t, link.connected)
+    testing.expect_value(t, link.pending_n, 0)
+}
+
+@(test)
+two_clients_in_one_frame_the_first_plays_the_second_is_turned_away :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    bufs: [2][4096]u8
+
+    first, _ := net.dial_tcp(at)
+    defer net.close(first)
+    net.send_tcp(first, transmute([]u8)string(`{"cmd":"objective","goal":"first"}` + "\n"))
+    time.sleep(20 * time.Millisecond)
+    second, _ := net.dial_tcp(at)
+    defer net.close(second)
+    net.send_tcp(second, transmute([]u8)string(`{"cmd":"objective","goal":"second"}` + "\n"))
+    time.sleep(50 * time.Millisecond)
+
+    got, _ := agent_test_collect(gs, link, {first, second}, {1, -1}, {bufs[0][:], bufs[1][:]})
+    testing.expect_value(t, string(bufs[0][:got[0]]), `{"ok":true}` + "\n")
+    testing.expect(t, strings.contains(string(bufs[1][:got[1]]), "another agent is playing"), string(bufs[1][:got[1]]))
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "first")
+}
+
+@(test)
+silent_connections_past_the_limit_shed_the_oldest_and_the_brief_still_comes :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_BRIEF_MAX + 1024]u8)
+    defer free(buf)
+
+    silent: [AGENT_PENDING_MAX + 1]net.TCP_Socket
+    for &s in silent {
+        s, _ = net.dial_tcp(at)
+        for _ in 0 ..< 200 {  // one at a time, so the order is the order they came
+            n := link.pending_n
+            agent_pump(link, gs)
+            if link.pending_n != n || n == AGENT_PENDING_MAX do break
+        }
+    }
+    defer for s in silent do net.close(s)
+    testing.expect_value(t, link.pending_n, AGENT_PENDING_MAX)
+
+    // The oldest was let go; the youngest still waits.
+    one: [16]u8
+    net.set_blocking(silent[0], false)
+    n, err := net.recv_tcp(silent[0], one[:])
+    testing.expect(t, (err == nil && n == 0) || (err != nil && err != .Would_Block && err != .Timeout), "the oldest is closed")
+    net.set_blocking(silent[AGENT_PENDING_MAX], false)
+    _, err = net.recv_tcp(silent[AGENT_PENDING_MAX], one[:])
+    testing.expect(t, err == .Would_Block || err == .Timeout, "the youngest is held")
+
+    web, _ := net.dial_tcp(at)
+    defer net.close(web)
+    net.send_tcp(web, transmute([]u8)string("GET / HTTP/1.0\r\n\r\n"))
+    got, closed := agent_test_collect(gs, link, {web}, {-1}, {buf[:]})
+    testing.expect(t, closed[0])
+    testing.expect(t, strings.contains(string(buf[:got[0]]), "HOW THE GAME WAITS"))
+    testing.expect(t, !link.connected, "silence never plays")
+}
+
+// Every waiting connection is looked at each frame, whatever leaves the list
+// ahead of it, and the one that plays starts from its own first line.
+@(test)
+one_frame_serves_every_waiting_connection :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    bufs := new([3][AGENT_BRIEF_MAX + 1024]u8)
+    defer free(bufs)
+    get :: "GET / HTTP/1.0\r\n\r\n"
+
+    silent, _ := net.dial_tcp(at)
+    defer net.close(silent)
+    web, _ := net.dial_tcp(at)
+    defer net.close(web)
+    net.send_tcp(web, transmute([]u8)string(get))
+    client, _ := net.dial_tcp(at)
+    defer net.close(client)
+    net.send_tcp(client, transmute([]u8)string(`{"cmd":"objective","goal":"mine"}` + "\n"))
+    web2, _ := net.dial_tcp(at)
+    defer net.close(web2)
+    net.send_tcp(web2, transmute([]u8)string(get))
+    time.sleep(100 * time.Millisecond)
+
+    agent_pump(link, gs)  // one frame
+    testing.expect_value(t, link.pending_n, 1)  // only the silent one waits
+    testing.expect(t, link.connected)
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "mine")
+
+    got, closed := agent_test_collect(gs, link, {web, web2, client}, {-1, -1, 1}, {bufs[0][:], bufs[1][:], bufs[2][:]})
+    testing.expect(t, closed[0] && closed[1])
+    testing.expect(t, strings.has_prefix(string(bufs[0][:got[0]]), "HTTP/1.0 200 OK"))
+    testing.expect(t, strings.has_prefix(string(bufs[1][:got[1]]), "HTTP/1.0 200 OK"))
+    testing.expect_value(t, string(bufs[2][:got[2]]), `{"ok":true}` + "\n")
+
+    // One that leaves without a word gives its place back.
+    gone, _ := net.dial_tcp(at)
+    for _ in 0 ..< 200 {
+        agent_pump(link, gs)
+        if link.pending_n == 2 do break
+    }
+    testing.expect_value(t, link.pending_n, 2)
+    net.close(gone)
+    for _ in 0 ..< 200 {
+        agent_pump(link, gs)
+        if link.pending_n == 1 do break
+    }
+    testing.expect_value(t, link.pending_n, 1)
+}
+
+// The game's own bind holds a burst: four briefs asked for between two frames.
+@(test)
+the_games_bind_queues_a_burst_for_the_next_frame :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    link.connected = false
+    sock, port, ok := agent_title_bind(47411)
+    testing.expect(t, ok)
+    net.set_blocking(sock, false)
+    link.listener  = sock
+    link.listening = true
+    link.port      = port
+    defer agent_close(link, gs)
+    bufs := new([AGENT_PENDING_MAX][AGENT_BRIEF_MAX + 1024]u8)
+    defer free(bufs)
+
+    webs: [AGENT_PENDING_MAX]net.TCP_Socket
+    for &w in webs {
+        w, _ = net.dial_tcp(net.Endpoint{address = net.IP4_Loopback, port = port})
+        net.send_tcp(w, transmute([]u8)string("GET / HTTP/1.0\r\n\r\n"))
+    }
+    defer for w in webs do net.close(w)
+    time.sleep(100 * time.Millisecond)
+    agent_pump(link, gs)
+    testing.expect_value(t, link.pending_n, 0)  // all four came in and were answered in that frame
+
+    got, closed := agent_test_collect(gs, link, webs[:], {-1, -1, -1, -1}, {bufs[0][:], bufs[1][:], bufs[2][:], bufs[3][:]})
+    for i in 0 ..< AGENT_PENDING_MAX {
+        testing.expect(t, closed[i])
+        testing.expect(t, strings.has_prefix(string(bufs[i][:got[i]]), "HTTP/1.0 200 OK"))
+    }
+}
+
+@(test)
+closing_the_link_closes_the_waiting_connections :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    waiting, _ := net.dial_tcp(at)
+    defer net.close(waiting)
+    for _ in 0 ..< 200 {
+        agent_pump(link, gs)
+        if link.pending_n > 0 do break
+    }
+    testing.expect_value(t, link.pending_n, 1)
+    agent_close(link, gs)
+    testing.expect_value(t, link.pending_n, 0)
+    net.set_option(waiting, .Receive_Timeout, 2 * time.Second)
+    one: [16]u8
+    n, err := net.recv_tcp(waiting, one[:])
+    testing.expect(t, (err == nil && n == 0) || (err != nil && err != .Timeout && err != .Would_Block), "the far side sees it close")
 }
