@@ -14806,6 +14806,8 @@ a_builder_in_its_cut_goes_on_through_the_wall :: proc(t: ^testing.T) {
     // Out of the den's rows or past its shell is outside, struck or not.
     e.pos = {f32(DD_ANCHOR.x) + 5.1, f32(DD_ANCHOR.y)}
     testing.expect(t, den_protected(gs, int(head.x), int(head.y), id), "past the corridor, it holds")
+    e.pos = {f32(DD_ANCHOR.x) - 5.1, f32(DD_ANCHOR.y)}
+    testing.expect(t, den_protected(gs, int(head.x), int(head.y), id), "past the shell on the far side, it holds")
     high := DD_ANCHOR + {-4, -3}
     set_tile(&gs.world, int(high.x), int(high.y), .Void)
     e.pos = {f32(high.x) + 0.1, f32(high.y)}
