@@ -315,6 +315,62 @@ smash_tile :: proc(gs: ^Game_State, x, y: int) -> (dropped: bool) {
     return
 }
 
+// The seconds a digger works a player-placed block before it breaks: Glenn's
+// numbers to tune.  A block with no row takes DIG_TIME_PLACED.  Natural rock and
+// blocks enemies laid carry no .Placed and break at the first hit, as ever.
+DIG_TIME_PLACED :: f32(1.5)
+DIG_LAPSE       :: f32(0.5)   // seconds past its time a digger's clock stays good
+@(rodata)
+dig_time_table := #partial [Tile_Type]f32{
+    .Stone = 4,
+    .Door  = 6,
+}
+
+dig_time :: proc(gs: ^Game_State, x, y: int) -> f32 {
+    if !is_solid(&gs.world, x, y) || .Placed not_in gs.world.tile_flags[grid_idx(x, y)] do return 0
+    secs := dig_time_table[gs.world.terrain[grid_idx(x, y)]]
+    return secs if secs > 0 else DIG_TIME_PLACED
+}
+
+// What a plan pays for a dig: its time, in the units COST_MINE buys MINE_TIME.
+// A wave goes for the thin spot.
+dig_cost :: proc(gs: ^Game_State, x, y: int) -> f32 {
+    return COST_MINE * max(1, dig_time(gs, x, y) / MINE_TIME)
+}
+
+// Ready to break this tile?  The first ask on a placed block starts the digger's
+// dig time on nav.mine_timer, and an ask as that runs out breaks it; a digger that
+// wandered off past DIG_LAPSE starts over.  Each digger times its own, so a pack
+// is no faster on one block.  Nothing is refused: the wait always ends, and
+// builder_travel counts it as work, so no hunter strikes out on a wall.  Garm goes
+// through walls at his own pace.
+builder_dig_ready :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32) -> bool {
+    secs := dig_time(gs, int(T.x), int(T.y))
+    if secs <= 0 || e.kind == .Garm do return true
+    status := &gs.enemy_status[id]
+    if status.dig_tile == T && e.nav.mine_timer > -DIG_LAPSE {
+        status.dig_tile = {}
+        return true
+    }
+    status.dig_tile  = T
+    e.nav.mine_timer = secs
+    e.vel.x = 0
+    log_action(gs, "Enemy#%d digs at placed %v (%d,%d), %.1f s", id, get_tile(&gs.world, int(T.x), int(T.y)), T.x, T.y, secs)
+    return false
+}
+
+// A clock dies with its block, however the block went, so a repair on the same
+// tile is a new block with its full time.  Runs after the frame's digs, before
+// anything can be placed on the gap.
+dig_clocks_sweep :: proc(gs: ^Game_State) {
+    for &status, i in gs.enemy_status {
+        T := status.dig_tile
+        if T == {} || dig_time(gs, int(T.x), int(T.y)) > 0 do continue
+        status.dig_tile = {}
+        gs.enemies.data[i].nav.mine_timer = 0
+    }
+}
+
 is_mineral :: proc(t: Tile_Type) -> bool {
     #partial switch t {
     case .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore:
@@ -547,6 +603,8 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
 
     reached_goal := false
     dens := collect_dens(gs)
+    // Golems never dig player masonry, and Garm does not slow for it.
+    flat_digs := protect_placed || bridge_budget >= MAX_NAV_PATH
 
     // The den question, asked per dig transition: bounds and material first
     // (cheap, and what almost every tile fails), the den list only after.
@@ -579,6 +637,10 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             c = pi
         }
         return false
+    }
+
+    mine_cost :: proc(gs: ^Game_State, x, y: int, flat: bool) -> f32 {
+        return COST_MINE if flat else dig_cost(gs, x, y)
     }
 
     A_Trans :: struct {
@@ -677,7 +739,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         // Dig through the floor (only when landing one tile down).
         floor_mineable := dig_allowed(w, x, y+1, protect_placed)
         if allow_mining && floor_mineable && is_builder_mineable(gs, x, y+1) && is_solid(w, x, y+2) && !den_blocks(gs, &dens, x, y+1, owner) {
-            push_trans(&trans, &nt, i32(x), i32(y+1), COST_MINE)
+            push_trans(&trans, &nt, i32(x), i32(y+1), mine_cost(gs, x, y+1, flat_digs))
         }
 
         HDIR :: [2]int{-1, 1}
@@ -742,7 +804,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             // Tunnel into a mineable wall (needs a floor under the mined tile).
             wall_mineable := dig_allowed(w, nx, y, protect_placed)
             if allow_mining && wall_mineable && is_builder_mineable(gs, nx, y) && is_solid(w, nx, y+1) && !den_blocks(gs, &dens, nx, y, owner) {
-                push_trans(&trans, &nt, i32(nx), i32(y), COST_MINE)
+                push_trans(&trans, &nt, i32(nx), i32(y), mine_cost(gs, nx, y, flat_digs))
             }
 
             // Diagonal step upward, mining whatever blocks the climb: the
@@ -754,12 +816,14 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             if allow_mining && is_solid(w, nx, y) && in_bounds(nx, y-2) {
                 climb_tiles := [3][2]int{{nx, y - 1}, {x, y - 1}, {nx, y - 2}}
                 mines     := 0
+                carve     := f32(0)
                 climbable := true
                 for c in climb_tiles {
                     if !is_solid(w, c.x, c.y) { continue }
                     cell_mineable := dig_allowed(w, c.x, c.y, protect_placed)
                     if cell_mineable && is_builder_mineable(gs, c.x, c.y) && !den_blocks(gs, &dens, c.x, c.y, owner) {
                         mines += 1
+                        carve += mine_cost(gs, c.x, c.y, flat_digs)
                     } else {
                         climbable = false
                         break
@@ -767,7 +831,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 }
                 // mines == 0 is the plain step-up move handled above.
                 if climbable && mines > 0 {
-                    cost := COST_MINE*f32(mines) + 1
+                    cost := carve + 1
                     // Alternating climbs (1-wide shafts) are self-contradicting:
                     // one tile must be both carved (headroom) and left solid
                     // (support).  Prefer straight staircases.  Directly after
@@ -1351,6 +1415,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
             cy := int(c.y)
             if is_solid(&gs.world, cx, cy) && is_builder_mineable(gs, cx, cy) &&
                !den_protected(gs, cx, cy, id) {
+                if !builder_dig_ready(e, id, gs, c) do return true
                 dropped := smash_tile(gs, cx, cy)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
                 log_action(gs, "Builder clears climb tile (%d,%d)", cx, cy)
@@ -1364,6 +1429,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
 
     // Mine: waypoint tile is solid and mineable (dens are off-limits).
     if is_builder_mineable(gs, tx, ty) && !den_protected(gs, tx, ty, id) {
+        if !builder_dig_ready(e, id, gs, target) do return true
         dropped := smash_tile(gs, tx, ty)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
         log_action(gs, "Builder mines (%d,%d)", tx, ty)
@@ -2597,4 +2663,5 @@ update_enemies :: proc(gs: ^Game_State) {
         }
         entity_map_move(&gs.world, enemy_entity_id(i), prev, builder_tile(e))
     }
+    dig_clocks_sweep(gs)
 }

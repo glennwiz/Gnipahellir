@@ -370,7 +370,7 @@ a_dug_block_takes_its_marks_with_it :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.golem_marks.count, 1)
 
     gs.delta_time = 1.0/60.0
-    update_enemies(gs)
+    dig_frames_until_open(gs, SMASH_X, SMASH_Y)
 
     testing.expect(t, !is_solid(&gs.world, SMASH_X, SMASH_Y), "the stone was dug out")
     testing.expect(t, .Placed not_in gs.world.tile_flags[idx], "the Placed flag goes")

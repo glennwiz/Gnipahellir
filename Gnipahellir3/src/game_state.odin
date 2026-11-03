@@ -130,6 +130,7 @@ Enemy_Status :: struct {
     burn:        f32,  // seconds still alight
     burn_charge: f32,  // toward the next FLAME_BURN_TICK
     slow:        f32,  // seconds still at WATER_SLOW
+    dig_tile:    [2]i32,  // placed block whose dig time is running (builder_dig_ready)
 }
 
 Enemy_Store :: struct {
