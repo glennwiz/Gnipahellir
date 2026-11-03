@@ -9495,6 +9495,45 @@ a_foreign_block_in_a_footprint_is_dug_out_or_named :: proc(t: ^testing.T) {
 }
 
 @(test)
+a_fallen_monument_block_in_a_footprint_is_cleared_not_named :: proc(t: ^testing.T) {
+	// Card 153: a golem-built Clay that fell into the hearth's Stone cell
+	// {-2,0} landed as .Placed and the crew called it the player's.  It keeps
+	// its mark now, so the crew digs it out (its Clay to the pack) and builds.
+	gs := test_state(); defer free(gs)
+	p, _ := hearth_site_without_iron(gs)
+	X, top := 118, SURFACE_Y - 6
+	cell := [2]i32{i32(X), i32(SURFACE_Y - 1)}
+	set_tile(&gs.world, X - 1, top, .Stone)   // a natural ledge it hangs from
+	set_tile(&gs.world, X, top, .Clay)
+	gs.world.tile_flags[grid_idx(X, top)] += {.Placed}
+	gs.monument_cells[gs.level_index][grid_idx(X, top)] = .Clay
+	set_tile(&gs.world, X - 1, top, .Air)
+	gravity_check_removed(gs, X - 1, top)
+	for _ in 0 ..< 200 do update_gravity(gs)
+	testing.expect_value(t, get_tile(&gs.world, int(cell.x), int(cell.y)), Tile_Type.Clay)
+	testing.expect(t, !golem_footprint_in_way(gs, cell), "the crew's own fallen block is not in the way")
+
+	for _ in 0 ..< int(50 / gs.delta_time) do update_golems(gs)
+	testing.expect_value(t, notices_with(gs, "in the way"), 0)
+	testing.expect_value(t, get_tile(&gs.world, int(cell.x), int(cell.y)), Tile_Type.Stone)
+	info := &golem_plan_table[p.plan]
+	for ci in 0 ..< len(info.cells) - 1 {
+		testing.expectf(t, golem_project_cell_done(gs, p, ci), "cell %v is built", p.anchor + info.cells[ci].off)
+	}
+
+	// Path clearing still leaves standing monument masonry alone.
+	player := p.anchor + info.cells[0].off
+	gs.golems.data[0].mine_timer = 0
+	testing.expect(t, !golem_mine_tile(gs, &gs.golems.data[0], player, true, 0), "a path dig leaves the built hearth")
+	testing.expect_value(t, get_tile(&gs.world, int(player.x), int(player.y)), Tile_Type.Stone)
+
+	// A block the player lays there is still theirs.
+	set_tile(&gs.world, int(player.x), int(player.y), .Clay)
+	gs.monument_cells[gs.level_index][grid_idx(int(player.x), int(player.y))] = .Air
+	testing.expect(t, golem_footprint_in_way(gs, player), "an unmarked .Placed block is the player's")
+}
+
+@(test)
 many_blocks_in_a_footprint_are_said_once_and_keep_no_list_slot :: proc(t: ^testing.T) {
 	// Card 152's review probe: eleven of the hearth's cells hold the
 	// player's Dirt.  Noted one by one into the eight-slot dropped list they

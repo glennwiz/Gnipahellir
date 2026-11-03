@@ -95,6 +95,7 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
         golem_placed := .Golem_Placed in gs.world.tile_flags[idx]
         owner, grace_expiry, has_grace := golem_block_grace_details(gs,{x,y})
         if !has_grace do owner = -1
+        monument := monument_cell_take(gs, {x, y}) != .None
         b = Falling_Block{
             tile = t,
             x = x,
@@ -104,12 +105,12 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
             golem_placed = golem_placed,
             golem_owner = i16(owner),
             grace_expires_at = grace_expiry,
+            monument = monument,
             active = true,
         }
         set_tile(&gs.world, int(x), int(y), gravity_open_tile(gs, int(y)))
         golem_remove_block_mark(gs,{x,y})
         gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed}  // the block left this cell
-        gs.monument_cells[gs.level_index][idx] = .Air
         return
     }
 }
@@ -296,13 +297,14 @@ update_gravity :: proc(gs: ^Game_State) {
                 settled := [2]i32{b.x,i32(r-1)}
                 settled_idx := grid_idx(int(settled.x),int(settled.y))
                 w.tile_flags[settled_idx] += {.Placed}
+                if b.monument do gs.monument_cells[gs.level_index][settled_idx] = b.tile
                 if b.golem_placed {
                     w.tile_flags[settled_idx] += {.Golem_Placed}
                     if b.golem_owner >= 0 && b.grace_expires_at > gs.elapsed_time {
                         golem_register_block_grace_until(gs,int(b.golem_owner),settled,b.grace_expires_at)
                     }
                 }
-            } else if drop := terrain_table[b.tile].drop_item; drop != .None {
+            } else if drop := b.monument ? monument_build_item(b.tile) : terrain_table[b.tile].drop_item; drop != .None {
                 spawn_ground_item(w, {b.x, i32(r - 1)}, drop, 1)   // crumbles to a pile
             }
             b.active = false

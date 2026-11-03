@@ -146,8 +146,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [12]int
-    action_names := [12]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash", "depot smash"}
+    viol_by: [13]int
+    action_names := [13]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash", "depot smash", "monument fall"}
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -204,7 +204,7 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         depot_at:  [2]i32  // the depot a depot smash raises, and what stood there
         depot_old: Tile_Type
 
-        action := fz_range(&rng, 0, 11)
+        action := fz_range(&rng, 0, 12)
         switch action {
         case 0:
             name = "pickup"
@@ -380,6 +380,42 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
                 smash_tile(gs, int(depot_at.x), int(depot_at.y))
             } else {
                 handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = depot_at})
+            }
+            gs.golems.projects[gs.level_index] = {}
+
+        case 12:
+            // A golem-built block that falls (card 153) still pays the item it
+            // was built from: where it crumbles, or by the pick where it settles.
+            name = "monument fall"
+            plan := Golem_Plan(fz_range(&rng, int(Golem_Plan.Clay_Hearth), int(Golem_Plan.World_Anchor)))
+            cells := golem_plan_table[plan].cells
+            c := cells[fz_range(&rng, 0, len(cells) - 1)]
+            if .Falls not_in terrain_table[c.tile].flags && .Falls_Placed not_in terrain_table[c.tile].flags do continue
+            x := fz_range(&rng, FUZZ_X0 + 2, FUZZ_X0 + FUZZ_W - 3)
+            y := fz_range(&rng, FUZZ_Y0 + 1, FUZZ_Y0 + FUZZ_H - 6)
+            drop := fz_range(&rng, 1, 3)  // rows of air under the cell
+            // A pocket: a natural anchor on the left, natural rock round it, air under the cell to a floor.
+            for yy in y - 1 ..= y + drop + 1 do for xx in x - 2 ..= x + 1 {
+                set_tile(&gs.world, xx, yy, .Stone)
+                gs.world.tile_flags[grid_idx(xx, yy)] = {}
+            }
+            set_tile(&gs.world, x, y - 1, .Air)
+            set_tile(&gs.world, x + 1, y, .Air)
+            for yy in y + 1 ..= y + drop do set_tile(&gs.world, x, yy, .Air)
+            T := [2]i32{i32(x), i32(y)}
+            gs.golems.projects[gs.level_index] = {active = true, plan = plan, level = gs.level_index, anchor = T - c.off}
+            set_tile(&gs.world, x, y, c.tile)
+            gs.monument_cells[gs.level_index][grid_idx(x, y)] = c.tile
+            gs.world.tile_flags[grid_idx(x, y)] += {.Placed}
+            want[c.item] += 1
+            allow_zero = false
+            before = fuzz_ledger(gs)
+            set_tile(&gs.world, x - 1, y, .Air)
+            gravity_check_removed(gs, x - 1, y)
+            for _ in 0 ..< 120 do update_gravity(gs)
+            if land := y + drop; get_tile(&gs.world, x, land) == c.tile {
+                if gs.level_index == LEVEL_SURFACE && in_shaft_apron(&gs.world, x, land) do want[.Dirt] += 1
+                eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {i32(x), i32(land)}})
             }
             gs.golems.projects[gs.level_index] = {}
         }

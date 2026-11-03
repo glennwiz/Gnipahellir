@@ -613,6 +613,66 @@ a_falling_monument_block_leaves_its_mark :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.monument_cells[gs.level_index][grid_idx(SMASH_X, SMASH_Y)], Tile_Type.Air)
 }
 
+// Card 153: a monument cell hung off a natural anchor at (100,70) with air
+// to a floor at row 75, then undermined: the block falls and lands.
+smash_test_fall_monument_cell :: proc(gs: ^Game_State, plan: Golem_Plan, c: Golem_Build_Cell) {
+    X, Y :: 100, 70
+    w := &gs.world
+    for yy in 68 ..= 76 do for xx in X - 1 ..= X + 1 {
+        set_tile(w, xx, yy, .Air)
+        w.tile_flags[grid_idx(xx, yy)] = {}
+    }
+    set_tile(w, X, 75, .Stone)
+    set_tile(w, X - 1, 70, .Stone)
+    gs.player.pos = {30, f32(SURFACE_Y) - PLAYER_H}   // far off: drops land on the ground
+    T := [2]i32{X, Y}
+    gs.golems.projects[gs.level_index] = {active = true, plan = plan, level = gs.level_index, anchor = T - c.off}
+    set_tile(w, X, Y, c.tile)
+    gs.monument_cells[gs.level_index][grid_idx(X, Y)] = c.tile
+    w.tile_flags[grid_idx(X, Y)] += {.Placed}
+    set_tile(w, X - 1, 70, .Air)
+    gravity_check_removed(gs, X - 1, 70)
+    for _ in 0 ..< 400 do update_gravity(gs)
+}
+
+// A settling monument block lands with its mark, and the pick on it pays its
+// build item and takes the mark.
+@(test)
+a_fallen_monument_block_keeps_its_mark :: proc(t: ^testing.T) {
+    for plan in ([]Golem_Plan{.Clay_Hearth, .Golem_Depot, .World_Anchor}) {
+        for c in golem_plan_table[plan].cells {
+            if is_structure_tile[c.tile] || .Settles not_in terrain_table[c.tile].flags do continue
+            gs := turret_test_state()
+            defer free(gs)
+            smash_test_fall_monument_cell(gs, plan, c)
+            testing.expectf(t, get_tile(&gs.world, 100, 74) == c.tile, "%v %v landed", plan, c.off)
+            testing.expectf(t, gs.monument_cells[gs.level_index][grid_idx(100, 74)] == c.tile, "%v %v keeps its mark where it lands", plan, c.off)
+            testing.expectf(t, gs.monument_cells[gs.level_index][grid_idx(100, 70)] == .Air, "%v %v leaves no mark behind", plan, c.off)
+            item0 := turret_ground_count(gs, c.item)
+            eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {100, 74}})
+            process_events(gs)
+            testing.expectf(t, turret_ground_count(gs, c.item) - item0 == 1, "%v %v pays its %v", plan, c.off, c.item)
+            testing.expectf(t, gs.monument_cells[gs.level_index][grid_idx(100, 74)] == .Air, "%v %v the mark is taken", plan, c.off)
+        }
+    }
+}
+
+// A monument block that crumbles where it lands drops its build item: a
+// Plank-built Wood paid a Wood_Log.
+@(test)
+a_crumbling_monument_block_drops_its_build_item :: proc(t: ^testing.T) {
+    for plan in ([]Golem_Plan{.Clay_Hearth, .Golem_Depot, .World_Anchor}) {
+        for c in golem_plan_table[plan].cells {
+            if is_structure_tile[c.tile] || .Settles in terrain_table[c.tile].flags || .Falls not_in terrain_table[c.tile].flags do continue
+            gs := turret_test_state()
+            defer free(gs)
+            smash_test_fall_monument_cell(gs, plan, c)
+            testing.expectf(t, gs.world.items[grid_idx(100, 74)] == c.item && gs.world.item_counts[grid_idx(100, 74)] == 1, "%v %v crumbles to one %v, got %v", plan, c.off, c.item, gs.world.items[grid_idx(100, 74)])
+            testing.expectf(t, turret_ground_count(gs, terrain_table[c.tile].drop_item) == 0 || terrain_table[c.tile].drop_item == c.item, "%v %v pays no %v", plan, c.off, terrain_table[c.tile].drop_item)
+        }
+    }
+}
+
 // A manufactured world made fresh keeps no marks from the one before it.
 @(test)
 a_fresh_dimension_forgets_its_monuments :: proc(t: ^testing.T) {

@@ -1470,12 +1470,15 @@ golem_in_work_zone :: proc(gs: ^Game_State, tile: [2]i32) -> bool {
 // What a worker may never dig on its way or out of a footprint (a block
 // another golem just laid aside, whose grace ends): the footprint check and
 // the dig share it, so a cell the crew skips and a dig it refuses are one set.
-golem_dig_forbidden :: proc(gs: ^Game_State, x, y: int, recovering: bool) -> bool {
+golem_dig_forbidden :: proc(gs: ^Game_State, x, y: int, recovering: bool, footprint := false) -> bool {
 	idx := grid_idx(x, y)
 	t := gs.world.terrain[idx]
 	flags := gs.world.tile_flags[idx]
-	// Incidental path clearing protects the player's masonry.
-	if .Placed in flags && .Golem_Placed not_in flags do return true
+	// Incidental path clearing protects the player's masonry.  In a footprint,
+	// a block still marked as the crew's monument work is the crew's own: one
+	// that fell there (card 153; a standing one is its own tile, so done).
+	own := footprint && monument_cell_item(gs, {i32(x), i32(y)}) != .None
+	if .Placed in flags && .Golem_Placed not_in flags && !own do return true
 	// A den shell can otherwise turn a completed rescue pillar into a trap: the
 	// worker aborts beneath the protected ceiling and falls all the way back
 	// down. Only the active vertical self-rescue may punch its narrow shaft
@@ -1486,7 +1489,7 @@ golem_dig_forbidden :: proc(gs: ^Game_State, x, y: int, recovering: bool) -> boo
 	return .Mineable not_in terrain_table[t].flags
 }
 
-golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := false, id := -1) -> bool {
+golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := false, id := -1, footprint := false) -> bool {
 	if g.mine_timer > 0 do return false
 	x, y := int(tile.x), int(tile.y)
 	if !in_bounds(x, y) do return false
@@ -1496,7 +1499,7 @@ golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := 
 	if !path_clear && !golem_in_work_zone(gs,tile) && .Golem_Marked not_in flags do return false
 	if .Golem_Placed in flags && golem_block_grace_protected(gs,id,tile) do return false
 	if path_clear {
-		if golem_dig_forbidden(gs, x, y, g.recovering) do return false
+		if golem_dig_forbidden(gs, x, y, g.recovering, footprint) do return false
 	} else {
 		// A Gather target is explicit permission to remove ordinary player
 		// masonry inside the rectangle; dens, structures and the ground under
@@ -1733,12 +1736,12 @@ golem_route_place :: proc(gs: ^Game_State, g: ^Golem, id: int, cell: [2]i32) {
 // A block in a monument footprint no worker may dig (golem_dig_forbidden:
 // the player's masonry or structure, a den, the ground under the base, an
 // undiggable block).  A natural block or a golem's loose navigation block is
-// dug out on arrival (golem_clear_footprint).  A monument block that fell
-// lands as .Placed and reads as the player's.
+// dug out on arrival (golem_clear_footprint), and so is a monument block
+// that fell there, which keeps its mark.
 golem_footprint_in_way :: proc(gs: ^Game_State, T: [2]i32) -> bool {
 	t := get_tile(&gs.world, int(T.x), int(T.y))
 	if t == .Air || t == .Void do return false   // an open cell's stale flag is nothing
-	return golem_dig_forbidden(gs, int(T.x), int(T.y), false)
+	return golem_dig_forbidden(gs, int(T.x), int(T.y), false, true)
 }
 
 // Every worker skips those cells without a dropped-list slot; the crew says
@@ -1774,7 +1777,7 @@ golem_clear_footprint :: proc(gs: ^Game_State, g: ^Golem, id: int, T: [2]i32) {
 		spawn_ground_item(&gs.world, golem_tile(g), golem_pack_pop(g), 1)
 		gs.save_dirty = true
 	}
-	_ = golem_mine_tile(gs, g, T, true, id)   // a cooldown or a grace refuses it for now: the worker tries again next frame
+	_ = golem_mine_tile(gs, g, T, true, id, true)   // a cooldown or a grace refuses it for now: the worker tries again next frame
 }
 
 golem_place_reserved :: proc(gs: ^Game_State, id: int) {
