@@ -611,6 +611,21 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 
 PLAN_CARVE_LOOKBACK :: 5   // steps back a move checks its support against the plan
 
+// A hop: two columns over and one up, the jump a staircase turns round with.
+// A 1-high body only rises diagonally, so a climb that meets a wall cannot
+// turn on its own steps: the step it would turn on is the one it climbed
+// through.  It hops back over that step instead, onto rock the climb left whole.
+is_hop :: proc(a, b: [2]i32) -> bool {
+    return b.y == a.y - 1 && abs(b.x - a.x) == 2
+}
+
+// What a hop from a to b needs open besides its landing: the takeoff's two
+// rows of headroom, and the three rows the arc passes in the column between.
+hop_carve_tiles :: proc(a, b: [2]i32) -> [6][2]i32 {
+    m := a.x + (b.x - a.x) / 2
+    return {{a.x, a.y - 1}, {a.x, a.y - 2}, {m, a.y}, {m, a.y - 1}, {m, a.y - 2}, {b.x, b.y - 1}}
+}
+
 // An open-set entry.  f travels with the node, so a sift never reaches back
 // into nodes[] or takes a square root.
 A_Open :: struct {
@@ -657,6 +672,19 @@ astar_open_pop :: proc(open: []A_Open, size: ^int, work: ^int) -> A_Open {
 }
 
 astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1, allow_mining := true, complete: ^bool = nil, protect_placed := false) -> bool {
+    // A refused rise can cost the only route: the search keeps one parent per
+    // tile, and what that parent carved decides what is refused after it.
+    // Then it searches again, the rise priced like any walk over its own hole.
+    reached, starved := false, false
+    ok := astar_dig_pass(gs, from, to, stop_within, bridge_budget, out, owner, allow_mining, &reached, protect_placed, false, &starved)
+    if starved {
+        ok = astar_dig_pass(gs, from, to, stop_within, bridge_budget, out, owner, allow_mining, &reached, protect_placed, true, nil)
+    }
+    if complete != nil do complete^ = reached
+    return ok
+}
+
+astar_dig_pass :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int, allow_mining: bool, complete: ^bool, protect_placed: bool, lax_rise: bool, starved: ^bool) -> bool {
     w := &gs.world
     out^ = {}
 
@@ -675,6 +703,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
     }
 
     reached_goal := false
+    refused := false   // a rise onto a floor this plan carved was turned down
     dens := collect_dens(gs)
     // Golems never dig player masonry, and Garm does not slow for it.
     flat_digs := protect_placed || bridge_budget >= MAX_NAV_PATH
@@ -705,7 +734,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             if pi < 0 { return false }
             a, b := nodes[pi].pos, nodes[c].pos
             if T == b { return true }
-            if b.y == a.y - 1 && b.x != a.x {
+            if is_hop(a, b) {
+                for h in hop_carve_tiles(a, b) do if T == h { return true }
+            } else if b.y == a.y - 1 && b.x != a.x {
                 if T == {a.x, a.y - 1} || T == {b.x, b.y - 1} { return true }
             }
             c = pi
@@ -918,6 +949,32 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
                 }
             }
 
+            // Hop, carving its arc: how a climb turns round without cutting
+            // the floor it turns on (is_hop).  Builders only: golems keep
+            // masonry and Garm's bulk does not thread a carved arc.
+            jx := x + 2*d
+            if allow_mining && !flat_digs && in_bounds(jx, y) && in_bounds(x, y-2) &&
+               is_solid(w, jx, y) {
+                from_t, to_t := [2]i32{i32(x), i32(y)}, [2]i32{i32(jx), i32(y-1)}
+                arc := hop_carve_tiles(from_t, to_t)
+                carve := f32(0)
+                hoppable := true
+                for c in ([7][2]i32{arc[0], arc[1], arc[2], arc[3], arc[4], arc[5], to_t}) {
+                    cx, cy := int(c.x), int(c.y)
+                    // The climb that meets the wall has already cut part of the arc.
+                    if !is_solid(w, cx, cy) || plan_carves(nodes[:], int(cur_idx), cx, cy) { continue }
+                    if is_builder_mineable(gs, cx, cy) && !den_blocks(gs, &dens, cx, cy, owner) {
+                        carve += dig_cost(gs, cx, cy)
+                    } else {
+                        hoppable = false
+                        break
+                    }
+                }
+                if hoppable {
+                    push_trans(&trans, &nt, to_t.x, to_t.y, carve + 1)
+                }
+            }
+
             // Bridge a gap: place a block at (nx, y+1) and stand on it —
             // only while the path still has pocket blocks to spend.
             if int(cur.bridges) < bridge_budget &&
@@ -939,9 +996,12 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             tentative_g := cur.g + trans[i].cost
             // A floor this plan carved reads solid now and costs a block at
             // run time.  Priced, not refused: crossing one's own hole can be
-            // the only way.  Garm conjures his stone free.
+            // the only way.  Garm conjures his stone free.  Rising onto it is
+            // refused: the bridge rule lays no floor under a waypoint above,
+            // so only a lay in mid-air makes it, and a hop goes round (but see astar_dig).
             if bridge_budget < MAX_NAV_PATH && is_solid(w, nxi, nyi + 1) &&
                plan_carves(nodes[:], int(cur_idx), nxi, nyi + 1) {
+                if nyi < y && !lax_rise { refused = true; continue }
                 tentative_g += COST_SELF_UNDONE
             }
             if tentative_g >= g_cost[nvi] { continue }   // not an improvement
@@ -964,6 +1024,7 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         }
     }
 
+    if starved != nil do starved^ = refused && !reached_goal && open_size == 0
     if found < 0 {
         if best_node <= 0 { return false }   // couldn't move toward goal at all
         found = best_node
@@ -1479,9 +1540,20 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     // Grounded only: while airborne the builder tile fluctuates and the
     // carves land on the wrong rows.
     bt := builder_tile(e)
-    if target.y < bt.y && e.grounded && abs(target.x - bt.x) <= 1 {
-        climb := [2][2]i32{{bt.x, bt.y - 1}, {target.x, target.y - 1}}
-        for c in climb {
+    // A hop's arc is carved from the waypoint it leaves: the body may tick
+    // that one off a column short.
+    takeoff := nav.path.tiles[nav.path.cursor - 1] if nav.path.cursor > 0 else bt
+    carves: [6][2]i32
+    n_carves := 0
+    if is_hop(takeoff, target) {
+        carves = hop_carve_tiles(takeoff, target)
+        n_carves = len(carves)
+    } else if target.y < bt.y && abs(target.x - bt.x) <= 1 {
+        carves[0], carves[1] = {bt.x, bt.y - 1}, {target.x, target.y - 1}
+        n_carves = 2
+    }
+    if e.grounded {
+        for c in carves[:n_carves] {
             cx := int(c.x)
             cy := int(c.y)
             if is_solid(&gs.world, cx, cy) && is_builder_mineable(gs, cx, cy) &&

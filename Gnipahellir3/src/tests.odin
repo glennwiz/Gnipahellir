@@ -15052,7 +15052,8 @@ no_hop_is_planned_under_a_low_ceiling :: proc(t: ^testing.T) {
 
 // A tunnel under a one-thick slab, with a bump a builder can climb through or
 // dig past.  Climbing here is cheap but cuts the slab it then walks back on;
-// the way round through the natural gap at x=37 leaves the slab whole.
+// the way round through the natural gap at x=37, or a hop off the bump over
+// the hole it cuts, leaves the floor it walks on whole.
 self_undo_world :: proc(gs: ^Game_State) {
     for &tile in gs.world.terrain do tile = .Stone
     for y in 66 ..= 69 do for x in 5 ..= 50 do set_tile(&gs.world, x, y, .Void)
@@ -15071,9 +15072,7 @@ a_plan_goes_round_rather_than_cut_the_floor_it_returns_on :: proc(t: ^testing.T)
     self_undo_world(gs)
     path: Nav_Path
     testing.expect(t, astar_dig(gs, {34, 71}, {24, 69}, 0, 4, &path), "a route exists")
-    east := 0
-    for i in 0 ..< path.len do east = max(east, int(path.tiles[i].x))
-    testing.expect(t, east >= 36, "the plan takes the gap and leaves the slab whole")
+    testing.expect_value(t, plan_self_undos({34, 71}, path), 0)
 }
 
 // Garm conjures his stone, so the short way stays the short way.
@@ -15114,8 +15113,11 @@ a_builder_carves_no_headroom_short_of_its_rise :: proc(t: ^testing.T) {
     e := &gs.enemies.data[id]
     e.pos = {41.1, 71}
     e.grounded = true
-    e.nav.path.tiles[0] = {43, 70}
-    e.nav.path.len = 1
+    // It ticked off the waypoint before the rise from a column short.
+    e.nav.path.tiles[0] = {42, 71}
+    e.nav.path.tiles[1] = {43, 70}
+    e.nav.path.len = 2
+    e.nav.path.cursor = 1
     set_tile(&gs.world, 43, 70, .Void)
     set_tile(&gs.world, 43, 69, .Void)
     builder_exec_action(e, id, &e.nav, gs)
@@ -15214,6 +15216,191 @@ builder_soak_plans_keep_what_they_carve :: proc(t: ^testing.T) {
     log.infof("CHURN self-undo soak: %d laid back within %d frames, top tile %d", undone, SOON, top)
     testing.expect(t, undone <= MAX_UNDONE, "plans are laying back what they carve")
     testing.expect(t, top <= MAX_TOUCHES, "one tile carved and laid back this often means plans undo themselves")
+}
+
+// Steps of a plan that stand on a tile the plan carved before them: each one
+// is a block laid back on what the builder just cut.  The carve rules are
+// astar_dig's: every step mines what it enters, a rise its own headroom and
+// its landing's, a hop its arc.
+plan_self_undos :: proc(from: [2]i32, path: Nav_Path) -> (undos: int) {
+    carved: [256][2]i32
+    n := 0
+    a := from
+    for i in 0 ..< path.len {
+        b := path.tiles[i]
+        for k in 0 ..< n do if carved[k] == b + {0, 1} { undos += 1; break }
+        cut: [7][2]i32
+        m := 0
+        cut[m] = b; m += 1
+        if is_hop(a, b) {
+            for h in hop_carve_tiles(a, b) { cut[m] = h; m += 1 }
+        } else if b.y == a.y - 1 && b.x != a.x {
+            cut[m] = {a.x, a.y - 1}; cut[m + 1] = {b.x, b.y - 1}; m += 2
+        }
+        for k in 0 ..< m do if n < len(carved) { carved[n] = cut[k]; n += 1 }
+        a = b
+    }
+    return
+}
+
+// A band of rock five wide against the east edge, under a room to the west.
+// Seven rows up and four columns across: a climb meets the wall and must turn.
+edge_band_world :: proc(gs: ^Game_State) {
+    for y in 64 ..= 86 do for x in 176 ..< GRID_W do set_tile(&gs.world, x, y, .Rune_Stone)
+    for y in 71 ..= 80 do for x in 187 ..< GRID_W do set_tile(&gs.world, x, y, .Stone)
+    for y in 72 ..= 73 do for x in 180 ..= 186 do set_tile(&gs.world, x, y, .Void)
+    set_tile(&gs.world, 187, 80, .Void)
+}
+
+// A turn on its own steps lays back the step it climbed through, and the next
+// trip cuts it again: 22 times on one tile in run 7.  A hop turns over it.
+@(test)
+a_climb_at_the_map_edge_turns_without_laying_back_its_steps :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    edge_band_world(gs)
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {187, 80}, {183, 73}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the room")
+    hops := 0
+    a := [2]i32{187, 80}
+    for i in 0 ..< path.len { if is_hop(a, path.tiles[i]) do hops += 1; a = path.tiles[i] }
+    testing.expect(t, hops > 0, "the climb turns with a hop")
+    testing.expect_value(t, plan_self_undos({187, 80}, path), 0)
+}
+
+// Run 7, L0 at the east edge, seed 1027776355: Builder#0 mined (190,77) and
+// laid it back 22 times, with (189,75) and (190,73) the same.  Thirty minutes
+// of the real update put 75 touches on each before hops; now about a dozen.
+@(test)
+builder_soak_turns_at_the_edge_without_undoing :: proc(t: ^testing.T) {
+    SEED :: u32(1027776355)
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, SEED)
+    gs.delta_time = 1.0 / 60.0
+    gs.player.pos = {107, 52}
+
+    MINUTES :: 30
+    MAX_TOUCHES :: 30
+    touches: [GRID_W * GRID_H]int
+    for _ in 1 ..= MINUTES * 3600 {
+        gs.frame += 1
+        update_enemies(gs)
+        for k in 0 ..< gs.events.size {
+            ev := gs.events.events[(gs.events.head + k) % MAX_EVENTS]
+            if ev.type == .Builder_Mined || ev.type == .Builder_Placed do touches[grid_idx(int(ev.tile.x), int(ev.tile.y))] += 1
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    top, top_idx := 0, 0
+    for c, i in touches do if c > top { top, top_idx = c, i }
+    log.infof("CHURN edge soak: top tile %d at (%d,%d)", top, top_idx % GRID_W, top_idx / GRID_W)
+    testing.expect(t, top <= MAX_TOUCHES, "one tile carved and laid back this often means plans undo themselves")
+}
+
+// Golems keep masonry and Garm's bulk does not thread a carved arc: neither hops.
+@(test)
+only_builders_hop :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    edge_band_world(gs)
+    hops :: proc(path: Nav_Path, from: [2]i32) -> (n: int) {
+        a := from
+        for i in 0 ..< path.len { if is_hop(a, path.tiles[i]) do n += 1; a = path.tiles[i] }
+        return
+    }
+    garm, golem: Nav_Path
+    testing.expect(t, astar_dig(gs, {187, 80}, {183, 73}, 0, MAX_NAV_PATH, &garm), "Garm has a route")
+    testing.expect_value(t, hops(garm, {187, 80}), 0)
+    testing.expect(t, astar_dig(gs, {187, 80}, {183, 73}, 0, 4, &golem, protect_placed = true), "a golem has a route")
+    testing.expect_value(t, hops(golem, {187, 80}), 0)
+}
+
+// After a rise, a step back up onto the headroom it cut stands on air: the
+// bridge rule lays nothing under a waypoint above.  Here that step is the
+// cheap way; the plan hops instead.  With no hop, the step is the only way,
+// and the plan still takes it.
+rise_back_world :: proc(gs: ^Game_State) {
+    for y in 68 ..= 78 do for x in 166 ..= 188 do set_tile(&gs.world, x, y, .Rune_Stone)
+    for y in 72 ..= 73 do for x in 170 ..= 182 do set_tile(&gs.world, x, y, .Void)
+    set_tile(&gs.world, 182, 75, .Void)
+    set_tile(&gs.world, 183, 73, .Void)
+    set_tile(&gs.world, 183, 74, .Stone)
+    set_tile(&gs.world, 182, 74, .Stone)
+    set_tile(&gs.world, 183, 72, .Stone)
+    set_tile(&gs.world, 181, 72, .Stone)
+}
+
+@(test)
+a_plan_does_not_rise_onto_the_headroom_it_cut :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    rise_back_world(gs)
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {182, 75}, {172, 73}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the corridor")
+    testing.expect_value(t, plan_self_undos({182, 75}, path), 0)
+}
+
+// A hop lands on rock: over a gap it would fall back down the hole.
+@(test)
+a_hop_never_lands_on_air :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    rise_back_world(gs)
+    set_tile(&gs.world, 181, 74, .Void)   // a pit where the hop would land
+    set_tile(&gs.world, 181, 75, .Void)
+    path: Nav_Path
+    _ = astar_dig(gs, {182, 75}, {172, 73}, 0, 4, &path)
+    a := [2]i32{182, 75}
+    for i in 0 ..< path.len {
+        b := path.tiles[i]
+        if is_hop(a, b) do testing.expectf(t, is_solid(&gs.world, int(b.x), int(b.y) + 1), "the hop to %v lands on rock", b)
+        a = b
+    }
+}
+
+@(test)
+a_plan_rises_onto_its_own_cut_when_nothing_else_goes :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    rise_back_world(gs)
+    set_tile(&gs.world, 181, 72, .Rune_Stone)   // no hop
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {182, 75}, {172, 73}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the corridor")
+}
+
+// A hop's arc is cut from the waypoint it leaves, not from where the body
+// stands: the body ticks that waypoint off from a column short.
+@(test)
+a_hop_carves_its_arc_from_the_waypoint_it_leaves :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 40, 41, 71, 71)
+    e := &gs.enemies.data[id]
+    e.pos = {40.1, 71}
+    e.nav.path.tiles[0] = {41, 71}
+    e.nav.path.tiles[1] = {43, 70}
+    e.nav.path.len = 2
+    e.nav.path.cursor = 1
+    for _ in 0 ..< 10 {
+        e.nav.mine_timer = 0
+        builder_exec_action(e, id, &e.nav, gs)
+    }
+    // Two rows over the takeoff, three in the column between, one over the landing.
+    for c in ([][2]i32{{41, 70}, {41, 69}, {42, 71}, {42, 70}, {42, 69}, {43, 69}}) {
+        testing.expectf(t, !is_solid(&gs.world, int(c.x), int(c.y)), "arc tile %v is cut", c)
+    }
+    testing.expect(t, !is_solid(&gs.world, 43, 70), "the landing is cut")
+    testing.expect(t, is_solid(&gs.world, 43, 71), "the landing's floor stays")
+    testing.expect(t, is_solid(&gs.world, 40, 70), "the body's own ceiling stays")
+    testing.expect(t, !is_hop({41, 71}, {44, 70}), "three columns over is no hop")
 }
 
 // ─── No route ─────────────────────────────────────────────────────────────────
