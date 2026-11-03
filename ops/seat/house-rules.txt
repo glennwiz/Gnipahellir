@@ -27,3 +27,4 @@ PROPOSED DEFAULTS, NOT YET CONFIRMED BY GLENN
 - Every seat works in its own clone or worktree, not in Glenn's checkout.
 - Handoffs are four lines: RESULT / EVIDENCE / NEXT / ASK.
 - Run tests one at a time, never in parallel, sabotage runs included: each odin test takes 600 MB and /tmp is RAM. Put scratch copies and -out binaries under your own worktree, not /tmp, and delete them when done.
+- Wrap every test or game run in `timeout` (for example `timeout 600 odin test ...`); a sabotage can hang a test forever. Before your closing post, check that no test binary or game you started is still running and stop it by pid. On 2026-11-03 a closed seat left 12 hung sabotage runs burning the box for two hours.
