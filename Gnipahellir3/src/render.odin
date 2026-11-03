@@ -2457,7 +2457,7 @@ draw_enemy :: proc(e: ^Enemy, t: f32) {
 		draw_builder(e, .Vargr)
 	case .Fire_Sprite:
 		draw_fire_sprite(e, t)
-	case .Pond_Frog, .Ember_Beetle, .Cave_Eel, .Magma_Crawler:
+	case .Pond_Frog, .Ember_Beetle, .Cave_Eel, .Magma_Crawler, .Stone_Grub:
 		draw_roamer(e)
 	}
 }
@@ -2469,6 +2469,7 @@ roamer_colors := #partial [Enemy_Kind][3]rl.Color{
 	.Ember_Beetle = {{44, 34, 34, 255}, {235, 90, 26, 255}, {255, 190, 60, 255}},
 	.Cave_Eel     = {{46, 70, 82, 255}, {150, 190, 180, 255}, {230, 240, 120, 255}},
 	.Magma_Crawler = {{70, 34, 26, 255}, {255, 150, 40, 255}, {255, 230, 120, 255}},
+	.Stone_Grub   = {{110, 106, 100, 255}, {176, 168, 150, 255}, {40, 36, 34, 255}},
 }
 
 draw_roamer :: proc(e: ^Enemy) {

@@ -417,6 +417,7 @@ enemy_behaviour := [Enemy_Kind]Enemy_Behaviour{
     // Zero gravity: water holds it up, and update_roamer drops it when none does.
     .Cave_Eel     = {{CAVE_EEL_W, CAVE_EEL_H}, CAVE_EEL_SPEED, CAVE_EEL_HP, 0, update_roamer},
     .Magma_Crawler = {{MAGMA_CRAWLER_W, MAGMA_CRAWLER_H}, MAGMA_CRAWLER_SPEED, MAGMA_CRAWLER_HP, BUILDER_GRAVITY, update_roamer},
+    .Stone_Grub   = {{STONE_GRUB_W, STONE_GRUB_H}, STONE_GRUB_SPEED, STONE_GRUB_HP, BUILDER_GRAVITY, update_roamer},
 }
 
 enemy_body_size :: proc(kind: Enemy_Kind) -> [2]f32 {

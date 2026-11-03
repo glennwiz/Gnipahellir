@@ -69,6 +69,7 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
     testing.expect(t, enemy_behaviour[.Ember_Beetle].update == update_roamer, "beetle brain")
     testing.expect(t, enemy_behaviour[.Cave_Eel].update == update_roamer, "eel brain")
     testing.expect(t, enemy_behaviour[.Magma_Crawler].update == update_roamer, "crawler brain")
+    testing.expect(t, enemy_behaviour[.Stone_Grub].update == update_roamer, "grub brain")
 
     // The first guesses, pinned so a retune is a choice.
     testing.expect_value(t, roamer_table[.Pond_Frog].cap, 4)
@@ -80,6 +81,10 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
     testing.expect_value(t, roamer_table[.Magma_Crawler].cap, 3)
     testing.expect_value(t, roamer_table[.Magma_Crawler].damage, 2)
     testing.expect_value(t, roamer_table[.Magma_Crawler].level, LEVEL_CAVE2)
+    testing.expect_value(t, roamer_table[.Stone_Grub].cap, 3)
+    testing.expect_value(t, roamer_table[.Stone_Grub].damage, 1)
+    testing.expect_value(t, roamer_table[.Stone_Grub].level, LEVEL_CAVE2)
+    testing.expect_value(t, enemy_behaviour[.Stone_Grub].hp, 12)
 }
 
 @(test)
@@ -1051,7 +1056,7 @@ crawlers_spawn_on_open_cave_floor_on_their_level_only :: proc(t: ^testing.T) {
         update_roamers(gs)
     }
     testing.expect_value(t, wave_count_kind(gs, .Magma_Crawler), roamer_table[.Magma_Crawler].cap)
-    for &e, s in gs.enemies.data do if gs.enemies.active[s] {
+    for &e, s in gs.enemies.data do if gs.enemies.active[s] && e.kind == .Magma_Crawler {
         testing.expect_value(t, builder_tile(&e).y, i32(ROAM_Y))
         testing.expect(t, abs(e.pos.y + MAGMA_CRAWLER_H - f32(ROAM_Y + 1)) < 0.01, "feet on the floor")
         testing.expect(t, abs(builder_tile(&e).x - 170) >= ROAMER_SPAWN_CLEAR, "spawned on the player")
@@ -1078,3 +1083,164 @@ a_crawler_drops_coal :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.world.items[grid_idx(60, ROAM_Y)], Item.Coal)
     testing.expect_value(t, enemy_kind_names[.Magma_Crawler], "a magma crawler")
 }
+
+// ─── Stone Grub (card 68) ─────────────────────────────────────────────────────
+
+GRUB_WALL :: 64   // the column it runs into
+
+// A grub at x 62 walking right into a wall, whole column, of `tile`.
+grub_wall :: proc(gs: ^Game_State, tile: Tile_Type) -> ^Enemy {
+    crawl_cave(gs, 170)
+    gs.world.tile_flags = {}
+    for y in 1 ..= ROAM_Y do set_tile(&gs.world, GRUB_WALL, y, tile)
+    e := roam_seed(gs, .Stone_Grub, 62)
+    e.builder.has_target = true
+    e.builder.cooldown = 1000
+    gs.delta_time = 1.0/60
+    return e
+}
+
+@(test)
+a_grub_eats_the_wall_it_meets_one_bite_a_beat :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e := grub_wall(gs, .Stone)
+    frames := 0
+    for get_tile(&gs.world, GRUB_WALL, ROAM_Y) == .Stone && frames < 600 {
+        roam_step(gs, 1)
+        frames += 1
+    }
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y), Tile_Type.Void)
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y - 1), Tile_Type.Stone)
+    testing.expect_value(t, gs.world.items[grid_idx(GRUB_WALL, ROAM_Y)], Item.None)
+    testing.expect_value(t, e.facing, 1)
+
+    // The next column is right behind it: it walks into the hole it made and
+    // has to wait out the bite before it takes the next one.
+    testing.expect(t, e.builder.attack_timer > STONE_GRUB_EAT_TIME - 0.1, "the bite set its clock")
+    set_tile(&gs.world, GRUB_WALL + 1, ROAM_Y, .Stone)
+    set_tile(&gs.world, GRUB_WALL + 1, ROAM_Y - 1, .Stone)
+    start := e.pos.x
+    roam_step(gs, 60)
+    testing.expect(t, e.pos.x > start + 0.3, "it walks the hole it made")
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL + 1, ROAM_Y), Tile_Type.Stone)
+    testing.expect_value(t, e.facing, 1)
+    roam_step(gs, int(STONE_GRUB_EAT_TIME*60))
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL + 1, ROAM_Y), Tile_Type.Void)
+}
+
+@(test)
+a_grub_spits_out_what_is_not_stone :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    grub_wall(gs, .Jade_Ore)
+    roam_step(gs, 90)
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y), Tile_Type.Void)
+    testing.expect_value(t, gs.world.items[grid_idx(GRUB_WALL, ROAM_Y)], terrain_table[.Jade_Ore].drop_item)
+    testing.expect_value(t, gs.world.item_counts[grid_idx(GRUB_WALL, ROAM_Y)], u8(1))
+}
+
+// Each is a wall it walks up to and turns away from, whole.
+@(test)
+a_grub_leaves_what_it_may_not_eat :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    refused :: proc(t: ^testing.T, gs: ^Game_State, e: ^Enemy, tile: Tile_Type, why: string) {
+        roam_step(gs, 90)
+        testing.expectf(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y) == tile, "%s: eaten", why)
+        testing.expectf(t, e.facing == -1, "%s: it should turn away", why)
+    }
+
+    // A player's block.
+    e := grub_wall(gs, .Stone)
+    gs.world.tile_flags[grid_idx(GRUB_WALL, ROAM_Y)] += {.Placed}
+    refused(t, gs, e, .Stone, "placed")
+
+    // A chest.
+    e = grub_wall(gs, .Rune_Scroll_Chest_A)
+    refused(t, gs, e, .Rune_Scroll_Chest_A, "chest")
+
+    // A natural machine tile: a structure, whoever set it there.
+    e = grub_wall(gs, .Smelter)
+    refused(t, gs, e, .Smelter, "structure")
+
+    // The wall of a pool.
+    e = grub_wall(gs, .Stone)
+    set_tile(&gs.world, GRUB_WALL + 1, ROAM_Y, .Water)
+    refused(t, gs, e, .Stone, "pool wall")
+
+    // Bedrock it cannot mine at all.
+    e = grub_wall(gs, .Rune_Stone)
+    refused(t, gs, e, .Rune_Stone, "unmineable")
+}
+
+@(test)
+a_grub_respects_a_built_den :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e := grub_wall(gs, .Iron_Ore)
+    id, _ := enemy_alloc(&gs.enemies)
+    b := &gs.enemies.data[id]
+    b.kind, b.hp, b.hp_max = .Builder, 50, 50
+    b.pos = {90, f32(ROAM_Y)}
+    b.builder.build, b.builder.den_built = .Shelter, true
+    // A shell slot under the wall tile: any anchor whose template reaches it.
+    find: for dy in -12 ..= 12 do for dx in -12 ..= 12 {
+        b.builder.anchor = {GRUB_WALL + i32(dx), ROAM_Y + i32(dy)}
+        if den_structure_slot(&b.builder, {GRUB_WALL, ROAM_Y}) do break find
+    }
+    testing.expect(t, den_protected(gs, GRUB_WALL, ROAM_Y), "the setup is a den wall")
+    roam_step(gs, 90)
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y), Tile_Type.Iron_Ore)
+    testing.expect_value(t, e.facing, -1)
+}
+
+@(test)
+only_a_grub_eats :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    grub_wall(gs, .Stone)
+    gs.enemies = {}
+    e := roam_seed(gs, .Magma_Crawler, 62)
+    e.builder.has_target = true
+    e.builder.cooldown = 1000
+    roam_step(gs, 240)
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y), Tile_Type.Stone)
+}
+
+// While it runs from a beating or comes for the player it does not chew.
+@(test)
+a_hurt_grub_runs_and_does_not_chew :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    e := grub_wall(gs, .Stone)
+    e.hp -= 1
+    gs.player.pos.x = 56
+    roam_step(gs, 120)
+    testing.expect(t, e.pos.x > 62.5, "it ran up to the wall")
+    testing.expect_value(t, get_tile(&gs.world, GRUB_WALL, ROAM_Y), Tile_Type.Stone)
+}
+
+@(test)
+grubs_spawn_on_cave_floors_and_drop_stone :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    crawl_cave(gs, 170)
+    for y in ROAM_Y + 2 ..< GRID_H do for x in 0 ..< GRID_W do set_tile(&gs.world, x, y, .Stone)
+    gs.delta_time = ROAMER_SPAWN_EVERY
+    for _ in 0 ..< 60 {
+        gs.frame += 1
+        update_roamers(gs)
+    }
+    testing.expect_value(t, wave_count_kind(gs, .Stone_Grub), roamer_table[.Stone_Grub].cap)
+
+    gs.enemies = {}
+    gs.world.entity_map = {}
+    roam_seed(gs, .Stone_Grub, 60)
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = PLAYER_ID, target = enemy_entity_id(0), payload = {int_val = 99}})
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.world.items[grid_idx(60, ROAM_Y)], Item.Stone_Block)
+    testing.expect_value(t, enemy_kind_names[.Stone_Grub], "a stone grub")
+}
+

@@ -40,6 +40,12 @@ MAGMA_CRAWLER_H     :: f32(0.5)
 MAGMA_CRAWLER_SPEED :: f32(2.0)
 CINDERS_LIFE        :: f32(6)   // seconds a burning tile stays alight
 
+STONE_GRUB_HP       :: 12
+STONE_GRUB_W        :: f32(0.9)
+STONE_GRUB_H        :: f32(0.7)
+STONE_GRUB_SPEED    :: f32(1.5)
+STONE_GRUB_EAT_TIME :: f32(3)   // seconds a bite of wall takes
+
 Roamer_Spec :: struct {
     level:    int,
     cap:      int,   // 0 = not a roamer
@@ -49,6 +55,7 @@ Roamer_Spec :: struct {
     swims:    bool,  // lives in water and notices only a player who is in it
     slows:    f32,   // seconds of BITE_SLOW a bite leaves on the player
     burns:    bool,  // sets the open cave floor it stands on alight
+    eats:     bool,  // a wanderer chews through the natural wall it meets
 }
 
 @(rodata)
@@ -57,6 +64,7 @@ roamer_table := #partial [Enemy_Kind]Roamer_Spec{
     .Ember_Beetle = {level = LEVEL_SURFACE, cap = 3, sight = 6, damage = 1},
     .Cave_Eel     = {level = LEVEL_CAVE2, cap = 3, sight = 8, damage = 2, swims = true, slows = CAVE_EEL_BITE_SLOW},
     .Magma_Crawler = {level = LEVEL_CAVE2, cap = 3, sight = 6, damage = 2, burns = true},
+    .Stone_Grub   = {level = LEVEL_CAVE2, cap = 3, sight = 5, damage = 1, eats = true},
 }
 
 // Step 5b1b.
@@ -145,6 +153,32 @@ roamer_swim :: proc(e: ^Enemy, gs: ^Game_State, dir, climb: int) -> bool {
         e.vel.y = f32(climb) * enemy_speed(e.kind)
     }
     return e.vel != {}
+}
+
+// What a grub's teeth may take: natural rock only.  is_builder_mineable keeps it
+// off chests, loaded containers and anything holding water back.
+roamer_may_eat :: proc(gs: ^Game_State, x, y: int) -> bool {
+    return is_builder_mineable(gs, x, y) && !den_protected(gs, x, y) &&
+           !is_structure_tile[get_tile(&gs.world, x, y)] &&
+           .Placed not_in gs.world.tile_flags[grid_idx(x, y)]
+}
+
+// Chew the wall at the feet, one bite each STONE_GRUB_EAT_TIME.  Stone is eaten;
+// anything else it spits out where it stood, so no ore or gem is lost to it.
+// False when there is nothing here it may eat.
+roamer_eat :: proc(e: ^Enemy, id: int, gs: ^Game_State) -> bool {
+    size := enemy_body_size(e.kind)
+    x := int(e.pos.x + size.x*0.5 + f32(e.facing)*(size.x*0.5 + 0.2))
+    y := int(e.pos.y + size.y - 0.01)
+    if !roamer_may_eat(gs, x, y) do return false
+    if e.builder.attack_timer > 0 do return true
+    e.builder.attack_timer = STONE_GRUB_EAT_TIME
+    old  := get_tile(&gs.world, x, y)
+    drop := terrain_table[old].drop_item
+    smash_tile(gs, x, y)
+    if old != .Stone && drop != .None do spawn_ground_item(&gs.world, {i32(x), i32(y)}, drop, 1)
+    log_action(gs, "%v#%d eats the %v at (%d,%d)", e.kind, id, old, x, y)
+    return true
 }
 
 // Walk one way, hopping a one-tile step.  Refuses lava and walls too tall to
@@ -251,5 +285,5 @@ update_roamer :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     e.vel.x = 0
     if !b.has_target do return
     open := roamer_swim(e, gs, e.facing, 0) if spec.swims else roamer_walk(e, gs, e.facing, careful = true)
-    if !open do e.facing = -e.facing
+    if !open && !(spec.eats && roamer_eat(e, id, gs)) do e.facing = -e.facing
 }
