@@ -14850,6 +14850,174 @@ no_hop_is_planned_under_a_low_ceiling :: proc(t: ^testing.T) {
     testing.expect(t, !plan({{61, 78}, {62, 78}}, 63, 79), "no hop under a ceiling")
 }
 
+// ─── Plans that undo themselves ───────────────────────────────────────────────
+
+// A tunnel under a one-thick slab, with a bump a builder can climb through or
+// dig past.  Climbing here is cheap but cuts the slab it then walks back on;
+// the way round through the natural gap at x=37 leaves the slab whole.
+self_undo_world :: proc(gs: ^Game_State) {
+    for &tile in gs.world.terrain do tile = .Stone
+    for y in 66 ..= 69 do for x in 5 ..= 50 do set_tile(&gs.world, x, y, .Void)
+    for x in 30 ..= 39 do set_tile(&gs.world, x, 71, .Void)
+    for y in 70 ..= 71 do set_tile(&gs.world, 29, y, .Rune_Stone)
+    set_tile(&gs.world, 35, 71, .Stone)
+    set_tile(&gs.world, 37, 70, .Void)
+    set_tile(&gs.world, 38, 70, .Void)
+    set_tile(&gs.world, 38, 71, .Stone)
+}
+
+@(test)
+a_plan_goes_round_rather_than_cut_the_floor_it_returns_on :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    self_undo_world(gs)
+    path: Nav_Path
+    testing.expect(t, astar_dig(gs, {34, 71}, {24, 69}, 0, 4, &path), "a route exists")
+    east := 0
+    for i in 0 ..< path.len do east = max(east, int(path.tiles[i].x))
+    testing.expect(t, east >= 36, "the plan takes the gap and leaves the slab whole")
+}
+
+// Garm conjures his stone, so the short way stays the short way.
+@(test)
+garm_plans_pay_nothing_for_their_own_hole :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    self_undo_world(gs)
+    path: Nav_Path
+    testing.expect(t, astar_dig(gs, {34, 71}, {24, 69}, 0, MAX_NAV_PATH, &path), "a route exists")
+    east := 0
+    for i in 0 ..< path.len do east = max(east, int(path.tiles[i].x))
+    testing.expect(t, east <= 35, "straight up through the slab")
+}
+
+// With no way round, crossing the hole is still a route: priced, never refused.
+@(test)
+a_plan_still_crosses_its_own_hole_when_nothing_else_goes :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    self_undo_world(gs)
+    set_tile(&gs.world, 37, 70, .Rune_Stone)
+    set_tile(&gs.world, 37, 71, .Rune_Stone)
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {34, 71}, {10, 69}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the goal")
+}
+
+// The headroom of a rise is carved from the tile the rise leaves.  A body still
+// two columns short is not there yet, and what it cuts is someone's floor.
+@(test)
+a_builder_carves_no_headroom_short_of_its_rise :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 40, 46, 71, 71)
+    set_tile(&gs.world, 43, 71, .Stone)
+    e := &gs.enemies.data[id]
+    e.pos = {41.1, 71}
+    e.grounded = true
+    e.nav.path.tiles[0] = {43, 70}
+    e.nav.path.len = 1
+    set_tile(&gs.world, 43, 70, .Void)
+    set_tile(&gs.world, 43, 69, .Void)
+    builder_exec_action(e, id, &e.nav, gs)
+    testing.expect(t, is_solid(&gs.world, 41, 70), "two columns short: the ceiling stays")
+    e.pos = {42.1, 71}
+    e.nav.mine_timer = 0
+    builder_exec_action(e, id, &e.nav, gs)
+    testing.expect(t, !is_solid(&gs.world, 42, 70), "at the rise: the headroom is cut")
+}
+
+// A carve is a mine: air above the surface line, marks gone, what stood on the
+// tile falls.
+self_undo_placed_stack :: proc(gs: ^Game_State, x, y: int) {
+    for dy in 0 ..= 1 {
+        set_tile(&gs.world, x, y - dy, .Stone)
+        gs.world.tile_flags[grid_idx(x, y - dy)] += {.Placed}
+    }
+}
+
+@(test)
+a_den_carve_is_a_real_mine :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.enemies = {}
+    gs.level_index = LEVEL_SURFACE
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind = .Builder
+    e.pos = {64, 40}
+    self_undo_placed_stack(gs, 60, 40)
+    builder_do_step(e, id, gs, {60, 40}, .Void)
+    testing.expect_value(t, get_tile(&gs.world, 60, 40), Tile_Type.Air)
+    testing.expect(t, .Placed not_in gs.world.tile_flags[grid_idx(60, 40)], "no flag outlives the block")
+    testing.expect(t, !is_solid(&gs.world, 60, 39), "the block on it comes down")
+}
+
+@(test)
+digging_free_is_a_real_mine :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.enemies = {}
+    gs.level_index = LEVEL_SURFACE
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind = .Builder
+    e.pos = {60.1, 40}
+    self_undo_placed_stack(gs, 60, 40)
+    builder_dig_free(e, id, gs)
+    testing.expect_value(t, get_tile(&gs.world, 60, 40), Tile_Type.Air)
+    testing.expect(t, .Placed not_in gs.world.tile_flags[grid_idx(60, 40)], "no flag outlives the block")
+    testing.expect(t, !is_solid(&gs.world, 60, 39), "the block on it comes down")
+}
+
+// The seed of run 6.  Bridges laid on a tile mined moments before are plans
+// undoing themselves: 1370 of them an hour before they were priced.
+@(test)
+builder_soak_plans_keep_what_they_carve :: proc(t: ^testing.T) {
+    SEED :: u32(563728924)
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, SEED)
+    gs.delta_time = 1.0 / 60.0
+    gen_cave_level(&gs.world, 1, SEED)
+    gs.enemies = {}
+    gs.level_index = LEVEL_CAVE2
+    spawn_builder(gs, 40)
+    spawn_builder(gs, GRID_W - 40)
+    spawn_builder(gs, GRID_W / 2)
+    gs.player.pos = {6, 10}
+
+    MINUTES :: 30
+    SOON    :: 400   // frames: a lay this close after the carve is the same trip
+    MAX_UNDONE :: 300
+    MAX_TOUCHES :: 80
+    mined: [GRID_W * GRID_H]int
+    undone, top := 0, 0
+    touches: [GRID_W * GRID_H]int
+    for frame in 1 ..= MINUTES * 3600 {
+        gs.frame += 1
+        update_enemies(gs)
+        for k in 0 ..< gs.events.size {
+            ev := gs.events.events[(gs.events.head + k) % MAX_EVENTS]
+            if ev.type != .Builder_Mined && ev.type != .Builder_Placed do continue
+            idx := grid_idx(int(ev.tile.x), int(ev.tile.y))
+            touches[idx] += 1
+            top = max(top, touches[idx])
+            if ev.type == .Builder_Mined {
+                mined[idx] = frame
+            } else if mined[idx] > 0 && frame - mined[idx] < SOON {
+                undone += 1
+            }
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    log.infof("CHURN self-undo soak: %d laid back within %d frames, top tile %d", undone, SOON, top)
+    testing.expect(t, undone <= MAX_UNDONE, "plans are laying back what they carve")
+    testing.expect(t, top <= MAX_TOUCHES, "one tile carved and laid back this often means plans undo themselves")
+}
+
 // ─── No route ─────────────────────────────────────────────────────────────────
 
 // An open cavern with ore only in its roof and nothing in reach to dig for a

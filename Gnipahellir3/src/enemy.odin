@@ -58,6 +58,7 @@ ESCAPE_MAX_TIME :: f32(15.0)  // hard cap — never pillar forever
 COST_WALK  :: f32(1)
 COST_PLACE :: f32(4)   // bridge: place a block underfoot
 COST_MINE  :: f32(6)   // tunnel: mine a solid tile
+COST_SELF_UNDONE :: COST_PLACE + COST_MINE   // standing on a tile the plan carves: the block, and the next trip's carve
 
 // Bridge blocks are not conjured: every tile a builder mines credits its
 // pocket, and every bridge block spends from it.
@@ -581,7 +582,7 @@ player_tile :: proc(p: ^Player) -> [2]i32 {
 //  If the found path exceeds MAX_NAV_PATH, the prefix nearest the start is
 //  kept — the builder walks it and replans from there.
 
-PLAN_CARVE_LOOKBACK :: 5   // steps back a climb checks its support against the plan
+PLAN_CARVE_LOOKBACK :: 5   // steps back a move checks its support against the plan
 
 astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_budget: int, out: ^Nav_Path, owner: int = -1, allow_mining := true, complete: ^bool = nil, protect_placed := false) -> bool {
     w := &gs.world
@@ -619,11 +620,11 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
         bridges: u8,    // bridge moves on the path to this node
     }
 
-    // Does the plan so far carve (x,y)?  A rise mines its landing, its own
-    // headroom and the landing's headroom, so a later climb that needs that
-    // tile as support contradicts its own plan: the builder carves it, then
-    // bridges it back, on every commute.  flip_after_rise only sees one step
-    // back; a walk between the two climbs hid the rest.
+    // Does the plan so far carve (x,y)?  Every step mines the solid tile it
+    // enters, and a rise also its own headroom and the landing's headroom, so
+    // a later move that needs that tile as support contradicts its own plan:
+    // the builder carves it, then bridges it back, on every commute.
+    // flip_after_rise only sees one step back; a walk between hid the rest.
     plan_carves :: proc(nodes: []A_Node, from: int, x, y: int) -> bool {
         T := [2]i32{i32(x), i32(y)}
         c := from
@@ -631,8 +632,9 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             pi := int(nodes[c].parent)
             if pi < 0 { return false }
             a, b := nodes[pi].pos, nodes[c].pos
+            if T == b { return true }
             if b.y == a.y - 1 && b.x != a.x {
-                if T == b || T == {a.x, a.y - 1} || T == {b.x, b.y - 1} { return true }
+                if T == {a.x, a.y - 1} || T == {b.x, b.y - 1} { return true }
             }
             c = pi
         }
@@ -873,6 +875,13 @@ astar_dig :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, bridge_bu
             if closed[nvi] { continue }
 
             tentative_g := cur.g + trans[i].cost
+            // A floor this plan carved reads solid now and costs a block at
+            // run time.  Priced, not refused: crossing one's own hole can be
+            // the only way.  Garm conjures his stone free.
+            if bridge_budget < MAX_NAV_PATH && is_solid(w, nxi, nyi + 1) &&
+               plan_carves(nodes[:], int(cur_idx), nxi, nyi + 1) {
+                tentative_g += COST_SELF_UNDONE
+            }
             if tentative_g >= g_cost[nvi] { continue }   // not an improvement
             g_cost[nvi] = tentative_g
 
@@ -1408,7 +1417,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     // Grounded only: while airborne the builder tile fluctuates and the
     // carves land on the wrong rows.
     bt := builder_tile(e)
-    if target.y < bt.y && e.grounded {
+    if target.y < bt.y && e.grounded && abs(target.x - bt.x) <= 1 {
         climb := [2][2]i32{{bt.x, bt.y - 1}, {target.x, target.y - 1}}
         for c in climb {
             cx := int(c.x)
@@ -1665,7 +1674,7 @@ builder_do_step :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32, desired:
                 nav.mine_timer = MINE_TIME
             }
         } else if is_builder_mineable(gs, x, y) {
-            set_tile(w, x, y, .Void)
+            smash_tile(gs, x, y)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = T})
             log_action(gs, "Builder#%d carves (%d,%d)", id, x, y)
             e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
@@ -1713,7 +1722,7 @@ builder_dig_free :: proc(e: ^Enemy, id: int, gs: ^Game_State) {
                 })
                 continue
             }
-            set_tile(&gs.world, x, y, .Void)
+            smash_tile(gs, x, y)
             eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(x), i32(y)}})
             e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         }
