@@ -143,8 +143,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [10]int
-    action_names := [10]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine"}
+    viol_by: [11]int
+    action_names := [11]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash"}
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -199,7 +199,7 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         furnace_at:  [2]int  // the furnace a smelter action borrows, and what stood there
         furnace_old: Tile_Type
 
-        action := fz_range(&rng, 0, 9)
+        action := fz_range(&rng, 0, 10)
         switch action {
         case 0:
             name = "pickup"
@@ -330,6 +330,28 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             }
             before = fuzz_ledger(gs)
             update_undermined(gs)
+
+        case 10:
+            // An enemy breaks a golem-built monument cell, by a dig or by a
+            // raid's demolition: the item it was built from lands, nothing else.
+            name = "monument smash"
+            plan := Golem_Plan(fz_range(&rng, int(Golem_Plan.Clay_Hearth), int(Golem_Plan.World_Anchor)))
+            cells := golem_plan_table[plan].cells
+            c := cells[fz_range(&rng, 0, len(cells) - 1)]
+            T := [2]i32{i32(px + fz_range(&rng, -2, 2)), i32(py + fz_range(&rng, -2, 2))}
+            gs.golems.projects[gs.level_index] = {active = true, plan = plan, level = gs.level_index, anchor = T - c.off}
+            set_tile(&gs.world, int(T.x), int(T.y), c.tile)
+            gs.monument_cells[gs.level_index][grid_idx(int(T.x), int(T.y))] = c.tile
+            if !is_structure_tile[c.tile] do gs.world.tile_flags[grid_idx(int(T.x), int(T.y))] += {.Placed}
+            want[c.item] += 1
+            allow_zero = false
+            before = fuzz_ledger(gs)
+            if fz_range(&rng, 0, 1) == 0 {
+                smash_tile(gs, int(T.x), int(T.y))
+            } else {
+                handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
+            }
+            gs.golems.projects[gs.level_index] = {}
         }
 
         process_events(gs)

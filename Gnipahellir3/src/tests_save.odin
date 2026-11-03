@@ -400,3 +400,142 @@ roamers_keep_their_kind_across_a_save :: proc(t: ^testing.T) {
 		testing.expect_value(t, gs.enemies.data[i].kind, k)
 	}
 }
+
+// ─── Monument marks across a save (card 147) ──────────────────────────────────
+//
+//  v30 saves the cells golems built into monuments.  Older files kept none, so
+//  their loads mark every cell a level's project shows standing.
+
+// A finished Clay Hearth at `anchor` as an old build left it: the project
+// record, the cells standing, masonry .Placed.  Cell 0 stands as natural rock
+// instead and cell 1 was dug out, its mark left behind: the migration counts
+// neither.
+@(private="file")
+old_hearth :: proc(w: ^World_Grid, p: ^Golem_Project, level: int, anchor: [2]i32) {
+	p^ = {active = true, complete = true, plan = .Clay_Hearth, level = level, anchor = anchor}
+	for c, i in golem_plan_table[.Clay_Hearth].cells {
+		idx := grid_idx(int(anchor.x + c.off.x), int(anchor.y + c.off.y))
+		w.terrain[idx] = .Void if i == 1 else c.tile
+		w.tile_flags[idx] = {} if is_structure_tile[c.tile] || i == 0 else {.Placed}
+	}
+}
+
+@(private="file")
+expect_hearth_marked :: proc(t: ^testing.T, cells: ^Monument_Cells, level: int, anchor: [2]i32, label: string) {
+	for c, i in golem_plan_table[.Clay_Hearth].cells {
+		want := Tile_Type.Air if i <= 1 else c.tile
+		got := cells[level][grid_idx(int(anchor.x + c.off.x), int(anchor.y + c.off.y))]
+		testing.expectf(t, got == want, "%s: level %d cell %v marked %v, want %v", label, level, c.off, got, want)
+	}
+}
+
+HEARTH_AT :: [2]i32{60, 40}
+
+// The golden v28 run stamped v29, with a Hearth on the surface it stands on and
+// one in the stashed sky, and a v29 grave.  Offsets are v28's and v29's, frozen.
+@(test)
+a_v29_save_loads_with_its_monuments_marked :: proc(t: ^testing.T) {
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+	raw := golden_bytes(t, &buf)
+	(^i32)(raw_data(raw))^ = 29
+	golems := (^Golem_System)(&raw[4_031_072])
+	surface := (^World_Grid)(&raw[16])
+	sky := (^World_Grid)(&raw[476_944 + offset_of(Level_Store, worlds) + LEVEL_SKY*size_of(World_Grid)])
+	old_hearth(surface, &golems.projects[LEVEL_SURFACE], LEVEL_SURFACE, HEARTH_AT)
+	old_hearth(sky, &golems.projects[LEVEL_SKY], LEVEL_SKY, HEARTH_AT + {30, 0})
+	(^Grave_Record)(&raw[4_048_184])^ = {active = true, pending = true, tile = {5, 6}, level = LEVEL_SKY}
+
+	sd := save_data_read(raw)
+	defer free(sd)
+	testing.expect(t, sd != nil, "the v29 run loads")
+	if sd == nil do return
+	expect_hearth_marked(t, &sd.monument_cells, LEVEL_SURFACE, HEARTH_AT, "v29 surface")
+	expect_hearth_marked(t, &sd.monument_cells, LEVEL_SKY, HEARTH_AT + {30, 0}, "v29 sky")
+	testing.expect_value(t, sd.grave.level, i32(LEVEL_SKY))
+	testing.expect(t, sd.grave.pending, "a v29 grave keeps its own fields")
+	testing.expect_value(t, sd.world_seed, u32(7791))
+}
+
+// v28 goes the same frozen way, its grave made on the surface.
+@(test)
+a_v28_save_loads_with_its_monument_marked :: proc(t: ^testing.T) {
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+	raw := golden_bytes(t, &buf)
+	golems := (^Golem_System)(&raw[4_031_072])
+	old_hearth((^World_Grid)(&raw[16]), &golems.projects[LEVEL_SURFACE], LEVEL_SURFACE, HEARTH_AT)
+	sd := save_data_read(raw)
+	defer free(sd)
+	testing.expect(t, sd != nil, "the v28 run loads")
+	if sd == nil do return
+	expect_hearth_marked(t, &sd.monument_cells, LEVEL_SURFACE, HEARTH_AT, "v28")
+	testing.expect_value(t, sd.grave.level, i32(LEVEL_SURFACE))
+}
+
+// The 1024-enemy files, v24 to v27, shrink and are marked too.
+@(test)
+a_v27_save_loads_with_its_monument_marked :: proc(t: ^testing.T) {
+	old := new(Save_Data_1024)
+	defer free(old)
+	old.version = 27
+	old.level_index = LEVEL_SURFACE
+	old_hearth(&old.world, &old.golems.projects[LEVEL_SURFACE], LEVEL_SURFACE, HEARTH_AT)
+	sd := save_data_read(mem.ptr_to_bytes(old))
+	defer free(sd)
+	testing.expect(t, sd != nil, "the v27 run loads")
+	if sd == nil do return
+	expect_hearth_marked(t, &sd.monument_cells, LEVEL_SURFACE, HEARTH_AT, "v27")
+}
+
+@(test)
+a_v23_save_loads_with_its_monument_marked :: proc(t: ^testing.T) {
+	path :: "gnipahellir_save_v23_monument_test.dat"
+	defer os.remove(path)
+	old := new(Save_Data_v23)
+	defer free(old)
+	old.version = 23
+	old.level_index = LEVEL_SURFACE
+	old_hearth(&old.world, &old.golems.projects[LEVEL_SURFACE], LEVEL_SURFACE, HEARTH_AT)
+	testing.expect(t, os.write_entire_file(path, mem.ptr_to_bytes(old)) == nil, "wrote a v23 save")
+	gs := turret_test_state()
+	defer free(gs)
+	testing.expect(t, load_game_from(gs, path), "the v23 run loads")
+	expect_hearth_marked(t, &gs.monument_cells, LEVEL_SURFACE, HEARTH_AT, "v23")
+}
+
+// A v30 save carries its marks as they are, and marks nothing more: ore the
+// player laid in a gold cell stays the player's.
+@(test)
+a_v30_save_keeps_its_monument_marks :: proc(t: ^testing.T) {
+	path :: "gnipahellir_save_v30_monument_test.dat"
+	defer os.remove(path)
+	gs := turret_test_state()
+	defer free(gs)
+	old_hearth(&gs.world, &gs.golems.projects[gs.level_index], gs.level_index, HEARTH_AT)
+	gs.monument_cells[LEVEL_SKY][grid_idx(7, 8)] = .Cloud
+	testing.expect(t, save_game_to(gs, path), "saved")
+	gs.monument_cells = {}
+	testing.expect(t, load_game_from(gs, path), "loads")
+	testing.expect_value(t, gs.monument_cells[LEVEL_SKY][grid_idx(7, 8)], Tile_Type.Cloud)
+	for c in golem_plan_table[.Clay_Hearth].cells {
+		idx := grid_idx(int(HEARTH_AT.x + c.off.x), int(HEARTH_AT.y + c.off.y))
+		testing.expectf(t, gs.monument_cells[gs.level_index][idx] == .Air, "v30 marks no cell its golems did not, %v", c.off)
+	}
+}
+
+// A project record off the world's edge marks nothing and breaks no load.
+@(test)
+an_old_save_with_a_project_off_the_world_loads :: proc(t: ^testing.T) {
+	old := new(Save_Data_1024)
+	defer free(old)
+	old.version = 27
+	old.golems.projects[LEVEL_SURFACE] = {active = true, complete = true, plan = .Clay_Hearth, anchor = {GRID_W, 0}}
+	old.world.terrain[grid_idx(GRID_W - 1, 0)] = .Wood
+	old.world.tile_flags[grid_idx(GRID_W - 1, 0)] = {.Placed}
+	sd := save_data_read(mem.ptr_to_bytes(old))
+	defer free(sd)
+	testing.expect(t, sd != nil, "the run loads")
+	if sd == nil do return
+	for row in sd.monument_cells do for m in row do testing.expect(t, m == .Air, "nothing is marked")
+}

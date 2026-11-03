@@ -1331,7 +1331,9 @@ golem_mine_tile :: proc(gs: ^Game_State, g: ^Golem, tile: [2]i32, path_clear := 
 	if pct := terrain_table[t].drop_pct; pct > 0 {
 		if whash(u32(idx)*2246822519 + 101) % 100 >= u32(pct) do drop = .None
 	}
+	if it := monument_cell_item(gs, tile); it != .None do drop = it
 	if drop != .None && !golem_pack_has_room(g) do return false
+	_ = monument_cell_take(gs, tile)
 	set_tile(&gs.world, x, y, gravity_open_tile(gs, y))
 	golem_remove_block_mark(gs,tile)
 	gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed}
@@ -1550,6 +1552,7 @@ golem_place_reserved :: proc(gs: ^Game_State, id: int) {
 		golem_release_reservation(gs, id); golem_reset_job(g); return
 	}
 	set_tile(&gs.world, int(T.x), int(T.y), c.tile)
+	gs.monument_cells[gs.level_index][grid_idx(int(T.x), int(T.y))] = c.tile
 	if c.tile != .Clay_Hearth && c.tile != .Golem_Depot && c.tile != .World_Anchor {
 		gs.world.tile_flags[grid_idx(int(T.x), int(T.y))] += {.Placed}
 	}

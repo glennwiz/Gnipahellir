@@ -17,7 +17,7 @@ SAVE_FILE    :: "gnipahellir_save.dat"
 STATS_FILE   :: "gnipahellir_stats.dat"
 SAVE_DEBOUNCE :: f32(5)  // min seconds between autosaves (main loop debounce)
 SAVE_BAK_SLOTS :: 16     // rejected saves kept beside the autosave; none is ever overwritten
-SAVE_VERSION :: i32(29)  // v29: a grave knows its level (padding, same size); v28: MAX_ENEMIES 256
+SAVE_VERSION :: i32(30)  // v30: monument_cells; v29: a grave knows its level (padding, same size); v28: MAX_ENEMIES 256
 
 // Tripwire: the save is a raw memory snapshot, so ANY layout change to a
 // saved struct (World_Grid, Player, Enemy, Level_Store, ...) changes this
@@ -26,7 +26,7 @@ SAVE_VERSION :: i32(29)  // v29: a grave knows its level (padding, same size); v
 // (save_data_size_probe logs the real number, plus len(Item).)
 // save_data_from_v28 then refuses to compile on the field that changed: replace
 // that one line with a converter from the old bytes, so v28 runs keep loading.
-SAVE_DATA_EXPECTED_SIZE :: 4_048_864
+SAVE_DATA_EXPECTED_SIZE :: 4_152_544
 #assert(size_of(Save_Data) == SAVE_DATA_EXPECTED_SIZE)
 
 // FROZEN: v28 as written to disk, with no live type in it.  Never edit a number.
@@ -163,7 +163,8 @@ Save_Data :: struct {
     frame:        u64,
     grave:        Grave_Record,  // see SAVE_V24_SIZE
     risen:        Risen_Hero,    // see SAVE_V25_SIZE
-    world_seed:   u32,           // keep last: see SAVE_V26_SIZE
+    world_seed:   u32,           // the last field of v26 to v29 (SAVE_V26_SIZE, SAVE_V28_SIZE)
+    monument_cells: Monument_Cells,
 }
 
 // Slots are kept where they fit: enemy_alloc fills from the bottom, so a 1024
@@ -237,7 +238,26 @@ save_data_shrink :: proc(old: ^Save_Data_1024) -> ^Save_Data {
     surface := level_store_shrink(&old.levels, &sd.levels)
     moved := enemy_store_shrink(&old.enemies, &sd.enemies, &sd.world)
     risen_after_shrink(&sd.risen, old.level_index == LEVEL_SURFACE ? &moved : &surface)
+    monument_cells_from_projects(&sd.monument_cells, &sd.golems, sd.level_index, &sd.world, &sd.levels)
     return sd
+}
+
+// A file older than v30 kept no monument marks.  Every cell of a level's
+// project that stands as its plan says counts as golem-built: a core, or
+// masonry with its .Placed mark.  The record is read from old bytes, so a plan
+// or a cell it cannot hold is passed over, never indexed.
+monument_cells_from_projects :: proc(cells: ^Monument_Cells, golems: ^Golem_System, level_index: int, world: ^World_Grid, levels: ^Level_Store) {
+    for p, L in golems.projects {
+        if p.plan > max(Golem_Plan) do continue
+        grid := world if L == level_index else &levels.worlds[L]
+        for c in golem_plan_table[p.plan].cells {
+            x, y := int(p.anchor.x + c.off.x), int(p.anchor.y + c.off.y)
+            if !in_bounds(x, y) do continue
+            idx := grid_idx(x, y)
+            if grid.terrain[idx] != c.tile do continue
+            if is_structure_tile[c.tile] || .Placed in grid.tile_flags[idx] do cells[L][idx] = c.tile
+        }
+    }
 }
 
 // One field of a v28 file.  `size` is the frozen byte count, so a live type that
@@ -247,9 +267,10 @@ v28_take :: proc(to: ^$T, data: []u8, at: int, $size: int) where size_of(T) == s
     mem.copy(to, &data[at], size)
 }
 
-// A v28 file by frozen offsets, whatever the live structs have become.
+// A v28 or v29 file by frozen offsets, whatever the live structs have become.
+// v29 is v28 with the grave's padding made into its pending and level fields.
 @(private="file")
-save_data_from_v28 :: proc(data: []u8) -> ^Save_Data {
+save_data_from_v28 :: proc(data: []u8, version: i32) -> ^Save_Data {
     sd := new(Save_Data)
     sd.version = SAVE_VERSION
     v28_take(&sd.level_index,  data, 8,                  8)
@@ -263,11 +284,16 @@ save_data_from_v28 :: proc(data: []u8) -> ^Save_Data {
     v28_take(&sd.dimension,    data, 4_048_064,          104)
     v28_take(&sd.elapsed_time, data, 4_048_168,          4)
     v28_take(&sd.frame,        data, 4_048_176,          8)
-    grave: Grave_Record_v28
-    v28_take(&grave,           data, 4_048_184,          96)
-    sd.grave = grave_from_v28(grave)
+    if version == 29 {
+        v28_take(&sd.grave,    data, 4_048_184,          96)
+    } else {
+        grave: Grave_Record_v28
+        v28_take(&grave,       data, 4_048_184,          96)
+        sd.grave = grave_from_v28(grave)
+    }
     v28_take(&sd.risen,        data, 4_048_280,          576)
     v28_take(&sd.world_seed,   data, 4_048_856,          4)
+    monument_cells_from_projects(&sd.monument_cells, &sd.golems, sd.level_index, &sd.world, &sd.levels)
     return sd
 }
 
@@ -284,8 +310,8 @@ save_data_read :: proc(data: []u8, current := SAVE_VERSION) -> ^Save_Data {
         free(sd)
         return nil
     }
-    if file_version == 28 && len(data) == SAVE_V28_SIZE {
-        sd := save_data_from_v28(data)
+    if (file_version == 28 || file_version == 29) && len(data) == SAVE_V28_SIZE {
+        sd := save_data_from_v28(data, file_version)
         if !sd.player.dead do return sd
         free(sd)
         return nil
@@ -330,6 +356,7 @@ save_game_to :: proc(gs: ^Game_State, path: string) -> bool {
     sd.grave        = gs.grave
     sd.risen        = gs.risen
     sd.world_seed   = gs.world_seed
+    sd.monument_cells = gs.monument_cells
 
     // Through a temp file, so a crash mid-write leaves the last good save whole.
     // No fsync: this runs on the main thread every few seconds, and the rename
@@ -394,6 +421,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
         gs.dimension = old.dimension
         gs.elapsed_time = old.elapsed_time
         gs.frame = old.frame
+        monument_cells_from_projects(&gs.monument_cells, &gs.golems, gs.level_index, &gs.world, &gs.levels)
 
         // Only progression changed shape: the same flags, now in a wider array.
         gs.progression.rune_scroll_found      = old.progression.rune_scroll_found
@@ -434,6 +462,7 @@ load_game_from :: proc(gs: ^Game_State, path: string) -> bool {
     gs.grave        = sd.grave
     gs.risen        = sd.risen
     gs.world_seed   = sd.world_seed
+    gs.monument_cells = sd.monument_cells
 
     // The raid director is transient by design — reloading during a buildup
     // cancels it — and the pre-load session's rumble telegraph must not
