@@ -166,3 +166,129 @@ ATTACK_TIME = 0.8s  ATTACK_DAMAGE  = 1     DEN_SHELL_LAYERS = 3
 - Cairn/pillar templates remain in the table but are currently unused (dens
   only). Garm, Undead and Fire_Sprite still need behavior — same
   `update_<kind>` pattern.
+
+---
+
+# Hero AI — the agent-driven hero's senses and behaviours
+
+How the hero acts while an outside agent drives it (card 149, after the goal
+queue of card 137). Code: the second half of `src/agent_exec.odin`; state:
+`gs.hero` (`Hero_Brain`), transient, zeroed by a New Game.
+
+The design goal (Glenn 2026-11-03): **the playerbot notices the enemies around
+it and the voids it could fall too far into, and acts like a person between
+and during goals.** Goals say what to do; this layer is the hero's own sense
+of danger.
+
+## Where it sits
+
+```
+agent goals ──► goal queue ──► hero_think ──► gs.agent.cmd ──► agent_input
+                                  │  sense → score → pick → run → tell
+                                  ▼
+                               gs.hero (senses, current behaviour, notes)
+```
+
+`update_agent_goals` (game_update step 0) takes the running goal, then on the
+play screen hands it to `hero_think`. On every other screen (title, menus,
+death, book, win) the goal plays straight through, so dismiss and tithe acts
+work as before. The brain writes `gs.agent.cmd`, the seam a goal writes, and
+never touches world state.
+
+## Senses (`Hero_Senses`, rebuilt every tick)
+
+- **Threats**: every enemy inside the watcher's framing (`AGENT_VIEW_W` x
+  `AGENT_VIEW_H` round the hero: what a player sees on screen, no more),
+  nearest first, at most `HERO_THREATS_MAX`. Each has kind, distance, signed
+  dx, closing (it moved toward the hero, or came nearer, within
+  `HERO_CLOSING_MEMORY_S`: a Vargr hunts in stops and starts, and a pause is
+  not a retreat), in_line (a clear
+  `sight_line_clear` between the two), the damage of one blow
+  (`hero_threat_damage`, a roamer's from `roamer_table`, a Draugr's a quarter
+  of max hp) and how long it has been in sight.
+- **Danger map**: `2*HERO_SENSE_REACH+1` columns round the hero, each judged
+  as a step from the feet row (`hero_column`): a wall, the drop below, the hp
+  the fall rule in `update_player` takes for it (`SAFE_FALL_TILES`,
+  `FALL_TILES_PER_HP`; water breaks the fall), a burn (a `.Damaging` tile at
+  the step or the landing), and a loose block (a faller) hanging over the head.
+- **Safe ground**: a ring of the last `HERO_SAFE_MAX` tiles the hero stood on,
+  grounded, not burning, no damaging enemy nearer than `HERO_SAFE_CLEAR`,
+  spaced `HERO_SAFE_SPACING` apart.
+
+A threat is *noticed* (`hero_threat`) once it has been in sight
+`HERO_REACTION_S`, does damage, and is in line or within sword reach. An enemy
+behind rock is seen, not answered. Once noticed it stays in mind while it is
+within `HERO_THREAT_FAR`, line or no line: a bump that cuts the sight line for
+a step does not make the wolf go away.
+
+## Behaviours (utility AI, `hero_behaviours`)
+
+One row per behaviour, a score proc and a run proc:
+
+| Behaviour | Score | Run |
+|---|---|---|
+| goal | `HERO_GOAL_SCORE` (50) with a goal running | one tick of the goal |
+| fight | press x (30 + 60 x hp fraction), armed only (sword or fire wand) | walk into reach; a sword swing every `HERO_SWING_S`; a wand fires held within `HERO_WAND_RANGE` |
+| flee | press x (30 + 60 x (1 - hp fraction)), +`HERO_UNARMED_FLEE` (40) unarmed | to the safe spot farthest from the threat at least `HERO_SAFE_CLEAR` from it, else straight away; cornered at a drop it will not walk, it takes the drop if the fall leaves it standing and no burn waits below, else runs past the threat and keeps going until it is behind |
+| ledge | `HERO_LEDGE_SCORE` (100) when the goal walks the hero into a step that hurts or burns, or into a drop of `HERO_LEDGE_LOOK_TILES`+ not yet looked at | stand and look `HERO_LEDGE_LOOK_S`; then step if the fall is free, else fail the goal ("a 10-tile drop ahead", "a burn ahead") |
+| idle | `HERO_IDLE_SCORE` (10) with the queue empty | stand; with a threat noticed, make for safe ground as flee does, cornered included; on a burn, back to the last safe spot |
+
+*Press* is how much the nearest noticed threat matters: 1 within
+`HERO_THREAT_NEAR`, falling to 0 at `HERO_THREAT_FAR`, halved for one out there
+that is not closing. Health decides between fight and flee: a full-health hero
+with a sword fights a Vargr, the same hero at a fifth of its health runs. Once
+fleeing, the hero keeps running until the threat is past `HERO_THREAT_FAR` or
+gone, so it never turns back toward a hunter at the threshold.
+
+Every movement a behaviour makes goes through `hero_walk`: never into a step
+that hurts or burns (flight and leaf fall excepted), a jump at a wall two high,
+and a still tick to sweep open windows shut first, the window rule a goal keeps.
+
+## Picking (`hero_pick`, pure)
+
+The best score wins, held back by hysteresis:
+
+- the running behaviour keeps the tick unless a rival beats it by
+  `HERO_SWITCH_MARGIN` after it has run `HERO_MIN_HOLD_S`;
+- a score of `HERO_URGENT_SCORE` or more takes over at once (the ledge);
+- a running behaviour that scores 0 lets go at once. A score is 0 only when
+  its cause is gone (the goal ended, the threat died, left the screen or went
+  past `HERO_THREAT_FAR`, the look at a ledge ended): every sense a score reads
+  remembers (noticed, closing, a look begun runs to its end), so no one tick's
+  read zeroes it.
+
+## Goals paused, not lost
+
+The running goal is the goal row. When another row wins, the goal stays
+running with its frames unspent; when the goal row wins again it carries on
+from where it was. A connected client hears (after its first `goals`):
+
+- `goal_paused` `{id, reason}` — reason fight, flee or ledge;
+- `goal_resumed` `{id, reason}` — the reason that paused it;
+- `idle` `{threats}` — once each time the queue runs dry, with the number of
+  enemies in sight then that can hurt the hero.
+
+These sit in the goal queue's `notes` (a ring of `HERO_NOTES_MAX` with a
+running count, kept with the queue so a New Game loses none);
+`agent_after_tick` pushes each once, before the goal ends it settles, so a
+resume reads before its goal_done.
+
+## Pacing (named constants, first guesses: Glenn's to tune)
+
+```
+HERO_REACTION_S   = 0.3 s   HERO_LEDGE_LOOK_S  = 0.4 s   HERO_LEDGE_LOOK_TILES = 3
+HERO_MIN_HOLD_S   = 0.5 s   HERO_SWITCH_MARGIN = 10      HERO_URGENT_SCORE     = 95
+HERO_SWING_S      = 0.45 s  HERO_THREAT_NEAR   = 5       HERO_THREAT_FAR       = 12
+HERO_SAFE_CLEAR   = 8       HERO_WAND_RANGE    = 8       HERO_UNARMED_FLEE     = 40
+HERO_CLOSING_MEMORY_S = 1.5 s
+```
+
+## Not built (yet)
+
+- heal, take_cover, pick_up_loot: the table takes them as rows. Loose blocks are
+  sensed but nothing scores them yet; a block that lands in a body crumbles
+  and does not hurt.
+- The hero fights with what it holds; it does not pick a weapon from the bag.
+- A deliberate drop the fall would charge for cannot be asked for: the ledge
+  row fails the goal. Cards 138+ (goto and friends) may want a flag for it.
+  Only a cornered hero takes one, and only one it survives.

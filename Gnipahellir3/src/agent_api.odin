@@ -72,7 +72,8 @@ package game
 //
 // Replies carry "re":<cmd>.  Once a client has sent a goals command the game
 // also pushes event lines unasked, each with "event": goal_done, goal_failed
-// (reason), hurt (by, hp), died (by), level_changed (level) and heard (text).
+// (reason), goal_paused and goal_resumed (id, reason), idle (threats), hurt (by,
+// hp), died (by), level_changed (level) and heard (text).
 //
 // An act drives the same seams a player does: Input_State for held input, the
 // Event_Queue for one-shot verbs.  It is never handed a shortcut into world
@@ -170,6 +171,7 @@ Agent_Link :: struct {
     seen_hp:     int,            // the player as the last tick left it, for the events
     seen_dead:   bool,
     seen_level:  int,
+    seen_notes:  int,            // goals.note_count as last pushed
     push_len:    int,
     push:        [AGENT_PUSH_MAX]u8,  // event lines not yet sent
     awaiting:    bool,           // a listen waits for the watcher's line
@@ -537,7 +539,10 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
 
     fmt.sbprintf(w, "\nEVENTS\n")
     fmt.sbprintf(w, "Every reply carries \"re\", the cmd it answers. After your first goals command the game also sends lines unasked,\n")
-    fmt.sbprintf(w, "each with \"event\" and the frame \"f\": goal_done (id), goal_failed (id, reason), hurt (by, hp), died (by), level_changed (level), heard (text).\n")
+    fmt.sbprintf(w, "each with \"event\" and the frame \"f\": goal_done (id), goal_failed (id, reason), hurt (by, hp), died (by), level_changed (level), heard (text),\n")
+    fmt.sbprintf(w, "goal_paused and goal_resumed (id, reason: fight, flee or ledge), idle (threats) once the queue runs dry.\n")
+    fmt.sbprintf(w, "The hero has its own sense of danger: it fights or flees an enemy that comes at it and goes back to the goal after,\n")
+    fmt.sbprintf(w, "stops at a drop the fall would hurt from (the goal fails, reason says the drop), and keeps to safe ground when idle.\n")
 
     fmt.sbprintf(w, "\nOBJECTIVE PANEL\n")
     fmt.sbprintf(w, "The human reads your panel in the window, so keep it true:\n")
@@ -645,6 +650,7 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
     agent_fight_log(link, gs)
     if !link.goals.ran && !link.realtime do link.idle_ticks += 1
     link.goals.ran = false
+    agent_hero_notes(link, gs)
     for &g in link.goals.slots[:link.goals.n] {
         if (g.status == .Done || g.status == .Failed) && !g.told do agent_goal_tell(link, gs, &g)
     }
@@ -665,11 +671,29 @@ agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
         agent_push_event(link, gs, "goal_failed", fmt.tprintf(`"id":%d,"reason":%s`, g.id, agent_quote(string(g.reason.buf[:g.reason.len]))))
     }
     // An act or wait was judged live on the frame it came, and starts on it, so
-    // it can only end done.
+    // it ends done, or failed at a ledge.
     if g.via == .Act || g.via == .Wait {
         agent_reply_state(link, gs, nil, "act" if g.via == .Act else "wait")
         link.reply_due = true
     }
+}
+
+// What the hero's behaviours did with the goals since the last push: a goal
+// paused or resumed, and an empty queue.  A client too far behind gets the
+// newest HERO_NOTES_MAX.
+@(private="file")
+agent_hero_notes :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    q := &link.goals
+    for i in max(link.seen_notes, q.note_count - HERO_NOTES_MAX) ..< q.note_count {
+        n := q.notes[i % HERO_NOTES_MAX]
+        name := hero_note_names[n.kind]
+        if n.kind == .Idle {
+            agent_push_event(link, gs, name, fmt.tprintf(`"threats":%d`, n.threats))
+        } else {
+            agent_push_event(link, gs, name, fmt.tprintf(`"id":%d,"reason":"%s"`, n.goal, hero_behaviours[n.why].name))
+        }
+    }
+    link.seen_notes = q.note_count
 }
 
 // Hurt, death and a new level, as the last tick left the player.
