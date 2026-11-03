@@ -153,6 +153,9 @@ process_events :: proc(gs: ^Game_State) {
                 notify(gs, "Drop a gem beside it - it grows more of that gem")
             }
 
+        case .Player_Slowed:
+            if !gs.player.dead do gs.bite_slow_t = max(gs.bite_slow_t, e.payload.float_val)
+
         case .Lava_Spread:
             // Unused: fluid flow (fluid.odin) walks the grid on its own clock
             // rather than announcing every cell it moves, which would swamp
@@ -522,6 +525,7 @@ enemy_kind_names := [Enemy_Kind]string{
     .Vargr       = "a Vargr",
     .Pond_Frog    = "a pond frog",
     .Ember_Beetle = "an ember beetle",
+    .Cave_Eel     = "a cave eel",
 }
 
 // Who or what dealt a Damage_Dealt, in words.  A projectile can outlive its

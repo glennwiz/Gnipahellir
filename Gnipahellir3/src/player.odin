@@ -125,6 +125,7 @@ update_player :: proc(gs: ^Game_State) {
         // ── Horizontal intent (Speed stat: base + equipment) ──────
         speed := f32(player_stat(p, .Speed))
         if submerged do speed *= WATER_DRAG
+        if gs.bite_slow_t > 0 do speed *= BITE_SLOW
         p.vel.x = 0
         if inp.move_left  { p.vel.x = -speed; p.facing = -1 }
         if inp.move_right { p.vel.x =  speed; p.facing =  1 }
@@ -151,6 +152,7 @@ update_player :: proc(gs: ^Game_State) {
 
     if gs.leaf_fall_t > 0 do gs.leaf_fall_t -= dt
     if gs.flight_t > 0 do gs.flight_t -= dt
+    if gs.bite_slow_t > 0 do gs.bite_slow_t -= dt
 
     gravity  := flying ? f32(0) : GRAVITY
     max_fall := MAX_FALL_SPEED

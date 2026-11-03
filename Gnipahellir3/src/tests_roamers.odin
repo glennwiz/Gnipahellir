@@ -42,7 +42,7 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
         testing.expectf(t, row.update != nil, "%v has no update", kind)
         testing.expectf(t, row.body.x > 0 && row.body.y > 0, "%v has no body", kind)
         testing.expectf(t, row.speed > 0 && row.hp > 0, "%v has no speed or hp", kind)
-        testing.expectf(t, row.gravity > 0 || kind == .Fire_Sprite, "%v floats", kind)
+        testing.expectf(t, row.gravity > 0 || kind == .Fire_Sprite || roamer_table[kind].swims, "%v floats", kind)
     }
     testing.expect_value(t, enemy_body_size(.Garm), [2]f32{GARM_W, GARM_H})
     testing.expect_value(t, enemy_body_size(.Vargr), [2]f32{BUILDER_W, BUILDER_H})
@@ -67,11 +67,15 @@ every_kind_has_a_whole_behaviour_row :: proc(t: ^testing.T) {
     testing.expect(t, enemy_behaviour[.Fire_Sprite].update == update_fire_sprite, "sprite brain")
     testing.expect(t, enemy_behaviour[.Pond_Frog].update == update_roamer, "frog brain")
     testing.expect(t, enemy_behaviour[.Ember_Beetle].update == update_roamer, "beetle brain")
+    testing.expect(t, enemy_behaviour[.Cave_Eel].update == update_roamer, "eel brain")
 
     // The first guesses, pinned so a retune is a choice.
     testing.expect_value(t, roamer_table[.Pond_Frog].cap, 4)
     testing.expect_value(t, roamer_table[.Ember_Beetle].cap, 3)
     testing.expect_value(t, roamer_table[.Ember_Beetle].damage, 1)
+    testing.expect_value(t, roamer_table[.Cave_Eel].cap, 3)
+    testing.expect_value(t, roamer_table[.Cave_Eel].damage, 2)
+    testing.expect_value(t, roamer_table[.Cave_Eel].level, LEVEL_CAVE2)
 }
 
 @(test)
@@ -231,7 +235,7 @@ roamers_spawn_only_on_their_own_level :: proc(t: ^testing.T) {
     gs := turret_test_state()
     defer free(gs)
     roam_ground(gs, 100)
-    gs.level_index = LEVEL_SURFACE + 1
+    gs.level_index = LEVEL_DIMENSION
     gs.delta_time = ROAMER_SPAWN_EVERY
     for _ in 0 ..< 40 {
         gs.frame += 1
@@ -562,4 +566,370 @@ roamers_ride_out_a_real_surface_soak :: proc(t: ^testing.T) {
     testing.expect(t, wave_count_kind(gs, .Pond_Frog) <= roamer_table[.Pond_Frog].cap, "capped")
     testing.expect(t, wave_count_kind(gs, .Ember_Beetle) > 0, "beetles arrive on real ground")
     testing.expect(t, wave_count_kind(gs, .Ember_Beetle) <= roamer_table[.Ember_Beetle].cap, "capped")
+}
+
+// ─── Cave Eel (card 66) ───────────────────────────────────────────────────────
+
+EEL_X0 :: 40
+EEL_X1 :: 69
+EEL_Y0 :: 41
+
+// An open-topped tank on the test ground, rows EEL_Y0..ROAM_Y.
+eel_tank :: proc(gs: ^Game_State, px: f32) {
+    roam_ground(gs, px)
+    for y in EEL_Y0 ..= ROAM_Y {
+        set_tile(&gs.world, EEL_X0 - 1, y, .Stone)
+        set_tile(&gs.world, EEL_X1 + 1, y, .Stone)
+        for x in EEL_X0 ..= EEL_X1 do set_tile(&gs.world, x, y, .Water)
+    }
+}
+
+// Not a drop of water left on the level.
+eel_dry :: proc(gs: ^Game_State) {
+    for &c in gs.world.terrain do if c == .Water do c = .Air
+}
+
+eel_seed :: proc(gs: ^Game_State, x, y: int) -> ^Enemy {
+    e := roam_seed(gs, .Cave_Eel, x)
+    e.pos.y = f32(y) + 0.3
+    e.grounded = false
+    return e
+}
+
+eel_in_tank :: proc(gs: ^Game_State, e: ^Enemy) -> bool {
+    T := builder_tile(e)
+    return get_tile(&gs.world, int(T.x), int(T.y)) == .Water
+}
+
+@(test)
+a_wandering_eel_never_leaves_the_water :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 170)
+    e := eel_seed(gs, 50, 45)
+    low, high := e.pos.x, e.pos.x
+    for _ in 0 ..< 3000 {
+        roam_step(gs, 1)
+        testing.expect(t, eel_in_tank(gs, e), "the eel left the water")
+        low, high = min(low, e.pos.x), max(high, e.pos.x)
+    }
+    testing.expect(t, high - low > 3, "the eel never swam")
+    testing.expect_value(t, e.pos.y, f32(45.3))
+}
+
+// At the bank it turns back: a swim that meets no water is refused and says so.
+@(test)
+an_eel_turns_at_the_bank :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 170)
+    e := eel_seed(gs, EEL_X1, 45)
+    e.pos.x = f32(EEL_X1) + 1 - CAVE_EEL_W
+    e.vel = {3, 3}   // last frame's swim must not carry on
+    testing.expect(t, !roamer_swim(e, gs, 1, 0), "swam out of the tank")
+    testing.expect_value(t, e.vel, [2]f32{})
+    testing.expect(t, roamer_swim(e, gs, -1, 0), "open water behind it")
+    testing.expect_value(t, e.vel, [2]f32{-CAVE_EEL_SPEED, 0})
+
+    e.pos = {50, f32(EEL_Y0)}
+    e.vel = {0, -3}
+    testing.expect(t, !roamer_swim(e, gs, 0, -1), "swam up out of the surface")
+    testing.expect_value(t, e.vel.y, f32(0))
+    testing.expect(t, roamer_swim(e, gs, 0, 1), "deeper water below")
+    testing.expect_value(t, e.vel.y, CAVE_EEL_SPEED)
+}
+
+@(test)
+an_eel_leaves_a_player_on_the_bank_alone :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 50)
+    gs.player.pos.y = f32(EEL_Y0) - PLAYER_H   // standing on the surface, dry
+    eel_seed(gs, 50, EEL_Y0 + 1)
+    testing.expect(t, !player_in_water(gs), "the player is dry")
+    roam_step(gs, 240)
+    testing.expect_value(t, gs.player.hp, gs.player.hp_max)
+    testing.expect_value(t, gs.bite_slow_t, f32(0))
+}
+
+@(test)
+an_eel_hunts_a_swimmer_bites_and_slows_him :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 45)
+    gs.player.pos.y = 44
+    testing.expect(t, player_in_water(gs), "the player swims")
+    e := eel_seed(gs, 51, 48)
+    for _ in 0 ..< 240 do if gs.player.hp == gs.player.hp_max do roam_step(gs, 1)
+    pt := player_tile(&gs.player)
+    testing.expect(t, chebyshev(builder_tile(e), pt) <= 1, "the eel came for him, across and up")
+    testing.expect_value(t, gs.player.hp, gs.player.hp_max - roamer_table[.Cave_Eel].damage)
+    testing.expect_value(t, gs.bite_slow_t, CAVE_EEL_BITE_SLOW)
+    testing.expect_value(t, buff_remaining(gs, .Eel_Bite), CAVE_EEL_BITE_SLOW)
+
+    // Same row: no climb, so it does not bob while it closes.
+    e.pos = {52, f32(pt.y) + 0.3}
+    e.builder.attack_timer = 0
+    e.facing = 1
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel.y, f32(0))
+    testing.expect(t, e.vel.x < 0, "it closes along the row")
+    testing.expect_value(t, e.facing, -1)
+
+    // Just past its sight it does not come.
+    testing.expect_value(t, roamer_table[.Cave_Eel].sight, 8)
+    e.pos = {f32(pt.x) + 9, f32(pt.y) + 0.3}
+    e.builder.has_target = false
+    e.builder.cooldown = 100
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel, [2]f32{})
+
+    // Beyond sight the swimmer is safe.
+    e.pos = {66, 49.3}
+    hp := gs.player.hp
+    gs.player.pos = {45, 41}
+    gs.bite_slow_t = 0
+    e.builder.has_target = false
+    e.builder.cooldown = 100
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel, [2]f32{})
+    testing.expect_value(t, gs.player.hp, hp)
+    testing.expect_value(t, gs.bite_slow_t, f32(0))
+}
+
+@(test)
+a_plain_bite_slows_nobody :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    roam_ground(gs, 100)
+    roam_seed(gs, .Ember_Beetle, 101)
+    roam_step(gs, 2)
+    testing.expect_value(t, gs.player.hp, gs.player.hp_max - 1)
+    testing.expect_value(t, gs.bite_slow_t, f32(0))
+}
+
+@(test)
+the_slow_takes_the_longer_of_two_and_skips_the_dead :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    slow :: proc(gs: ^Game_State, secs: f32) {
+        eq_push(&gs.events, Event{type = .Player_Slowed, target = PLAYER_ID, payload = {float_val = secs}})
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    slow(gs, 3)
+    testing.expect_value(t, gs.bite_slow_t, f32(3))
+    slow(gs, 1)
+    testing.expect_value(t, gs.bite_slow_t, f32(3))
+    gs.bite_slow_t = 0
+    gs.player.dead = true
+    slow(gs, 3)
+    testing.expect_value(t, gs.bite_slow_t, f32(0))
+}
+
+@(test)
+the_slow_cuts_the_players_speed_and_runs_out :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    roam_ground(gs, 100)
+    gs.delta_time = 0.1
+    gs.input.move_right = true
+    update_player(gs)
+    full := gs.player.vel.x
+    testing.expect(t, full > 0, "the player walks")
+
+    gs.bite_slow_t = 0.25
+    update_player(gs)
+    testing.expect_value(t, gs.player.vel.x, full*BITE_SLOW)
+    testing.expect(t, abs(gs.bite_slow_t - 0.15) < 0.001, "the clock runs")
+    update_player(gs)
+    update_player(gs)
+    testing.expect(t, gs.bite_slow_t <= 0, "the clock ran out")
+    update_player(gs)
+    testing.expect_value(t, gs.player.vel.x, full)
+}
+
+@(test)
+a_hurt_eel_flees_through_the_water :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 45)
+    gs.player.pos.y = 44
+    e := eel_seed(gs, 50, 46)
+    e.hp -= 1
+    e.facing = -1
+    start := e.pos
+    roam_step(gs, 30)
+    testing.expect_value(t, e.facing, 1)
+    testing.expect(t, e.pos.x > start.x + 1, "swims off along the row")
+    testing.expect(t, e.pos.y > start.y + 1, "and down")
+    testing.expect(t, eel_in_tank(gs, e), "it stays in the water")
+    testing.expect_value(t, gs.player.hp, gs.player.hp_max)
+
+    // From above the swimmer it dives the other way.
+    e.pos = {50, 42.3}
+    gs.player.pos.y = 46
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel.y, -CAVE_EEL_SPEED)
+}
+
+@(test)
+an_eel_with_no_water_falls_and_lies_there_until_it_comes_back :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_tank(gs, 45)
+    e := eel_seed(gs, 50, 45)
+    for y in EEL_Y0 ..= ROAM_Y do for x in EEL_X0 ..= EEL_X1 do set_tile(&gs.world, x, y, .Air)
+    e.vel.x = CAVE_EEL_SPEED
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel.x, f32(0))
+    roam_step(gs, 120)
+    testing.expect(t, abs(e.pos.y + CAVE_EEL_H - f32(ROAM_Y + 1)) < 0.05, "it fell to the floor")
+    x := e.pos.x
+    roam_step(gs, 300)
+    testing.expect_value(t, e.pos.x, x)
+
+    // In a long drop it falls no faster than anyone else.
+    e.pos.y = 45
+    e.vel.y = BUILDER_MAX_FALL
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel.y, BUILDER_MAX_FALL)
+    e.pos.y = f32(ROAM_Y + 1) - CAVE_EEL_H
+    e.vel.y = 0
+    roam_step(gs, 2)
+
+    // Water back: the fall is forgotten, it swims again.
+    e.pos.y = 45.3
+    T := builder_tile(e)
+    set_tile(&gs.world, int(T.x), int(T.y), .Water)
+    e.vel.y = 5
+    e.builder.has_target = false
+    e.builder.cooldown = 100
+    roam_step(gs, 1)
+    testing.expect_value(t, e.vel.y, f32(0))
+}
+
+@(test)
+eels_spawn_in_water_on_their_level_only :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_dry(gs)
+    eel_tank(gs, 170)
+    testing.expect(t, gs.level_index == LEVEL_SURFACE, "starts on the surface")
+    gs.delta_time = ROAMER_SPAWN_EVERY
+    for _ in 0 ..< 60 {
+        gs.frame += 1
+        update_roamers(gs)
+    }
+    testing.expect_value(t, wave_count_kind(gs, .Cave_Eel), 0)
+
+    gs.enemies = {}
+    gs.level_index = LEVEL_CAVE2
+    for _ in 0 ..< 60 {
+        gs.frame += 1
+        update_roamers(gs)
+    }
+    testing.expect_value(t, wave_count_kind(gs, .Cave_Eel), roamer_table[.Cave_Eel].cap)
+    testing.expect_value(t, wave_count_kind(gs, .Pond_Frog), 0)
+    for &e, s in gs.enemies.data do if gs.enemies.active[s] {
+        testing.expect(t, eel_in_tank(gs, &e), "spawned out of the water")
+    }
+
+    // No water, or only water beside the player: no eel.
+    gs.enemies = {}
+    gs.player.pos.x = 55
+    for f in 0 ..< 40 {
+        gs.frame = u64(f)
+        testing.expect(t, !spawn_roamer(gs, .Cave_Eel), "spawned beside the player")
+    }
+    eel_dry(gs)
+    for f in 0 ..< 40 {
+        gs.frame = u64(f)
+        testing.expect(t, !spawn_roamer(gs, .Cave_Eel), "spawned with no water")
+    }
+}
+
+// Water beside the player does not stop one out of his sight being found.
+@(test)
+find_water_passes_over_the_players_pool :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_dry(gs)
+    eel_tank(gs, 55)
+    set_tile(&gs.world, 150, 33, .Water)
+    for h in 0 ..< 50 {
+        x, _, ok := find_water(gs, whash(u32(h)))
+        testing.expect(t, ok, "missed it")
+        testing.expect_value(t, x, 150)
+    }
+}
+
+// One cell of water, anywhere: the walk meets every cell.
+@(test)
+find_water_finds_a_lone_cell :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    eel_dry(gs)
+    set_tile(&gs.world, 77, 33, .Water)
+    for h in 0 ..< 50 {
+        x, y, ok := find_water(gs, whash(u32(h)))
+        testing.expect(t, ok, "missed it")
+        testing.expect_value(t, x, 77)
+        testing.expect_value(t, y, 33)
+    }
+}
+
+@(test)
+an_eel_drops_its_skin :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    roam_ground(gs, 100)
+    roam_seed(gs, .Cave_Eel, 60)
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = PLAYER_ID, target = enemy_entity_id(0), payload = {int_val = 99}})
+    process_events(gs)
+    eq_clear(&gs.events)
+    testing.expect_value(t, gs.world.items[grid_idx(60, ROAM_Y)], Item.Eel_Skin)
+    testing.expect_value(t, enemy_kind_names[.Cave_Eel], "a cave eel")
+}
+
+// The tub brings its own walls and floor to open ground.
+@(test)
+a_cave_pool_is_lined_with_stone :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    roam_ground(gs, 170)
+    dig_cave_pool(&gs.world, 60, 30)
+    x0, x1 := 60 - CAVE_POOL_W/2, 60 + CAVE_POOL_W/2 - 1
+    for y in 30 ..= 30 + CAVE_POOL_H {
+        testing.expect_value(t, get_tile(&gs.world, x0 - 1, y), Tile_Type.Stone)
+        testing.expect_value(t, get_tile(&gs.world, x1 + 1, y), Tile_Type.Stone)
+    }
+    for x in x0 ..= x1 {
+        testing.expect_value(t, get_tile(&gs.world, x, 29), Tile_Type.Air)
+        testing.expect_value(t, get_tile(&gs.world, x, 30), Tile_Type.Water)
+        testing.expect_value(t, get_tile(&gs.world, x, 30 + CAVE_POOL_H), Tile_Type.Stone)
+    }
+}
+
+// The Deep Cave's pool: on every seed, and its water stays put.
+@(test)
+the_deep_cave_pool_is_there_and_holds :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    count :: proc(w: ^World_Grid) -> (n: int) {
+        for c in w.terrain do if c == .Water do n += 1
+        return
+    }
+    for seed in u32(0) ..< 4 {
+        gen_cave_level(&gs.world, 1, seed)
+        testing.expect_value(t, count(&gs.world), CAVE_POOL_W*CAVE_POOL_H)
+        gs.delta_time = 0.1
+        for _ in 0 ..< 300 {
+            gs.frame += 1
+            update_fluid(gs)
+        }
+        testing.expect_value(t, count(&gs.world), CAVE_POOL_W*CAVE_POOL_H)
+    }
+    gen_cave_level(&gs.world, 2, 0)
+    testing.expect_value(t, count(&gs.world), 0)
 }
