@@ -6,7 +6,7 @@ history lives in git log and `gnipa_project/Work_done.md` (the full pre-2026-11-
 text of this file is archived verbatim at its end). Where this file disagrees with
 older docs, trust it; where it disagrees with the code or git log, they win.
 
-- **Branch:** master · **Build:** green (`odin build src`) · **Tests:** 888 green in both configs (`odin test src` and `odin test src -define:GAME_DEBUG=false`; a test that reads logs or debug tools carries a `when GAME_DEBUG` guard — includes the conservation fuzzer, GREEN since 372c30f; if it ever goes red again, a handler is leaking items — fix the handler, never the harness)
+- **Branch:** master · **Build:** green (`odin build src`) · **Tests:** 895 green in both configs (`odin test src` and `odin test src -define:GAME_DEBUG=false`; a test that reads logs or debug tools carries a `when GAME_DEBUG` guard — includes the conservation fuzzer, GREEN since 372c30f; if it ever goes red again, a handler is leaking items — fix the handler, never the harness)
 - **Last updated:** 2026-11-03
 - **Save:** `SAVE_VERSION` 29 (`save.odin`). v28 is frozen and read by fixed offsets (`save_data_from_v28`); v23-v27 read through the frozen 1024-enemy layout and shrink to 256. Enums are pinned by `saved_enum_ordinals_never_move` and `every_saved_enum_is_pinned` (`tests_save.odin`).
 - **Board:** Thingvellir, http://127.0.0.1:41070, board `gnipahellir`. Task state lives there. Glenn's design decisions: `gnipa_project/design_review.md` section 6.
@@ -101,7 +101,7 @@ One line per system; the long form of each is in the archive at the end of `Work
 - **Clay golems:** Command Wand, roster window, Gather/Build modes, eight-block packs, Quick Clay footholds, monument templates. Only Draugr can hurt a golem (deliberate).
 - **Physics and terrain:** placed-block gravity (a block landing in a player, enemy or golem body crumbles to its item), falling trees, water and lava flow, springs, quench (water on lava makes `Scoria`), undermined structures break into their item. Enemy digs conserve items (`smash_tile` spills machines and both door halves).
 - **Saves:** write to `<path>.tmp` then rename; a refused save moves to a `.N.bak` slot; stats file is versioned and an unreadable one goes to `.unread`.
-- **Agent play:** `agent_api.odin` serves a local HTTP API; the title's `[A] Let an agent play` runs in a sandbox folder under `agent_runs/`. Verbs include `tithe:slot` on the death screen. Glenn can chat to the agent with Enter. `GNIPA_AGENT_TURBO=1` for fast runs; `tools/agent_play.sh` (port 7777), `tools/agent_pacing.py` and `tools/agent_bot/` for pacing.
+- **Agent play:** `agent_api.odin` serves a local HTTP API; the title's `[A] Let an agent play` runs in a sandbox folder under `agent_runs/`. Verbs include `tithe:slot` on the death screen (state's `tithe.ready_in` counts the screen's 1.2 s wait down) and, with a command wand selected, `zone`, `crew` and `monument`+`at` for the golem crew; state lists the crew (golems, the level's zone and monument) and the sky flocks in view. Glenn can chat to the agent with Enter. `GNIPA_AGENT_TURBO=1` for fast runs; `tools/agent_play.sh` (port 7777), `tools/agent_pacing.py` and `tools/agent_bot/` for pacing.
 - **Debug (debug builds):** F1 cheat menu and Item Palette, F2 altar menu, F3 ten snapshot slots, F4 raid/wave menu, action.log streamed for every run.
 - **Art:** pixel-art atlas `pixel_art.dat` (Glenn's runtime file, not in git), edited in GNIPA Studio. Provenance list: `gnipa_project/art_provenance.md`.
 
