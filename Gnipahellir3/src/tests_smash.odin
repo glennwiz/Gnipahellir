@@ -742,3 +742,89 @@ a_full_golem_leaves_a_monument_cell_marked :: proc(t: ^testing.T) {
     testing.expect(t, !golem_mine_tile(gs, g, T, false, 0), "a full golem does not mine")
     testing.expect_value(t, gs.monument_cells[gs.level_index][grid_idx(SMASH_X, SMASH_Y)], c.tile)
 }
+
+// ─── A Golem Depot keeps its cargo (card 150) ─────────────────────────────────
+//
+//  A loaded depot is a hoard, like a loaded silo: no hunter targets it and no
+//  dig smashes it.  Whatever does take one anyway spills the cargo.
+
+// The depot core at (SMASH_X, SMASH_Y), built by golems, holding 40 Iron Bar
+// and 3 Wood Log.
+smash_test_depot :: proc(gs: ^Game_State) -> ^Golem_Depot_State {
+    c: Golem_Build_Cell
+    for cell in golem_plan_table[.Golem_Depot].cells do if cell.tile == .Golem_Depot do c = cell
+    smash_test_monument_cell(gs, .Golem_Depot, c)
+    golem_depot_on_built(gs, {SMASH_X, SMASH_Y})
+    d := golem_depot_at(gs, gs.level_index, {SMASH_X, SMASH_Y})
+    golem_depot_add(d, .Iron_Bar, 40)
+    golem_depot_add(d, .Wood_Log, 3)
+    return d
+}
+
+@(test)
+a_loaded_depot_is_never_smashed :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    smash_test_builder(gs)
+    d := smash_test_depot(gs)
+    T := [2]i32{SMASH_X, SMASH_Y}
+    testing.expect(t, wave_target_refused(gs, T), "a loaded depot refuses the smash")
+    testing.expect(t, !smash_tile(gs, SMASH_X, SMASH_Y), "nothing drops")
+    testing.expect_value(t, get_tile(&gs.world, SMASH_X, SMASH_Y), Tile_Type.Golem_Depot)
+    testing.expect_value(t, d.slots[0], Silo_Slot{.Iron_Bar, 40})
+
+    // Cargo in a later slot only (a furnace took the first one dry) still counts.
+    d.slots[0] = {}
+    testing.expect(t, wave_target_refused(gs, T), "cargo in any slot refuses the smash")
+    testing.expect(t, !smash_tile(gs, SMASH_X, SMASH_Y), "nothing drops")
+    testing.expect_value(t, get_tile(&gs.world, SMASH_X, SMASH_Y), Tile_Type.Golem_Depot)
+
+    // Emptied, it is fair game again: the rule is the load, not the tile.
+    d.slots = {}
+    testing.expect(t, !wave_target_refused(gs, T), "an empty depot is an ordinary structure")
+    testing.expect(t, smash_tile(gs, SMASH_X, SMASH_Y), "the empty depot drops its Emerald")
+    testing.expect(t, golem_depot_at(gs, gs.level_index, T) == nil, "its record goes with the tile")
+}
+
+@(test)
+a_mined_depot_spills_its_cargo :: proc(t: ^testing.T) {
+    gs := turret_test_state()
+    defer free(gs)
+    smash_test_builder(gs)
+    smash_test_depot(gs)
+    T := [2]i32{SMASH_X, SMASH_Y}
+    bar0, log0, gem0 := turret_ground_count(gs, .Iron_Bar), turret_ground_count(gs, .Wood_Log), turret_ground_count(gs, .Emerald)
+
+    handle_tile_mined(gs, Event{type = .Tile_Mined, source = enemy_entity_id(0), tile = T})
+
+    testing.expect(t, get_tile(&gs.world, SMASH_X, SMASH_Y) != .Golem_Depot, "the depot was taken")
+    testing.expect_value(t, turret_ground_count(gs, .Iron_Bar) - bar0, 40)
+    testing.expect_value(t, turret_ground_count(gs, .Wood_Log) - log0, 3)
+    testing.expect_value(t, turret_ground_count(gs, .Emerald) - gem0, 1)
+    testing.expect(t, golem_depot_at(gs, gs.level_index, T) == nil, "its record goes with the tile")
+
+    // A depot raised again on the same tile starts empty.
+    set_tile(&gs.world, SMASH_X, SMASH_Y, .Golem_Depot)
+    golem_depot_on_built(gs, T)
+    d := golem_depot_at(gs, gs.level_index, T)
+    testing.expect(t, d != nil && d.slots == {}, "the new depot holds nothing")
+}
+
+// An undermine breaks a tile through Tile_Mined from the world.  No monument
+// tile needs ground today; were one to, its break must pay the build item.
+@(test)
+an_undermined_monument_cell_pays_its_build_item :: proc(t: ^testing.T) {
+    for plan in ([]Golem_Plan{.Clay_Hearth, .Golem_Depot, .World_Anchor}) {
+        for c in golem_plan_table[plan].cells {
+            testing.expectf(t, !needs_ground(c.tile), "%v %v stands without ground", plan, c.off)
+            gs := turret_test_state()
+            defer free(gs)
+            smash_test_builder(gs)
+            smash_test_monument_cell(gs, plan, c)
+            item0 := turret_ground_count(gs, c.item)
+            eq_push(&gs.events, Event{type = .Tile_Mined, source = WORLD_ID, tile = {SMASH_X, SMASH_Y}})
+            process_events(gs)
+            testing.expectf(t, turret_ground_count(gs, c.item) - item0 == 1, "%v %v drops its %v", plan, c.off, c.item)
+        }
+    }
+}
