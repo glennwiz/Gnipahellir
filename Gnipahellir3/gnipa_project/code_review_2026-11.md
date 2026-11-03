@@ -120,6 +120,25 @@ Facts:
 
 Not measured: rendering at 256, and anything on the game PC.
 
+Follow-up, card 116 (2026-11-03, after cards 77 and 106). Quiet box, load 1.1 to 1.5 (1-minute),
+`-o:speed -define:GAME_DEBUG=false`, one test thread, two runs that agreed. The world is
+`a_full_frame_at_the_cap_stays_in_budget`'s: 256 hunters plus the full golem crew, 1,000 frames of
+full `game_update`, no rendering. [ran]
+
+| Scenario | p50 ms | p95 ms | p99 ms | max ms | Frames over 16 ms | nav work p99 / max |
+|---|---|---|---|---|---|---|
+| Vargr 256 + crew | 0.12 | 1.7 | 3.6 | 6.9 | 0 of 1,000 | 83,839 / 164,270 |
+| mixed 256 + crew | 0.11 | 1.5 | 3.3 | 7.2 | 0 of 1,000 | 76,005 / 164,978 |
+
+- The work budget in ms: a least-squares fit of frame time on `gs.nav_work` gives 4.6 to 4.75 ms
+  per 110k work, on a base of 0.12 ms a frame. So a frame at `NAV_WORK_P99_BUDGET` costs about
+  4.8 ms, and the worst frame seen (165k) about 7 ms. A full search (about 37.7k) is about 1.6 ms,
+  down from 2.15 ms before the heap. [ran]
+- `update_undermined` at `-o:speed`: old scan (per-tile `is_undermined`, rebuilt from f4b470f^)
+  0.026 ms, new 0.025 ms, the same in the swarm's world and in `turret_test_state`. The compiler
+  already hoists what card 106 hoisted by hand. At `-o:minimal` on the same quiet box the gain is
+  real: old 0.29 ms, new 0.076 ms. [ran]
+
 ### 4. Reload wipes wave progress (medium, cheap)
 
 `Save_Data` has no wave field, and `gs.wave` starts zeroed. A save and reload test gave pressure 900
