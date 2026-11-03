@@ -7989,7 +7989,7 @@ golem_unloads_its_entire_pack_before_leaving_storage :: proc(t:^testing.T) {
 		job=.Deliver,carry=.Stone_Block,target=store,has_target=true,grounded=true,project_cell=-1}
 	for _ in 0..<GOLEM_PACK_CAP-1 do _=golem_pack_add(g,.Stone_Block)
 
-	for _ in 0..<GOLEM_PACK_CAP do golem_update_one(gs,0)
+	for _ in 0..<GOLEM_PACK_CAP do update_golems(gs)
 	b:=barrel_at(gs,gs.level_index,store)
 	testing.expect_value(t,barrel_total(b),GOLEM_PACK_CAP)
 	testing.expect_value(t,g.carry,Item.None)
@@ -8015,7 +8015,7 @@ golem_reroutes_remaining_pack_when_storage_fills :: proc(t:^testing.T) {
 	_ = golem_pack_add(g,.Stone_Block)
 	_ = golem_pack_add(g,.Stone_Block)
 
-	for _ in 0..<3 do golem_update_one(gs,0)
+	for _ in 0..<3 do update_golems(gs)
 	testing.expect_value(t,b1.slots[0].count,MAX_STACK)
 	testing.expect_value(t,barrel_total(barrel_at(gs,gs.level_index,second)),2)
 	testing.expect_value(t,g.carry,Item.None)
@@ -8170,7 +8170,7 @@ build_worker_without_a_project_unloads_then_waits :: proc(t:^testing.T) {
 	g^={status=.Deployed,level=gs.level_index,pos={20.2,81-GOLEM_H},hp=GOLEM_HP,mode=.Build,
 		job=.Idle,carry=.Stone_Block,grounded=true,project_cell=-1}
 	_ = golem_pack_add(g,.Leaf)
-	for _ in 0..<5 do golem_update_one(gs,0)
+	for _ in 0..<5 do update_golems(gs)
 	testing.expect_value(t,g.carry,Item.None)
 	testing.expect_value(t,golem_pack_count(g),0)
 	testing.expect_value(t,g.mode,Golem_Mode.Build)

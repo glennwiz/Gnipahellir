@@ -215,6 +215,13 @@ GOLEM_PROJECT_CELLS :: 128
 MAX_GOLEM_DEPOTS     :: 8
 GOLEM_DEPOT_SLOTS    :: 12
 GOLEM_PACK_CAP       :: 8
+// Resource choices a worker found no route to, kept across frames so an
+// assignment the search budget interrupts picks up at the next choice.
+Golem_Skips :: struct {
+    tiles: [16][2]i32,
+    n:     int,
+}
+
 GOLEM_BLOCK_GRACE_CAP :: MAX_GOLEMS * 8
 GOLEM_QUICK_CLAY_CAP  :: MAX_GOLEMS * 4
 
@@ -783,6 +790,11 @@ Game_State :: struct {
     den_revenge: Den_Revenge, // transient robbed-den grudge (enemy.odin)
     nav_searches: int,       // astar_dig calls spent this frame by enemies; reset
                              // in update_enemies, capped by MAX_NAV_SEARCHES_PER_FRAME
+    golem_searches: int,     // the same for golems; reset in update_golems,
+                             // capped by MAX_GOLEM_SEARCHES_PER_FRAME
+    golem_skips: [MAX_GOLEMS]Golem_Skips, // transient: resource choices each golem found no route to
+    nav_work:    int,        // astar_dig work this frame, golems and enemies:
+                             // nodes expanded + heap sift steps; reset in update_golems
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     golem_grace: Golem_Grace_State,
