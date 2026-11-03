@@ -513,3 +513,130 @@ fresh_levels_lose_nothing_to_the_rule :: proc(t: ^testing.T) {
     gs.level_index = LEVEL_CAVE3; gen_cave_level(&gs.world, 2, gs.world_seed); check(t, gs)
     gs.level_index = LEVEL_SKY;   gen_sky_level(&gs.world, gs.world_seed);     check(t, gs)
 }
+
+// ─── A falling block onto a body (card 124) ──────────────────────────────────
+//
+// Run 7 life 3: the player mined the stone that held placed Dirt over their
+// head, the Dirt fell through their body and settled in it, and they froze.
+
+FX :: 100  // the column the block falls down
+FY :: 80   // the floor row under it
+
+@(private = "file")
+fall_site :: proc() -> ^Game_State {
+    gs := under_site()
+    for x in FX - 4 ..= FX + 6 do set_tile(&gs.world, x, FY, .Stone)
+    set_tile(&gs.world, FX, FY - 3, .Dirt)      // placed Dirt, always a faller
+    set_tile(&gs.world, FX + 1, FY - 3, .Stone) // the natural stone it leans on
+    return gs
+}
+
+@(private = "file")
+dirt_total :: proc(gs: ^Game_State) -> (n: int) {
+    for t in gs.world.terrain do if t == .Dirt do n += 1
+    for b in gs.gravity.blocks do if b.active && b.tile == .Dirt do n += 1
+    return n + ground_count(&gs.world, .Dirt) + inventory_count(&gs.player.inventory, .Dirt)
+}
+
+@(test)
+a_block_falling_onto_the_player_does_not_wall_them_in :: proc(t: ^testing.T) {
+    gs := fall_site(); defer free(gs)
+    gs.player.pos = {f32(FX) + 0.1, f32(FY) - PLAYER_H}
+    under_frames(gs, 10)  // the player settles on the floor
+    eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {FX + 1, FY - 3}})
+    under_frames(gs, 120)
+    testing.expect_value(t, get_tile(&gs.world, FX, FY - 3), Tile_Type.Void)
+    for y in FY - 2 ..< FY do testing.expect(t, !is_solid(&gs.world, FX, y), "no block in the player's cells")
+    testing.expect_value(t, dirt_total(gs), 1)
+
+    x0 := gs.player.pos.x
+    gs.input.move_right = true  // game_update polls the hardware over this
+    for _ in 0 ..< 30 do update_player(gs)
+    testing.expectf(t, gs.player.pos.x > x0 + 1, "the player walks on: x %.2f -> %.2f", x0, gs.player.pos.x)
+}
+
+@(test)
+a_block_falling_onto_an_enemy_does_not_wall_it_in :: proc(t: ^testing.T) {
+    gs := fall_site(); defer free(gs)
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind, e.hp, e.hp_max = .Vargr, 8, 8
+    size := enemy_body_size(e.kind)
+    e.pos = {f32(FX) + (1 - size.x)*0.5, f32(FY) - size.y}
+    set_tile(&gs.world, FX + 1, FY - 3, .Void)
+    gravity_check_removed(gs, FX + 1, FY - 3)
+    gs.delta_time = 1.0 / 60.0
+    for _ in 0 ..< 120 do update_gravity(gs)
+    testing.expect(t, !is_solid(&gs.world, FX, FY - 1), "no block in the enemy's cell")
+    testing.expect_value(t, ground_count(&gs.world, .Dirt), 1)
+    testing.expect_value(t, dirt_total(gs), 1)
+}
+
+@(test)
+a_block_falling_beside_a_body_still_settles :: proc(t: ^testing.T) {
+    // Bodies edge to edge with the landing cell, or just above it, and a
+    // despawned enemy whose stale record still sits in it: none of them is in
+    // the way, so the Dirt settles as a tile.
+    gs := fall_site(); defer free(gs)
+    size := enemy_body_size(.Vargr)
+    put :: proc(gs: ^Game_State, pos: [2]f32) -> int {
+        id, _ := enemy_alloc(&gs.enemies)
+        gs.enemies.data[id].kind, gs.enemies.data[id].hp = .Vargr, 8
+        gs.enemies.data[id].pos = pos
+        return id
+    }
+    put(gs, {f32(FX) - size.x, f32(FY) - size.y})  // left
+    put(gs, {f32(FX) + 1, f32(FY) - size.y})       // right
+    despawn_enemy(gs, put(gs, {f32(FX) + (1 - size.x)*0.5, f32(FY) - size.y}))
+    gs.player.pos = {f32(FX) + 0.1, f32(FY) - 1 - PLAYER_H}  // above, still
+    set_tile(&gs.world, FX + 1, FY - 3, .Void)
+    gravity_check_removed(gs, FX + 1, FY - 3)
+    gs.delta_time = 1.0 / 60.0
+    for _ in 0 ..< 120 do update_gravity(gs)
+    testing.expect_value(t, get_tile(&gs.world, FX, FY - 1), Tile_Type.Dirt)
+    testing.expect_value(t, dirt_total(gs), 1)
+}
+
+@(test)
+a_block_landing_on_water_over_a_swimmer_settles :: proc(t: ^testing.T) {
+    // Water stops a falling block, so it lands on the surface: a body under
+    // the surface, its top edge on the landing cell's floor, is not in the way.
+    gs := fall_site(); defer free(gs)
+    set_tile(&gs.world, FX, FY - 1, .Water)
+    gs.player.pos = {f32(FX) + 0.1, f32(FY) - 1}
+    set_tile(&gs.world, FX + 1, FY - 3, .Void)
+    gravity_check_removed(gs, FX + 1, FY - 3)
+    gs.delta_time = 1.0 / 60.0
+    for _ in 0 ..< 120 do update_gravity(gs)
+    testing.expect_value(t, get_tile(&gs.world, FX, FY - 2), Tile_Type.Dirt)
+    testing.expect_value(t, dirt_total(gs), 1)
+}
+
+@(test)
+a_block_falling_onto_a_body_straddling_in_from_the_left_crumbles :: proc(t: ^testing.T) {
+    // The body's left edge is in the next column over and only its right
+    // side reaches into the landing cell: it is still in the way.
+    drop :: proc(t: ^testing.T, gs: ^Game_State, loc := #caller_location) {
+        set_tile(&gs.world, FX + 1, FY - 3, .Void)
+        gravity_check_removed(gs, FX + 1, FY - 3)
+        gs.delta_time = 1.0 / 60.0
+        for _ in 0 ..< 120 do update_gravity(gs)
+        testing.expect(t, !is_solid(&gs.world, FX, FY - 1), "no block in the body's cell", loc = loc)
+        testing.expect_value(t, ground_count(&gs.world, .Dirt), 1, loc)
+        testing.expect_value(t, dirt_total(gs), 1, loc)
+    }
+    {
+        gs := fall_site(); defer free(gs)
+        gs.player.pos = {f32(FX) + 0.3 - PLAYER_W, f32(FY) - PLAYER_H}
+        drop(t, gs)
+    }
+    {
+        gs := fall_site(); defer free(gs)
+        id, _ := enemy_alloc(&gs.enemies)
+        e := &gs.enemies.data[id]
+        e.kind, e.hp, e.hp_max = .Vargr, 8, 8
+        size := enemy_body_size(e.kind)
+        e.pos = {f32(FX) + 0.3 - size.x, f32(FY) - size.y}
+        drop(t, gs)
+    }
+}

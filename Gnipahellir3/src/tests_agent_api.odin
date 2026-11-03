@@ -1727,28 +1727,31 @@ a_client_connecting_on_the_title_starts_the_frame_clock :: proc(t: ^testing.T) {
     testing.expect_value(t, link.panel.goal.len, 0)
 }
 
+// The two title tests bind fixed ports, so those sit below Linux's ephemeral
+// range (32768-60999): in it, a client socket from a test that listens on port 0
+// can hold the next port and this one gets the one after.  Clear of 7777/7878.
 @(test)
 the_title_only_binds_loopback_and_steps_past_a_taken_port :: proc(t: ^testing.T) {
-    first, port, ok := agent_title_bind(47311)
+    first, port, ok := agent_title_bind(23311)
     testing.expect(t, ok)
     defer net.close(first)
-    testing.expect_value(t, port, 47311)
+    testing.expect_value(t, port, 23311)
     at, err := net.bound_endpoint(first)
     testing.expect_value(t, err, nil)
     testing.expect_value(t, at.address, net.Address(net.IP4_Loopback))
 
-    second, next, ok2 := agent_title_bind(47311)
+    second, next, ok2 := agent_title_bind(23311)
     testing.expect(t, ok2)
     defer net.close(second)
-    testing.expect_value(t, next, 47312)
+    testing.expect_value(t, next, 23312)
 }
 
 @(test)
 the_title_bind_gives_up_when_every_port_is_taken :: proc(t: ^testing.T) {
     socks: [AGENT_TITLE_PORTS]net.TCP_Socket
-    for &s, i in socks do s, _ = net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 47331 + i}, 1)
+    for &s, i in socks do s, _ = net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 23331 + i}, 1)
     defer for s in socks do net.close(s)
-    _, _, ok := agent_title_bind(47331)
+    _, _, ok := agent_title_bind(23331)
     testing.expect(t, !ok)
 }
 
@@ -2530,4 +2533,241 @@ closing_the_link_closes_the_waiting_connections :: proc(t: ^testing.T) {
     one: [16]u8
     n, err := net.recv_tcp(waiting, one[:])
     testing.expect(t, (err == nil && n == 0) || (err != nil && err != .Timeout && err != .Would_Block), "the far side sees it close")
+}
+
+// ─── The command wand's gestures, and what state shows of the crew ──────────
+
+// The player holding a wand, on a cleared pad: open air above a stone floor
+// under the feet, so a monument's footprint and its ground are both there.
+@(private="file")
+agent_test_wand :: proc(gs: ^Game_State, wand := Item.Command_Wand) -> (T: [2]i32) {
+    hand := MAX_INVENTORY - 2
+    gs.player.inventory.slots[hand] = {item = wand, count = 1}
+    gs.player.inventory.selected = hand
+    T = player_tile(&gs.player)
+    for y in T.y - 6 ..= T.y do for x in T.x - 6 ..= T.x + 6 do set_tile(&gs.world, int(x), int(y), .Air)
+    for x in T.x - 6 ..= T.x + 6 do set_tile(&gs.world, int(x), int(T.y) + 1, .Stone)
+    return
+}
+
+@(private="file")
+agent_test_golem :: proc(gs: ^Game_State, mode := Golem_Mode.Gather) -> ^Golem {
+    T := player_tile(&gs.player)
+    g := &gs.golems.data[0]
+    g^ = {status = .Deployed, hp = GOLEM_HP, mode = mode, facing = 1, level = gs.level_index,
+        pos = {f32(T.x + 2) + (1 - GOLEM_W) * 0.5, f32(T.y + 1) - GOLEM_H}, grounded = true, project_cell = -1}
+    return g
+}
+
+@(test)
+agent_zone_drags_the_gather_zone :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_test_refused(t, link, gs, `{"cmd":"act","zone":[10,20,15,25]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "command wand"), "a bare hand is told why")
+
+    T := agent_test_wand(gs)
+    agent_test_refused(t, link, gs, `{"cmd":"act","zone":[10,20,15]}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","zone":[10,20,15,999]}`)
+    agent_test_refused(t, link, gs, `{"cmd":"act","zone":[10,20,10,20]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "two different corners"), "a click is not a drag")
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","zone":[10,20,15,25],"place":[%d,%d]}}`, T.x + 1, T.y))
+    set_tile(&gs.world, 10, 20, .Smelter)
+    agent_test_refused(t, link, gs, `{"cmd":"act","zone":[10,20,15,25]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "opens it"), "a press on a machine opens the machine")
+    set_tile(&gs.world, 10, 20, .Air)
+    testing.expect(t, !gs.golems.work[gs.level_index].active, "every refusal leaves the old zone")
+
+    // Corners either way round, far from the player: the mouse has no reach limit.
+    agent_test_run_act(link, gs, `{"cmd":"act","zone":[15,25,10,20]}`)
+    z := gs.golems.work[gs.level_index]
+    testing.expect(t, z.active)
+    testing.expect_value(t, gs.input.mouse_tile, [2]i32{10, 20})  // the cursor ends where the drag let go
+    testing.expect_value(t, z.min, [2]i32{10, 20})
+    testing.expect_value(t, z.max, [2]i32{15, 25})
+    zone := agent_test_state(link, gs)["crew"].(json.Object)["zone"].(json.Array)
+    testing.expect_value(t, len(zone), 4)
+    testing.expect_value(t, zone[0].(json.Float), 10)
+    testing.expect_value(t, zone[1].(json.Float), 20)
+    testing.expect_value(t, zone[2].(json.Float), 15)
+    testing.expect_value(t, zone[3].(json.Float), 25)
+}
+
+@(test)
+agent_crew_flips_the_crew_between_gather_and_build :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    g := agent_test_golem(gs)
+    agent_test_refused(t, link, gs, `{"cmd":"act","crew":true}`)
+    testing.expect_value(t, g.mode, Golem_Mode.Gather)
+
+    agent_test_wand(gs)
+    // crew is a key, not a click: a machine under the unset cursor (0,0) does not matter.
+    set_tile(&gs.world, 0, 0, .Smelter)
+    agent_test_run_act(link, gs, `{"cmd":"act","crew":true,"frames":3}`)
+    testing.expect_value(t, g.mode, Golem_Mode.Build)  // once: a second press would flip it back
+    agent_test_run_act(link, gs, `{"cmd":"act","crew":true}`)
+    testing.expect_value(t, g.mode, Golem_Mode.Gather)
+}
+
+@(test)
+agent_monument_marks_a_build_anchor :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    T := player_tile(&gs.player)
+    at := fmt.tprintf(`"at":[%d,%d]`, T.x + 1, T.y)
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Clay_Hearth",%s}}`, at))
+    testing.expect(t, strings.contains(agent_test_reply(link), "command wand"), "a bare hand is told why")
+
+    agent_test_wand(gs)
+    agent_test_refused(t, link, gs, `{"cmd":"act","monument":"Clay_Hearth"}`)
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act",%s}}`, at))
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Clay_Hearth",%s,"craft":"Plank"}}`, at))
+    testing.expect(t, strings.contains(agent_test_reply(link), "at goes with monument"), "one verb per act")
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Longhouse",%s}}`, at))
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"None",%s}}`, at))
+    testing.expect(t, strings.contains(agent_test_reply(link), "must be"), "None is no plan")
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Golem_Depot",%s}}`, at))
+    testing.expect(t, strings.contains(agent_test_reply(link), "not unlocked"), "the basic wand shows no depot button")
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Clay_Hearth",%s,"use":[%d,%d]}}`, at, T.x, T.y))
+    set_tile(&gs.world, int(T.x) + 1, int(T.y), .Smelter)
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Clay_Hearth",%s}}`, at))
+    set_tile(&gs.world, int(T.x) + 1, int(T.y), .Air)
+    testing.expect(t, !gs.golems.projects[gs.level_index].active, "every refusal marks nothing")
+
+    // Out of reach is the game's own refusal, as for the mouse: it plays, and a toast says why.
+    agent_test_run_act(link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Clay_Hearth","at":[%d,%d]}}`, T.x + PLAYER_REACH + 1, T.y))
+    testing.expect(t, !gs.golems.projects[gs.level_index].active, "beyond reach")
+
+    agent_test_run_act(link, gs, fmt.tprintf(`{{"cmd":"act","monument":"Clay_Hearth",%s}}`, at))
+    p := gs.golems.projects[gs.level_index]
+    testing.expect(t, p.active)
+    testing.expect_value(t, p.plan, Golem_Plan.Clay_Hearth)
+    testing.expect_value(t, p.anchor, [2]i32{T.x + 1, T.y})
+    m := agent_test_state(link, gs)["crew"].(json.Object)["monument"].(json.Object)
+    testing.expect_value(t, m["plan"].(json.String), "Clay_Hearth")
+    testing.expect_value(t, m["x"].(json.Float), f64(T.x + 1))
+    testing.expect_value(t, m["y"].(json.Float), f64(T.y))
+    testing.expect_value(t, m["complete"].(json.Boolean), false)
+}
+
+@(test)
+agent_state_lists_the_crew :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    crew := agent_test_state(link, gs)["crew"].(json.Object)
+    testing.expect_value(t, len(crew["golems"].(json.Array)), 0)
+    testing.expect(t, "zone" not_in crew && "monument" not_in crew, "nothing marked, nothing shown")
+
+    g := agent_test_golem(gs, .Build)
+    g.job = .Seek
+    gs.golems.data[3] = {status = .Carried, mode = .Gather}
+    golems := agent_test_state(link, gs)["crew"].(json.Object)["golems"].(json.Array)
+    testing.expect_value(t, len(golems), 2)
+    first := golems[0].(json.Object)
+    testing.expect_value(t, first["slot"].(json.Float), 0)
+    testing.expect_value(t, first["status"].(json.String), "Deployed")
+    testing.expect_value(t, first["mode"].(json.String), "Build")
+    testing.expect_value(t, first["job"].(json.String), "Seek")
+    testing.expect_value(t, first["level"].(json.Float), f64(gs.level_index))
+    testing.expect_value(t, first["hp"].(json.Float), f64(GOLEM_HP))
+    testing.expect(t, abs(first["x"].(json.Float) - f64(g.pos.x)) < 0.01 && abs(first["y"].(json.Float) - f64(g.pos.y)) < 0.01, "where it stands")
+    testing.expect_value(t, golems[1].(json.Object)["slot"].(json.Float), 3)
+    testing.expect_value(t, golems[1].(json.Object)["status"].(json.String), "Carried")
+
+    // Another level's zone is that level's.
+    gs.golems.work[(gs.level_index + 1) % NUM_LEVELS] = {active = true, min = {1, 1}, max = {4, 4}}
+    testing.expect(t, "zone" not_in agent_test_state(link, gs)["crew"].(json.Object))
+
+    // On level 1, with both levels marked, only level 1's show.
+    gs.level_index = 1
+    gs.golems.work[0]     = {active = true, min = {1, 1}, max = {4, 4}}
+    gs.golems.work[1]     = {active = true, min = {7, 8}, max = {9, 10}}
+    gs.golems.projects[0] = {active = true, plan = .Clay_Hearth, level = 0, anchor = {20, 30}}
+    gs.golems.projects[1] = {active = true, complete = true, plan = .Golem_Depot, level = 1, anchor = {40, 50}}
+    crew = agent_test_state(link, gs)["crew"].(json.Object)
+    testing.expect_value(t, crew["zone"].(json.Array)[0].(json.Float), 7)
+    testing.expect_value(t, crew["monument"].(json.Object)["plan"].(json.String), "Golem_Depot")
+    testing.expect_value(t, crew["monument"].(json.Object)["x"].(json.Float), 40)
+    testing.expect_value(t, crew["monument"].(json.Object)["y"].(json.Float), 50)
+    testing.expect_value(t, crew["monument"].(json.Object)["complete"].(json.Boolean), true)
+}
+
+@(test)
+agent_state_lists_the_flocks_in_view :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    whole := fmt.tprintf(`{{"cmd":"state","x":0,"y":0,"w":%d,"h":%d}}`, GRID_W, GRID_H)
+    testing.expect_value(t, len(agent_test_state(link, gs, whole)["birds"].(json.Array)), 0)
+
+    birds_seed(gs)
+    f := &gs.birds.flocks[0]
+    f.center = {50, 30}
+    for &b in f.birds do b.pos = {50, 30}
+    f.scatter_t = 1
+    found := false
+    for v in agent_test_state(link, gs, whole)["birds"].(json.Array) {
+        o := v.(json.Object)
+        if o["x"].(json.Float) != 50 || o["y"].(json.Float) != 30 do continue
+        found = true
+        testing.expect_value(t, o["heading"].(json.Float), f64(f.heading))
+        testing.expect_value(t, o["scattered"].(json.Boolean), true)
+    }
+    testing.expect(t, found, "the flock is in the level")
+
+    // A view the flock is not in leaves it out, and the others are elsewhere.
+    for &o, i in gs.birds.flocks do if i > 0 do for &b in o.birds do b.pos = {150, 70}
+    testing.expect_value(t, len(agent_test_state(link, gs, `{"cmd":"state","x":40,"y":25,"w":20,"h":10}`)["birds"].(json.Array)), 1)
+    testing.expect_value(t, len(agent_test_state(link, gs, `{"cmd":"state","x":0,"y":0,"w":10,"h":10}`)["birds"].(json.Array)), 0)
+    // In the view's columns but above its rows, and below them: not in view.
+    testing.expect_value(t, len(agent_test_state(link, gs, `{"cmd":"state","x":40,"y":31,"w":20,"h":10}`)["birds"].(json.Array)), 0)
+    testing.expect_value(t, len(agent_test_state(link, gs, `{"cmd":"state","x":40,"y":15,"w":20,"h":15}`)["birds"].(json.Array)), 0)
+    // In the view's rows but beside its columns, either side: not in view.
+    testing.expect_value(t, len(agent_test_state(link, gs, `{"cmd":"state","x":51,"y":25,"w":20,"h":10}`)["birds"].(json.Array)), 0)
+    testing.expect_value(t, len(agent_test_state(link, gs, `{"cmd":"state","x":30,"y":25,"w":20,"h":10}`)["birds"].(json.Array)), 0)
+    f.scatter_t = 0
+    testing.expect_value(t, agent_test_state(link, gs, whole)["birds"].(json.Array)[0].(json.Object)["scattered"].(json.Boolean), false)
+}
+
+@(test)
+agent_death_screen_counts_down_to_ready :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    inventory_insert(&gs.player.inventory, .Potion_Health, 1)
+    slot := 0
+    for s, i in gs.player.inventory.slots do if s.item == .Potion_Health do slot = i
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID,
+        payload = {int_val = 100}, cause = .Lava})
+    agent_test_play(link, gs, `{"cmd":"act","frames":1}`)
+    testing.expect(t, gs.player.dead)
+
+    left := int(agent_test_state(link, gs)["tithe"].(json.Object)["ready_in"].(json.Float))
+    testing.expect(t, left > 60 && left <= 73, "about the 1.2 s the screen waits")
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, slot))
+    testing.expect(t, strings.contains(agent_test_reply(link), fmt.tprintf("%d more frames", left)), "the refusal says how long")
+
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","frames":%d}}`, left - 1))
+    testing.expect_value(t, int(agent_test_state(link, gs)["tithe"].(json.Object)["ready_in"].(json.Float)), 1)
+    agent_test_refused(t, link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, slot))
+    agent_test_play(link, gs, `{"cmd":"act","frames":1}`)
+    testing.expect_value(t, int(agent_test_state(link, gs)["tithe"].(json.Object)["ready_in"].(json.Float)), 0)
+    agent_test_play(link, gs, fmt.tprintf(`{{"cmd":"act","tithe":%d}}`, slot))
+    testing.expect_value(t, gs.stats.grave.tithe, Item.Potion_Health)
+}
+
+@(test)
+agent_brief_names_the_crew_verbs_and_the_death_wait :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    brief := agent_write_brief(link, gs)
+    for want in ([]string{"zone: [x0,y0,x1,y1]", "crew: true", "monument: Clay_Hearth", "at: [x,y]", "tithe.ready_in", "about its first 72 ticks", "birds"}) {
+        testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
+    }
 }

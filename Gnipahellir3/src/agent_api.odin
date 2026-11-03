@@ -22,8 +22,16 @@ package game
 //                                                   the whole stack unless count says less;
 //                                                   tithe:slot, on the death screen, picks
 //                                                   the item to send on, and again to take
-//                                                   it back: state lists "tithe":{chosen,
-//                                                   offerable}.  Dismiss then moves on
+//                                                   it back: state lists "tithe":{ready_in,
+//                                                   chosen, offerable}, and both it and
+//                                                   dismiss wait out ready_in ticks first.
+//                                                   Dismiss then moves on.
+//                                                   With a command wand selected: zone:
+//                                                   [x0,y0,x1,y1] drags the Gather zone,
+//                                                   monument:"Clay_Hearth" with at:[x,y]
+//                                                   marks a Build anchor, crew:true is the
+//                                                   crew's Gather/Build key; state's crew
+//                                                   lists the golems, zone and monument
 //   {"cmd":"plan","acts":[{"move":"left","frames":30},...]}
 //                                                   what to do while you think: played
 //                                                   at quarter speed, no reply per step;
@@ -494,6 +502,11 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  one of select, equip, feed (with count), store, take: bag slot. select -1 is an empty hand\n")
     fmt.sbprintf(w, "  craft: item name, from state's craftable. collect, withdraw, withdraw_fuel: true, on the smelter a use opened\n")
     fmt.sbprintf(w, "  store and take work on the barrel a use opened. tithe: slot, on the death screen; then dismiss moves on\n")
+    fmt.sbprintf(w, "  The death screen hears neither tithe nor dismiss for about its first %d ticks: state's tithe.ready_in counts them down\n", int(DEATH_INPUT_DELAY / AGENT_STEP))
+    fmt.sbprintf(w, "  with a command wand selected, place: [x,y] sets down a bound golem, and one of:\n")
+    fmt.sbprintf(w, "    zone: [x0,y0,x1,y1]  drags the Gather zone, up to %dx%d tiles. crew: true  flips this level's golems between Gather and Build\n", GOLEM_ZONE_MAX_W, GOLEM_ZONE_MAX_H)
+    fmt.sbprintf(w, "    monument: Clay_Hearth, Golem_Depot or World_Anchor, with at: [x,y] in reach  the anchor Build golems raise it from\n")
+    fmt.sbprintf(w, "  state's crew lists the golems, and this level's zone and monument. birds lists the sky flocks in view: scenery, harmless\n")
     fmt.sbprintf(w, "{{\"cmd\":\"plan\",\"acts\":[{{...}},...]}}  up to %d acts to play while you think; an act drops the rest\n", AGENT_PLAN_MAX)
     fmt.sbprintf(w, "{{\"cmd\":\"wait\",\"frames\":30}}  ticks with no input. {{\"cmd\":\"idle\",\"on\":false}}  no idle ticks between acts\n")
     fmt.sbprintf(w, "{{\"cmd\":\"realtime\",\"on\":true}}  the game stops waiting for you\n")
@@ -1087,12 +1100,20 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
     c.place, present, ok = agent_tile(o, "place"); c.has_place = ok; tile_ok &&= ok || !present
     c.use,   present, ok = agent_tile(o, "use");   c.has_use   = ok; tile_ok &&= ok || !present
     c.reclaim, present, ok = agent_tile(o, "reclaim"); c.has_reclaim = ok; tile_ok &&= ok || !present
+    c.at,    present, ok = agent_tile(o, "at");    c.has_at    = ok; tile_ok &&= ok || !present
     if !tile_ok {
-        problem = "mine, place, use and reclaim take [x,y] inside the map"
+        problem = "mine, place, use, reclaim and at take [x,y] inside the map"
         return
     }
-    if int(c.has_mine) + int(c.has_place) + int(c.has_use) + int(c.has_reclaim) > 1 {
-        problem = "one of mine, place, use or reclaim per act: there is one cursor"
+    if "zone" in o {
+        c.zone_from, c.zone_to, c.has_zone = agent_zone(o)
+        if !c.has_zone {
+            problem = "zone takes [x0,y0,x1,y1] inside the map"
+            return
+        }
+    }
+    if int(c.has_mine) + int(c.has_place) + int(c.has_use) + int(c.has_reclaim) + int(c.has_zone) + int(c.has_at) > 1 {
+        problem = "one of mine, place, use, reclaim, zone or at per act: there is one cursor"
         return
     }
     if agent_flag(o, "warp") {
@@ -1126,6 +1147,17 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
     if agent_flag(o, "withdraw") do c.verb = .Withdraw
     if agent_flag(o, "withdraw_fuel") do c.verb = .Withdraw_Fuel
     if p := agent_slot_verb(&c, o, "tithe", .Tithe); p != "" { problem = p; return }
+    if agent_flag(o, "crew") do c.verb = .Crew
+    if "monument" in o {
+        name, _ := o["monument"].(json.String)
+        plan := agent_find_plan(name)
+        if plan == .None {
+            problem = "monument must be Clay_Hearth, Golem_Depot or World_Anchor"
+            return
+        }
+        c.verb     = .Monument
+        c.verb_arg = i32(plan)
+    }
 
     if "craft" in o {
         name, _ := o["craft"].(json.String)
@@ -1136,6 +1168,15 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
         }
         c.verb     = .Craft
         c.verb_arg = i32(idx)
+    }
+    // After every verb: a later one in the same act would leave at pointing nowhere.
+    if c.verb == .Monument && !c.has_at {
+        problem = "monument needs at:[x,y], its anchor"
+        return
+    }
+    if c.has_at && c.verb != .Monument {
+        problem = "at goes with monument"
+        return
     }
 
     if "count" in o {
@@ -1153,6 +1194,23 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
 
     if !live do return  // a plan's later steps run in a world not yet played
 
+    // The command wand's gestures, refused where the mouse would do something else.
+    if c.has_zone || c.verb == .Crew || c.verb == .Monument {
+        corner := c.zone_from if c.has_zone else c.at
+        t := get_tile(&gs.world, int(corner.x), int(corner.y))
+        switch {
+        case equipped_command_wand(gs) == .None:
+            problem = "zone, crew and monument need a command wand selected"
+        case c.has_zone && c.zone_from == c.zone_to:
+            problem = "a zone needs two different corners"
+        case c.verb != .Crew && (is_structure_tile[t] || is_rune_scroll_chest(t)):
+            problem = fmt.tprintf("a click on the %v there opens it: start on open ground", t)
+        case c.verb == .Monument && !golem_plan_unlocked(gs, Golem_Plan(c.verb_arg)):
+            problem = fmt.tprintf("%v is not unlocked: it needs a stronger wand, and World_Anchor a dimension", Golem_Plan(c.verb_arg))
+        }
+        if problem != "" do return
+    }
+
     // The smelter and barrel verbs act on the window a `use` opened, as the
     // drag-and-drop they stand in for does.
     #partial switch c.verb {
@@ -1168,12 +1226,39 @@ agent_parse_act :: proc(gs: ^Game_State, o: json.Object, live := true) -> (c: Ag
         case !gs.player.dead:
             problem = "tithe needs the death screen"
         case gs.player.death_timer <= DEATH_INPUT_DELAY:
-            problem = "the death screen is not ready yet"
+            problem = fmt.tprintf("the death screen is not ready yet: %d more frames", agent_death_ready_in(gs))
         case !tithe_offerable(gs.player.inventory.slots[c.verb_arg]):
             problem = "nothing in that slot can be sent on"
         }
     }
     return
+}
+
+// A zone's two corners, [x0,y0,x1,y1] in tiles.
+@(private="file")
+agent_zone :: proc(o: json.Object) -> (from, to: [2]i32, ok: bool) {
+    a, is_arr := o["zone"].(json.Array)
+    if !is_arr || len(a) != 4 do return
+    n: [4]int
+    for v, i in a {
+        num, num_ok := agent_num(v)
+        if !num_ok do return
+        n[i] = num
+    }
+    if !in_bounds(n[0], n[1]) || !in_bounds(n[2], n[3]) do return
+    return {i32(n[0]), i32(n[1])}, {i32(n[2]), i32(n[3])}, true
+}
+
+@(private="file")
+agent_find_plan :: proc(name: string) -> Golem_Plan {
+    for plan in Golem_Plan do if fmt.tprint(plan) == name do return plan
+    return .None
+}
+
+// Ticks until the death screen hears a click: it waits DEATH_INPUT_DELAY.
+agent_death_ready_in :: proc(gs: ^Game_State) -> int {
+    if gs.player.death_timer > DEATH_INPUT_DELAY do return 0
+    return int((DEATH_INPUT_DELAY - gs.player.death_timer) / AGENT_STEP) + 1
 }
 
 // By result name.  A result with several recipes prefers one that can be made now.
@@ -1241,6 +1326,8 @@ agent_input :: proc(gs: ^Game_State) {
     if c.has_place do tile = c.place
     if c.has_use   do tile = c.use
     if c.has_reclaim do tile = c.reclaim
+    if c.has_zone do tile = c.zone_to  // where the drag lets go
+    if c.has_at   do tile = c.at
     inp.mouse_tile   = tile
     inp.mouse_world  = {(f32(tile.x) + 0.5) * CELL_SIZE, (f32(tile.y) + 0.5) * CELL_SIZE}
     gs.ui.hover_tile = tile
@@ -1267,6 +1354,10 @@ agent_input :: proc(gs: ^Game_State) {
     gs.agent.place_refused = false
 
     if c.warp do eq_push(&gs.events, Event{type = .Warp_Home_Request})
+    if c.has_zone {
+        packed := u32(c.zone_from.x) | (u32(c.zone_from.y) << 16)
+        eq_push(&gs.events, Event{type = .Golem_Zone, tile = c.zone_to, payload = {int_val = i32(packed)}})
+    }
     if c.has_place {
         type := Event_Type.Golem_Deploy if command_active else Event_Type.Place_Request
         eq_push(&gs.events, Event{type = type, tile = tile})
@@ -1282,6 +1373,8 @@ agent_input :: proc(gs: ^Game_State) {
     arg := c.verb_arg
     switch c.verb {
     case .None, .Tithe:  // a tithe went out above, ahead of the death screen's return
+    case .Monument: eq_push(&gs.events, Event{type = .Golem_Project, tile = tile, payload = {int_val = arg}})
+    case .Crew:    eq_push(&gs.events, Event{type = .Golem_Crew_Toggle})
     case .Select:  gs.player.inventory.selected = int(arg)
     case .Craft:   eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = arg}})
     case .Equip:   eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = arg}})
@@ -1463,8 +1556,52 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View)
         comma = true
         fmt.sbprintf(&b, `{{"owner":%d,"x":%d,"y":%d,"hoard":%d}}`, i, a.x, a.y, den_hoard(gs, &e.builder))
     }
-    strings.write_string(&b, "]}\n")
+    strings.write_string(&b, "],")
+    agent_write_birds(&b, gs, v)
+    agent_write_crew(&b, gs)
+    strings.write_string(&b, "}\n")
     link.out_len = strings.builder_len(b)
+}
+
+// Sky flocks with a bird inside the view, by their V's point.  Scenery: they
+// scatter from the player and touch nothing.
+@(private="file")
+agent_write_birds :: proc(b: ^strings.Builder, gs: ^Game_State, v: Agent_View) {
+    strings.write_string(b, `"birds":[`)
+    comma := false
+    if gs.birds.seeded do for &f in gs.birds.flocks {
+        seen := false
+        for bird in f.birds {
+            seen ||= int(bird.pos.x) >= v.x && int(bird.pos.x) < v.x + v.w && int(bird.pos.y) >= v.y && int(bird.pos.y) < v.y + v.h
+        }
+        if !seen do continue
+        if comma do strings.write_byte(b, ',')
+        comma = true
+        fmt.sbprintf(b, `{{"x":%.2f,"y":%.2f,"heading":%d,"scattered":%v}}`, f.center.x, f.center.y, int(f.heading), f.scatter_t > 0)
+    }
+    strings.write_string(b, "],")
+}
+
+// Every golem the wand has bound, and this level's Gather zone and monument.
+@(private="file")
+agent_write_crew :: proc(b: ^strings.Builder, gs: ^Game_State) {
+    strings.write_string(b, `"crew":{"golems":[`)
+    comma := false
+    for &g, i in gs.golems.data {
+        if g.status == .Empty do continue
+        if comma do strings.write_byte(b, ',')
+        comma = true
+        fmt.sbprintf(b, `{{"slot":%d,"status":"%v","level":%d,"x":%.2f,"y":%.2f,"hp":%d,"mode":"%v","job":"%v"}}`,
+            i, g.status, g.level, g.pos.x, g.pos.y, g.hp, g.mode, g.job)
+    }
+    strings.write_byte(b, ']')
+    if z := gs.golems.work[gs.level_index]; z.active {
+        fmt.sbprintf(b, `,"zone":[%d,%d,%d,%d]`, z.min.x, z.min.y, z.max.x, z.max.y)
+    }
+    if p := gs.golems.projects[gs.level_index]; p.active {
+        fmt.sbprintf(b, `,"monument":{{"plan":"%v","x":%d,"y":%d,"complete":%v}}`, p.plan, p.anchor.x, p.anchor.y, p.complete)
+    }
+    strings.write_byte(b, '}')
 }
 
 // The watcher's unread lines.  A reply reads them: each comes once.
@@ -1491,7 +1628,7 @@ agent_write_death :: proc(b: ^strings.Builder, gs: ^Game_State) {
         json_write_string(b, gs.death_by)
         strings.write_byte(b, ',')
     }
-    fmt.sbprintf(b, `"tithe":{{"chosen":%d,"offerable":[`, gs.ui.tithe_slot)
+    fmt.sbprintf(b, `"tithe":{{"ready_in":%d,"chosen":%d,"offerable":[`, agent_death_ready_in(gs), gs.ui.tithe_slot)
     comma := false
     for s, i in gs.player.inventory.slots {
         if !tithe_offerable(s) do continue

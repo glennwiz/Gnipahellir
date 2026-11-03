@@ -5818,8 +5818,26 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     worst_idx := 0
     SOAK_MINUTES :: 15
     MAX_TILE_CHURN :: 40
+    // Pillars in a row for one target with the goal unchanged (card 119).
+    MAX_PILLAR_RUN :: 2
+    was_escaping: [3]bool
+    pillar_t:     [3][2]i32
+    pillar_run:   [3]int
+    run_goal:     [3]Builder_Goal
+    top_run := 0
     for frame in 0 ..< SOAK_MINUTES * 3600 {
         update_enemies(gs)
+        for i in 0 ..< 3 {
+            b := &gs.enemies.data[i].builder
+            if b.goal != run_goal[i] && b.goal != .Cooldown { pillar_run[i] = 0; run_goal[i] = b.goal }
+            if b.escaping && !was_escaping[i] {
+                T := b.target_tile if b.goal == .Fetch_Mineral else b.anchor
+                if T != pillar_t[i] { pillar_t[i], pillar_run[i] = T, 0 }
+                pillar_run[i] += 1
+                top_run = max(top_run, pillar_run[i])
+            }
+            was_escaping[i] = b.escaping
+        }
         for k in 0 ..< gs.events.size {
             ev := gs.events.events[(gs.events.head + k) % MAX_EVENTS]
             #partial switch ev.type {
@@ -5854,6 +5872,8 @@ builder_surface_soak_no_pingpong :: proc(t: ^testing.T) {
     log.infof("builder soak: most touched tile = %d at (%d,%d)", top, top_idx % GRID_W, top_idx / GRID_W)
     log.infof("CHURN top %d", top)
     testing.expect(t, top <= MAX_TILE_CHURN, "one tile carved and laid back this often means plans undo themselves")
+    log.infof("builder soak: most pillars in a row for one target = %d", top_run)
+    testing.expect(t, top_run <= MAX_PILLAR_RUN, "a target pillared for again and again means its pillar never found a route")
 }
 
 // ─── Phase 4 AI soak ──────────────────────────────────────────────────────────
@@ -15052,7 +15072,8 @@ no_hop_is_planned_under_a_low_ceiling :: proc(t: ^testing.T) {
 
 // A tunnel under a one-thick slab, with a bump a builder can climb through or
 // dig past.  Climbing here is cheap but cuts the slab it then walks back on;
-// the way round through the natural gap at x=37 leaves the slab whole.
+// the way round through the natural gap at x=37, or a hop off the bump over
+// the hole it cuts, leaves the floor it walks on whole.
 self_undo_world :: proc(gs: ^Game_State) {
     for &tile in gs.world.terrain do tile = .Stone
     for y in 66 ..= 69 do for x in 5 ..= 50 do set_tile(&gs.world, x, y, .Void)
@@ -15071,9 +15092,7 @@ a_plan_goes_round_rather_than_cut_the_floor_it_returns_on :: proc(t: ^testing.T)
     self_undo_world(gs)
     path: Nav_Path
     testing.expect(t, astar_dig(gs, {34, 71}, {24, 69}, 0, 4, &path), "a route exists")
-    east := 0
-    for i in 0 ..< path.len do east = max(east, int(path.tiles[i].x))
-    testing.expect(t, east >= 36, "the plan takes the gap and leaves the slab whole")
+    testing.expect_value(t, plan_self_undos({34, 71}, path), 0)
 }
 
 // Garm conjures his stone, so the short way stays the short way.
@@ -15114,8 +15133,11 @@ a_builder_carves_no_headroom_short_of_its_rise :: proc(t: ^testing.T) {
     e := &gs.enemies.data[id]
     e.pos = {41.1, 71}
     e.grounded = true
-    e.nav.path.tiles[0] = {43, 70}
-    e.nav.path.len = 1
+    // It ticked off the waypoint before the rise from a column short.
+    e.nav.path.tiles[0] = {42, 71}
+    e.nav.path.tiles[1] = {43, 70}
+    e.nav.path.len = 2
+    e.nav.path.cursor = 1
     set_tile(&gs.world, 43, 70, .Void)
     set_tile(&gs.world, 43, 69, .Void)
     builder_exec_action(e, id, &e.nav, gs)
@@ -15216,6 +15238,191 @@ builder_soak_plans_keep_what_they_carve :: proc(t: ^testing.T) {
     testing.expect(t, top <= MAX_TOUCHES, "one tile carved and laid back this often means plans undo themselves")
 }
 
+// Steps of a plan that stand on a tile the plan carved before them: each one
+// is a block laid back on what the builder just cut.  The carve rules are
+// astar_dig's: every step mines what it enters, a rise its own headroom and
+// its landing's, a hop its arc.
+plan_self_undos :: proc(from: [2]i32, path: Nav_Path) -> (undos: int) {
+    carved: [256][2]i32
+    n := 0
+    a := from
+    for i in 0 ..< path.len {
+        b := path.tiles[i]
+        for k in 0 ..< n do if carved[k] == b + {0, 1} { undos += 1; break }
+        cut: [7][2]i32
+        m := 0
+        cut[m] = b; m += 1
+        if is_hop(a, b) {
+            for h in hop_carve_tiles(a, b) { cut[m] = h; m += 1 }
+        } else if b.y == a.y - 1 && b.x != a.x {
+            cut[m] = {a.x, a.y - 1}; cut[m + 1] = {b.x, b.y - 1}; m += 2
+        }
+        for k in 0 ..< m do if n < len(carved) { carved[n] = cut[k]; n += 1 }
+        a = b
+    }
+    return
+}
+
+// A band of rock five wide against the east edge, under a room to the west.
+// Seven rows up and four columns across: a climb meets the wall and must turn.
+edge_band_world :: proc(gs: ^Game_State) {
+    for y in 64 ..= 86 do for x in 176 ..< GRID_W do set_tile(&gs.world, x, y, .Rune_Stone)
+    for y in 71 ..= 80 do for x in 187 ..< GRID_W do set_tile(&gs.world, x, y, .Stone)
+    for y in 72 ..= 73 do for x in 180 ..= 186 do set_tile(&gs.world, x, y, .Void)
+    set_tile(&gs.world, 187, 80, .Void)
+}
+
+// A turn on its own steps lays back the step it climbed through, and the next
+// trip cuts it again: 22 times on one tile in run 7.  A hop turns over it.
+@(test)
+a_climb_at_the_map_edge_turns_without_laying_back_its_steps :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    edge_band_world(gs)
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {187, 80}, {183, 73}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the room")
+    hops := 0
+    a := [2]i32{187, 80}
+    for i in 0 ..< path.len { if is_hop(a, path.tiles[i]) do hops += 1; a = path.tiles[i] }
+    testing.expect(t, hops > 0, "the climb turns with a hop")
+    testing.expect_value(t, plan_self_undos({187, 80}, path), 0)
+}
+
+// Run 7, L0 at the east edge, seed 1027776355: Builder#0 mined (190,77) and
+// laid it back 22 times, with (189,75) and (190,73) the same.  Thirty minutes
+// of the real update put 75 touches on each before hops; now about a dozen.
+@(test)
+builder_soak_turns_at_the_edge_without_undoing :: proc(t: ^testing.T) {
+    SEED :: u32(1027776355)
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, SEED)
+    gs.delta_time = 1.0 / 60.0
+    gs.player.pos = {107, 52}
+
+    MINUTES :: 30
+    MAX_TOUCHES :: 30
+    touches: [GRID_W * GRID_H]int
+    for _ in 1 ..= MINUTES * 3600 {
+        gs.frame += 1
+        update_enemies(gs)
+        for k in 0 ..< gs.events.size {
+            ev := gs.events.events[(gs.events.head + k) % MAX_EVENTS]
+            if ev.type == .Builder_Mined || ev.type == .Builder_Placed do touches[grid_idx(int(ev.tile.x), int(ev.tile.y))] += 1
+        }
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    top, top_idx := 0, 0
+    for c, i in touches do if c > top { top, top_idx = c, i }
+    log.infof("CHURN edge soak: top tile %d at (%d,%d)", top, top_idx % GRID_W, top_idx / GRID_W)
+    testing.expect(t, top <= MAX_TOUCHES, "one tile carved and laid back this often means plans undo themselves")
+}
+
+// Golems keep masonry and Garm's bulk does not thread a carved arc: neither hops.
+@(test)
+only_builders_hop :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    edge_band_world(gs)
+    hops :: proc(path: Nav_Path, from: [2]i32) -> (n: int) {
+        a := from
+        for i in 0 ..< path.len { if is_hop(a, path.tiles[i]) do n += 1; a = path.tiles[i] }
+        return
+    }
+    garm, golem: Nav_Path
+    testing.expect(t, astar_dig(gs, {187, 80}, {183, 73}, 0, MAX_NAV_PATH, &garm), "Garm has a route")
+    testing.expect_value(t, hops(garm, {187, 80}), 0)
+    testing.expect(t, astar_dig(gs, {187, 80}, {183, 73}, 0, 4, &golem, protect_placed = true), "a golem has a route")
+    testing.expect_value(t, hops(golem, {187, 80}), 0)
+}
+
+// After a rise, a step back up onto the headroom it cut stands on air: the
+// bridge rule lays nothing under a waypoint above.  Here that step is the
+// cheap way; the plan hops instead.  With no hop, the step is the only way,
+// and the plan still takes it.
+rise_back_world :: proc(gs: ^Game_State) {
+    for y in 68 ..= 78 do for x in 166 ..= 188 do set_tile(&gs.world, x, y, .Rune_Stone)
+    for y in 72 ..= 73 do for x in 170 ..= 182 do set_tile(&gs.world, x, y, .Void)
+    set_tile(&gs.world, 182, 75, .Void)
+    set_tile(&gs.world, 183, 73, .Void)
+    set_tile(&gs.world, 183, 74, .Stone)
+    set_tile(&gs.world, 182, 74, .Stone)
+    set_tile(&gs.world, 183, 72, .Stone)
+    set_tile(&gs.world, 181, 72, .Stone)
+}
+
+@(test)
+a_plan_does_not_rise_onto_the_headroom_it_cut :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    rise_back_world(gs)
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {182, 75}, {172, 73}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the corridor")
+    testing.expect_value(t, plan_self_undos({182, 75}, path), 0)
+}
+
+// A hop lands on rock: over a gap it would fall back down the hole.
+@(test)
+a_hop_never_lands_on_air :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    rise_back_world(gs)
+    set_tile(&gs.world, 181, 74, .Void)   // a pit where the hop would land
+    set_tile(&gs.world, 181, 75, .Void)
+    path: Nav_Path
+    _ = astar_dig(gs, {182, 75}, {172, 73}, 0, 4, &path)
+    a := [2]i32{182, 75}
+    for i in 0 ..< path.len {
+        b := path.tiles[i]
+        if is_hop(a, b) do testing.expectf(t, is_solid(&gs.world, int(b.x), int(b.y) + 1), "the hop to %v lands on rock", b)
+        a = b
+    }
+}
+
+@(test)
+a_plan_rises_onto_its_own_cut_when_nothing_else_goes :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    rise_back_world(gs)
+    set_tile(&gs.world, 181, 72, .Rune_Stone)   // no hop
+    path: Nav_Path
+    complete: bool
+    testing.expect(t, astar_dig(gs, {182, 75}, {172, 73}, 0, 4, &path, complete = &complete), "a route exists")
+    testing.expect(t, complete, "the plan reaches the corridor")
+}
+
+// A hop's arc is cut from the waypoint it leaves, not from where the body
+// stands: the body ticks that waypoint off from a column short.
+@(test)
+a_hop_carves_its_arc_from_the_waypoint_it_leaves :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 40, 41, 71, 71)
+    e := &gs.enemies.data[id]
+    e.pos = {40.1, 71}
+    e.nav.path.tiles[0] = {41, 71}
+    e.nav.path.tiles[1] = {43, 70}
+    e.nav.path.len = 2
+    e.nav.path.cursor = 1
+    for _ in 0 ..< 10 {
+        e.nav.mine_timer = 0
+        builder_exec_action(e, id, &e.nav, gs)
+    }
+    // Two rows over the takeoff, three in the column between, one over the landing.
+    for c in ([][2]i32{{41, 70}, {41, 69}, {42, 71}, {42, 70}, {42, 69}, {43, 69}}) {
+        testing.expectf(t, !is_solid(&gs.world, int(c.x), int(c.y)), "arc tile %v is cut", c)
+    }
+    testing.expect(t, !is_solid(&gs.world, 43, 70), "the landing is cut")
+    testing.expect(t, is_solid(&gs.world, 43, 71), "the landing's floor stays")
+    testing.expect(t, is_solid(&gs.world, 40, 70), "the body's own ceiling stays")
+    testing.expect(t, !is_hop({41, 71}, {44, 70}), "three columns over is no hop")
+}
+
 // ─── No route ─────────────────────────────────────────────────────────────────
 
 // An open cavern with ore only in its roof and nothing in reach to dig for a
@@ -15291,9 +15498,166 @@ a_pillar_that_rose_leaves_the_next_free :: proc(t: ^testing.T) {
     }
     testing.expect(t, 80 - builder_tile(e).y >= ESCAPE_MIN_RISE, "the pillar rose")
     e.pos.y = 80
+    // Down again by a route, which frees a target its pillar reached.
+    e.nav.path, b.replan_timer = {}, 0
+    builder_travel(e, id, gs, gs.delta_time, {64, 80}, 0)
     testing.expect(t, builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "a lower no-route pillars")
     b.escaping, b.escape_from = false, 50
     testing.expect(t, builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "a failed pillar far off is no bar")
+}
+
+// Run 7, Deep Cave: Builder#2 pillared for (106,64) six times, 543 frames
+// apart, each ending "4 up" at the top of a hop and landing 2 up, until it
+// stood level with the ore and still had no way across.  A floating ore over
+// an open room is that target: the pillar climbs to its row once, and when
+// there is still no route the target is given up.
+@(private = "file")
+floating_ore_room :: proc(gs: ^Game_State) -> (id: int) {
+    id = route_room(gs, 50, 90, 62, 80)
+    // Nothing to dig, so no block in the pocket to bridge with.
+    for y in CAVE_TOP ..< CAVE_BOT do for x in CAVE_LEFT ..< CAVE_RIGHT {
+        if get_tile(&gs.world, x, y) == .Stone do set_tile(&gs.world, x, y, .Rune_Stone)
+    }
+    // A shelf it cannot climb keeps it from standing under the ore.
+    for y in 76 ..= 80 do for x in 76 ..= 90 do set_tile(&gs.world, x, y, .Rune_Stone)
+    set_tile(&gs.world, 85, 66, .Iron_Ore)
+    e := &gs.enemies.data[id]
+    e.pos.x = 70.1
+    b := &e.builder
+    b.anchor, b.den_built, b.goal = {70, 80}, true, .Fetch_Mineral
+    return
+}
+
+@(test)
+a_target_out_of_reach_gets_one_pillar :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := floating_ore_room(gs)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    pillars := 0
+    was := false
+    for _ in 0 ..< 120 * 60 {
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+        if b.escaping && !was do pillars += 1
+        was = b.escaping
+
+        if b.avoid_n > 0 do break
+    }
+    testing.expect_value(t, pillars, 1)
+    testing.expect(t, b.avoid_n > 0 && b.avoid[0] == {85, 66}, "the ore is given up")
+}
+
+// The pillar climbs to the target's row, measured standing, not at the top of
+// a hop.
+@(test)
+a_pillar_toward_a_target_climbs_to_its_row :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 60, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 70}, "no path"), "it pillars")
+    for _ in 0 ..< 60 * 16 {
+        if !b.escaping do break
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, !b.escaping, "the pillar ends")
+    testing.expect(t, e.grounded, "standing on its pillar")
+    testing.expect(t, builder_tile(e).y <= 71, "level with the target")
+    testing.expect(t, gs.enemy_status[id].pillar_aim == {}, "the climb is over")
+    testing.expect(t, gs.enemy_status[id].pillar_spent == {60, 70}, "and spent on its target")
+
+    // It stops a row under the target: from a floor the hops land on that row.
+    id = route_room(gs, 60, 66, 60, 79)
+    e = &gs.enemies.data[id]
+    gs.enemy_status[id] = {}
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 70}, "no path"), "it pillars again")
+    for _ in 0 ..< 60 * 16 {
+        if !e.builder.escaping do break
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect_value(t, builder_tile(e).y, 71)
+}
+
+// A pillar stopped by a roof it cannot eat drops its aim: the next plain
+// escape rises its own ESCAPE_MIN_RISE, not to the old target's row, and
+// spends nothing.  Scene from the review of card 119.
+@(test)
+a_pillar_stopped_by_its_roof_drops_its_aim :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 62, 60, 80)
+    for x in 60 ..= 62 do set_tile(&gs.world, x, 72, .Rune_Stone)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    run :: proc(gs: ^Game_State, b: ^Builder_State) {
+        for _ in 0 ..< 60 * 16 {
+            if !b.escaping do break
+            update_enemies(gs)
+            process_events(gs)
+            eq_clear(&gs.events)
+        }
+    }
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 50}, "no path"), "it pillars")
+    run(gs, b)
+    testing.expect(t, gs.enemy_status[id].pillar_aim == {}, "the roof drops the aim")
+    for x in 60 ..= 62 do set_tile(&gs.world, x, 72, .Void)
+    start := builder_tile(e).y
+    builder_start_escape(e)
+    run(gs, b)
+    testing.expect(t, start - builder_tile(e).y < 2*ESCAPE_MIN_RISE, "a plain escape rises its own height")
+    testing.expect(t, gs.enemy_status[id].pillar_spent == {}, "and spends no target")
+}
+
+// A pillar the clock stopped short of the row is not spent: the next
+// no-route for that target may climb again.
+@(test)
+a_pillar_cut_short_is_not_spent :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 60, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 62}, "no path"), "it pillars")
+    b.escape_timer = ESCAPE_MAX_TIME
+    update_enemies(gs)
+    testing.expect(t, !b.escaping, "the clock ends it")
+    testing.expect(t, gs.enemy_status[id].pillar_aim == {}, "the climb is over")
+    testing.expect(t, gs.enemy_status[id].pillar_spent == {}, "short of the row, not spent")
+}
+
+// A second pillar for the same target is refused until a route is found; one
+// for another target is not, and a route makes the next pillar welcome again.
+@(test)
+a_target_gets_a_second_pillar_only_after_a_route :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    id := route_room(gs, 60, 66, 60, 80)
+    e := &gs.enemies.data[id]
+    b := &e.builder
+    testing.expect(t, builder_pillar_toward(e, id, gs, {60, 70}, "no path"), "the first pillar")
+    for _ in 0 ..< 60 * 16 {
+        if !b.escaping do break
+        update_enemies(gs)
+        process_events(gs)
+        eq_clear(&gs.events)
+    }
+    testing.expect(t, builder_tile(e).y <= 71, "it reached the row")
+    testing.expect(t, !builder_pillar_toward(e, id, gs, {60, 70}, "no path"), "the same target again")
+    testing.expect(t, builder_pillar_toward(e, id, gs, {62, 50}, "no path"), "another target")
+    b.escaping, b.escape_from = false, 0
+    e.nav.path = {}
+    b.replan_timer = 0
+    builder_travel(e, id, gs, gs.delta_time, {64, 80}, 0)
+    testing.expect(t, e.nav.path.len > 0, "a route along the floor")
+    testing.expect(t, builder_pillar_toward(e, id, gs, {62, 50}, "no path"), "after a route, a pillar again")
 }
 
 // The ring holds four: five bad targets in a row once cycled for ever while a

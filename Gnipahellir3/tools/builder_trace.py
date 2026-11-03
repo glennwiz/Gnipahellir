@@ -6,7 +6,9 @@ Reports goal time shares (from the 5 s breadcrumbs), tiles touched repeatedly,
 place-then-mine pairs, A-B-A cycles of goal and position, time still while not
 idle, strikes, give-ups, dens and hoards. Old logs name no Builder on `mines`,
 `places` and `clears climb` lines, so those go to the nearest Builder on the
-breadcrumbs and are marked ~ in the output; logs that carry the id do not need it.
+breadcrumbs and are marked ~ in the output, Vargr and Raider digs included. Logs
+from card 120 on name kind and slot (`Builder#3 mines`, `Vargr#7 mines`): a
+Builder's line goes to that Builder and any other kind's is left out.
 
 A world only ticks while the player is on its level, so a level's clock here is
 frames with the player there. A new life is a new world, and frames restart.

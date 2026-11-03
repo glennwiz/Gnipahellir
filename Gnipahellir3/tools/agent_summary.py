@@ -43,8 +43,8 @@ for who, track in pos.items():
 # The same tile mined and placed over and over.
 churn = collections.Counter()
 for line in log:
-    if m := re.search(r"(Builder#?\d*) (mines|places) \((\d+),(\d+)\)", line):
-        churn[(m.group(3), m.group(4))] += 1
+    if m := re.search(r"Builder#?\d* (?:mines|places at) \((\d+),(\d+)\)", line):
+        churn[(m.group(1), m.group(2))] += 1
 for tile, n in churn.most_common(5):
     if n >= 8:
         print(f"churn: tile {tile} mined or placed {n} times by builders")

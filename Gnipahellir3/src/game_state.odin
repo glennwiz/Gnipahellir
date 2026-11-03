@@ -140,6 +140,8 @@ Enemy_Status :: struct {
     burn_charge: f32,  // toward the next FLAME_BURN_TICK
     slow:        f32,  // seconds still at WATER_SLOW
     dig_tile:    [2]i32,  // placed block whose dig time is running (builder_dig_ready)
+    pillar_aim:   [2]i32, // target the no-route pillar in flight climbs toward; {} = none
+    pillar_spent: [2]i32, // target whose pillar reached its row, until a route (builder_pillar_toward)
 }
 
 Enemy_Store :: struct {
@@ -395,6 +397,7 @@ Projectile :: struct {
     damage: int,
     age:    f32,   // seconds alive; dies at PROJECTILE_LIFETIME
     drip:   bool,  // a Rain Wisp's drop: soaks the player, passes through enemies
+    born:   [2]i32, // the tile it spawned in: terrain there never stops it
 }
 
 Projectile_Store :: struct {
@@ -562,7 +565,7 @@ Input_State :: struct {
 
 // ─── Agent drive (agent_api.odin) ─────────────────────────────────────────────
 
-Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe }
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe, Monument, Crew }
 
 // One act: held input for its frames, one-shots on the first.  Tiles are only
 // meaningful under their has_ flag.
@@ -576,11 +579,16 @@ Agent_Command :: struct {
     has_place: bool,
     has_use:   bool,
     has_reclaim: bool,
+    has_zone:  bool,  // a command-wand drag from zone_from to zone_to
+    has_at:    bool,  // the monument anchor a command-wand click marks
     warp:      bool,
     mine:      [2]i32,
     place:     [2]i32,
     use:       [2]i32,
     reclaim:   [2]i32,
+    zone_from: [2]i32,
+    zone_to:   [2]i32,
+    at:        [2]i32,
     verb:      Agent_Verb,
     verb_arg:  i32,
     feed_count: i32,  // 0: the whole stack
