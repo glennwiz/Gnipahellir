@@ -355,7 +355,7 @@ builder_dig_ready :: proc(e: ^Enemy, id: int, gs: ^Game_State, T: [2]i32) -> boo
     status.dig_tile  = T
     e.nav.mine_timer = secs
     e.vel.x = 0
-    log_action(gs, "Enemy#%d digs at placed %v (%d,%d), %.1f s", id, get_tile(&gs.world, int(T.x), int(T.y)), T.x, T.y, secs)
+    log_action(gs, "Enemy#%d(%v) digs at placed %v (%d,%d), %.1f s", id, e.kind, get_tile(&gs.world, int(T.x), int(T.y)), T.x, T.y, secs)
     return false
 }
 
@@ -1489,7 +1489,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
                 if !builder_dig_ready(e, id, gs, c) do return true
                 dropped := smash_tile(gs, cx, cy)
                 eq_push(&gs.events, Event{type = .Builder_Mined, tile = c})
-                log_action(gs, "Builder clears climb tile (%d,%d)", cx, cy)
+                log_action(gs, "%v#%d clears climb tile (%d,%d)", e.kind, id, cx, cy)
                 if !dropped do e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
                 nav.mine_timer = MINE_TIME
                 e.vel.x = 0
@@ -1503,7 +1503,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
         if !builder_dig_ready(e, id, gs, target) do return true
         dropped := smash_tile(gs, tx, ty)
         eq_push(&gs.events, Event{type = .Builder_Mined, tile = {i32(tx), i32(ty)}})
-        log_action(gs, "Builder mines (%d,%d)", tx, ty)
+        log_action(gs, "%v#%d mines (%d,%d)", e.kind, id, tx, ty)
         if !dropped do e.builder.pocket = min(e.builder.pocket + 1, POCKET_MAX)
         nav.mine_timer = MINE_TIME
         e.vel.x = 0
@@ -1519,7 +1519,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
     if target.y >= bt.y && in_bounds(tx, ty+1) && !is_solid(&gs.world, tx, ty+1) &&
        builder_may_lay(get_tile(&gs.world, tx, ty+1)) {
         if e.builder.pocket == 0 {
-            log_action(gs, "Builder out of blocks at (%d,%d) - replans", tx, ty+1)
+            log_action(gs, "%v#%d out of blocks at (%d,%d) - replans", e.kind, id, tx, ty+1)
             nav.path = {}
             e.vel.x  = 0
             return true
@@ -1527,7 +1527,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
         e.builder.pocket -= 1
         set_tile(&gs.world, tx, ty+1, .Stone)
         eq_push(&gs.events, Event{type = .Builder_Placed, tile = {i32(tx), i32(ty+1)}})
-        log_action(gs, "Builder places at (%d,%d)", tx, ty+1)
+        log_action(gs, "%v#%d places at (%d,%d)", e.kind, id, tx, ty+1)
         nav.mine_timer = MINE_TIME
         e.vel.x = 0
 
@@ -1540,7 +1540,7 @@ builder_exec_action :: proc(e: ^Enemy, id: int, nav: ^Enemy_Nav, gs: ^Game_State
             if e.builder.place_reps >= PLACE_REPS_LOOP {
                 e.builder.place_reps  = 0
                 builder_start_escape(e)
-                log_action(gs, "Builder loops at (%d,%d) - pillars up and out", tx, ty+1)
+                log_action(gs, "%v#%d loops at (%d,%d) - pillars up and out", e.kind, id, tx, ty+1)
             }
         } else {
             e.builder.last_place = pt

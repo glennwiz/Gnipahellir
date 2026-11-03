@@ -1,5 +1,6 @@
 package game
 
+import "core:fmt"
 import "core:strings"
 import "core:testing"
 
@@ -365,4 +366,72 @@ a_large_wave_at_a_placed_wall_stays_inside_the_frame :: proc(t: ^testing.T) {
         eq_clear(&gs.events)
     }
     testing.expect_value(t, most, MAX_NAV_SEARCHES_PER_FRAME)
+}
+
+// Card 120: every dig, carve and bridge line names the digger's kind and slot,
+// so a Vargr's work is never read as some Builder's.
+dig_log_after :: proc(gs: ^Game_State, e: ^Enemy) -> string {
+    gs.debug_log.pos = 0
+    e.nav.mine_timer = 0
+    builder_exec_action(e, 0, &e.nav, gs)
+    return string(gs.debug_log.buf[:gs.debug_log.pos])
+}
+
+@(test)
+dig_lines_name_the_digger :: proc(t: ^testing.T) {
+    when !GAME_DEBUG do return
+    for kind in ([]Enemy_Kind{.Builder, .Vargr}) {
+        gs := turret_test_state()
+        defer free(gs)
+        e := smash_test_builder(gs)
+        e.kind = kind
+        bt := builder_tile(e)
+        ahead := bt + {1, 0}
+        want :: proc(t: ^testing.T, logged, line: string) {
+            testing.expectf(t, strings.contains(logged, line), "wants %q in %q", line, logged)
+        }
+
+        set_tile(&gs.world, int(ahead.x), int(ahead.y), .Stone)
+        e.nav.path = {tiles = {0 = ahead}, len = 1}
+        want(t, dig_log_after(gs, e), fmt.tprintf("%v#0 mines (%d,%d)", kind, ahead.x, ahead.y))
+
+        set_tile(&gs.world, int(bt.x), int(bt.y) - 1, .Stone)
+        e.nav.path = {tiles = {0 = bt + {1, -1}}, len = 1}
+        want(t, dig_log_after(gs, e), fmt.tprintf("%v#0 clears climb tile (%d,%d)", kind, bt.x, bt.y - 1))
+
+        set_tile(&gs.world, int(ahead.x), int(ahead.y), .Void)
+        e.nav.path = {tiles = {0 = ahead}, len = 1}
+        e.builder.pocket = 0
+        set_tile(&gs.world, int(ahead.x), int(ahead.y) + 1, .Void)
+        want(t, dig_log_after(gs, e), fmt.tprintf("%v#0 out of blocks at (%d,%d)", kind, ahead.x, ahead.y + 1))
+
+        logged: string
+        for _ in 0 ..< PLACE_REPS_LOOP {
+            set_tile(&gs.world, int(ahead.x), int(ahead.y) + 1, .Void)
+            e.nav.path = {tiles = {0 = ahead}, len = 1}
+            e.builder.pocket = 1
+            logged = dig_log_after(gs, e)
+            want(t, logged, fmt.tprintf("%v#0 places at (%d,%d)", kind, ahead.x, ahead.y + 1))
+        }
+        want(t, logged, fmt.tprintf("%v#0 loops at (%d,%d)", kind, ahead.x, ahead.y + 1))
+
+        gs.debug_log.pos = 0
+        dig_place(gs, int(ahead.x), int(ahead.y), .Door)
+        builder_dig_ready(e, 0, gs, ahead)
+        want(t, string(gs.debug_log.buf[:gs.debug_log.pos]), fmt.tprintf("Enemy#0(%v) digs at placed Door", kind))
+    }
+}
+
+// Card 120: an orb's impact is in the trace, so a miss can be followed.
+@(test)
+a_projectile_impact_is_in_the_log :: proc(t: ^testing.T) {
+    when !GAME_DEBUG do return
+    gs := turret_test_state()
+    defer free(gs)
+    gs.debug_log.pos = 0
+    eq_push(&gs.events, Event{type = .Projectile_Impact, tile = {70, 40}})
+    process_events(gs)
+    logged := string(gs.debug_log.buf[:gs.debug_log.pos])
+    testing.expectf(t, strings.contains(logged, "evt Projectile_Impact") && strings.contains(logged, "tile=(70,40)"),
+        "an impact reads in action.log: %q", logged)
 }
