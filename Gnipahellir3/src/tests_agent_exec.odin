@@ -3282,7 +3282,7 @@ hero_work_goals_fail_at_the_start :: proc(t: ^testing.T) {
         {fmt.tprintf(`{{"do":"place","item":"Barrel","at":%s}}`, tile(x0 + 3, G - 1)), "no_item: no Barrel"},
         {`{"do":"collect"}`, "no_station: no smelter"},
         {`{"do":"withdraw","item":"Iron_Ore"}`, "no_station: no barrel holding"},
-        {fmt.tprintf(`{{"do":"withdraw","at":%s}}`, tile(x0 + 3, G - 1)), "no_station: no barrel, silo or smelter"},
+        {fmt.tprintf(`{{"do":"withdraw","at":%s}}`, tile(x0 + 3, G - 1)), "no_station: no barrel, chest, silo or smelter"},
     }
     for f in fails {
         id := work_test_run(t, link, gs, f[0], 120)
@@ -4007,7 +4007,12 @@ hero_mine_passes_over_an_ore_it_cannot_reach :: proc(t: ^testing.T) {
         id = work_test_run(t, link, gs, `{"do":"mine","item":"Iron_Ore"}`, 60 * 60)
         work_test_expect_failed(t, link, gs, id, "unreachable: no Iron_Ore in")
         id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 4, G - 7), 60 * 60)
-        work_test_expect_failed(t, link, gs, id, "unsafe")  // its top, over the pillar of barrels
+        // Its top, over the pillar of barrels: the walks went through the
+        // barrels from the side, as the body does, and dug none (card 164;
+        // before, the first walk dug the pillar out and this read unsafe), so
+        // the pillar stands and nothing climbs it.
+        for y in G - 6 ..< G do testing.expectf(t, get_tile(&gs.world, x0 + 4, y) == .Barrel, "the pillar at row %d", y)
+        work_test_expect_failed(t, link, gs, id, "unreachable")
         id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 - 3, G - 1), 60 * 60)
         work_test_expect_failed(t, link, gs, id, "unreachable")
     }
@@ -6331,4 +6336,356 @@ hero_plan_takes_no_hurtful_drop_while_a_safe_way_reaches :: proc(t: ^testing.T) 
     testing.expect(t, hero_plan(gs, {X, Y - 1}, foot, path) && hurtful(path), "the tunnel shut: the drop")
     gs.player.hp = 1
     testing.expect(t, !hero_plan(gs, {X, Y - 1}, foot, path), "at 1 hp the fall is refused")
+}
+
+// Card 164, item 17: a goal paused past HERO_PAUSE_MAX_S at a stretch fails
+// held, naming what holds it.  The hero, hurt and unarmed, is shut in a room
+// with a beetle in a pit: it can run nowhere out of HERO_THREAT_FAR.
+@(test)
+hero_goal_paused_too_long_fails_held :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    gs.player.hp = 1
+    for x in ([2]int{x0 - 3, x0 + 11}) do for y in G - 6 ..< G do set_tile(&gs.world, x, y, .Stone)
+    for x in x0 + 3 ..= x0 + 5 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Air)
+    fight_test_body(gs, .Ember_Beetle, x0 + 4, G + 3)
+    exec_test_frames(link, gs, 5)
+    gs.hero.paused_t = HERO_PAUSE_MAX_S - 0.5  // an earlier stretch's: each pause counts from its own start
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 9, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 6000 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && reason == fmt.tprintf("held: paused by flee for %d s", int(HERO_PAUSE_MAX_S)), "%s %s after %d frames", status, reason, frames)
+    testing.expectf(t, f32(frames) * AGENT_STEP > HERO_PAUSE_MAX_S, "not before its time: %d frames", frames)
+}
+
+// Card 164, item 2: a scroll chest a player opens is a station for withdraw,
+// by its tile and by the item: a chest never opened holds its own scroll, an
+// opened one what its record holds.
+@(test)
+hero_withdraws_from_a_scroll_chest :: proc(t: ^testing.T) {
+    for by_tile in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        set_tile(&gs.world, x0 + 3, G - 1, .Rune_Scroll_Chest_A)
+        exec_test_frames(link, gs, 5)
+        line := fmt.tprintf(`{{"do":"withdraw","at":[%d,%d],"item":"Rune_Scroll_A"}}`, x0 + 3, G - 1) if by_tile else `{"do":"withdraw","item":"Rune_Scroll_A"}`
+        id := work_test_run(t, link, gs, line, 900)
+        work_test_expect_done(t, link, gs, id)
+        testing.expectf(t, inventory_count(&gs.player.inventory, .Rune_Scroll_A) == 1, "%s: the scroll in the bag", line)
+        // Opened now and empty of it: no scroll left, said so.
+        id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"withdraw","at":[%d,%d],"item":"Rune_Scroll_A"}}`, x0 + 3, G - 1), 300)
+        work_test_expect_failed(t, link, gs, id, "no_item: the chest holds no Rune_Scroll_A")
+    }
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 + 3, G - 1, .Rune_Scroll_Chest_B)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"withdraw","at":[%d,%d],"item":"Rune_Scroll_A"}}`, x0 + 3, G - 1), 300)
+    work_test_expect_failed(t, link, gs, id, "no_item: the chest holds no Rune_Scroll_A")
+    id = work_test_run(t, link, gs, `{"do":"store","item":"Wood_Log"}`, 300)
+    work_test_expect_failed(t, link, gs, id, "no_station")
+}
+
+// Card 164, items 4, 6, 10 and 19: a place on the tile the hero's body is
+// over steps aside off it and sets it down; a body held over it fails with
+// the reason.
+@(test)
+hero_place_under_its_own_body_steps_aside :: proc(t: ^testing.T) {
+    for it in ([2]Item{.Stone_Block, .Crafting_Bench}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.pos.x = f32(x0) + 0.5  // feet on x0, the body over x0 + 1 too
+        exec_test_frames(link, gs, 5)
+        go_test_give(gs, it, 2)
+        at := [2]i32{i32(x0 + 1), i32(G - 1)}
+        testing.expect(t, tile_overlaps_player(gs, int(at.x), int(at.y)), "the body is over it")
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"%v","at":[%d,%d]}}`, it, at.x, at.y), 600)
+        work_test_expect_done(t, link, gs, id)
+        testing.expectf(t, get_tile(&gs.world, int(at.x), int(at.y)) == item_table[it].place_tile, "%v set down", it)
+    }
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    go_test_give(gs, .Stone_Block, 2)
+    held := f32(x0) + 0.5
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"place","item":"Stone_Block","at":[%d,%d]}}]}}`, x0 + 1, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    for f := 0; f < 600 && agent_goals_busy(&link.goals); f += 1 {
+        gs.player.pos.x = held
+        exec_test_frames(link, gs, 1)
+    }
+    work_test_expect_failed(t, link, gs, id, fmt.tprintf("blocked: the body stays over [%d,%d]", x0 + 1, G - 1))
+}
+
+// Card 164, item 15 (playtest 134: an act would not step off a sky island,
+// 'a 44-tile drop ahead').  A fall through the sky's floor (the body's top
+// past SKY_FALL_Y before the feet land) reaches the surface unhurt: the act
+// walks off.  A drop onto ground above that line still stops it, and so does
+// the same hole on the surface.
+@(test)
+hero_steps_off_a_sky_island :: proc(t: ^testing.T) {
+    Case :: struct{level, land: int, through: bool}
+    for c in ([?]Case{{LEVEL_SKY, GRID_H, true}, {LEVEL_SKY, SKY_FALL_Y + 2, true}, {LEVEL_SKY, SKY_FALL_Y + 1, false}, {LEVEL_SURFACE, GRID_H, false}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.level_index = c.level
+        for x in x0 + 4 ..= x0 + 8 do for y in G ..< GRID_H do set_tile(&gs.world, x, y, .Air if y < c.land else .Stone)
+        exec_test_frames(link, gs, 10)
+        hp := gs.player.hp
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":120}]}`)
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for f := 0; f < 400 && gs.level_index == c.level && (c.through || agent_goals_busy(&link.goals)); f += 1 do exec_test_frames(link, gs, 1)
+        status, reason := go_test_status(link, gs, id)
+        if c.through {
+            testing.expectf(t, gs.level_index == LEVEL_SURFACE && gs.player.hp == hp, "%v: fell through to the surface: level %d, hp %d of %d, act %s %s", c, gs.level_index, gs.player.hp, hp, status, reason)
+        } else {
+            testing.expectf(t, status == "failed" && reason == fmt.tprintf("a %d-tile drop ahead", c.land - G), "%v: stopped: %s %s", c, status, reason)
+        }
+    }
+}
+
+// Card 164: the brief tells the held fail.
+@(test)
+agent_brief_tells_held :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    brief := agent_write_brief(link, gs)
+    want := fmt.tprintf("more than %.0f s at a stretch fails held", HERO_PAUSE_MAX_S)
+    testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
+}
+
+// Card 164, item 17: a beetle in plain sight that cannot come (held where it
+// stands, as one walled off by a pond).  The hero's own walk toward it is not
+// it coming: an unarmed go stopping 6 tiles short is not held.
+@(test)
+hero_unarmed_goal_is_not_held_by_its_own_walk_at_a_beetle :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    e := fight_test_body(gs, .Ember_Beetle, x0 + 12, G)
+    held := gs.enemies.data[e].pos
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 6, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    noticed := false
+    for f := 0; f < 900 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        gs.enemies.data[e].pos, gs.enemies.data[e].vel = held, {}
+        if th := hero_threat(&gs.hero); th != nil && th.slot == e do noticed = true
+    }
+    status, reason := go_test_status(link, gs, id)
+    paused := hero_test_count(exec_test_pushed(link), `"goal_paused"`)
+    testing.expect(t, noticed, "the beetle is noticed")
+    testing.expectf(t, status == "done" && paused == 0, "6 short of the beetle: %s %s, paused %d", status, reason, paused)
+}
+
+// Card 164, item 17: the pause clock runs only while the goal is paused.  A
+// goal that is never paused does not fail held, whatever the clock read.
+@(test)
+hero_goal_never_paused_is_never_held :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    gs.hero.paused_t = HERO_PAUSE_MAX_S + 1
+    id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 8, G - 1), 600)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s", status, reason)
+}
+
+// Card 164 (rework): a 2-high tunnel with a structure, a scroll chest or a
+// door in it is a route: the body walks through each from the side, so the
+// walk does too, and the tile is still there after.
+@(test)
+hero_walks_through_a_walk_through_tile_in_a_tunnel :: proc(t: ^testing.T) {
+    for tile in ([3]Tile_Type{.Rune_Scroll_Chest_A, .Crafting_Bench, .Door}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 2 ..= x0 + 12 do set_tile(&gs.world, x, G - 3, .Stone)
+        set_tile(&gs.world, x0 + 4, G - 1, tile)
+        exec_test_frames(link, gs, 5)
+        id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 9, G - 1), 900)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "%v: %s %s at %v", tile, status, reason, gs.player.pos)
+        testing.expectf(t, get_tile(&gs.world, x0 + 4, G - 1) == tile, "%v: still there", tile)
+    }
+}
+
+// The walk into a structure stands on its floor: one with nothing under it
+// is no step (the body would fall through the column), nor water or lava.
+@(test)
+hero_walk_in_needs_a_floor :: proc(t: ^testing.T) {
+    gs, _ := exec_test_world()
+    defer free(gs)
+    x0, G := hero_test_arena(gs)
+    f := [2]i32{i32(x0 + 4), i32(G - 1)}
+    set_tile(&gs.world, x0 + 4, G - 1, .Rune_Scroll_Chest_A)
+    testing.expect(t, hero_walk_in(&gs.world, f), "in the chest, on the floor")
+    testing.expect(t, !hero_stand(&gs.world, f), "no stand: the chest is no open tile")
+    set_tile(&gs.world, x0 + 4, G - 2, .Crafting_Bench)
+    testing.expect(t, hero_walk_in(&gs.world, f), "a bench at the head as well")
+    set_tile(&gs.world, x0 + 4, G - 2, .Stone)
+    testing.expect(t, !hero_walk_in(&gs.world, f), "stone at the head")
+    for wet in ([2]Tile_Type{.Water, .Lava}) do for row in ([2]int{G - 1, G - 2}) {
+        set_tile(&gs.world, x0 + 4, G - 1, .Air)
+        set_tile(&gs.world, x0 + 4, G - 2, .Air)
+        set_tile(&gs.world, x0 + 4, row, wet)
+        testing.expectf(t, !hero_walk_in(&gs.world, f), "%v at row %d", wet, row)
+    }
+    set_tile(&gs.world, x0 + 4, G - 1, .Air)
+    set_tile(&gs.world, x0 + 4, G - 2, .Air)
+    testing.expect(t, hero_walk_in(&gs.world, f), "open")
+    set_tile(&gs.world, x0 + 4, G, .Air)
+    testing.expect(t, !hero_walk_in(&gs.world, f), "no floor")
+}
+
+// Card 164 (rework): an act's pick that cannot reach the tile it could work
+// says so in a toast, once; one that reaches it says nothing.  Hovering in
+// flight 1.2 tiles or more over the floor, the floor is out of the pick's reach.
+@(test)
+hero_act_mine_out_of_reach_says_so :: proc(t: ^testing.T) {
+    reach_toasts :: proc(gs: ^Game_State) -> (n: int) {
+        for i in 0 ..< gs.notify.count {
+            it := &gs.notify.items[i]
+            if strings.has_prefix(string(it.text[:it.len]), "Out of reach") do n += 1
+        }
+        return
+    }
+    for lift in ([4]f32{0, 0.5, 1.2, 2.5}) do for frames in ([2]int{1, 120}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, .Pickaxe)
+        exec_test_frames(link, gs, 5)
+        if lift > 0 {
+            gs.flight_t = 100
+            gs.player.pos.y = f32(G) - PLAYER_H - lift
+            gs.player.vel = {}
+        }
+        gs.notify.count = 0
+        go_test_run(link, gs, fmt.tprintf(`{{"do":"act","mine":[%d,%d],"frames":%d}}`, x0, G, frames), 200)
+        far := lift > 1
+        testing.expectf(t, reach_toasts(gs) == (1 if far else 0), "lift %v, %d frames: %d toasts", lift, frames, reach_toasts(gs))
+        if frames > 1 do testing.expectf(t, is_solid(&gs.world, x0, G) == far, "lift %v: the floor", lift)
+    }
+}
+
+// The toast is for a tile the pick works and does not reach: a mine at air,
+// at a structure, bare-handed at stone, a wand's or a sword's is no reach to
+// report, nor a walkable tile the body stands in; bare hands at a far tree are.
+@(test)
+hero_act_mine_reach_note_only_for_work :: proc(t: ^testing.T) {
+    Case :: struct { tile: Tile_Type, held: Item, in_body: bool, toasts: int }
+    cases := [?]Case{
+        {.Air, .Pickaxe, false, 0}, {.Crafting_Bench, .Pickaxe, false, 0}, {.Stone, .None, false, 0},
+        {.Wood, .Mine_Wand, false, 0}, {.Wood, .Sword, false, 0}, {.Wood, .None, false, 1},
+        {.Green_Cave_Mushroom, .Pickaxe, true, 0},
+    }
+    for c in cases {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory.selected = -1
+        if c.held != .None {
+            go_test_give(gs, c.held, 1)
+            gs.player.inventory.selected = hero_item_slot(gs, c.held)
+        }
+        gs.player.mana = 0
+        at := [2]int{x0, G - 1} if c.in_body else {x0 + 6, G - 3}
+        set_tile(&gs.world, at.x, at.y, c.tile)
+        exec_test_frames(link, gs, 5)
+        gs.notify.count = 0
+        go_test_run(link, gs, fmt.tprintf(`{{"do":"act","mine":[%d,%d],"frames":30}}`, at.x, at.y), 100)
+        n := 0
+        for i in 0 ..< gs.notify.count {
+            it := &gs.notify.items[i]
+            if strings.has_prefix(string(it.text[:it.len]), "Out of reach") do n += 1
+        }
+        testing.expectf(t, n == c.toasts, "%v with %v: %d toasts", c.tile, c.held, n)
+    }
+}
+
+// Card 164 (rework): a mine goal while hovering in flight works a tile in
+// reach of the hover, and fails at once naming the hover for one out of it,
+// where it used to walk on the spot until "blocked".  A hover exactly a tile
+// up has air under its feet row; one half a tile up still walks, as does the
+// body on the ground in flight.
+@(test)
+hero_mine_from_the_hover_or_says_why_not :: proc(t: ^testing.T) {
+    Case :: struct { lift: f32, at: [2]int, done: bool, grounded: bool }
+    cases := [?]Case{
+        {2.5, {0, 0}, false, true},  // flown up from the ground: grounded still says so
+        {2.5, {1, -3}, true, false}, {1.2, {4, 0}, false, false}, {1, {4, 0}, false, false},
+        {0.5, {4, 0}, true, true},   // low over the floor: the feet tile stands, it walks
+        {0, {4, 0}, true, true},
+    }
+    for c in cases {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, .Pickaxe)
+        tile := [2]int{x0 + c.at.x, G + c.at.y}
+        if c.at.y < 0 do set_tile(&gs.world, tile.x, tile.y, .Stone)  // beside the hover
+        exec_test_frames(link, gs, 5)
+        gs.flight_t = 1000
+        if c.lift > 0 {
+            gs.player.pos.y = f32(G) - PLAYER_H - c.lift
+            gs.player.vel = {}
+            gs.player.grounded = c.grounded  // flight keeps whatever grounded last was
+        }
+        id, frames := go_test_run(link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, tile.x, tile.y), 1000)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, (status == "done") == c.done, "lift %v at %v: %s %s", c.lift, c.at, status, reason)
+        testing.expectf(t, is_solid(&gs.world, tile.x, tile.y) != c.done, "lift %v at %v: the tile", c.lift, c.at)
+        if !c.done {
+            testing.expectf(t, reason == fmt.tprintf("unreachable: [%d,%d] is out of reach of the hover in flight", tile.x, tile.y), "lift %v: %s", c.lift, reason)
+            testing.expectf(t, frames < 10, "lift %v: failed in %d frames", c.lift, frames)
+        }
+    }
+}
+
+// A body over two columns in flight stands on a floor under either one; with
+// none under its feet row it hovers, and out of flight it never does.
+@(test)
+hero_hovering_reads_both_columns :: proc(t: ^testing.T) {
+    gs, _ := exec_test_world()
+    defer free(gs)
+    x0, G := hero_test_arena(gs)
+    gs.flight_t = 100
+    set_tile(&gs.world, x0 + 1, G - 1, .Stone)
+    gs.player.pos = {f32(x0) + 0.5, f32(G - 1) - PLAYER_H}  // over x0 and x0 + 1, feet on the block's row top
+    testing.expect(t, !hero_hovering(gs), "the block under the second column")
+    set_tile(&gs.world, x0 + 1, G - 1, .Air)
+    set_tile(&gs.world, x0, G - 1, .Stone)
+    testing.expect(t, !hero_hovering(gs), "the block under the first column")
+    set_tile(&gs.world, x0, G - 1, .Air)
+    testing.expect(t, hero_hovering(gs), "air under both")
+    gs.flight_t = 0
+    testing.expect(t, !hero_hovering(gs), "out of flight")
 }

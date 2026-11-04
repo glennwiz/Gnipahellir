@@ -110,7 +110,6 @@ in_pick_reach :: proc(p: ^Player, tile: [2]i32) -> bool {
 // cone's 45° edge, and a cursor on the head block mined the block above it
 // instead.  The boundary ran straight through the hovered tile, which is why
 // aiming felt almost-right rather than wrong.
-@(private = "file")
 pick_target :: proc(p: ^Player, mouse_world: [2]f32) -> (target: [2]i32, ok: bool) {
 	col := i32(p.pos.x + PLAYER_W * 0.5)
 	top := i32(p.pos.y + 0.1)

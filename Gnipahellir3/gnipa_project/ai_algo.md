@@ -200,9 +200,10 @@ never touches world state.
 - **Threats**: every enemy inside the watcher's framing (`AGENT_VIEW_W` x
   `AGENT_VIEW_H` round the hero: what a player sees on screen, no more),
   nearest first, at most `HERO_THREATS_MAX`. Each has kind, distance, signed
-  dx, closing (it moved toward the hero, or came nearer, within
-  `HERO_CLOSING_MEMORY_S`: a Vargr hunts in stops and starts, and a pause is
-  not a retreat), in_line (a clear
+  dx, closing (it moved toward the hero, or came nearer by its own move,
+  within `HERO_CLOSING_MEMORY_S`: a Vargr hunts in stops and starts, and a
+  pause is not a retreat; the hero walking at one standing still is not it
+  coming, card 164, playtest 136's beetle in a pit), in_line (a clear
   `sight_line_clear` between the two), the damage of one blow
   (`hero_threat_damage`, a roamer's from `roamer_table`, a Draugr's a quarter
   of max hp) and how long it has been in sight. The risen hero holding its
@@ -216,7 +217,9 @@ never touches world state.
 - **Danger map**: `2*HERO_SENSE_REACH+1` columns round the hero, each judged
   as a step from the feet row (`hero_column`): a wall, the drop below, the hp
   the fall rule in `update_player` takes for it (`SAFE_FALL_TILES`,
-  `FALL_TILES_PER_HP`; water breaks the fall), a burn (a `.Damaging` tile at
+  `FALL_TILES_PER_HP`; water breaks the fall; in the sky a fall whose body
+  passes `SKY_FALL_Y` before it lands is none, as the fall through the clouds
+  lands on the surface unhurt, card 164), a burn (a `.Damaging` tile at
   the step or the landing), and a loose block (a faller) hanging over the head.
 - **Safe ground**: a ring of the last `HERO_SAFE_MAX` tiles the hero stood on,
   grounded, not burning, no damaging enemy nearer than `HERO_SAFE_CLEAR`,
@@ -255,7 +258,10 @@ more than `HERO_HUNTED_PAUSES` times by a hunting threat (`Hunt` or
 `Wave_Hunt`) still in sight fails "hunted: a Vargr keeps coming" (card 158:
 playtest 129's go flapped between goal and flight 884 times); one on an
 errand of its own is fled from but never counted, and the count clears when
-nothing is in sight.
+nothing is in sight. A goal paused by any behaviour more than
+`HERO_PAUSE_MAX_S` at a stretch fails "held: paused by flee for 60 s" (card
+164: playtest 136's hero, boxed in by trunks and a pond, held every goal on
+flight for 104k frames).
 Flight and idle dig out (cornered with a pick) never through the player's
 placed blocks, and never a tile whose loss would drop the hero far
 (`hero_dig_safe`; card 158: playtest 127's hero dug out its own shelter and
@@ -321,7 +327,7 @@ the one below is solid. Moves and their price:
 
 | Move | When | Cost |
 |---|---|---|
-| walk | the next column, level or a step up | 1, a step 1.5 |
+| walk | the next column, level or a step up; level, also into a structure, scroll chest or door the body walks through from the side (`hero_walk_in`, card 164: a 2-high tunnel with a chest in it was `no_route`) | 1, a step 1.5 |
 | jump | a step two up, headroom clear | 2 + `HERO_NAV_JUMP_COST` |
 | drop | off an edge to wherever it lands | 1 + 0.3/tile + `HERO_NAV_HP_COST` per hp; never onto a burn or water, never one that kills or leaves hp under `HERO_LOW_HP_FRAC` |
 | gap | a running jump over open columns, landing up to `HERO_GAP_MAX` over | columns + `HERO_NAV_JUMP_COST` |
@@ -407,12 +413,12 @@ with the input a player gives.
 
 | Kind | Fields | What it does |
 |---|---|---|
-| mine | `tile`, or `item` (+ `near`) | the nearest tile that gives the item round `near` (else the feet), no rim, a tool in the bag that mines it; walks into reach, takes the tool up, holds the button on it until the tile changes |
+| mine | `tile`, or `item` (+ `near`) | the nearest tile that gives the item round `near` (else the feet), no rim, a tool in the bag that mines it; walks into reach, takes the tool up, holds the button on it until the tile changes; hovering in flight (`hero_hovering`: no floor under the feet row, so no walk starts there) it works a tile in reach from the hover and fails `unreachable: ... out of reach of the hover in flight` for the rest (card 164, goal 316) |
 | gather | `item`, `count` (1) | piles of it first (a pile lies on the ground: stood in, it is picked up), then the tiles that give it, nearest each time, until the bag holds count; a cut trunk falls and may give more |
 | craft | `item`, `count` (1) | the revealed recipe; walks to its station, opens it (TAB's window for a hand recipe), clicks the card, then CRAFT count times |
-| place | `item`, `at` or `near:"home"` | walks into reach and sets it down; near home walks to the home goal's tile and takes the free tile nearest it that takes the item; refused in reach, it fails `refused: <the game's own note>` (`place_refusal_full`, the click's note too: the cell, a template's foundation, a machine's gate; card 159) |
+| place | `item`, `at` or `near:"home"` | walks into reach and sets it down (a stand that leaves the body over the tile is walked to its middle, else `blocked`, card 164); near home walks to the home goal's tile and takes the free tile nearest it that takes the item; refused in reach, it fails `refused: <the game's own note>` (`place_refusal_full`, the click's note too: the cell, a template's foundation, a machine's gate; card 159) |
 | store | `item`, `count` (all), `at` (else nearest barrel) | drags the bag's stacks of it into the barrel |
-| withdraw | `at`: barrel (+ `item`, `count`), silo, smelter; no `at`: the nearest barrel holding `item` | barrel stacks to the bag; a silo's click empties it (no window); a smelter's ore back |
+| withdraw | `at`: barrel or scroll chest (+ `item`, `count`), silo, smelter; no `at`: the nearest barrel or chest holding `item` (a chest never opened holds its own scroll) | barrel stacks to the bag; a silo's click empties it (no window); a smelter's ore back |
 | feed | `item` (ore or wood), `count` (all), `at` (else nearest smelter) | drags it onto the furnace's ore or fuel slot |
 | collect | `at` (else nearest smelter) | drags the cast bars from the tray to the bag |
 
@@ -467,7 +473,8 @@ hero walks to the machine again and reopens it.
 A failure says why first: `no_recipe`, `no_station`, `no_item`,
 `out_of_reach`, `unreachable`, `unsafe` (digging it from its only stand drops
 the hero further than a free fall), `blocked` (a tile in reach gave nothing for
-`HERO_MINE_GIVE_UP_S`, as when the rim reflex holds the dig) or `full`.
+`HERO_MINE_GIVE_UP_S`, as when the rim reflex holds the dig), `refused` (a
+place the game turns away, or a dig a reflex keeps the pick off) or `full`.
 
 ## Not built (yet)
 
