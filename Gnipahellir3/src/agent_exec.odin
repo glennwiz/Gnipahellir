@@ -774,6 +774,14 @@ hero_strike :: proc(gs: ^Game_State, b: ^Hero_Brain, i: int, sword_ok := true) -
     return true
 }
 
+// The agent's fight_back switch: off, the hero strikes no blow of its own
+// (the Fight behaviour, the flee's shots back and the fight_back reflex); a
+// fight goal still fights.
+@(private="file")
+hero_may_fight :: proc(gs: ^Game_State) -> bool {
+    return .Fight_Back not_in gs.agent.goals.reflexes_off
+}
+
 // The running goal is a fight: it does the fighting and the backing off.
 @(private="file")
 hero_fighting_goal :: proc(g: ^Agent_Goal) -> bool {
@@ -926,7 +934,7 @@ hero_goal_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
 @(private="file")
 hero_fight_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     th := hero_threat(b)
-    if th == nil || !hero_armed(gs) || hero_fighting_goal(g) do return 0
+    if th == nil || !hero_armed(gs) || !hero_may_fight(gs) || hero_fighting_goal(g) do return 0
     return hero_press(th) * (30 + 60 * hero_hp_frac(gs))
 }
 
@@ -957,7 +965,7 @@ hero_flee_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 
 hero_flee_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
     th := hero_threat(b)
     hero_get_clear(gs, b, th)
-    hero_strike(gs, b, th.slot, sword_ok = false)  // a wand shoots back as the hero runs
+    if hero_may_fight(gs) do hero_strike(gs, b, th.slot, sword_ok = false)  // a wand shoots back as the hero runs
 }
 
 // A goal walking the hero to the edge of a drop: stop, look, then step if the
