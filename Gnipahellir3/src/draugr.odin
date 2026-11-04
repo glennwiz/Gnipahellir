@@ -11,6 +11,7 @@ package game
 DRAUGR_HP          :: 4          // frailer than a live builder (6) — already felled once
 DRAUGR_SPEED       :: f32(10.0)  // super-fast: outruns the fleeing player (MOVE_SPEED 8.0)
 DRAUGR_ATTACK_TIME :: f32(1.0)   // one heartbeat between claws — two land and you're dead
+DRAUGR_RISE_DELAY  :: f32(0.8)   // seconds after rising before the first claw (= builder ATTACK_TIME): a modest guess, Glenn tunes
 
 // Convert a felled builder into a draugr and RISE IT AT ITS HOME BASE: the
 // corpse crawls back to the den it called home and claws its way up there.  A
@@ -36,7 +37,7 @@ rise_draugr :: proc(gs: ^Game_State, i: int) {
 
     b.goal        = .Hunt
     b.carry       = .Air        // drops whatever it hauled; the pile stays where it fell
-    b.attack_timer = 0
+    b.attack_timer = DRAUGR_RISE_DELAY   // a hero standing in the den gets a beat to step off
     b.los_timer   = 0
     b.stuck_timer = 0
     b.stuck_count = 0
