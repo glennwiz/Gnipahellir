@@ -216,10 +216,14 @@ never touches world state.
   spaced `HERO_SAFE_SPACING` apart.
 
 A threat is *noticed* (`hero_threat`) once it has been in sight
-`HERO_REACTION_S`, does damage, and is in line or within sword reach. An enemy
+`HERO_REACTION_S`, does damage, and is in line, within sword reach, or hunting
+(`Hunt` or `Wave_Hunt`) and coming at the hero within `HERO_THREAT_NEAR`
+(card 158: a Builder digging up at the hero through the rock is answered, as a
+player sees it coming; one fetching ore that passes under the hero's shaft is
+not, seed 999). Any other enemy
 behind rock is seen, not answered. Once noticed it stays in mind while it is
-within `HERO_THREAT_FAR`, line or no line: a bump that cuts the sight line for
-a step does not make the wolf go away.
+within `HERO_THREAT_FAR` + `HERO_CLEAR_MARGIN`, line or no line: a bump that
+cuts the sight line for a step does not make the wolf go away.
 
 ## Behaviours (utility AI, `hero_behaviours`)
 
@@ -239,7 +243,16 @@ One row per behaviour, a score proc and a run proc:
 that is not closing. Health decides between fight and flee: a full-health hero
 with a sword fights a Vargr, the same hero at a fifth of its health runs. Once
 fleeing, the hero keeps running until the threat is past `HERO_THREAT_FAR` or
-gone, so it never turns back toward a hunter at the threshold.
+gone, so it never turns back toward a hunter at the threshold. A goal paused for flight
+more than `HERO_HUNTED_PAUSES` times by a hunting threat (`Hunt` or
+`Wave_Hunt`) still in sight fails "hunted: a Vargr keeps coming" (card 158:
+playtest 129's go flapped between goal and flight 884 times); one on an
+errand of its own is fled from but never counted, and the count clears when
+nothing is in sight.
+Flight and idle dig out (cornered with a pick) never through the player's
+placed blocks, and never a tile whose loss would drop the hero far
+(`hero_dig_safe`; card 158: playtest 127's hero dug out its own shelter and
+fell 36 tiles).
 
 Every movement a behaviour makes goes through `hero_walk`: never into a step
 that hurts or burns (flight and leaf fall excepted), a jump at a wall two high,
@@ -265,6 +278,10 @@ running with its frames unspent; when the goal row wins again it carries on
 from where it was. A connected client hears (after its first `goals`):
 
 - `goal_paused` `{id, reason}` — reason fight, flee, ledge or retreat;
+  when the hero dies every running or queued goal but an act fails `died`,
+  once (the next life may be a new world; an act stays, to work the death
+  screen; failed on the death event itself, so goals queued on the death
+  screen run in the next life, whatever opens over it or reconnects);
 - `goal_resumed` `{id, reason}` — the reason that paused it;
 - `idle` `{threats}` — once each time the queue runs dry, with the number of
   enemies in sight then that can hurt the hero.
@@ -281,7 +298,8 @@ HERO_REACTION_S   = 0.3 s   HERO_LEDGE_LOOK_S  = 0.4 s   HERO_LEDGE_LOOK_TILES =
 HERO_MIN_HOLD_S   = 0.5 s   HERO_SWITCH_MARGIN = 10      HERO_URGENT_SCORE     = 95
 HERO_SWING_S      = 0.45 s  HERO_THREAT_NEAR   = 5       HERO_THREAT_FAR       = 12
 HERO_SAFE_CLEAR   = 8       HERO_WAND_RANGE    = 8       HERO_UNARMED_FLEE     = 40
-HERO_CLOSING_MEMORY_S = 1.5 s
+HERO_CLOSING_MEMORY_S = 1.5 s HERO_CLEAR_MARGIN  = 4       HERO_HUNTED_PAUSES    = 3
+HERO_WARY_S       = 8 s
 ```
 
 ## Going somewhere: go and home (card 138)
@@ -303,8 +321,10 @@ the one below is solid. Moves and their price:
 | bridge | a block from the bag set under the next column | 1 + `HERO_NAV_BRIDGE_COST`; at most the blocks in the bag's first block stack |
 | dig | with the pick, or by hand through wood: a tunnel (2 tiles), a step cut up (3), a stair down, one down and one across (3); never a shaft, never the floor under the feet, never a tile beside water or lava | 1 + `HERO_NAV_DIG_COST` per tile dug |
 
-The search ends at the goal tile, or keeps the tile nearest it; an empty path
-is `no_route`. A path longer than `HERO_PATH_MAX` keeps its start and is
+A drop that hurts at all is taken only when no way without one reaches: the
+search runs once with no hurtful drop, and again with them only if that fails
+(card 158). The search ends at the goal tile, or keeps the tile nearest it; an
+empty path is `no_route`. A path longer than `HERO_PATH_MAX` keeps its start and is
 planned again from its end. The executor writes only `gs.agent.cmd`: it walks
 toward each step's tile, jumps at a two-high wall or a gap's edge, selects the
 pick (with none, puts a sword or wand away and cuts wood by hand) and mines a

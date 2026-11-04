@@ -329,6 +329,7 @@ process_events :: proc(gs: ^Game_State) {
             // debug snapshots are too: neither is touched.
             gs.player.dead = true
             save_remove(gs)
+            agent_goals_died(gs)  // the goals live at the death fail, once
 
         case .Rune_Scroll_Found:
             tier := int(e.payload.int_val)
