@@ -724,3 +724,48 @@ trace_reads_searches_dens_loops_and_levels :: proc(t: ^testing.T) {
     text, _ = tools_test_say("--builder-trace", run, "--min-frames", "1600")
     testing.expect(t, !strings.contains(text, "== life 1 level 0") && strings.contains(text, "== life 1 level 2"), "a level played less than --min-frames is left out")
 }
+
+// A run that switches reflexes, marks a home and goes there replays the same:
+// the replay's queue ends with the same reflexes and mark, and the go ends done.
+@(test)
+replay_carries_reflexes_and_home :: proc(t: ^testing.T) {
+    rec_path, got_path := "tools_test_replay_reflex_rec.jsonl", "tools_test_replay_reflex_got.jsonl"
+    defer os.remove(rec_path)
+    defer os.remove(got_path)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    tools_test_record(link, rec_path)
+    link.connected, link.realtime = true, true
+    home := hero_feet(&gs.player) + {3, 0}
+    for frame in 0 ..< 300 {
+        switch frame {
+        case 5:  agent_handle_line(link, gs, `{"cmd":"reflexes","potion":false,"rim_dig":false}`)
+        case 8:  agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"home","at":[%d,%d]}}`, home.x, home.y))
+        case 10: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"home"}]}`)
+        case 200: agent_handle_line(link, gs, `{"cmd":"home"}`)
+        case 210: agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"home","at":[%d,%d]}}`, home.x + 1, home.y))
+        }
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    os.close(link.acts_file)
+    data, _ := os.read_entire_file(rec_path, context.allocator)
+    defer delete(data)
+    for want in ([]string{`"reflexes":{`, `"home":[`, `"home":null`, `"kind":"home"`, `"done":1`}) {
+        testing.expect(t, strings.contains(string(data), want), want)
+    }
+
+    rep, gs2, link2 := tools_test_replay(string(data), got_path)
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged)
+    testing.expect_value(t, link2.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})
+    testing.expect(t, link2.goals.has_home && link2.goals.home == home + {1, 0})
+    testing.expect_value(t, hero_feet(&gs2.player), home)  // the go home went where it went
+    got, _ := os.read_entire_file(got_path, context.allocator)
+    defer delete(got)
+    testing.expect(t, strings.contains(string(got), `"done":1`) && strings.contains(string(got), `"home":null`))
+}

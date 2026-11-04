@@ -264,6 +264,15 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
     case "say" in rec:
         text, _ := rec["say"].(json.String)
         agent_text_set(&link.panel.say, text)
+    case "reflexes" in rec:
+        o, _ := rec["reflexes"].(json.Object)
+        off: bit_set[Hero_Reflex]
+        for row, k in hero_reflexes do if on, _ := o[row.name].(json.Boolean); !on do off += {k}
+        agent_reflexes_set(link, gs, off)
+    case "home" in rec:
+        at, _, _, marked := agent_tile(rec, "home")
+        level, _ := agent_int(rec, "level")
+        agent_home_set(link, gs, at, level, marked)
     case "mark" in rec:
         if mark, _ := rec["mark"].(json.String); mark == "disconnect" do rep.cut = true
     }

@@ -3285,3 +3285,57 @@ a_watcher_that_speaks_as_the_driver_goes_takes_the_game_that_frame :: proc(t: ^t
     agent_pump(link, gs)
     testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "mine now")  // its order, the next
 }
+
+// reflexes switches each one by name, all or nothing, answers with all of them
+// and is recorded; home marks a tile or clears the mark; go and home are goal
+// kinds the add-time check knows.
+@(test)
+agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    path := "agent_reflexes_test.jsonl"
+    defer os.remove(path)
+    f, err := os.open(path, {.Write, .Create, .Trunc}, os.Permissions_Default_File)
+    testing.expect(t, err == nil)
+    link.acts_file = f
+    link.recording = true
+
+    agent_handle_line(link, gs, `{"cmd":"reflexes","potion":false,"rim_dig":false}`)
+    testing.expect_value(t, agent_test_reply(link), `{"re":"reflexes","ok":true,"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false}}` + "\n")
+    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})
+    agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":true,"swim":false}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "swim is not a reflex"))
+    agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":1}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "rim_dig is not a reflex to switch with true or false"))
+    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})  // all or nothing
+    agent_handle_line(link, gs, `{"cmd":"reflexes"}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"potion":false`), "a bare reflexes reads them")
+
+    agent_handle_line(link, gs, `{"cmd":"home","at":[40,30]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":true`))
+    testing.expect(t, link.goals.has_home && link.goals.home == {40, 30} && link.goals.home_level == gs.level_index)
+    agent_handle_line(link, gs, `{"cmd":"home","at":[400,30]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`))
+    testing.expect(t, link.goals.has_home, "a bad mark keeps the old")
+    agent_handle_line(link, gs, `{"cmd":"home"}`)
+    testing.expect(t, !link.goals.has_home)
+
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"go"}]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "go needs to:[x,y]"))
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fly"}]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), "do must name a goal kind: act, go, home"))
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"go","to":[40,30]},{"do":"home"}]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ids":[`))
+
+    link.recording = false
+    os.close(f)
+    data, read_err := os.read_entire_file(path, context.allocator)
+    testing.expect(t, read_err == nil)
+    defer delete(data)
+    text := string(data)
+    testing.expect(t, strings.contains(text, `"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false}`))
+    testing.expect(t, strings.contains(text, `"home":[40,30],"level":`))
+    testing.expect(t, strings.contains(text, `"home":null`))
+    testing.expect(t, strings.contains(text, `"kind":"go"`) && strings.contains(text, `"kind":"home"`))
+}

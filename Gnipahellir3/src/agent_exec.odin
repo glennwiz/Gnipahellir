@@ -26,7 +26,7 @@ AGENT_GOALS_MAX  :: 32
 AGENT_GOAL_LINE  :: 512  // one goal as recorded; a longer one is refused
 
 Agent_Goal_Status :: enum u8 { Empty, Queued, Running, Done, Failed }
-Agent_Goal_Kind   :: enum u8 { Act }
+Agent_Goal_Kind   :: enum u8 { Act, Go, Home }
 // How a goal came: the old act and wait answer with state when it is done, and a
 // plan's goals stop together.
 Agent_Goal_Via    :: enum u8 { Goal, Act, Wait, Plan }
@@ -43,6 +43,11 @@ Agent_Goal :: struct {
     frames_left: int,
     first:       bool,  // the next tick it plays is its first
     reason:      Agent_Text,  // why it failed
+    to:          [2]i32,  // a go's feet tile
+    best:        i32,     // the nearest it has come, in tiles
+    stuck_t:     f32,     // seconds since it came nearer
+    replanned:   bool,    // stuck long enough to plan again, once
+    left:        int,     // tiles the step being dug still has
     len:         int,
     line:        [AGENT_GOAL_LINE]u8,  // the goal as strict JSON
 }
@@ -55,6 +60,10 @@ Agent_Goals :: struct {
     plan_stopped: Agent_Text,  // why a plan's step could not start, until the next plan
     notes:        [HERO_NOTES_MAX]Hero_Note,  // what the hero did with the goals: a ring
     note_count:   int,  // every note ever, so the link knows what it has not pushed
+    reflexes_off: bit_set[Hero_Reflex],  // the reflexes the agent switched off
+    home:         [2]i32,  // the tile {"cmd":"home","at":[x,y]} marked
+    home_level:   int,
+    has_home:     bool,
 }
 
 // One goal kind: what its parameters are, the add-time check, the start-time
@@ -76,6 +85,20 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
         start  = agent_goal_act_start,
         tick   = agent_goal_act_tick,
     },
+    .Go = {
+        name   = "go",
+        params = "to: [x,y], the tile to stand in (a solid one: the tile on it); walks, jumps, drops, digs with the pick and bridges with blocks from the bag",
+        check  = agent_goal_go_check,
+        start  = agent_goal_go_start,
+        tick   = hero_go_tick,
+    },
+    .Home = {
+        name   = "home",
+        params = `none: goes as go does to the tile {"cmd":"home","at":[x,y]} marked on this level, else the surface spawn`,
+        check  = agent_goal_home_check,
+        start  = agent_goal_home_start,
+        tick   = hero_go_tick,
+    },
 }
 
 agent_goal_find_kind :: proc(name: string) -> (Agent_Goal_Kind, bool) {
@@ -93,6 +116,7 @@ update_agent_goals :: proc(gs: ^Game_State) {
     if g != nil do q.ran = true
     if agent_screen(gs) == "play" {
         hero_think(gs, q, g)  // the hero's own sense of danger has a say first
+        hero_reflexes_run(gs, q)  // and its reflexes the last
     } else if g != nil && agent_goal_kinds[g.kind].tick(gs, g) {
         g.status = .Done
     }
@@ -342,6 +366,9 @@ Hero_Brain :: struct {
     has_looked:  bool,
     swing_t:     f32,
     break_dir:   i8,  // cornered, running past the threat this way until it is behind
+    potion_t:    f32,  // seconds until the potion reflex may fire again
+    path:        Hero_Path,
+    nav:         Hero_Nav,
 }
 
 Hero_Behaviour_Row :: struct {
@@ -585,10 +612,21 @@ hero_press :: proc(th: ^Hero_Threat) -> f32 {
     return u
 }
 
+// The bag slot the hero fights from: the hand if it holds a sword or a fire
+// wand, else the first in the bag; -1 none.  A dig leaves the pick in hand,
+// and a fight takes the weapon back up.
+@(private="file")
+hero_weapon_slot :: proc(gs: ^Game_State) -> int {
+    inv := &gs.player.inventory
+    weapon :: proc(s: Inventory_Slot) -> bool { return s.count > 0 && (is_melee_weapon(s.item) || is_fire_wand(s.item)) }
+    if inv.selected >= 0 && weapon(inv.slots[inv.selected]) do return inv.selected
+    for s, i in inv.slots do if weapon(s) do return i
+    return -1
+}
+
 @(private="file")
 hero_armed :: proc(gs: ^Game_State) -> bool {
-    held := held_item(&gs.player)
-    return is_melee_weapon(held) || is_fire_wand(held)
+    return hero_weapon_slot(gs) >= 0
 }
 
 @(private="file")
@@ -679,6 +717,11 @@ hero_fight_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
     e := &gs.enemies.data[th.slot]
     et := builder_tile(e)
     c := &gs.agent.cmd
+    if ws := hero_weapon_slot(gs); ws != gs.player.inventory.selected {
+        c.verb, c.verb_arg = .Select, i32(ws)
+        gs.agent.first = true
+        return
+    }
     wand := is_fire_wand(held_item(&gs.player))
     if th.dist > HERO_WAND_RANGE || (!wand && chebyshev(et, player_tile(&gs.player)) > MELEE_REACH) {
         hero_walk_to(gs, b, gs.player.pos.x + PLAYER_W * 0.5 + th.dx)
@@ -768,4 +811,530 @@ hero_note_names := [Hero_Note_Kind]string{
     .Paused  = "goal_paused",
     .Resumed = "goal_resumed",
     .Idle    = "idle",
+}
+
+// ─── Going somewhere: the go and home goals ───────────────────────────────────
+//
+// {"do":"go","to":[x,y]} and {"do":"home"} walk the hero to a tile as a player
+// would: hero_plan searches the feet tiles round the hero (a fixed window, a
+// fixed budget) for walks, step-ups, jumps, gap jumps and drops, a block from
+// the bag set down as a bridge, and digs with the pick (a tunnel, a step cut
+// up, a stair down: one down and one across, never a shaft).  Each step has a
+// price: a drop costs nothing to SAFE_FALL_TILES and HERO_NAV_HP_COST per hp
+// the fall rule takes after, and one that would kill or leave the hero under
+// the reflex line is never taken; burning and water tiles are never stood in,
+// and a pond or lava rim is never dug.  hero_go_tick follows the path through
+// gs.agent.cmd alone, replans when knocked off it or stuck, and fails the goal
+// with no_route (nothing nearer can be reached), blocked (no headway for
+// HERO_GO_STUCK_S) or hazard (the tile asked for burns or drowns).
+
+HERO_NAV_W      :: 64  // the search window round the hero, in tiles
+HERO_NAV_H      :: 48
+HERO_NAV_NODES  :: HERO_NAV_W * HERO_NAV_H
+HERO_NAV_OPEN   :: 4 * HERO_NAV_NODES
+HERO_NAV_BUDGET :: 4000  // nodes one search expands at most
+HERO_PATH_MAX   :: 64    // a longer path keeps the start of it, and is planned again from its end
+HERO_GAP_MAX    :: 4     // a running jump lands this many columns over at most
+
+// Feel: first guesses for Glenn to look at.
+HERO_GO_REPLAN_S     :: f32(1.5)  // no headway this long: plan again
+HERO_GO_STUCK_S      :: f32(5)    // and this long: blocked
+HERO_NAV_JUMP_COST   :: f32(2)    // steps a jump is worth, over its walk
+HERO_NAV_DIG_COST    :: f32(3)    // per tile dug
+HERO_NAV_BRIDGE_COST :: f32(4)    // per block set down
+HERO_NAV_HP_COST     :: f32(20)   // per hp a fall takes
+HERO_LOW_HP_FRAC     :: f32(0.3)  // the reflex line: a potion under it, no fall that ends below it
+HERO_POTION_COOLDOWN_S :: f32(1)  // between potions
+
+Hero_Move :: enum u8 { Walk, Jump, Drop, Gap, Dig, Bridge }
+
+Hero_Step :: struct {
+    from, to: [2]i32,  // feet tiles
+    move:     Hero_Move,
+}
+
+Hero_Path :: struct {
+    steps: [HERO_PATH_MAX]Hero_Step,
+    n, at: int,
+    goal:  int,  // the goal it was planned for
+}
+
+// One search's scratch, sized once and kept in gs.hero.
+Hero_Nav :: struct {
+    g:       [HERO_NAV_NODES]f32,
+    parent:  [HERO_NAV_NODES]i16,
+    move:    [HERO_NAV_NODES]Hero_Move,
+    bridges: [HERO_NAV_NODES]u8,
+    seen:    [HERO_NAV_NODES]bool,
+    closed:  [HERO_NAV_NODES]bool,
+    open:    [HERO_NAV_OPEN]A_Open,
+}
+
+hero_feet :: proc(p: ^Player) -> [2]i32 {
+    return {i32(p.pos.x + PLAYER_W * 0.5), hero_feet_row(p)}
+}
+
+hero_wet_or_burning :: proc(w: ^World_Grid, x, y: i32) -> bool {
+    f := terrain_table[get_tile(w, int(x), int(y))].flags
+    return .Damaging in f || .Swimmable in f
+}
+
+// A tile the body can be in: not solid, not burning, not water.
+hero_open :: proc(w: ^World_Grid, x, y: i32) -> bool {
+    return !is_solid(w, int(x), int(y)) && !hero_wet_or_burning(w, x, y)  // outside the level reads as stone
+}
+
+// A feet tile the hero can stand on.
+hero_stand :: proc(w: ^World_Grid, t: [2]i32) -> bool {
+    return hero_open(w, t.x, t.y) && hero_open(w, t.x, t.y - 1) && is_solid(w, int(t.x), int(t.y + 1))
+}
+
+// Next to water or a burn: dug, it lets the pond or the lava in.
+hero_rim :: proc(w: ^World_Grid, t: [2]i32) -> bool {
+    for d in ([4][2]i32{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) do if hero_wet_or_burning(w, t.x + d.x, t.y + d.y) do return true
+    return false
+}
+
+// A tile the hero may dig: the pick works it, and it is no rim.
+hero_diggable :: proc(gs: ^Game_State, t: [2]i32, has_pick: bool) -> bool {
+    if !in_bounds(int(t.x), int(t.y)) do return false
+    tile := get_tile(&gs.world, int(t.x), int(t.y))
+    if .Mineable not_in terrain_table[tile].flags || is_structure_tile[tile] do return false
+    return (has_pick || tile == .Wood) && !hero_rim(&gs.world, t)
+}
+
+// The tiles a dig step clears, by its rise: a tunnel, a step cut up (and the
+// headroom to step into it), a stair down (one down, one across).
+hero_dig_tiles :: proc(from, to: [2]i32) -> (tiles: [3][2]i32, n: int) {
+    x := to.x
+    switch to.y - from.y {
+    case 0:  return {{x, to.y}, {x, to.y - 1}, {}}, 2
+    case -1: return {{x, to.y}, {x, to.y - 1}, {from.x, from.y - 2}}, 3
+    case:    return {{x, from.y - 1}, {x, from.y}, {x, to.y}}, 3
+    }
+}
+
+// Whether a fall that takes hurts hp leaves the hero above the reflex line.
+hero_fall_ok :: proc(gs: ^Game_State, hurts: int) -> bool {
+    if hurts == 0 do return true
+    left := gs.player.hp - hurts
+    return left > 0 && f32(left) >= HERO_LOW_HP_FRAC * f32(gs.player.hp_max)
+}
+
+// The bag slot whose blocks bridge: the first that sets down a solid tile.
+hero_block_slot :: proc(gs: ^Game_State) -> int {
+    for s, i in gs.player.inventory.slots {
+        if s.count <= 0 do continue
+        t := item_table[s.item].place_tile
+        if t != .Air && !is_structure_tile[t] && .Solid in terrain_table[t].flags do return i
+    }
+    return -1
+}
+
+hero_item_slot :: proc(gs: ^Game_State, it: Item) -> int {
+    for s, i in gs.player.inventory.slots do if s.item == it && s.count > 0 do return i
+    return -1
+}
+
+@(private="file")
+hero_nav_index :: proc(o, t: [2]i32) -> int {
+    r := t - o
+    if r.x < 0 || r.y < 0 || r.x >= HERO_NAV_W || r.y >= HERO_NAV_H do return -1
+    return int(r.y) * HERO_NAV_W + int(r.x)
+}
+
+@(private="file")
+hero_nav_h :: proc(a, b: [2]i32) -> f32 {
+    return f32(abs(a.x - b.x)) + 0.5 * f32(abs(a.y - b.y))
+}
+
+// A path from feet tile from toward to, into out: to itself when the search
+// reaches it, else the tile nearest it the search found.  An empty path: no
+// tile nearer than from.
+hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path) -> (reached: bool) {
+    n := &gs.hero.nav
+    w := &gs.world
+    o := [2]i32{clamp(from.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(from.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
+    n.seen   = {}
+    n.closed = {}
+    out.n, out.at = 0, 0
+    s := hero_nav_index(o, from)
+    if s < 0 do return false
+    has_pick := hero_item_slot(gs, .Pickaxe) >= 0
+    blocks := 0
+    if b := hero_block_slot(gs); b >= 0 do blocks = gs.player.inventory.slots[b].count
+
+    size, work := 0, 0
+    n.g[s], n.seen[s], n.bridges[s] = 0, true, 0
+    astar_open_push(n.open[:], &size, {hero_nav_h(from, to), i16(s)}, &work)
+    best, best_h := s, hero_nav_h(from, to)
+    expanded := 0
+    for size > 0 && expanded < HERO_NAV_BUDGET {
+        i := int(astar_open_pop(n.open[:], &size, &work).node)
+        if n.closed[i] do continue
+        n.closed[i] = true
+        expanded += 1
+        a := o + {i32(i % HERO_NAV_W), i32(i / HERO_NAV_W)}
+        if a == to {
+            best, reached = i, true
+            break
+        }
+        if h := hero_nav_h(a, to); h < best_h || (h == best_h && n.g[i] < n.g[best]) do best, best_h = i, h
+        x, y := a.x, a.y
+        nb := n.bridges[i]
+        for d in ([2]i32{-1, 1}) {
+            f := [2]i32{x + d, y}
+            if hero_stand(w, f) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
+            if up := ([2]i32{x + d, y - 1}); hero_stand(w, up) && hero_open(w, x, y - 2) {
+                hero_nav_relax(n, &size, o, i, up, 1.5, .Walk, nb, to)
+            }
+            if up := ([2]i32{x + d, y - 2}); hero_stand(w, up) && hero_open(w, x, y - 2) && hero_open(w, x, y - 3) {
+                hero_nav_relax(n, &size, o, i, up, 2 + HERO_NAV_JUMP_COST, .Jump, nb, to)
+            }
+            if hero_open(w, f.x, f.y) && hero_open(w, f.x, f.y - 1) && !is_solid(w, int(f.x), int(f.y + 1)) {
+                // Off the edge: a drop to wherever it lands, or a running jump
+                // over the gap, or a block set down to walk on.
+                col := hero_column(w, int(f.x), int(f.y))
+                land := [2]i32{f.x, f.y + i32(col.drop)}
+                if !col.hazard && hero_stand(w, land) && hero_fall_ok(gs, col.hurts) {
+                    hero_nav_relax(n, &size, o, i, land, 1 + 0.3 * f32(col.drop) + HERO_NAV_HP_COST * f32(col.hurts), .Drop, nb, to)
+                }
+                if hero_open(w, x, y - 2) do for k in i32(2) ..= HERO_GAP_MAX {
+                    m := [2]i32{x + d * (k - 1), y}
+                    if !hero_open(w, m.x, m.y) || !hero_open(w, m.x, m.y - 1) || !hero_open(w, m.x, m.y - 2) do break
+                    if l := ([2]i32{x + d * k, y}); hero_stand(w, l) && hero_open(w, l.x, l.y - 2) {
+                        hero_nav_relax(n, &size, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
+                        break
+                    }
+                }
+                under := get_tile(w, int(f.x), int(f.y + 1))
+                if int(nb) < blocks && (under == .Air || under == .Void) {
+                    hero_nav_relax(n, &size, o, i, f, 1 + HERO_NAV_BRIDGE_COST, .Bridge, nb + 1, to)
+                }
+            }
+            for dt in ([3][2]i32{{x + d, y}, {x + d, y - 1}, {x + d, y + 1}}) {
+                tiles, k := hero_dig_tiles(a, dt)
+                floor := dt + {0, 1}
+                if !is_solid(w, int(floor.x), int(floor.y)) do continue
+                dug, ok := 0, true
+                for t in tiles[:k] {
+                    switch {
+                    case hero_open(w, t.x, t.y):
+                    case is_solid(w, int(t.x), int(t.y)) && hero_diggable(gs, t, has_pick): dug += 1
+                    case: ok = false
+                    }
+                }
+                if ok && dug > 0 do hero_nav_relax(n, &size, o, i, dt, 1 + HERO_NAV_DIG_COST * f32(dug), .Dig, nb, to)
+            }
+        }
+    }
+
+    // The chain back from best, kept from the start end.
+    length := 0
+    for j := best; j != s; j = int(n.parent[j]) do length += 1
+    pos := length - 1
+    for j := best; j != s; j = int(n.parent[j]) {
+        if pos < HERO_PATH_MAX {
+            p := int(n.parent[j])
+            out.steps[pos] = {
+                from = o + {i32(p % HERO_NAV_W), i32(p / HERO_NAV_W)},
+                to   = o + {i32(j % HERO_NAV_W), i32(j / HERO_NAV_W)},
+                move = n.move[j],
+            }
+        }
+        pos -= 1
+    }
+    out.n = min(length, HERO_PATH_MAX)
+    return reached && length <= HERO_PATH_MAX
+}
+
+@(private="file")
+hero_nav_relax :: proc(n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, b: [2]i32, cost: f32, m: Hero_Move, nb: u8, to: [2]i32) {
+    j := hero_nav_index(o, b)
+    if j < 0 do return
+    g := n.g[i] + cost
+    if n.seen[j] && g >= n.g[j] do return
+    n.g[j], n.parent[j], n.move[j], n.bridges[j], n.seen[j] = g, i16(i), m, nb, true
+    work := 0
+    if size^ < HERO_NAV_OPEN do astar_open_push(n.open[:], size, {g + hero_nav_h(b, to), i16(j)}, &work)
+}
+
+// ─── The goal rows ───
+
+@(private="file")
+agent_goal_go_check :: proc(gs: ^Game_State, o: json.Object) -> string {
+    if _, _, _, ok := agent_tile(o, "to"); !ok do return fmt.tprintf("go needs to:[x,y] inside the %dx%d level", GRID_W, GRID_H)
+    return ""
+}
+
+@(private="file")
+agent_goal_go_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    value, _ := json.parse_string(string(g.line[:g.len]), parse_integers = true, allocator = context.temp_allocator)
+    o, _ := value.(json.Object)
+    to, _, _, _ := agent_tile(o, "to")
+    return hero_go_start(gs, g, to)
+}
+
+@(private="file")
+agent_goal_home_check :: proc(gs: ^Game_State, o: json.Object) -> string {
+    return ""
+}
+
+// Home: the tile the agent marked on this level, else the spawn on the surface.
+@(private="file")
+agent_goal_home_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
+    q := gs.agent.goals
+    switch {
+    case q != nil && q.has_home && q.home_level == gs.level_index:
+        return hero_go_start(gs, g, q.home)
+    case gs.level_index == LEVEL_SURFACE:
+        return hero_go_start(gs, g, hero_spawn_feet())
+    }
+    agent_text_set(&g.reason, "no_route: no home on this level")
+    return false
+}
+
+// The feet tile of the surface spawn.
+hero_spawn_feet :: proc() -> [2]i32 {
+    p := SURFACE_HOME_POS
+    return {i32(p.x + PLAYER_W * 0.5), i32(p.y + PLAYER_H - 0.001)}
+}
+
+// A solid tile asked for means the one standing on it.
+@(private="file")
+hero_go_start :: proc(gs: ^Game_State, g: ^Agent_Goal, to: [2]i32) -> bool {
+    w := &gs.world
+    to := to
+    if is_solid(w, int(to.x), int(to.y)) && in_bounds(int(to.x), int(to.y - 1)) do to.y -= 1
+    if !hero_open(w, to.x, to.y) && !is_solid(w, int(to.x), int(to.y)) {
+        agent_text_set(&g.reason, "hazard")
+        return false
+    }
+    g.to      = to
+    g.best    = max(i32)
+    g.stuck_t = 0
+    return true
+}
+
+// One tick of a go: follow the path, plan when there is none or it has gone
+// stale, and judge the headway.
+hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
+    b := &gs.hero
+    p := &gs.player
+    w := &gs.world
+    path := &b.path
+    feet := hero_feet(p)
+    if p.grounded && feet == g.to do return true
+    if agent_window_open(gs) {
+        gs.agent.first = true  // a still tick sweeps the windows shut, as for any goal
+        return false
+    }
+
+    if d := abs(feet.x - g.to.x) + abs(feet.y - g.to.y); d < g.best {
+        g.best, g.stuck_t, g.replanned = d, 0, false
+    } else {
+        g.stuck_t += gs.delta_time
+    }
+    if g.stuck_t >= HERO_GO_STUCK_S {
+        g.status = .Failed
+        agent_text_set(&g.reason, "blocked")
+        return false
+    }
+    stale := path.goal != g.id || path.at >= path.n
+    if g.stuck_t >= HERO_GO_REPLAN_S && !g.replanned {
+        stale, g.replanned = true, true
+    }
+    if p.grounded && !stale {
+        st := path.steps[path.at]
+        if feet == st.to {
+            path.at += 1
+            stale = path.at >= path.n
+        } else {
+            // Off the box between the step's ends: knocked off it.  Inside it
+            // is on the way, as at an edge that still holds the body up.
+            a, z := st.from, st.to
+            stale = feet.x < min(a.x, z.x) || feet.x > max(a.x, z.x) || feet.y < min(a.y, z.y) || feet.y > max(a.y, z.y)
+        }
+    }
+    if stale {
+        if !p.grounded do return false  // plan from the ground
+        hero_plan(gs, feet, g.to, path)
+        path.goal = g.id
+        if path.n == 0 {
+            g.status = .Failed
+            agent_text_set(&g.reason, "no_route")
+            return false
+        }
+    }
+
+    st := path.steps[path.at]
+    c := &gs.agent.cmd
+    switch st.move {
+    case .Dig:
+        tiles, k := hero_dig_tiles(st.from, st.to)
+        left := 0
+        for t in tiles[:k] do if is_solid(w, int(t.x), int(t.y)) do left += 1
+        if left < g.left do g.stuck_t = 0  // a tile dug is headway
+        g.left = left
+        for t in tiles[:k] {
+            if !is_solid(w, int(t.x), int(t.y)) do continue
+            // The pick if the bag has one; without, wood by hand, with no
+            // sword or wand in it to swing instead.
+            held := held_item(p)
+            pick := hero_item_slot(gs, .Pickaxe)
+            if (pick >= 0 && held != .Pickaxe) || (pick < 0 && (is_melee_weapon(held) || is_fire_wand(held) || is_command_wand(held))) {
+                c.verb, c.verb_arg = .Select, i32(pick)
+                gs.agent.first = true
+                return false
+            }
+            c.has_mine = true
+            c.mine     = t
+            c.aim      = {f32(t.x) + 0.5, f32(t.y) + 0.5}
+            return false
+        }
+    case .Bridge:
+        under := st.to + {0, 1}
+        if !is_solid(w, int(under.x), int(under.y)) {
+            if feet != st.from {
+                hero_go_toward(gs, st.from)
+                return false
+            }
+            slot := hero_block_slot(gs)
+            if slot < 0 {
+                path.n = 0  // the bag ran out: plan again
+                return false
+            }
+            c.verb, c.verb_arg = .Select, i32(slot)
+            c.has_place = true
+            c.place     = under
+            c.aim       = {f32(under.x) + 0.5, f32(under.y) + 0.5}
+            gs.agent.first = true
+            return false
+        }
+    case .Walk, .Jump, .Drop, .Gap:
+    }
+    hero_go_toward(gs, st.to)
+    if !p.grounded do return false
+    col, x := hero_step(gs, &b.senses, c.move)
+    #partial switch st.move {
+    case .Jump:
+        if col.wall && is_solid(w, int(x), int(b.senses.feet_y) - 1) do c.jump = true
+    case .Gap:
+        if !col.wall && col.drop > 0 do c.jump = true
+    }
+    if c.jump do gs.agent.first = true
+    return false
+}
+
+// The key toward tile t's middle.  A step ends as the feet reach its tile, so
+// this never has to stop.
+@(private="file")
+hero_go_toward :: proc(gs: ^Game_State, t: [2]i32) {
+    gs.agent.cmd.move = 1 if f32(t.x) + 0.5 > gs.player.pos.x + PLAYER_W * 0.5 else -1
+}
+
+// ─── Reflexes ───
+//
+// Under every goal, after the brain has had its say, each reflex the agent has
+// left on ({"cmd":"reflexes"}) may change this tick's input: off a burn or out
+// of water, a potion under the reflex line, no dig of the floor when the fall
+// would kill, no dig of a pond or lava rim.
+
+Hero_Reflex :: enum u8 { Leave_Hazard, Potion, Floor_Dig, Rim_Dig }
+
+@(rodata)
+hero_reflexes := [Hero_Reflex]struct {
+    name: string,
+    run:  proc(gs: ^Game_State, b: ^Hero_Brain),
+}{
+    .Leave_Hazard = {"leave_hazard", hero_reflex_leave},
+    .Potion       = {"potion",       hero_reflex_potion},
+    .Floor_Dig    = {"floor_dig",    hero_reflex_floor},
+    .Rim_Dig      = {"rim_dig",      hero_reflex_rim},
+}
+
+@(private="file")
+hero_reflexes_run :: proc(gs: ^Game_State, q: ^Agent_Goals) {
+    b := &gs.hero
+    b.potion_t = max(b.potion_t - gs.delta_time, 0)
+    for r, k in hero_reflexes do if k not_in q.reflexes_off do r.run(gs, b)
+}
+
+// In a burn or in water, or in the air over one: for the nearest column either
+// side the body can be in, walking and jumping, until out.
+@(private="file")
+hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
+    w := &gs.world
+    f := hero_feet(&gs.player)
+    over := !gs.player.grounded && hero_wet_or_burning(w, f.x, f.y + 1)  // a jump out not yet clear of it
+    if !hero_wet_or_burning(w, f.x, f.y) && !over do return
+    blocked: [2]bool  // a wall that side: no way out past it
+    for k in i32(1) ..= HERO_SENSE_REACH {
+        for d, side in ([2]i8{-1, 1}) {
+            if blocked[side] do continue
+            x := f.x + i32(d) * k
+            level := hero_open(w, x, f.y) && hero_open(w, x, f.y - 1) && !hero_wet_or_burning(w, x, f.y + 1)
+            // Ground a jump reaches: one up or two.
+            step := is_solid(w, int(x), int(f.y)) &&
+                    (hero_open(w, x, f.y - 1) && hero_open(w, x, f.y - 2) ||
+                     hero_open(w, x, f.y - 2) && hero_open(w, x, f.y - 3))
+            if !level && !step {
+                blocked[side] = is_solid(w, int(x), int(f.y)) || is_solid(w, int(x), int(f.y - 1))
+                continue
+            }
+            gs.agent.cmd.move = d
+            if gs.player.grounded {
+                gs.agent.cmd.jump = true
+                gs.agent.first    = true
+            }
+            return
+        }
+    }
+}
+
+@(private="file")
+hero_reflex_potion :: proc(gs: ^Game_State, b: ^Hero_Brain) {
+    p := &gs.player
+    c := &gs.agent.cmd
+    if b.potion_t > 0 || c.verb != .None || f32(p.hp) >= HERO_LOW_HP_FRAC * f32(p.hp_max) do return
+    slot := hero_item_slot(gs, .Potion_Health)
+    if slot < 0 do return
+    c.verb, c.verb_arg = .Equip, i32(slot)
+    gs.agent.first = true
+    b.potion_t = HERO_POTION_COOLDOWN_S
+}
+
+// A pick or a wand at work on terrain; a weapon's swing is not a dig.
+@(private="file")
+hero_digging :: proc(gs: ^Game_State) -> bool {
+    held := held_item(&gs.player)
+    c := &gs.agent.cmd
+    return c.has_mine && !is_melee_weapon(held) && !is_fire_wand(held) && !is_command_wand(held)
+}
+
+// The floor under the body, when the fall through it would kill or burn.
+@(private="file")
+hero_reflex_floor :: proc(gs: ^Game_State, b: ^Hero_Brain) {
+    if !hero_digging(gs) do return
+    p := &gs.player
+    t := gs.agent.cmd.mine
+    if t.y != hero_feet_row(p) + 1 || t.x < i32(p.pos.x) || t.x > i32(p.pos.x + PLAYER_W - 0.001) do return
+    w := &gs.world
+    land := int(t.y) + 1
+    for in_bounds(int(t.x), land) && !is_solid(w, int(t.x), land) {
+        f := terrain_table[get_tile(w, int(t.x), land)].flags
+        if .Swimmable in f || .Damaging in f do break
+        land += 1
+    }
+    drop := land - int(t.y)
+    landing := terrain_table[get_tile(w, int(t.x), land)].flags
+    hurts := 0
+    if .Swimmable not_in landing && f32(drop) > SAFE_FALL_TILES do hurts = int((f32(drop) - SAFE_FALL_TILES) / FALL_TILES_PER_HP) + 1
+    if hurts >= p.hp || .Damaging in landing do gs.agent.cmd.has_mine = false
+}
+
+@(private="file")
+hero_reflex_rim :: proc(gs: ^Game_State, b: ^Hero_Brain) {
+    if hero_digging(gs) && hero_rim(&gs.world, gs.agent.cmd.mine) do gs.agent.cmd.has_mine = false
 }
