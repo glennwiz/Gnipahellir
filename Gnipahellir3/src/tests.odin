@@ -4147,6 +4147,46 @@ draugr_respawns_at_its_den :: proc(t: ^testing.T) {
     testing.expect_value(t, builder_tile(e), [2]i32{i32(hx), i32(hy)})
 }
 
+// A builder felled while the hero stands in its den rises right on top of
+// them: the first claw waits out DRAUGR_RISE_DELAY, then lands.
+@(test)
+draugr_risen_in_the_den_waits_before_its_first_claw :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+
+    spawn_builder(gs, 40)
+    bi := -1
+    for i in 0 ..< MAX_ENEMIES {
+        if gs.enemies.active[i] && gs.enemies.data[i].kind == .Builder do bi = i
+    }
+    testing.expect(t, bi >= 0, "builder should have spawned")
+    e := &gs.enemies.data[bi]
+
+    hx, hy, ok := find_cave_floor(&gs.world, 90, 3)
+    testing.expect(t, ok, "a cave floor for the den")
+    e.builder.anchor    = {i32(hx), i32(hy)}
+    e.builder.den_built = true
+    gs.player.pos = {f32(hx) + (1 - PLAYER_W)*0.5, f32(hy) - PLAYER_H + 1}
+    testing.expect_value(t, player_tile(&gs.player), [2]i32{i32(hx), i32(hy)})
+
+    eq_push(&gs.events, Event{type = .Entity_Died, source = enemy_entity_id(bi)})
+    process_events(gs)
+    testing.expect_value(t, e.kind, Enemy_Kind.Undead)
+
+    gs.delta_time = 1.0 / 60.0
+    hp := gs.player.hp
+    for _ in 0 ..< int(DRAUGR_RISE_DELAY * 60) - 2 {
+        update_enemies(gs)
+        process_events(gs)
+    }
+    testing.expect_value(t, gs.player.hp, hp)
+    for _ in 0 ..< 10 {
+        update_enemies(gs)
+        process_events(gs)
+    }
+    testing.expect_value(t, gs.player.hp, hp - (gs.player.hp_max + 3) / 4)
+}
+
 @(test)
 sword_respects_reach :: proc(t: ^testing.T) {
     gs := test_state()
