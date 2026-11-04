@@ -38,6 +38,9 @@ package game
 //   {"cmd":"goals","add":[{"do":"act",...},...]}    queue goals (agent_exec.odin); answers
 //                                                   their ids, or ok:false for a full queue
 //   {"cmd":"goals","clear":true} / "cancel":id      drop them; each ends as failed, cancelled
+//   {"cmd":"reflexes","potion":false,...}           switch the hero's reflexes; answers with each
+//   {"cmd":"home","at":[x,y]}                       mark this level's home for the home goal; no
+//                                                   at clears it
 //   {"cmd":"plan","acts":[{"move":"left","frames":30},...]}
 //                                                   acts queued as goals, no reply per step;
 //                                                   an act or a plan drops the rest;
@@ -630,6 +633,11 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  The queue holds %d; a full one answers ok:false. {{\"cmd\":\"goals\",\"cancel\":id}} or \"clear\":true drops goals, which then end failed\n", AGENT_GOALS_MAX)
     fmt.sbprintf(w, "  state's goals lists each one: queued, running (with left), done, or failed with a reason. do names the kind:\n")
     for row in agent_goal_kinds do fmt.sbprintf(w, "    %s: %s\n", row.name, row.params)
+    fmt.sbprintf(w, "  a go or home that cannot get nearer fails: no_route (nothing nearer to reach), blocked (no headway for %.0f s), hazard (the tile burns or drowns)\n", HERO_GO_STUCK_S)
+    fmt.sbprintf(w, "{{\"cmd\":\"home\",\"at\":[x,y]}}  marks this level's home for the home goal; with no at, the mark goes and home is the surface spawn\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"reflexes\",\"potion\":false}}  the hero's reflexes, under every goal, all on at first; answers with each:\n")
+    fmt.sbprintf(w, "  leave_hazard: walks and jumps out of lava, water or a burn. potion: drinks a health potion under %.0f%% hp\n", HERO_LOW_HP_FRAC * 100)
+    fmt.sbprintf(w, "  floor_dig: never digs the floor under itself over a fall that kills or burns. rim_dig: never digs beside water or lava\n")
     fmt.sbprintf(w, "{{\"cmd\":\"plan\",\"acts\":[{{...}},...]}}  up to %d acts queued as act goals; an act drops the rest\n", AGENT_PLAN_MAX)
     fmt.sbprintf(w, "  an act or a wait drops what is queued and answers with state when it is done\n")
     fmt.sbprintf(w, "{{\"cmd\":\"wait\",\"frames\":30}}  ticks with no input. {{\"cmd\":\"realtime\",\"on\":false}}  the game waits for you between goals\n")
@@ -1083,6 +1091,16 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         link.out_len = 0
     case "goals":
         agent_goals_command(link, gs, root)
+    case "reflexes":
+        agent_reflexes_command(link, gs, root)
+    case "home":
+        at, _, present, ok := agent_tile(root, "at")
+        if present && !ok {
+            agent_reply_error(link, cmd, fmt.tprintf("at must be [x,y] inside the %dx%d level", GRID_W, GRID_H))
+            return
+        }
+        agent_home_set(link, gs, at, gs.level_index, present)
+        agent_reply_text(link, cmd, `"ok":true`)
     case "realtime":
         on, ok := root["on"].(json.Boolean)
         if !ok {
@@ -1180,6 +1198,59 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
     }
 }
 
+@(private="file")
+agent_goal_kind_problem :: proc() -> string {
+    b := strings.builder_make(context.temp_allocator)
+    strings.write_string(&b, "do must name a goal kind:")
+    for row, k in agent_goal_kinds do fmt.sbprintf(&b, "%s %s", "" if k == .Act else ",", row.name)
+    return strings.to_string(b)
+}
+
+// {"cmd":"reflexes","potion":false,...}: switches reflexes on and off, all or
+// nothing, and answers with every one.
+@(private="file")
+agent_reflexes_command :: proc(link: ^Agent_Link, gs: ^Game_State, root: json.Object) {
+    off := link.goals.reflexes_off
+    for key, v in root {
+        if key == "cmd" do continue
+        on, is_bool := v.(json.Boolean)
+        found := false
+        for row, k in hero_reflexes do if row.name == key {
+            found = true
+            if on {
+                off -= {k}
+            } else {
+                off += {k}
+            }
+        }
+        if !found || !is_bool {
+            agent_reply_error(link, "reflexes", fmt.tprintf("%s is not a reflex to switch with true or false", key))
+            return
+        }
+    }
+    agent_reply_text(link, "reflexes", fmt.tprintf(`"ok":true,"reflexes":{{%s}}`, agent_reflexes_set(link, gs, off)))
+}
+
+// The reflexes switched, recorded for a replay; gives them all as JSON fields.
+agent_reflexes_set :: proc(link: ^Agent_Link, gs: ^Game_State, off: bit_set[Hero_Reflex]) -> string {
+    link.goals.reflexes_off = off
+    b := strings.builder_make(context.temp_allocator)
+    for row, k in hero_reflexes do fmt.sbprintf(&b, `%s"%s":%v`, "" if k == min(Hero_Reflex) else ",", row.name, k not_in off)
+    agent_record_op(link, gs, fmt.tprintf(`"reflexes":{{%s}}`, strings.to_string(b)))
+    return strings.to_string(b)
+}
+
+// The home goal's tile on a level marked, or the mark taken away, recorded.
+agent_home_set :: proc(link: ^Agent_Link, gs: ^Game_State, at: [2]i32, level: int, marked: bool) {
+    q := &link.goals
+    q.home, q.home_level, q.has_home = at, level, marked
+    if marked {
+        agent_record_op(link, gs, fmt.tprintf(`"home":[%d,%d],"level":%d`, at.x, at.y, level))
+    } else {
+        agent_record_op(link, gs, `"home":null`)
+    }
+}
+
 // {"cmd":"goals",...}: add, clear or cancel.  The first one turns the pushed
 // events on.
 @(private="file")
@@ -1225,7 +1296,7 @@ agent_goals_command :: proc(link: ^Agent_Link, gs: ^Game_State, root: json.Objec
             problem: string
             switch {
             case !is_obj: problem = "not an object"
-            case !known:  problem = "do must name a goal kind: act"
+            case !known:  problem = agent_goal_kind_problem()
             case:         problem = agent_goal_kinds[kind].check(gs, o)
             }
             lines[i] = agent_canonical(a)
@@ -1298,7 +1369,6 @@ agent_flag :: proc(o: json.Object, key: string) -> bool {
 // key:[x,y] in tiles.  A whole number aims at the tile's centre, as it always
 // has; a fraction (10.0 included) aims at that point, as a mouse can.  point
 // is in tiles.  present says the key was there at all.
-@(private="file")
 agent_tile :: proc(o: json.Object, key: string) -> (tile: [2]i32, point: [2]f32, present, ok: bool) {
     if key not_in o do return
     present = true

@@ -228,7 +228,7 @@ One row per behaviour, a score proc and a run proc:
 | Behaviour | Score | Run |
 |---|---|---|
 | goal | `HERO_GOAL_SCORE` (50) with a goal running | one tick of the goal |
-| fight | press x (30 + 60 x hp fraction), armed only (sword or fire wand) | walk into reach; a sword swing every `HERO_SWING_S`; a wand fires held within `HERO_WAND_RANGE` |
+| fight | press x (30 + 60 x hp fraction), armed only (a sword or fire wand in the bag) | the weapon in hand first (the one held, else the bag's first: a dig leaves the pick in hand); walk into reach; a sword swing every `HERO_SWING_S`; a wand fires held within `HERO_WAND_RANGE` |
 | flee | press x (30 + 60 x (1 - hp fraction)), +`HERO_UNARMED_FLEE` (40) unarmed | to the safe spot farthest from the threat at least `HERO_SAFE_CLEAR` from it, else straight away; cornered at a drop it will not walk, it takes the drop if the fall leaves it standing and no burn waits below, else runs past the threat and keeps going until it is behind |
 | ledge | `HERO_LEDGE_SCORE` (100) when the goal walks the hero into a step that hurts or burns, or into a drop of `HERO_LEDGE_LOOK_TILES`+ not yet looked at | stand and look `HERO_LEDGE_LOOK_S`; then step if the fall is free, else fail the goal ("a 10-tile drop ahead", "a burn ahead") |
 | idle | `HERO_IDLE_SCORE` (10) with the queue empty | stand; with a threat noticed, make for safe ground as flee does, cornered included; on a burn, back to the last safe spot |
@@ -283,12 +283,60 @@ HERO_SAFE_CLEAR   = 8       HERO_WAND_RANGE    = 8       HERO_UNARMED_FLEE     =
 HERO_CLOSING_MEMORY_S = 1.5 s
 ```
 
+## Going somewhere: go and home (card 138)
+
+`{"do":"go","to":[x,y]}` and `{"do":"home"}` (the tile `{"cmd":"home","at":[x,y]}`
+marked on this level, else the surface spawn) are goal kinds whose tick is
+`hero_go_tick`. The path comes from `hero_plan`, an A* over feet tiles in a
+`HERO_NAV_W` x `HERO_NAV_H` window round the hero, at most `HERO_NAV_BUDGET`
+nodes, its scratch (`Hero_Nav`) sized once in `gs.hero`. A tile is stood in
+when it and the one above are open (not solid, not burning, not water) and
+the one below is solid. Moves and their price:
+
+| Move | When | Cost |
+|---|---|---|
+| walk | the next column, level or a step up | 1, a step 1.5 |
+| jump | a step two up, headroom clear | 2 + `HERO_NAV_JUMP_COST` |
+| drop | off an edge to wherever it lands | 1 + 0.3/tile + `HERO_NAV_HP_COST` per hp; never onto a burn or water, never one that kills or leaves hp under `HERO_LOW_HP_FRAC` |
+| gap | a running jump over open columns, landing up to `HERO_GAP_MAX` over | columns + `HERO_NAV_JUMP_COST` |
+| bridge | a block from the bag set under the next column | 1 + `HERO_NAV_BRIDGE_COST`; at most the blocks in the bag's first block stack |
+| dig | with the pick, or by hand through wood: a tunnel (2 tiles), a step cut up (3), a stair down, one down and one across (3); never a shaft, never the floor under the feet, never a tile beside water or lava | 1 + `HERO_NAV_DIG_COST` per tile dug |
+
+The search ends at the goal tile, or keeps the tile nearest it; an empty path
+is `no_route`. A path longer than `HERO_PATH_MAX` keeps its start and is
+planned again from its end. The executor writes only `gs.agent.cmd`: it walks
+toward each step's tile, jumps at a two-high wall or a gap's edge, selects the
+pick (with none, puts a sword or wand away and cuts wood by hand) and mines a
+dig step's tiles from where it stands, selects the block and
+places it for a bridge, and shuts an open window first. It plans again when
+the path runs out, when the hero lands outside the box between a step's two
+tiles (an edge still holding the body up is inside it), and once after `HERO_GO_REPLAN_S` with no headway; a tile dug
+is headway. `HERO_GO_STUCK_S` with none is `blocked`. A goal tile that burns
+or drowns is `hazard` at the start; a solid one means the tile on top of it.
+The ledge row leaves a go alone: its drops are priced already.
+
+## Reflexes
+
+After the brain, under every goal and with none, each reflex the agent has
+not switched off (`{"cmd":"reflexes","potion":false,...}`, `Hero_Reflex`,
+`hero_reflexes` table) may change the tick's input:
+
+- leave_hazard: in lava, water or a burn, or in the air over one, walk (and
+  jump) for the nearest column on dry ground, or ground a jump reaches, that
+  no wall stands before;
+- potion: under `HERO_LOW_HP_FRAC` of max hp, drink a health potion, then not
+  again for `HERO_POTION_COOLDOWN_S`;
+- floor_dig: no pick or wand dig of the floor under the body when the fall
+  through it would kill or land in a burn;
+- rim_dig: no dig of a tile beside water or lava. A weapon's swing is no dig.
+
 ## Not built (yet)
 
 - heal, take_cover, pick_up_loot: the table takes them as rows. Loose blocks are
   sensed but nothing scores them yet; a block that lands in a body crumbles
   and does not hurt.
 - The hero fights with what it holds; it does not pick a weapon from the bag.
-- A deliberate drop the fall would charge for cannot be asked for: the ledge
-  row fails the goal. Cards 138+ (goto and friends) may want a flag for it.
-  Only a cornered hero takes one, and only one it survives.
+- An act goal cannot ask for a drop the fall would charge for: the ledge row
+  fails it. A go plans such drops itself, priced, above the reflex line.
+- The planner sees falling blocks as solid: a tunnel through dirt or sand
+  refills behind the hero.
