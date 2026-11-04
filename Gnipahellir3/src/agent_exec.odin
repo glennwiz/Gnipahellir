@@ -26,7 +26,7 @@ AGENT_GOALS_MAX  :: 32
 AGENT_GOAL_LINE  :: 512  // one goal as recorded; a longer one is refused
 
 Agent_Goal_Status :: enum u8 { Empty, Queued, Running, Done, Failed }
-Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect }
+Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect, Fight }
 // How a goal came: the old act and wait answer with state when it is done, and a
 // plan's goals stop together.
 Agent_Goal_Via    :: enum u8 { Goal, Act, Wait, Plan }
@@ -48,7 +48,9 @@ Agent_Goal :: struct {
     stuck_t:     f32,     // seconds since it came nearer
     replanned:   bool,    // stuck long enough to plan again, once
     left:        int,     // tiles the step being dug still has
+    no_dig:      bool,    // its walks never dig (a fight's)
     work:        Hero_Work,  // a work goal's plan and progress (agent_work.odin)
+    fight:       Hero_Fight,  // a fight goal's target (agent_fight.odin)
     len:         int,
     line:        [AGENT_GOAL_LINE]u8,  // the goal as strict JSON
 }
@@ -155,6 +157,13 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
         check  = hero_work_check,
         start  = hero_work_start,
         tick   = hero_window_tick,
+    },
+    .Fight = {
+        name   = "fight",
+        params = `kind: an enemy kind (the nearest in sight), or slot: its slot in state; the sword in reach, the fire wand at range with mana, from open ground with a clear line, never digging; backs off at low hp`,
+        check  = hero_fight_check,
+        start  = hero_fight_start,
+        tick   = hero_fight_goal_tick,
     },
 }
 
@@ -359,6 +368,12 @@ HERO_THREAT_FAR       :: f32(12)    // and one this far not at all
 HERO_CLOSING_MEMORY_S :: f32(1.5)   // a hunter that stops for breath is still coming
 HERO_SWING_S          :: f32(0.45)  // between sword swings; the sword itself allows SWORD_COOLDOWN
 HERO_WAND_RANGE       :: f32(8)     // a fire wand shoots at a threat this close
+HERO_PASS_BLOWS       :: 1          // blows a threat gets in as the hero runs back past it
+HERO_BREAK_STUCK_S    :: f32(0.5)   // a flight with no headway this long: the way is shut
+HERO_MAULED_TILES     :: f32(1.5)   // a threat this near across is striking: with the way shut, a fall that leaves the hero standing beats it
+HERO_KITE_TILES       :: f32(4)     // with the wand, a threat nearer than this is backed off from as it is shot
+HERO_FIGHT_BACK_S     :: f32(1.5)   // the fight_back reflex answers a blow this long
+HERO_FIGHT_RETREAT_FRAC :: f32(0.3) // a fight goal backs off under this share of max hp
 HERO_SAFE_CLEAR       :: f32(8)     // safe ground has no threat nearer than this
 HERO_SAFE_SPACING     :: i32(2)     // tiles between remembered safe spots
 HERO_LOOSE_ROWS       :: 4          // rows above the head searched for loose blocks
@@ -422,7 +437,13 @@ Hero_Brain :: struct {
     looked:      [2]i32,  // the edge looked at, safe to step
     has_looked:  bool,
     swing_t:     f32,
+    last_hp:     int,  // the hp a tick ago: a drop is a blow
+    hurt_slot:   int,  // the enemy that landed the last blow, answered by fight_back
+    hurt_t:      f32,  // seconds fight_back still answers it
     break_dir:   i8,  // cornered, running past the threat this way until it is behind
+    break_x:     f32, // where the flight last made headway
+    break_t:     f32, // seconds since it did
+    break_shut:  bool, // a way got nowhere: a fall that leaves the hero standing is taken
     potion_t:    f32,  // seconds until the potion reflex may fire again
     path:        Hero_Path,
     nav:         Hero_Nav,
@@ -456,10 +477,18 @@ hero_threat_damage := #partial [Enemy_Kind]int{
     .Vargr         = WAVE_DAMAGE,
 }
 
+// One blow of a kind of enemy at the hero.
+hero_enemy_damage :: proc(gs: ^Game_State, kind: Enemy_Kind) -> int {
+    if roamer_table[kind].cap > 0 do return roamer_table[kind].damage
+    if hero_threat_damage[kind] < 0 do return (gs.player.hp_max + 3) / 4
+    return hero_threat_damage[kind]
+}
+
 // One tick of the brain on the play screen: sense, score, pick, run, tell.
 @(private="file")
 hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b := &gs.hero
+    b.swing_t -= gs.delta_time
     hero_sense(gs, b)
     for row, k in hero_behaviours do if row.score != nil do b.scores[k] = row.score(gs, b, g)
     next := hero_pick(b)
@@ -542,10 +571,8 @@ hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
             dist    = math.sqrt(d.x * d.x + d.y * d.y),
             dx      = d.x,
             in_line = sight_line_clear(&gs.world, hc, ec, skip_ends = true),
-            damage  = hero_threat_damage[e.kind],
+            damage  = hero_enemy_damage(gs, e.kind),
         }
-        if roamer_table[e.kind].cap > 0 do th.damage = roamer_table[e.kind].damage
-        if th.damage < 0 do th.damage = (p.hp_max + 3) / 4
         // Coming at the hero: moving toward it, or nearer than a tick ago.
         // Remembered a while, so a stop-and-go hunter reads as coming.
         coming := e.vel.x * -d.x + e.vel.y * -d.y > 0
@@ -670,21 +697,72 @@ hero_press :: proc(th: ^Hero_Threat) -> f32 {
     return u
 }
 
-// The bag slot the hero fights from: the hand if it holds a sword or a fire
-// wand, else the first in the bag; -1 none.  A dig leaves the pick in hand,
-// and a fight takes the weapon back up.
+// A sword, or a fire wand with the mana for a shot.
 @(private="file")
-hero_weapon_slot :: proc(gs: ^Game_State) -> int {
+hero_armed :: proc(gs: ^Game_State) -> bool {
+    return hero_held_or_first(gs, is_melee_weapon) >= 0 ||
+           (hero_held_or_first(gs, is_fire_wand) >= 0 && gs.player.mana >= FIRE_ORB_MANA)
+}
+
+// The bag slot of a kind of item: the hand's if it holds one, else the first.
+hero_held_or_first :: proc(gs: ^Game_State, is: proc(it: Item) -> bool) -> int {
     inv := &gs.player.inventory
-    weapon :: proc(s: Inventory_Slot) -> bool { return s.count > 0 && (is_melee_weapon(s.item) || is_fire_wand(s.item)) }
-    if inv.selected >= 0 && weapon(inv.slots[inv.selected]) do return inv.selected
-    for s, i in inv.slots do if weapon(s) do return i
+    if inv.selected >= 0 && inv.slots[inv.selected].count > 0 && is(inv.slots[inv.selected].item) do return inv.selected
+    for s, i in inv.slots do if s.count > 0 && is(s.item) do return i
     return -1
 }
 
+// Whether a hero with its feet on s and its centre at hc lands a blow on
+// enemy i: the sword in reach, or the wand with mana in range along a clear
+// line from hc, where the orb leaves, to its body.
+hero_blow_from :: proc(gs: ^Game_State, s: [2]i32, hc: [2]f32, i: int) -> (sword, wand: bool) {
+    e := &gs.enemies.data[i]
+    ec := e.pos + enemy_body_size(e.kind) * 0.5
+    d := ec - hc
+    sword = hero_held_or_first(gs, is_melee_weapon) >= 0 && chebyshev(builder_tile(e), s) <= MELEE_REACH
+    wand = hero_held_or_first(gs, is_fire_wand) >= 0 && gs.player.mana >= FIRE_ORB_MANA &&
+           math.sqrt(d.x * d.x + d.y * d.y) <= HERO_WAND_RANGE && sight_line_clear(&gs.world, hc, ec, skip_ends = true)
+    return
+}
+
+// One tick of a blow at enemy i, if one lands from where the hero is: the
+// sword in reach (unless sword_ok is false), else the fire wand.  A dig left
+// the pick in hand: the weapon is taken up first.  The aim is the body's
+// centre.  False when no blow lands from here.
+hero_strike :: proc(gs: ^Game_State, b: ^Hero_Brain, i: int, sword_ok := true) -> bool {
+    p := &gs.player
+    e := &gs.enemies.data[i]
+    sword, wand := hero_blow_from(gs, player_tile(p), p.pos + [2]f32{PLAYER_W, PLAYER_H} * 0.5, i)
+    slot := -1
+    if sword && sword_ok {
+        slot = hero_held_or_first(gs, is_melee_weapon)
+    } else if wand {
+        slot = hero_held_or_first(gs, is_fire_wand)
+    }
+    if slot < 0 do return false
+    c := &gs.agent.cmd
+    if slot != p.inventory.selected {
+        c.verb, c.verb_arg = .Select, i32(slot)
+        gs.agent.first = true
+        return true
+    }
+    // A wand fires while the button is held and paces its own shots; a sword
+    // swings on a click, which the hero gives every HERO_SWING_S.
+    if is_melee_weapon(held_item(p)) {
+        if b.swing_t > 0 do return true
+        b.swing_t = HERO_SWING_S
+        gs.agent.first = true
+    }
+    c.has_mine = true
+    c.mine     = builder_tile(e)
+    c.aim      = e.pos + enemy_body_size(e.kind) * 0.5
+    return true
+}
+
+// The running goal is a fight: it does the fighting and the backing off.
 @(private="file")
-hero_armed :: proc(gs: ^Game_State) -> bool {
-    return hero_weapon_slot(gs) >= 0
+hero_fighting_goal :: proc(g: ^Agent_Goal) -> bool {
+    return g != nil && g.kind == .Fight && g.status == .Running
 }
 
 @(private="file")
@@ -718,33 +796,48 @@ hero_walk_to :: proc(gs: ^Game_State, b: ^Hero_Brain, x: f32) {
 }
 
 // Away from th: to the remembered safe spot farthest from it, if one lies
-// HERO_SAFE_CLEAR from it, else straight away.  Cornered at a drop it will
-// not walk, it takes the drop if the fall leaves it standing, and otherwise
-// runs the other way, past the threat: never frozen in danger.
-@(private="file")
-hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat) {
+// clear (HERO_SAFE_CLEAR unless asked) from it, else straight away.  Cornered
+// at a drop it will not walk, it takes the drop only when the fall costs less
+// than running back past the threat would (HERO_PASS_BLOWS of its blows: every
+// threat is slower than the hero, so it gets in that many at most), and
+// otherwise runs the other way, past the threat.  A way that makes no headway
+// for HERO_BREAK_STUCK_S with the threat on it (HERO_MAULED_TILES) is shut: the
+// hero turns back, and with the threat on it takes a fall that leaves it
+// standing, a blow taken as it goes included.  Never frozen in danger.
+hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear := HERO_SAFE_CLEAR) {
     s := &b.senses
     hx := gs.player.pos.x + PLAYER_W * 0.5
     tx := hx + th.dx
-    best_x, best_d := hx - math.sign(th.dx) * HERO_THREAT_FAR, HERO_SAFE_CLEAR
+    best_x, best_d := hx - math.sign(th.dx) * HERO_THREAT_FAR, clear
     for spot in s.safe[:s.n_safe] {
         sx := f32(spot.x) + 0.5
         if d := abs(sx - tx); d > best_d do best_x, best_d = sx, d
     }
+    if th.dist >= clear do b.break_shut = false  // got clear: the next corner is weighed afresh
+    dir: i8
     if b.break_dir != 0 && math.sign(th.dx) != -f32(b.break_dir) {
-        hero_walk(gs, b, b.break_dir)  // still on the way past it
-        return
+        dir = b.break_dir  // still on the way past it
+    } else {
+        b.break_dir = 0
+        if abs(best_x - hx) < 0.3 do return  // at rest by choice
+        dir = 1 if best_x > hx else -1
     }
-    b.break_dir = 0
-    if abs(best_x - hx) < 0.3 do return
-    dir: i8 = 1 if best_x > hx else -1
+    // A way that gives no headway for HERO_BREAK_STUCK_S with the threat on
+    // the hero is shut: the other way, where a fall that leaves the hero
+    // standing beats a mauling.  With the threat still off it keeps at it.
+    b.break_t += gs.delta_time
+    if abs(hx - b.break_x) > 0.5 do b.break_x, b.break_t = hx, 0
+    if b.break_t >= HERO_BREAK_STUCK_S && abs(th.dx) < HERO_MAULED_TILES {
+        dir = -dir
+        b.break_dir, b.break_x, b.break_t, b.break_shut = dir, hx, 0, true
+    }
     if col, _ := hero_step(gs, s, dir); !hero_falls_safe(gs) && hero_unsafe(col) {
-        if !col.hazard && col.hurts < gs.player.hp {
-            hero_walk(gs, b, dir, drop_ok = true)  // a hurt fall beats a mauling
+        if !col.hazard && col.hurts < gs.player.hp && (col.hurts < th.damage * HERO_PASS_BLOWS || b.break_shut && abs(th.dx) < HERO_MAULED_TILES && col.hurts + th.damage < gs.player.hp) {
+            hero_walk(gs, b, dir, drop_ok = true)  // a fall that costs less than the blows, or than a mauling
             return
         }
-        b.break_dir = -dir
         dir = -dir
+        b.break_dir, b.break_x, b.break_t = dir, hx, 0
     }
     hero_walk(gs, b, dir)
 }
@@ -764,43 +857,25 @@ hero_goal_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
 @(private="file")
 hero_fight_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     th := hero_threat(b)
-    if th == nil || !hero_armed(gs) do return 0
+    if th == nil || !hero_armed(gs) || hero_fighting_goal(g) do return 0
     return hero_press(th) * (30 + 60 * hero_hp_frac(gs))
 }
 
 @(private="file")
 hero_fight_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
     th := hero_threat(b)
-    b.swing_t -= gs.delta_time
-    e := &gs.enemies.data[th.slot]
-    et := builder_tile(e)
-    c := &gs.agent.cmd
-    if ws := hero_weapon_slot(gs); ws != gs.player.inventory.selected {
-        c.verb, c.verb_arg = .Select, i32(ws)
-        gs.agent.first = true
+    if hero_strike(gs, b, th.slot) {
+        // The wand keeps its distance: too near, the hero backs off shooting.
+        if is_fire_wand(held_item(&gs.player)) && th.dist < HERO_KITE_TILES do hero_get_clear(gs, b, th)
         return
     }
-    wand := is_fire_wand(held_item(&gs.player))
-    if th.dist > HERO_WAND_RANGE || (!wand && chebyshev(et, player_tile(&gs.player)) > MELEE_REACH) {
-        hero_walk_to(gs, b, gs.player.pos.x + PLAYER_W * 0.5 + th.dx)
-        if !wand do return
-    }
-    // A wand fires while the button is held and paces its own shots; a sword
-    // swings on a click, which the hero gives every HERO_SWING_S.
-    if !wand {
-        if b.swing_t > 0 do return
-        b.swing_t = HERO_SWING_S
-        gs.agent.first = true
-    }
-    c.has_mine = true
-    c.mine     = et
-    c.aim      = e.pos + enemy_body_size(e.kind) * 0.5
+    hero_walk_to(gs, b, gs.player.pos.x + PLAYER_W * 0.5 + th.dx)  // into reach, or range
 }
 
 @(private="file")
 hero_flee_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     th := hero_threat(b)
-    if th == nil do return 0
+    if th == nil || hero_fighting_goal(g) do return 0
     s := 30 + 60 * (1 - hero_hp_frac(gs))
     if !hero_armed(gs) do s += HERO_UNARMED_FLEE
     // Once running, the hero keeps running until the threat is out of
@@ -811,7 +886,9 @@ hero_flee_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 
 
 @(private="file")
 hero_flee_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
-    hero_get_clear(gs, b, hero_threat(b))
+    th := hero_threat(b)
+    hero_get_clear(gs, b, th)
+    hero_strike(gs, b, th.slot, sword_ok = false)  // a wand shoots back as the hero runs
 }
 
 // A goal walking the hero to the edge of a drop: stop, look, then step if the
@@ -820,6 +897,12 @@ hero_flee_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
 hero_ledge_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     if g == nil || g.status != .Running || g.cmd.move == 0 || (g.first && g.cmd.jump) do return 0
     if hero_falls_safe(gs) do return 0
+    // A threat that takes over from the goal comes first, a look begun or not:
+    // fight and flee walk into no step that hurts.  It takes over as hero_pick
+    // would let it take over from the goal; the look itself holds nothing.
+    rival := max(hero_fight_score(gs, b, g), hero_flee_score(gs, b, g))
+    held := b.held if b.current == .Work_Goal else HERO_MIN_HOLD_S
+    if held >= HERO_MIN_HOLD_S && rival > HERO_GOAL_SCORE + HERO_SWITCH_MARGIN do return 0
     col, x := hero_step(gs, &b.senses, g.cmd.move)
     looked := b.has_looked && b.looked == {x, b.senses.feet_y}
     if b.current == .Avoid_Ledge && !looked do return HERO_LEDGE_SCORE  // a look, once begun, runs to its end
@@ -1009,7 +1092,7 @@ hero_nav_h :: proc(a, b: [2]i32) -> f32 {
 // A path from feet tile from toward to, into out: to itself when the search
 // reaches it, else the tile nearest it the search found.  An empty path: no
 // tile nearer than from.
-hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path) -> (reached: bool) {
+hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := true) -> (reached: bool) {
     n := &gs.hero.nav
     w := &gs.world
     o := [2]i32{clamp(from.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(from.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
@@ -1018,7 +1101,7 @@ hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path) -> (reache
     out.n, out.at = 0, 0
     s := hero_nav_index(o, from)
     if s < 0 do return false
-    has_pick := hero_item_slot(gs, .Pickaxe) >= 0
+    has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
     blocks := 0
     if b := hero_block_slot(gs); b >= 0 do blocks = gs.player.inventory.slots[b].count
 
@@ -1217,7 +1300,7 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     }
     if stale {
         if !p.grounded do return false  // plan from the ground
-        hero_plan(gs, feet, g.to, path)
+        hero_plan(gs, feet, g.to, path, dig = !g.no_dig)
         path.goal = g.id
         if path.n == 0 {
             g.status = .Failed
@@ -1301,7 +1384,7 @@ hero_go_toward :: proc(gs: ^Game_State, t: [2]i32) {
 // of water, a potion under the reflex line, no dig of the floor when the fall
 // would kill, no dig of a pond or lava rim.
 
-Hero_Reflex :: enum u8 { Leave_Hazard, Potion, Floor_Dig, Rim_Dig }
+Hero_Reflex :: enum u8 { Leave_Hazard, Potion, Floor_Dig, Rim_Dig, Fight_Back }
 
 @(rodata)
 hero_reflexes := [Hero_Reflex]struct {
@@ -1312,6 +1395,7 @@ hero_reflexes := [Hero_Reflex]struct {
     .Potion       = {"potion",       hero_reflex_potion},
     .Floor_Dig    = {"floor_dig",    hero_reflex_floor},
     .Rim_Dig      = {"rim_dig",      hero_reflex_rim},
+    .Fight_Back   = {"fight_back",   hero_reflex_fight_back},
 }
 
 @(private="file")
@@ -1415,4 +1499,26 @@ hero_dig_safe :: proc(w: ^World_Grid, t: [2]i32, fy, x0, x1: i32) -> (drop: int,
 @(private="file")
 hero_reflex_rim :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     if hero_digging(gs) && hero_rim(&gs.world, gs.agent.cmd.mine) do gs.agent.cmd.has_mine = false
+}
+
+// A blow from an enemy is answered for HERO_FIGHT_BACK_S: a swing or a shot
+// at it when one lands from where the hero is, the brain's walk kept.
+@(private="file")
+hero_reflex_fight_back :: proc(gs: ^Game_State, b: ^Hero_Brain) {
+    p := &gs.player
+    hurt := p.hp < b.last_hp
+    b.last_hp = p.hp
+    b.hurt_t = max(b.hurt_t - gs.delta_time, 0)
+    if hurt {
+        // The blow's dealer, by the name the game gave it: the nearest of that kind.
+        best := HERO_THREAT_FAR
+        for i in 0 ..< MAX_ENEMIES {
+            if !gs.enemies.active[i] || enemy_kind_names[gs.enemies.data[i].kind] != gs.hurt_by do continue
+            e := &gs.enemies.data[i]
+            if d := chebyshev(builder_tile(e), player_tile(p)); f32(d) < best do best, b.hurt_slot, b.hurt_t = f32(d), i, HERO_FIGHT_BACK_S
+        }
+    }
+    if b.hurt_t <= 0 || !gs.enemies.active[b.hurt_slot] do return
+    if gs.agent.cmd.verb != .None || agent_window_open(gs) do return  // a potion first; never a click in a window
+    hero_strike(gs, b, b.hurt_slot)
 }

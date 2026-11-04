@@ -228,8 +228,8 @@ One row per behaviour, a score proc and a run proc:
 | Behaviour | Score | Run |
 |---|---|---|
 | goal | `HERO_GOAL_SCORE` (50) with a goal running | one tick of the goal |
-| fight | press x (30 + 60 x hp fraction), armed only (a sword or fire wand in the bag) | the weapon in hand first (the one held, else the bag's first: a dig leaves the pick in hand); walk into reach; a sword swing every `HERO_SWING_S`; a wand fires held within `HERO_WAND_RANGE` |
-| flee | press x (30 + 60 x (1 - hp fraction)), +`HERO_UNARMED_FLEE` (40) unarmed | to the safe spot farthest from the threat at least `HERO_SAFE_CLEAR` from it, else straight away; cornered at a drop it will not walk, it takes the drop if the fall leaves it standing and no burn waits below, else runs past the threat and keeps going until it is behind |
+| fight | press x (30 + 60 x hp fraction), armed only (a sword, or a fire wand with mana); 0 while a fight goal runs | `hero_strike`: the sword in reach, else the wand within `HERO_WAND_RANGE` along a clear line from the body's centre (where the orb leaves) to the enemy's; the weapon taken up first; a sword swing every `HERO_SWING_S`. With the wand, a threat nearer than `HERO_KITE_TILES` is backed off from as it is shot. No blow from here: walk at it |
+| flee | press x (30 + 60 x (1 - hp fraction)), +`HERO_UNARMED_FLEE` (40) unarmed | to the safe spot farthest from the threat at least `HERO_SAFE_CLEAR` from it, else straight away; cornered at a drop it will not walk, it takes the drop only if the fall costs less hp than `HERO_PASS_BLOWS` of the threat's blows (every threat is slower than the hero, so running back past it costs that much at most) and no burn waits below, else runs past the threat and keeps going until it is behind. A way that makes no headway for `HERO_BREAK_STUCK_S` with the threat on it (within `HERO_MAULED_TILES` across) is shut: it turns back, and at a drop with the threat on it takes a fall that leaves it standing even after one more blow, burns excepted, rather than be mauled; with the threat still off it keeps at the way it is going; the shut mark clears when it gets clear. With only the wand it shoots as it runs; 0 while a fight goal runs |
 | ledge | `HERO_LEDGE_SCORE` (100) when the goal walks the hero into a step that hurts or burns, or into a drop of `HERO_LEDGE_LOOK_TILES`+ not yet looked at | stand and look `HERO_LEDGE_LOOK_S`; then step if the fall is free, else fail the goal ("a 10-tile drop ahead", "a burn ahead") |
 | idle | `HERO_IDLE_SCORE` (10) with the queue empty | stand; with a threat noticed, make for safe ground as flee does, cornered included; on a burn, back to the last safe spot |
 
@@ -329,6 +329,30 @@ not switched off (`{"cmd":"reflexes","potion":false,...}`, `Hero_Reflex`,
 - floor_dig: no pick or wand dig of the floor under the body when the fall
   through it would kill or land in a burn;
 - rim_dig: no dig of a tile beside water or lava. A weapon's swing is no dig.
+- fight_back: hurt, the hero strikes back for `HERO_FIGHT_BACK_S` at the
+  nearest enemy of the kind that hurt it (`gs.hurt_by`), the sword in reach or
+  the wand at range, unless a verb (a potion) is set or a window is open. It
+  answers blows the brain does not: in the first `HERO_REACTION_S`, and while
+  the hero flees with only a sword.
+
+## Fighting: the fight goal (card 140)
+
+`{"do":"fight","kind":"Pond_Frog"}` (the nearest of that kind in sight) or
+`{"do":"fight","slot":12}` fights one enemy until it is gone (`agent_fight.odin`).
+It strikes through `hero_strike`, as the brain does: the sword in reach, else
+the fire wand with mana at range along a clear line to the body's centre (the
+enemy's w,h). With no blow from where it stands it walks, as a go does but never
+digging, to the stand nearest the target's row (then nearest the hero) from
+which one lands, so from a pit or behind a ridge it climbs out first and never
+shoots into a wall (run 8 tunnelled under a frog and shot the dirt). A stand no
+walk gets to is passed over, `HERO_FIGHT_SKIP` at most; with no stand at all
+(an eel hugging the far wall of its pool) it waits `HERO_FIGHT_WAIT_S` in all for the
+target to come out. With the wand it keeps `HERO_KITE_TILES` off. Under
+`HERO_FIGHT_RETREAT_FRAC` of its hp it backs off all the way out of
+`HERO_THREAT_FAR`, shooting with the wand as it goes, and fails `low_hp`.
+While it runs, the brain's fight and flee score 0: the goal does both. It
+fails `no_item` (no sword or fire wand), `no_target` (none in sight, or the
+slot is empty), `unreachable` or `low_hp`.
 
 ## Working: mine, gather, craft, place, store (card 139)
 
@@ -387,7 +411,8 @@ that pauses the goal shuts the window to fight or flee; back on the goal, the
 hero walks to the machine again and reopens it.
 
 A failure says why first: `no_recipe`, `no_station`, `no_item`,
-`out_of_reach`, `unreachable`, `blocked` (a tile in reach gave nothing for
+`out_of_reach`, `unreachable`, `unsafe` (digging it from its only stand drops
+the hero further than a free fall), `blocked` (a tile in reach gave nothing for
 `HERO_MINE_GIVE_UP_S`, as when the rim reflex holds the dig) or `full`.
 
 ## Not built (yet)
