@@ -1,5 +1,8 @@
 package game
 
+import "core:fmt"
+import "core:os"
+import "core:strings"
 import rl "vendor:raylib"
 
 // Virtual resolution: the game always simulates and renders at this fixed size;
@@ -25,6 +28,14 @@ screen_transform :: proc() -> (scale: f32, offset: [2]f32) {
 }
 
 main :: proc() {
+    // The run tools are options of this binary (agent_tools.odin): a report
+    // prints and ends here, before any window.
+    said := strings.builder_make()
+    run, exit, code := tool_args(os.args[1:], &said)
+    fmt.print(strings.to_string(said))
+    if exit do os.exit(code)
+    strings.builder_destroy(&said)
+
     agent := new(Agent_Link)
     defer free(agent)
     agent_open(agent)  // before anything writes: it can refuse to run in this folder
@@ -80,13 +91,19 @@ main :: proc() {
     if !gs.ui.title_fresh do log_action(gs, "World seed %d", gs.world_seed)
     load_settings(gs)  // after audio_init: overrides its default volumes
     agent_boot_title(agent, gs)
+    replay: Tool_Replay
+    switch run.mode {
+    case .Play:
+    case .Agent_Run: if !tool_agent_run(agent, gs, run) do os.exit(1)
+    case .Replay:    if !tool_replay_start(&replay, agent, gs, run.folder) do os.exit(1)
+    }
 
     for !rl.WindowShouldClose() && !gs.quit_requested {
         profile_scope("frame")
         if rl.IsKeyPressed(.F11) do rl.ToggleBorderlessWindowed()
         gs.delta_time = rl.GetFrameTime()
         if gs.ui.agent_requested do agent_title_start(agent, gs)
-        tick := agent_pump(agent, gs)
+        tick := tool_replay_frame(&replay, agent, gs) if run.mode == .Replay else agent_pump(agent, gs)
         if gs.agent.driving do agent_watcher_input(gs, tick)
         if gs.agent.driving do agent_chat_poll(agent, gs)
         if tick do game_update(gs)
@@ -107,6 +124,7 @@ main :: proc() {
         if agent_draw_due(agent) do draw_game(gs, target)
     }
 
+    tool_replay_end(&replay, agent)
     save_on_quit(gs)
     flush_action_log(gs)
     flush_cam_log(gs)
@@ -115,4 +133,5 @@ main :: proc() {
     assets_shutdown(&gs.assets)
     rl.UnloadRenderTexture(target)
     rl.CloseWindow()
+    if replay.diverged do os.exit(1)
 }

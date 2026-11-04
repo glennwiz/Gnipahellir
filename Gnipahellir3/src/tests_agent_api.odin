@@ -845,7 +845,7 @@ agent_plan_is_all_or_nothing :: proc(t: ^testing.T) {
 }
 
 // What a replay does with a recording must be what the plan did: this plays the
-// real rows back, the way tools/agent_replay.py does.
+// real rows back, act by act, as the old replay did.
 @(test)
 agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
     start :: proc(gs: ^Game_State, link: ^Agent_Link) {
@@ -914,7 +914,7 @@ agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
             if row == "" do continue
             value, _ := json.parse_string(row)
             rec := value.(json.Object)
-            if "goal" in rec || "clear" in rec || "cancel" in rec do continue  // the goal replay's rows, as agent_replay.py skips them
+            if "goal" in rec || "clear" in rec || "cancel" in rec || "done" in rec || "failed" in rec || "window" in rec do continue  // the goal replay's rows
             if n, ok := agent_int(rec, "idle"); ok {
                 append(&replay, Replay_Row{fmt.aprintf(`{{"cmd":"wait","frames":%d}}`, n, allocator = heap), n})
                 continue
@@ -1632,7 +1632,7 @@ the_brief_is_written_from_the_game_as_it_stands :: proc(t: ^testing.T) {
 }
 
 @(test)
-the_brief_is_served_while_a_client_plays_and_a_second_client_is_turned_away :: proc(t: ^testing.T) {
+the_brief_is_served_while_a_client_plays_and_a_second_client_watches :: proc(t: ^testing.T) {
     gs, link, at := agent_test_listening(t)
     defer free(gs)
     defer free(link)
@@ -1651,10 +1651,11 @@ the_brief_is_served_while_a_client_plays_and_a_second_client_is_turned_away :: p
     testing.expect(t, strings.contains(reply, "HOW THE GAME WAITS"))
 
     second, _ := net.dial_tcp(at)
-    reply = agent_test_ask(gs, link, second, `{"cmd":"state"}` + "\n", -1, buf[:])
-    net.close(second)
-    testing.expect(t, strings.contains(reply, "another agent is playing"), reply)
+    reply = agent_test_ask(gs, link, second, `{"cmd":"state"}` + "\n", 1, buf[:])
+    testing.expect(t, strings.contains(reply, `"re":"state","ok":true`), reply[:min(len(reply), 60)])
     testing.expect_value(t, link.pending_n, 0)
+    testing.expect_value(t, link.readers_n, 1)
+    net.close(second)
 
     out := agent_test_ask(gs, link, client, `{"cmd":"state"}` + "\n", 1, buf[:])
     testing.expect(t, strings.contains(out, `"ok":true`), "the first client never noticed")
@@ -2200,7 +2201,7 @@ agent_typing_changes_nothing_in_the_game :: proc(t: ^testing.T) {
     testing.expect(t, runtime.memory_equal(before, gs, size_of(Game_State)), "typing touched Game_State")
 }
 
-// A run with talk records it and replays to the same game, as agent_replay.py does.
+// A run with talk records it and replays to the same game, act by act.
 @(test)
 agent_talk_is_recorded_and_the_replay_matches :: proc(t: ^testing.T) {
     start :: proc(gs: ^Game_State, link: ^Agent_Link) {
@@ -2252,6 +2253,7 @@ agent_talk_is_recorded_and_the_replay_matches :: proc(t: ^testing.T) {
     defer delete(rows)
     goal_rows := 0
     for row in all_rows {
+        if strings.contains(row, `,"done":`) || strings.contains(row, `,"failed":`) || strings.contains(row, `,"window":`) do continue
         if strings.contains(row, `,"goal":`) || strings.contains(row, `,"clear":true}`) {
             goal_rows += 1
             continue
@@ -2384,7 +2386,7 @@ a_get_and_a_connect_in_one_frame_are_both_answered :: proc(t: ^testing.T) {
 }
 
 @(test)
-two_clients_in_one_frame_the_first_plays_the_second_is_turned_away :: proc(t: ^testing.T) {
+two_clients_in_one_frame_the_first_plays_the_second_only_watches :: proc(t: ^testing.T) {
     gs, link, at := agent_test_listening(t)
     defer free(gs)
     defer free(link)
@@ -2400,9 +2402,9 @@ two_clients_in_one_frame_the_first_plays_the_second_is_turned_away :: proc(t: ^t
     net.send_tcp(second, transmute([]u8)string(`{"cmd":"objective","goal":"second"}` + "\n"))
     time.sleep(50 * time.Millisecond)
 
-    got, _ := agent_test_collect(gs, link, {first, second}, {1, -1}, {bufs[0][:], bufs[1][:]})
+    got, _ := agent_test_collect(gs, link, {first, second}, {1, 1}, {bufs[0][:], bufs[1][:]})
     testing.expect_value(t, string(bufs[0][:got[0]]), `{"re":"objective","ok":true}` + "\n")
-    testing.expect(t, strings.contains(string(bufs[1][:got[1]]), "another agent is playing"), string(bufs[1][:got[1]]))
+    testing.expect(t, strings.contains(string(bufs[1][:got[1]]), "a watcher can only ask for state"), string(bufs[1][:got[1]]))
     testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "first")
 }
 
@@ -3094,4 +3096,192 @@ a_socket_client_hears_events_before_the_reply_and_its_plan_step_is_cut :: proc(t
     defer delete(data)
     for row in strings.split_lines(string(data)) do if strings.contains(row, `"played"`) do testing.expect(t, strings.contains(row, `"played":5,"act":{`) && strings.contains(row, `"move":"right"`), row)
     testing.expect(t, strings.contains(string(data), `"played":5,`), "the cut step is recorded")
+}
+
+// ─── Watchers and a reconnect, in place of the old bridge (card 141) ─────────
+
+// Pumps and ticks, as main does, for this many frames.
+@(private="file")
+agent_test_frames :: proc(link: ^Agent_Link, gs: ^Game_State, frames: int) {
+    for _ in 0 ..< frames {
+        if agent_pump(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+}
+
+@(test)
+a_watcher_reads_state_hears_events_and_takes_the_game_when_the_driver_goes :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+
+    driver, _ := net.dial_tcp(at)
+    agent_test_ask(gs, link, driver, `{"cmd":"state"}` + "\n", 1, buf[:])
+    watcher, _ := net.dial_tcp(at)
+    defer net.close(watcher)
+    out := agent_test_ask(gs, link, watcher, `{"cmd":"state","w":3,"h":3}` + "\n", 1, buf[:])
+    testing.expect(t, strings.contains(out, `"re":"state","ok":true`), out[:min(len(out), 60)])
+    testing.expect(t, link.connected && link.readers_n == 1, "the driver still drives")
+
+    agent_test_type(link, gs, "hello agent")
+    out = agent_test_ask(gs, link, watcher, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    testing.expect(t, strings.contains(out, "hello agent"), "a watcher sees the watcher's line")
+    out = agent_test_ask(gs, link, driver, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    testing.expect(t, strings.contains(out, "hello agent"), "and leaves it for the driver")
+
+    out = agent_test_ask(gs, link, watcher, `{"cmd":"act","move":"left","frames":5}` + "\n", 1, buf[:])
+    testing.expect_value(t, out, `{"re":"act","ok":false,"error":"another agent drives: a watcher can only ask for state"}` + "\n")
+    testing.expect(t, !agent_goals_busy(&link.goals), "and nothing of it plays")
+
+    // A watcher hears every event, even before the driver speaks goals.
+    agent_test_ask(gs, link, driver, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":3}]}` + "\n", 1, buf[:])
+    agent_test_frames(link, gs, 10)
+    net.set_blocking(watcher, false)
+    got := 0
+    for _ in 0 ..< 2000 {
+        agent_pump(link, gs)
+        n, err := net.recv_tcp(watcher, buf[got:])
+        if err == nil do got += n
+        if strings.contains(string(buf[:got]), "goal_done") do break
+    }
+    testing.expect(t, strings.contains(string(buf[:got]), `{"event":"goal_done"`), string(buf[:got]))
+    agent_test_frames(link, gs, 5)
+    for _ in 0 ..< 200 {
+        n, err := net.recv_tcp(watcher, buf[got:])
+        if err == nil do got += n
+    }
+    testing.expect_value(t, strings.count(string(buf[:got]), "goal_done"), 1)  // once
+
+    // The driver goes: the watcher's next order takes the game, and plays.
+    net.close(driver)
+    agent_test_frames(link, gs, 20)
+    testing.expect(t, !link.connected)
+    out = agent_test_ask(gs, link, watcher, `{"cmd":"state"}` + "\n", 1, buf[:])
+    testing.expect(t, strings.contains(out, `"ok":true`) && !link.connected, "state alone does not take the game")
+    out = agent_test_ask(gs, link, watcher, `{"cmd":"objective","goal":"back"}` + "\n", 1, buf[:])
+    testing.expect_value(t, out, `{"re":"objective","ok":true}` + "\n")
+    testing.expect(t, link.connected && link.readers_n == 0, "the watcher drives now")
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "back")
+}
+
+@(test)
+a_client_that_lost_its_connection_comes_back_and_a_full_house_is_turned_away :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+
+    first, _ := net.dial_tcp(at)
+    agent_test_ask(gs, link, first, `{"cmd":"objective","goal":"one"}` + "\n", 1, buf[:])
+    net.close(first)
+    agent_test_frames(link, gs, 20)
+    testing.expect(t, !link.connected)
+    again, _ := net.dial_tcp(at)
+    defer net.close(again)
+    out := agent_test_ask(gs, link, again, `{"cmd":"objective","goal":"two"}` + "\n", 1, buf[:])
+    testing.expect_value(t, out, `{"re":"objective","ok":true}` + "\n")
+    testing.expect(t, link.connected, "a reconnect drives")
+
+    watchers: [AGENT_READERS_MAX]net.TCP_Socket
+    for &w in watchers {
+        w, _ = net.dial_tcp(at)
+        agent_test_ask(gs, link, w, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    }
+    defer for w in watchers do net.close(w)
+    testing.expect_value(t, link.readers_n, AGENT_READERS_MAX)
+    extra, _ := net.dial_tcp(at)
+    defer net.close(extra)
+    out = agent_test_ask(gs, link, extra, `{"cmd":"state"}` + "\n", -1, buf[:])
+    testing.expect(t, strings.contains(out, "every watcher's place is taken"), out)
+    testing.expect_value(t, link.readers_n, AGENT_READERS_MAX)
+
+    net.close(watchers[0])
+    watchers[0], _ = net.dial_tcp(at)  // so the deferred close has a socket of its own
+    agent_test_frames(link, gs, 3)
+    testing.expect_value(t, link.readers_n, AGENT_READERS_MAX - 1)  // a watcher that hung up leaves
+    out = agent_test_ask(gs, link, watchers[AGENT_READERS_MAX - 1], `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    testing.expect(t, strings.contains(out, `"ok":true`), "and the others are still served")
+}
+
+@(test)
+a_watcher_that_stops_reading_or_sends_no_line_is_dropped :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+    driver, _ := net.dial_tcp(at)
+    defer net.close(driver)
+    agent_test_ask(gs, link, driver, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+
+    deaf, _ := net.dial_tcp(at)
+    defer net.close(deaf)
+    agent_test_ask(gs, link, deaf, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    ask := strings.repeat(`{"cmd":"state","x":0,"y":0,"w":192,"h":108}` + "\n", 400, context.temp_allocator)
+    net.send_tcp(deaf, transmute([]u8)ask)
+    for _ in 0 ..< 20 {
+        if link.readers_n == 0 do break
+        agent_pump(link, gs)
+    }
+    testing.expect_value(t, link.readers_n, 0)
+    testing.expect(t, link.connected, "the driver plays on")
+
+    long, _ := net.dial_tcp(at)
+    defer net.close(long)
+    agent_test_ask(gs, link, long, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    testing.expect_value(t, link.readers_n, 1)
+    net.send_tcp(long, transmute([]u8)strings.repeat("x", AGENT_LINE_MAX + 10, context.temp_allocator))
+    time.sleep(50 * time.Millisecond)
+    agent_test_frames(link, gs, 3)
+    testing.expect_value(t, link.readers_n, 0)  // a line this long is not the protocol
+    net.set_blocking(long, true)
+    net.set_option(long, .Receive_Timeout, 2 * time.Second)
+    for {  // what it was sent, then the close
+        n, err := net.recv_tcp(long, buf[:])
+        if n > 0 && err == nil do continue
+        hung_up := (n == 0 && err == nil) || (err != nil && err != .Timeout && err != .Would_Block)  // unread bytes make it a reset
+        testing.expect(t, hung_up, "a dropped watcher is hung up on")
+        break
+    }
+
+    last, _ := net.dial_tcp(at)
+    defer net.close(last)
+    agent_test_ask(gs, link, last, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    agent_close(link, gs)
+    net.set_blocking(last, true)
+    net.set_option(last, .Receive_Timeout, 2 * time.Second)
+    n, err := net.recv_tcp(last, buf[:])
+    testing.expect(t, n == 0 && err == nil, "closing the link hangs up on its watchers")
+}
+
+// The driver's going and a watcher's order in one frame: the going is read first.
+@(test)
+a_watcher_that_speaks_as_the_driver_goes_takes_the_game_that_frame :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+
+    driver, _ := net.dial_tcp(at)
+    agent_test_ask(gs, link, driver, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    watcher, _ := net.dial_tcp(at)
+    defer net.close(watcher)
+    agent_test_ask(gs, link, watcher, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+    net.close(driver)
+    net.send_tcp(watcher, transmute([]u8)string(`{"cmd":"objective","goal":"mine now"}` + "\n"))
+    time.sleep(50 * time.Millisecond)  // both are in before the frame looks
+    agent_pump(link, gs)
+    testing.expect(t, link.connected && link.readers_n == 0, "one frame: the driver gone, the watcher in")
+    agent_pump(link, gs)
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "mine now")  // its order, the next
 }
