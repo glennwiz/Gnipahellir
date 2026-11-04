@@ -21,6 +21,22 @@ what broke, and hands back a report. Glenn reads the reports; feel is still his 
 - A card's cap counts game time (frames / 60), not wall time: the box is shared and
   the game can fall well behind the clock under load. Pass `timeout` twice the cap
   as the wall-time backstop, and give frames played and the wall time in RUN.
+- A card past ritual A (physics, the Deep Cave, lava) starts from a prepared save
+  instead of replaying the ~20 game minutes to get there (Glenn, 2026-11-04):
+  `build/gnipa --make-save --seed <seed> --out build/past_a_<seed>.sav`, then
+  `build/gnipa --agent-run --port 7777 --load build/past_a_<seed>.sav` (no `--seed`:
+  the world is the save's). The run folder keeps the save as `start.sav`, and
+  action.log opens with `Run starts from the save`. A `--replay` of such a run is
+  refused: a replay starts from the seed.
+- How the save is made: a new game on the seed plays the route through the game's
+  own handlers (pickaxe off its ledge, bench and two Sky Altars crafted, the tier-A
+  foundation and gate altar placed, Scroll A taken from its chest, the gate, a
+  second foundation and altar in the Low Sky, the ritual, the return portal). Two
+  shortcuts, and only two: the player is set beside each station instead of
+  walking, and each step's exact materials are handed over instead of gathered,
+  all of them spent. No time passes. So the run starts on the Surface with the
+  start kit, the pickaxe and Scroll A, two altars and a bench standing, frame 0,
+  and nothing gathered, explored or fought. Say so in RUN.
 - Your client logs every state poll it makes to `client_state.jsonl` in the run
   folder, so the reviewer can check any value you cite.
 - Drive the game only through the API: a GET on the port is the brief. Send goals over
