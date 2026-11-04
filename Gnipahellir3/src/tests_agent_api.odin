@@ -2659,6 +2659,21 @@ agent_crew_flips_the_crew_between_gather_and_build :: proc(t: ^testing.T) {
     testing.expect_value(t, g.mode, Golem_Mode.Build)  // once: a second press would flip it back
     agent_test_run_act(link, gs, `{"cmd":"act","crew":true}`)
     testing.expect_value(t, g.mode, Golem_Mode.Gather)
+
+    // Card 148: with only a cracked golem the key changes nothing, and says so;
+    // a golem at work on another level is that level's.
+    g.status = .Broken
+    gs.golems.data[5] = {status = .Deployed, mode = .Gather, level = (gs.level_index + 1) % NUM_LEVELS}
+    gs.notify.count = 0
+    agent_test_run_act(link, gs, `{"cmd":"act","crew":true}`)
+    testing.expect_value(t, g.mode, Golem_Mode.Gather)
+    testing.expect_value(t, gs.notify.count, 1)
+    testing.expect_value(t, string(gs.notify.items[0].text[:gs.notify.items[0].len]), "Crew: a cracked golem takes no orders - PICK UP in the roster")
+    testing.expect_value(t, gs.golems.data[5].mode, Golem_Mode.Gather)
+    g.status = .Empty
+    gs.notify.count = 0
+    agent_test_run_act(link, gs, `{"cmd":"act","crew":true}`)
+    testing.expect_value(t, string(gs.notify.items[0].text[:gs.notify.items[0].len]), "Crew: no golem at work on this level")
 }
 
 @(test)
@@ -2727,6 +2742,26 @@ agent_state_lists_the_crew :: proc(t: ^testing.T) {
     testing.expect(t, abs(first["x"].(json.Float) - f64(g.pos.x)) < 0.01 && abs(first["y"].(json.Float) - f64(g.pos.y)) < 0.01, "where it stands")
     testing.expect_value(t, golems[1].(json.Object)["slot"].(json.Float), 3)
     testing.expect_value(t, golems[1].(json.Object)["status"].(json.String), "Carried")
+    // Card 148: what it carries and packs, where it is headed, and whether it
+    // is cracked or coming back from it.
+    testing.expect_value(t, first["broken"].(json.Boolean), false)
+    testing.expect_value(t, first["recovering"].(json.Boolean), false)
+    testing.expect_value(t, first["carry"].(json.String), "None")
+    testing.expect(t, "target" not_in first, "no target, none shown")
+    testing.expect_value(t, len(first["pack"].(json.Array)), 0)
+    g.carry, g.target, g.has_target, g.recovering = .Clay, {31, 42}, true, true
+    g.pack[0], g.pack[2] = .Iron_Ore, .Stone_Block
+    gs.golems.data[3].status = .Broken
+    golems = agent_test_state(link, gs)["crew"].(json.Object)["golems"].(json.Array)
+    first = golems[0].(json.Object)
+    testing.expect_value(t, first["carry"].(json.String), "Clay")
+    testing.expect_value(t, first["recovering"].(json.Boolean), true)
+    target := first["target"].(json.Array)
+    testing.expect(t, len(target) == 2 && target[0].(json.Float) == 31 && target[1].(json.Float) == 42, "the target tile")
+    pack := first["pack"].(json.Array)
+    testing.expect(t, len(pack) == 2 && pack[0].(json.String) == "Iron_Ore" && pack[1].(json.String) == "Stone_Block", "the pack, empty slots left out")
+    testing.expect(t, strings.contains(agent_test_reply(link), `"pack":["Iron_Ore","Stone_Block"]`), "strict JSON, a comma between")
+    testing.expect_value(t, golems[1].(json.Object)["broken"].(json.Boolean), true)
 
     // Another level's zone is that level's.
     gs.golems.work[(gs.level_index + 1) % NUM_LEVELS] = {active = true, min = {1, 1}, max = {4, 4}}
@@ -2816,7 +2851,8 @@ agent_brief_names_the_crew_verbs_and_the_death_wait :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     brief := agent_write_brief(link, gs)
-    for want in ([]string{"zone: [x0,y0,x1,y1]", "crew: true", "monument: Clay_Hearth", "at: [x,y]", "tithe.ready_in", "about its first 72 ticks", "birds"}) {
+    for want in ([]string{"zone: [x0,y0,x1,y1]", "crew: true", "monument: Clay_Hearth", "at: [x,y]", "tithe.ready_in", "about its first 72 ticks", "birds",
+                          "(slot, status, mode, job, hp, broken, recovering, carry, target, pack)", "The roster's per-golem orders are goals: crew_mode, crew_call, crew_pickup"}) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
 }

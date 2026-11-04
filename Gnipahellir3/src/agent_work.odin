@@ -74,6 +74,8 @@ Hero_Work :: struct {
     by_item:    bool, // a mine by item: an unreachable tile gives way to the next
     skip:       [HERO_WORK_SKIP][2]i32,  // tiles that gave the item but could not be reached
     n_skip:     int,
+    golem:      int,         // a crew goal's golem slot
+    mode:       Golem_Mode,  // and crew_mode's mode
 }
 
 // One click at to, or a drag from `from` to `to`, and what the click or the
@@ -131,6 +133,18 @@ hero_work_parse :: proc(kind: Agent_Goal_Kind, o: json.Object) -> (w: Hero_Work,
     }
     need_item := false
     #partial switch kind {
+    case .Crew_Mode, .Crew_Call, .Crew_Pickup:
+        n, is_int := agent_int(o, "golem")
+        if !is_int || n < 0 || n >= MAX_GOLEMS do return w, fmt.tprintf("%s needs golem: a slot from state's crew, 0..%d", name, MAX_GOLEMS - 1)
+        w.golem = n
+        if kind != .Crew_Mode do break
+        s, _ := o["mode"].(json.String)
+        for m in Golem_Mode {
+            if fmt.tprint(m) != s do continue
+            w.mode = m
+            return
+        }
+        return w, "crew_mode needs mode: Gather, Build or Fight"
     case .Mine:
         if !w.has_at && w.item == .None do return w, "mine needs tile:[x,y] or item"
     case .Gather, .Craft, .Store, .Feed:
@@ -205,12 +219,44 @@ hero_work_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
         }
     case .Store, .Feed, .Withdraw, .Collect:
         why = hero_work_find_machine(gs, w, feet)
+    case .Crew_Mode, .Crew_Call, .Crew_Pickup:
+        why = hero_crew_check(gs, w)
     }
     if why != "" {
         agent_text_set(&g.reason, why)
         return false
     }
     return true
+}
+
+// A crew goal against the crew as it is: the wand in the bag, and a golem in
+// the slot on this level that the roster can give the order to.
+@(private="file")
+hero_crew_check :: proc(gs: ^Game_State, w: ^Hero_Work) -> string {
+    g := &gs.golems.data[w.golem]
+    switch {
+    case hero_held_or_first(gs, is_command_wand) < 0: return "no_item: no command wand in the bag"
+    case g.status == .Empty:                          return fmt.tprintf("no_item: no golem in slot %d", w.golem)
+    case g.status == .Carried:                        return fmt.tprintf("blocked: golem %d rides in the wand: place it first", w.golem)
+    case g.level != gs.level_index:                   return fmt.tprintf("out_of_reach: golem %d is on level %d", w.golem, g.level)
+    case g.status == .Broken && w.kind != .Crew_Pickup: return fmt.tprintf("blocked: golem %d is cracked: crew_pickup it and repair it at a Clay Hearth", w.golem)
+    case w.kind == .Crew_Mode && g.mode == w.mode:    return fmt.tprintf("blocked: golem %d is in %v already", w.golem, w.mode)
+    }
+    w.machine = golem_tile(g)  // a cracked one is walked to: PICK UP needs it in reach
+    return ""
+}
+
+// The crew goals work the roster; a cracked golem's PICK UP wants it in reach.
+// The kind matters: a golem that cracks mid-goal leaves a call or a mode order
+// with a dimmed button, which no walk lights.
+@(private="file")
+hero_crew_kind :: proc(k: Agent_Goal_Kind) -> bool {
+    return k == .Crew_Mode || k == .Crew_Call || k == .Crew_Pickup
+}
+
+@(private="file")
+hero_crew_walks :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
+    return g.kind == .Crew_Pickup && gs.golems.data[g.work.golem].status == .Broken
 }
 
 @(private="file")
@@ -613,7 +659,9 @@ hero_window_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     b := &gs.hero
     c := &gs.agent.cmd
     m := w.machine
-    hand := g.kind == .Craft && recipe_table[w.recipe].station == .None
+    crew := hero_crew_kind(g.kind)
+    hand := g.kind == .Craft && recipe_table[w.recipe].station == .None || crew && !hero_crew_walks(gs, g)
+    reach := i32(PLAYER_REACH if crew else BENCH_RANGE)
     if b.cursor == {} do b.cursor = {UI_W / 2, UI_H / 2}
     if (w.phase == .Look || w.phase == .Clicks) && !hero_window_up(gs, g) {
         // Shut under it, by a fight or a flight the goal paused for: back to
@@ -622,11 +670,11 @@ hero_window_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     }
     switch w.phase {
     case .Walk:
-        if !hand && (!p.grounded || chebyshev(m, player_tile(p)) > BENCH_RANGE) {
+        if !hand && (!p.grounded || chebyshev(m, player_tile(p)) > reach) {
             s := g.to
             if !w.walking {
                 found: bool
-                s, found, _ = hero_work_stand(gs, m, .Bench, BENCH_RANGE)
+                s, found, _ = hero_work_stand(gs, m, .Bench, reach)
                 if !found do return hero_work_fail(g, fmt.tprintf("unreachable: no ground in reach of [%d,%d]", m.x, m.y))
             }
             hero_work_walk(gs, g, s)
@@ -646,7 +694,14 @@ hero_window_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         }
         if w.tries > HERO_OPEN_TRIES do return hero_work_fail(g, fmt.tprintf("out_of_reach: the window at [%d,%d] did not open", m.x, m.y))
         if w.tries == 0 {
-            if hand {
+            if crew && equipped_command_wand(gs) == .None {
+                c.verb, c.verb_arg = .Select, i32(hero_held_or_first(gs, is_command_wand))
+                gs.agent.first = true
+                return false  // the wand in hand first; the next tick opens the roster
+            }
+            if crew {
+                c.verb = .Open_Roster  // the wand's click on the world
+            } else if hand {
                 c.verb = .Open_Craft
             } else {
                 c.has_use = true
@@ -688,6 +743,7 @@ hero_window_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
 @(private="file")
 hero_window_up :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
     m := g.work.machine
+    if hero_crew_kind(g.kind) do return gs.ui.show_golem_roster
     if g.kind == .Craft {
         st := recipe_table[g.work.recipe].station
         return gs.ui.show_crafting && (st == .None || gs.ui.active_station == st)
@@ -799,6 +855,19 @@ hero_next_click :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (k: Hero_Click, more
         if bslot < 0 do return
         x, y := barrel_slot_rect(gs, bslot)
         return {from = hero_slot_mid(x, y, SLOT_PX), to = hero_bag_drop(gs, w.item), carry = w.item, verb = .Take, arg = i32(bslot)}, true
+    case .Crew_Mode, .Crew_Call, .Crew_Pickup:
+        if w.clicks > 0 do return
+        btn := Roster_Button.Pickup if g.kind == .Crew_Pickup else .Call
+        if g.kind == .Crew_Mode do btn = Roster_Button(int(w.mode))  // the mode buttons mirror Golem_Mode's order
+        if !golem_roster_button_enabled(gs, w.golem, btn) {
+            hero_work_failing(g, fmt.tprintf("blocked: golem %d's %s is dimmed in the roster", w.golem, roster_button_label[btn]))
+            return
+        }
+        rows, n := golem_roster_rows(gs)
+        row := 0
+        for r in 0 ..< n do if rows[r] == w.golem do row = r
+        x, y := golem_roster_button_rect(gs, row, btn)
+        return {to = {f32(x) + f32(ROSTER_BTN_W) / 2, f32(y) + f32(ROSTER_BTN_H) / 2}, verb = .Roster, arg = i32(w.golem) | i32(btn) << 8}, true
     case .Collect:
         if w.clicks > 0 || sd.store_count == 0 do return
         x, y := smelter_tray_rect(gs)

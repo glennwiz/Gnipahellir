@@ -628,7 +628,8 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  with a command wand selected, place: [x,y] sets down a bound golem, and one of:\n")
     fmt.sbprintf(w, "    zone: [x0,y0,x1,y1]  drags the Gather zone, up to %dx%d tiles. crew: true  flips this level's golems between Gather and Build\n", GOLEM_ZONE_MAX_W, GOLEM_ZONE_MAX_H)
     fmt.sbprintf(w, "    monument: Clay_Hearth, Golem_Depot or World_Anchor, with at: [x,y] in reach  the anchor Build golems raise it from\n")
-    fmt.sbprintf(w, "  state's crew lists the golems, and this level's zone and monument. birds lists the sky flocks in view: scenery, harmless\n")
+    fmt.sbprintf(w, "  state's crew lists the golems (slot, status, mode, job, hp, broken, recovering, carry, target, pack), and this level's zone and monument.\n")
+    fmt.sbprintf(w, "  The roster's per-golem orders are goals: crew_mode, crew_call, crew_pickup. birds lists the sky flocks in view: scenery, harmless\n")
     fmt.sbprintf(w, "{{\"cmd\":\"home\",\"at\":[x,y]}}  marks this level's home for the home goal; with no at, the mark goes and home is the surface spawn\n")
     fmt.sbprintf(w, "{{\"cmd\":\"reflexes\",\"potion\":false}}  the hero's reflexes, under every goal, all on at first; answers with each:\n")
     fmt.sbprintf(w, "  leave_hazard: walks and jumps out of lava, water or a burn. potion: drinks a health potion under %.0f%% hp\n", HERO_LOW_HP_FRAC * 100)
@@ -1663,6 +1664,8 @@ agent_input :: proc(gs: ^Game_State) {
         gs.ui.show_crafting  = true
         place_craft_pair(gs)
     case .Pick_Recipe: gs.ui.craft_selected = int(arg)
+    case .Open_Roster: gs.ui.show_golem_roster = true  // the held command wand's click on the world, no drag
+    case .Roster:  golem_roster_press(gs, int(arg & 0xff), Roster_Button(arg >> 8))
     case .Equip:   eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = arg}})
     case .Feed:    eq_push(&gs.events, Event{type = .Smelter_Feed, tile = gs.ui.smelter_tile, payload = {int_val = arg}, count = c.feed_count})
     case .Collect: eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
@@ -1896,8 +1899,18 @@ agent_write_crew :: proc(b: ^strings.Builder, gs: ^Game_State) {
         if g.status == .Empty do continue
         if comma do strings.write_byte(b, ',')
         comma = true
-        fmt.sbprintf(b, `{{"slot":%d,"status":"%v","level":%d,"x":%.2f,"y":%.2f,"hp":%d,"mode":"%v","job":"%v"}}`,
-            i, g.status, g.level, g.pos.x, g.pos.y, g.hp, g.mode, g.job)
+        fmt.sbprintf(b, `{{"slot":%d,"status":"%v","level":%d,"x":%.2f,"y":%.2f,"hp":%d,"mode":"%v","job":"%v","broken":%v,"recovering":%v,"carry":"%v"`,
+            i, g.status, g.level, g.pos.x, g.pos.y, g.hp, g.mode, g.job, g.status == .Broken, g.recovering, g.carry)
+        if g.has_target do fmt.sbprintf(b, `,"target":[%d,%d]`, g.target.x, g.target.y)
+        strings.write_string(b, `,"pack":[`)
+        packed := false
+        for it in g.pack {
+            if it == .None do continue
+            if packed do strings.write_byte(b, ',')
+            packed = true
+            fmt.sbprintf(b, `"%v"`, it)
+        }
+        strings.write_string(b, "]}")
     }
     strings.write_byte(b, ']')
     if z := gs.golems.work[gs.level_index]; z.active {

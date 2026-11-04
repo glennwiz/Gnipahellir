@@ -589,7 +589,7 @@ Input_State :: struct {
 
 // Open_Craft and Pick_Recipe are the executor's own: TAB's crafting window, and
 // a click on a recipe card.  No act parses to them.
-Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe, Monument, Crew, Open_Craft, Pick_Recipe }
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe, Monument, Crew, Open_Craft, Pick_Recipe, Open_Roster, Roster }
 
 // One act: held input for its frames, one-shots on the first.  Tiles are only
 // meaningful under their has_ flag.

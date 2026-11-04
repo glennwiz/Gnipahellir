@@ -487,18 +487,7 @@ update_input :: proc(gs: ^Game_State) {
     // Clicks on open UI panels (skipped while a window is being dragged)
     if rl.IsMouseButtonPressed(.LEFT) && gs.ui.win_drag < 0 {
         if gs.ui.show_golem_roster && gs.ui.drag_item == .None {
-            if slot, btn, ok := golem_roster_button_at_cursor(gs); ok && golem_roster_button_enabled(gs, slot, btn) {
-                switch btn {
-                case .Gather, .Build, .Fight:
-                    mode := Golem_Mode(int(btn))  // the three mode buttons mirror Golem_Mode's order
-                    eq_push(&gs.events, Event{type = .Golem_Set_Mode,
-                        payload = {int_val = i32(slot) | i32(mode) << 8}})
-                case .Call:
-                    eq_push(&gs.events, Event{type = .Golem_Call_To_Me, payload = {int_val = i32(slot)}})
-                case .Pickup:
-                    eq_push(&gs.events, Event{type = .Golem_Pickup, payload = {int_val = i32(slot)}})
-                }
-            }
+            if slot, btn, ok := golem_roster_button_at_cursor(gs); ok do golem_roster_press(gs, slot, btn)
         }
         if gs.ui.show_inventory {
             if slot := slot_at_cursor(gs); slot >= 0 {
@@ -1012,4 +1001,20 @@ smelter_fuel_drop :: proc(gs: ^Game_State) {
         eq_push(&gs.events, Event{type = .Smelter_Withdraw_Fuel, tile = gs.ui.smelter_tile})
     }
     gs.ui.drag_fuel = false
+}
+
+// A press on a button of the open roster: the event its click pushes, when the
+// button is live.  The mouse and the agent's crew goals both come here.
+golem_roster_press :: proc(gs: ^Game_State, slot: int, btn: Roster_Button) {
+    if !golem_roster_button_enabled(gs, slot, btn) do return
+    switch btn {
+    case .Gather, .Build, .Fight:
+        mode := Golem_Mode(int(btn))  // the three mode buttons mirror Golem_Mode's order
+        eq_push(&gs.events, Event{type = .Golem_Set_Mode,
+            payload = {int_val = i32(slot) | i32(mode) << 8}})
+    case .Call:
+        eq_push(&gs.events, Event{type = .Golem_Call_To_Me, payload = {int_val = i32(slot)}})
+    case .Pickup:
+        eq_push(&gs.events, Event{type = .Golem_Pickup, payload = {int_val = i32(slot)}})
+    }
 }

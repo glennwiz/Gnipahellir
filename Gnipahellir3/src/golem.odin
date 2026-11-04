@@ -421,6 +421,15 @@ golem_recall :: proc(gs: ^Game_State, id: int) {
 }
 
 golem_crew_toggle :: proc(gs: ^Game_State) {
+	working, cracked := false, false
+	for g in gs.golems.data do if g.level == gs.level_index {
+		working ||= g.status == .Deployed
+		cracked ||= g.status == .Broken
+	}
+	if !working {
+		notify(gs, "Crew: a cracked golem takes no orders - PICK UP in the roster" if cracked else "Crew: no golem at work on this level")
+		return
+	}
 	to_build := false
 	for g in gs.golems.data do if g.status == .Deployed && g.level == gs.level_index && g.mode == .Gather {
 		to_build = true

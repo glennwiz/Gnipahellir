@@ -83,8 +83,10 @@ Hold one connection, from one client: never drive from two at once.
 - Crew over the API (run 8): select the Clay_Golem and `place` anywhere to bind it, then the wand
   and `place:[x,y]` to set it down. Wand 2 Clay + 2 Plank + 1 Iron_Bar, golem 4 Clay + 1 Iron_Bar,
   both instant at a bench; Clay is 1 Stone_Block for 2, no station. The basic wand holds ONE golem.
-- There is no recall, roster, per-golem mode, mark-paint or drop verb. A cracked golem cannot be
-  picked up, so with the basic wand the crew is over until a new life. Keep golems away from waves.
+- The roster's orders are goals: crew_mode (one golem's Gather, Build or Fight), crew_call and
+  crew_pickup. A cracked golem takes no orders and cannot walk: crew_pickup walks the hero into
+  reach and takes it back into the wand, then repair it at a Clay Hearth. There is no mark-paint
+  or drop verb. Keep golems away from waves.
 - A Vargr strikes golems (2 a hit), not only Draugr: run 8 life 1 lost the golem to a Draugr plus a Vargr.
 - Killing a Builder raises a Draugr at its den, and it hunts the crew. Do not kill den owners near the base.
 - Gather logs go into the smelter as fuel before any barrel; `withdraw_fuel` gets them back.
