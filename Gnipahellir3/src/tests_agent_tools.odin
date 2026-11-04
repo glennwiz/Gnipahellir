@@ -800,3 +800,272 @@ hero_soak_is_an_option_that_takes_nothing :: proc(t: ^testing.T) {
     want := [Tool_Soak_Kit][]Item{.Unarmed = {}, .Pickaxe = {.Pickaxe}, .Sword = {.Sword}, .Wand = {.Fire_Wand}, .Both = {.Sword, .Fire_Wand}}
     for kit in Tool_Soak_Kit do testing.expectf(t, slice.equal(tool_soak_kits[kit].items, want[kit]), "%s: %v", tool_soak_kits[kit].name, tool_soak_kits[kit].items)
 }
+
+// ─── --make-save and --agent-run --load (card 170) ──────────────────────────
+
+@(private="file")
+tools_test_bag :: proc(gs: ^Game_State) -> (bag: [Item]int) {
+    for sl in gs.player.inventory.slots do bag[sl.item] += sl.count
+    bag[.None] = 0
+    return
+}
+
+// The fixture on two seeds: each save loads past ritual A, the Deep Cave gate
+// opens to a player standing in it, and the bag holds only what the route
+// leaves: the start kit, the pickaxe and Scroll A.
+@(test)
+a_made_save_loads_past_ritual_a_with_the_deep_cave_open :: proc(t: ^testing.T) {
+    run := tools_test_run("make_save")
+    defer tools_test_done(run)
+    for seed in ([]u32{42, 781}) {
+        path := fmt.tprintf("%s/past_a_%d.sav", run, seed)
+        text, code := tools_test_say("--make-save", "--seed", fmt.tprintf("%d", seed), "--out", path)
+        testing.expectf(t, code == 0, "seed %d: %s", seed, text)
+        testing.expect(t, strings.contains(text, "ritual A done, Deep Cave open, back on the Surface"), text)  // the route's own last step
+        testing.expect(t, strings.contains(text, fmt.tprintf("wrote %s: seed %d, ritual A done, Deep Cave open; start a run from it with --agent-run --load %s", path, seed, path)), text)
+
+        fresh := new(Game_State)
+        defer free(fresh)
+        start_new_game_with(fresh, seed)
+        kit := tools_test_bag(fresh)
+
+        gs := new(Game_State)
+        defer free(gs)
+        game_state_init(gs, 1)
+        testing.expectf(t, load_game_from(gs, path), "seed %d: the save loads", seed)
+        pr := &gs.progression
+        testing.expect_value(t, gs.world_seed, seed)
+        testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+        testing.expect(t, pr.rune_scroll_found[0] && pr.sky_structure_complete[0] && pr.cave_unlocked[0], "ritual A done")
+        testing.expect(t, !pr.rune_scroll_found[1] && !pr.sky_structure_complete[1] && !pr.cave_unlocked[1], "and nothing past it")
+        testing.expect_value(t, get_tile(&gs.world, int(pr.sky_altar_pos.x), int(pr.sky_altar_pos.y)), Tile_Type.Sky_Altar)
+        testing.expect(t, !gs.player.dead, "alive")
+        testing.expect(t, recipe_revealed(pr, .Sky_Altar) && recipe_revealed(pr, .Crafting_Bench), "the recipes it crafted are known")
+
+        // Both altars stand on whole foundations over solid ground, and the
+        // sky's way home is left open.
+        sky := &gs.levels.worlds[LEVEL_SKY]
+        testing.expect(t, gs.levels.generated[LEVEL_SKY], "the Low Sky was visited")
+        sky_altar, sky_has := fixture_test_find(sky, .Sky_Altar)
+        testing.expect(t, sky_has, "an altar stands in the Low Sky")
+        for at in ([][2]i32{pr.sky_altar_pos, sky_altar}) {
+            w := &gs.world if at == pr.sky_altar_pos else sky
+            ok, want := structure_template_satisfied(w, &structure_templates[0], int(at.x), int(at.y))
+            testing.expectf(t, ok, "seed %d: the altar at %v lacks %v", seed, at, want)
+            for c in at.x - 2 ..= at.x + 2 do testing.expectf(t, is_solid(w, int(c), int(at.y) + 3), "seed %d: ground under the stone at (%d,%d)", seed, c, at.y + 2)
+        }
+        for &p in level_portals[LEVEL_SKY] do if portal_valid(&p) {
+            for tile in p.tiles do testing.expectf(t, !is_solid(sky, int(tile.x), int(tile.y)), "seed %d: the sky portal at %v is open", seed, tile)
+        }
+
+        kit[.Pickaxe] += 1
+        kit[.Rune_Scroll_A] += 1
+        bag := tools_test_bag(gs)
+        for n, it in bag do testing.expectf(t, n == kit[it], "seed %d: %d %v in the bag, the route leaves %d", seed, n, it, kit[it])
+
+        // The Deep Cave gate, as a player standing in it presses E: open here,
+        // sealed in a new game of the same seed.
+        gate := level_portals[LEVEL_SURFACE][0]
+        for g in ([]^Game_State{fresh, gs}) {
+            g.player.pos = {f32(gate.tiles[0].x) + 0.5 - PLAYER_W*0.5, f32(gate.tiles[0].y) + 0.5 - PLAYER_H*0.5}
+            player_interact(g)
+            process_events(g)
+        }
+        testing.expect_value(t, fresh.level_index, LEVEL_SURFACE)
+        testing.expect_value(t, gs.level_index, LEVEL_CAVE2)
+    }
+}
+
+@(private="file")
+fixture_test_find :: proc(w: ^World_Grid, tile: Tile_Type) -> ([2]i32, bool) {
+    for i in 0 ..< GRID_W * GRID_H do if w.terrain[i] == tile do return {i32(i % GRID_W), i32(i / GRID_W)}, true
+    return {}, false
+}
+
+// The site finder on a made world: flat ground of stone at row 60, open above.
+@(test)
+the_altar_site_is_flat_open_off_the_portals_and_in_bounds :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, 1)
+    gs.level_index = LEVEL_CAVE3  // its portals: the spawn chamber at (93,26),(94,26)
+    w := &gs.world
+    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W do set_tile(w, x, y, .Stone if y >= 60 else .Air)
+    x, g := fixture_site(gs, 50, 1)
+    testing.expect_value(t, x, 50)
+    testing.expect_value(t, g, 60)
+    set_tile(w, 52, 60, .Air)  // a dip under column 52: every site over it, 50 to 54, is out
+    x, _ = fixture_site(gs, 52, 1)
+    testing.expect_value(t, x, 55)  // the nearest site whose five columns miss it
+    set_tile(w, 52, 60, .Stone)
+    set_tile(w, 50, 57, .Wood)  // three rows up is not open
+    x, _ = fixture_site(gs, 50, 1)
+    testing.expect_value(t, x, 53)
+    set_tile(w, 50, 57, .Air)
+    x, _ = fixture_site(gs, 1, 1)
+    testing.expect_value(t, x, 2)  // never a column off the left edge
+    x, _ = fixture_site(gs, GRID_W - 1, 1)
+    testing.expect_value(t, x, GRID_W - 6)  // and room to stand on the right
+    for y in 0 ..< GRID_H do for x in 0 ..< GRID_W do set_tile(w, x, y, .Stone if y >= 27 else .Air)
+    x, g = fixture_site(gs, 93, 1)
+    testing.expect_value(t, g, 27)
+    testing.expect(t, x - 2 > 94 || x + 2 < 93, "the foundation keeps off the portal cells")
+    x, g = fixture_site(gs, 93, 30)  // nothing open below the top row
+    testing.expect_value(t, x, 0)
+    testing.expect_value(t, g, 0)
+}
+
+// The route fails, and says so, rather than writing a save that is not past
+// ritual A or carries more than the route leaves.
+@(test)
+the_fixture_refuses_a_route_it_could_not_play :: proc(t: ^testing.T) {
+    run :: proc(seed: u32, spoil: proc(gs: ^Game_State)) -> (why, said: string) {
+        gs := new(Game_State)
+        defer free(gs)
+        start_new_game_with(gs, seed)
+        spoil(gs)
+        b := strings.builder_make(context.temp_allocator)
+        why = fixture_past_ritual_a(gs, &b)
+        return why, strings.to_string(b)
+    }
+    why, _ := run(42, proc(gs: ^Game_State) {
+        for &it in gs.world.items do if it == .Pickaxe do it = .None
+    })
+    testing.expect_value(t, why, "no pickaxe on the ledge")
+    said: string
+    why, said = run(42, proc(gs: ^Game_State) {  // no open ground anywhere: nothing can be built
+        for y in 0 ..< GRID_H do for x in 0 ..< GRID_W do set_tile(&gs.world, x, y, .Stone)
+    })
+    testing.expect_value(t, why, "ritual A did not complete: see the refused step")
+    testing.expect(t, strings.contains(said, "refused: place Stone_Block"), said)
+    testing.expect(t, strings.contains(said, "refused: craft Sky_Altar"), "no bench stands, so no altar is crafted")
+    why, _ = run(42, proc(gs: ^Game_State) {  // a plank lies on the ledge: the pick-up takes it too
+        for it, i in gs.world.items do if it == .Pickaxe {
+            gs.world.items[i - GRID_W], gs.world.item_counts[i - GRID_W] = .Plank, 1
+        }
+    })
+    testing.expect_value(t, why, "the bag ends with 1 Plank, the route leaves 0")
+    why, _ = run(42, proc(gs: ^Game_State) {  // a start kit the route never touches stays, and is no leftover
+        inventory_insert(&gs.player.inventory, .Flower, 2)
+    })
+    testing.expect_value(t, why, "")
+}
+
+@(test)
+make_save_says_when_it_cannot_write :: proc(t: ^testing.T) {
+    text, code := tools_test_say("--make-save", "--seed", "42", "--out", "tools_test_no_such_folder/x.sav")
+    testing.expect_value(t, code, 1)
+    testing.expect(t, strings.contains(text, "cannot write tools_test_no_such_folder/x.sav"), text)
+}
+
+@(test)
+make_save_needs_a_seed_and_a_file :: proc(t: ^testing.T) {
+    for args in ([][]string{{"--make-save"}, {"--make-save", "--seed", "4"}, {"--make-save", "--out", "x.sav"}, {"--make-save", "--seed", "x", "--out", "y"}, {"--make-save", "--seed", "4", "--out"}}) {
+        text, code := tools_test_say(..args)
+        testing.expectf(t, code == 2 && strings.contains(text, "--make-save"), "%v: %d %s", args, code, text)
+    }
+}
+
+@(test)
+agent_run_load_names_its_save_and_takes_no_seed :: proc(t: ^testing.T) {
+    b := strings.builder_make(context.temp_allocator)
+    run, exit, _ := tool_args({"--agent-run", "--port", "7001", "--load", "past_a.sav"}, &b)
+    testing.expect(t, !exit, "an agent run is play, not a report")
+    testing.expect_value(t, run.mode, Tool_Mode.Agent_Run)
+    testing.expect_value(t, run.load, "past_a.sav")
+    testing.expect_value(t, run.port, 7001)
+    testing.expect(t, !run.seeded, "the world comes from the save")
+    _, code := tools_test_say("--agent-run", "--load", "past_a.sav", "--seed", "3")
+    testing.expect_value(t, code, 2)
+    _, code = tools_test_say("--agent-run", "--load")
+    testing.expect_value(t, code, 2)
+    help, _ := tools_test_say("--help")
+    testing.expect(t, strings.contains(help, "gnipa --agent-run [--port P] [--seed N | --load save]"), "--help names --load")
+    testing.expect(t, strings.contains(help, "gnipa --make-save --seed N --out save"), "and --make-save")
+}
+
+// A run started with --load: the save is kept beside it, the seed file and the
+// run's autosave follow it, the title waits for the agent, and once the agent
+// dismisses it the run plays on from the loaded world.
+@(test)
+an_agent_run_started_from_a_save_plays_from_there :: proc(t: ^testing.T) {
+    run := tools_test_run("load_run")
+    defer tools_test_done(run)
+    src := fmt.tprintf("%s/past_a.sav", run)
+    _, code := tools_test_say("--make-save", "--seed", "42", "--out", src)
+    testing.expect_value(t, code, 0)
+    data, err := os.read_entire_file(src, context.allocator)
+    defer delete(data)
+    testing.expect(t, err == nil, "the made save reads back")
+
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_run_reset(gs, 5, 7001, fmt.tprintf("%s/game.sav", run), "")
+    testing.expect(t, tool_run_load(gs, data, src, run), "the run loads the save")
+    testing.expect(t, !tool_run_load(gs, []u8{1, 2, 3}, "junk", run), "a file that is no save is refused")
+    testing.expect(t, tool_run_load(gs, data, src, run), "and loads again after it")
+
+    kept, _ := os.read_entire_file(fmt.tprintf("%s/%s", run, TOOL_START_SAVE), context.temp_allocator)
+    testing.expect(t, slice.equal(kept, data), "the run keeps the save it began from")
+    seed_text, _ := os.read_entire_file(fmt.tprintf("%s/seed", run), context.temp_allocator)
+    testing.expect_value(t, string(seed_text), "42\n")
+    testing.expect(t, os.exists(fmt.tprintf("%s/game.sav", run)), "the run's own autosave starts from it")
+    testing.expect(t, gs.ui.show_title, "the title waits for the agent")
+    testing.expect(t, gs.progression.cave_unlocked[0], "past ritual A")
+    testing.expect_value(t, gs.cam_y, (gs.player.pos.y + PLAYER_H*0.5) * CELL_SIZE)  // the view starts on the player
+    when GAME_DEBUG {  // a release build keeps no action.log
+        log := string(gs.debug_log.buf[:gs.debug_log.pos])
+        testing.expect(t, strings.contains(log, fmt.tprintf("Run starts from the save %s: world seed 42, level 0", src)), "action.log says where the run began")
+    }
+
+    link.connected, link.realtime = true, true
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","dismiss":true,"frames":1},{"do":"act","frames":60}]}`)
+    for _ in 0 ..< 70 {
+        agent_drive(link, gs)
+        game_update(gs)
+        agent_after_tick(link, gs)
+    }
+    testing.expect(t, !gs.ui.show_title, "the agent's dismiss closes the title onto the loaded world")
+    testing.expect(t, gs.frame >= 60, "and the run plays on")
+    testing.expect_value(t, gs.world_seed, u32(42))
+    testing.expect(t, gs.progression.sky_structure_complete[0] && gs.progression.cave_unlocked[0], "still past ritual A")
+    testing.expect(t, !gs.player.dead, "alive")
+}
+
+// Its goals replayed on the seed's world would be another run, so a replay
+// refuses a run that began from a save, before it makes any folder.
+@(test)
+a_replay_refuses_a_run_that_began_from_a_save :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_loaded", {"seed", "42\n"}, {AGENT_ACTS_FILE, ""}, {TOOL_START_SAVE, "a save"})
+    defer tools_test_done(run)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    rep: Tool_Replay
+    testing.expect(t, !tool_replay_start(&rep, link, gs, run), "refused")
+    entries, _ := os.read_all_directory_by_path(run, context.temp_allocator)
+    testing.expect_value(t, len(entries), 3)  // no replay folder was made
+}
+
+// A loaded run sweeps the Quick Clay a save left without its pool, as a load
+// from the title does.
+@(test)
+a_loaded_run_sweeps_orphan_quick_clay :: proc(t: ^testing.T) {
+    run := tools_test_run("load_clay")
+    defer tools_test_done(run)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    set_tile(&gs.world, 40, 50, .Quick_Clay)
+    path := fmt.tprintf("%s/clay.sav", run)
+    testing.expect(t, save_game_to(gs, path), "saved")
+    data, _ := os.read_entire_file(path, context.allocator)
+    defer delete(data)
+    other := new(Game_State)
+    defer free(other)
+    game_state_init(other, 9)
+    other.save_path = fmt.tprintf("%s/game.sav", run)
+    testing.expect(t, tool_run_load(other, data, path, run), "loaded")
+    testing.expect(t, get_tile(&other.world, 40, 50) != .Quick_Clay, "the orphan clay is gone")
+}

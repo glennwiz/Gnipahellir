@@ -2,12 +2,15 @@ package game
 
 // agent_tools.odin — the run tools, as options of the game binary (card 141).
 //
-//   gnipa --agent-run [--port P] [--seed N]   an agent run in a new folder under
-//                                             build/agent_runs/, as the title's [A]
+//   gnipa --agent-run [--port P] [--seed N | --load F]
+//                                             an agent run in a new folder under
+//                                             build/agent_runs/, as the title's [A];
+//                                             --load starts it from the save F
 //   gnipa --replay <run folder>               plays a run's goals back in the window
 //   gnipa --summary <run folder>              one page on a run, for finding bugs
 //   gnipa --pacing <run folder>... [--csv f]  seconds to Scroll B and to 10 Gold Bars
 //   gnipa --builder-trace <run folder|action.log> [--min-frames N] [--tiles N]
+//   gnipa --make-save --seed N --out F        a save just past ritual A, for --load
 //
 // The three reports read files and print, and the game never starts: they run
 // before the window opens, outside play, so they use the heap (a temp arena
@@ -25,6 +28,7 @@ import "core:time"
 
 TOOL_RUNS_DIR     :: "build/agent_runs"  // where --agent-run makes its folder
 TOOL_RUN_PORT     :: 7777                // --agent-run's port when it names none
+TOOL_START_SAVE   :: "start.sav"         // a --load run keeps the save it began from
 TOOL_FPS          :: 60                  // the agent's fixed step: seconds are frames / 60
 TOOL_GOLD_GOAL    :: 10                  // the pacing mark: Gold Bars taken in one life
 TOOL_TRACE_FRAMES :: 600                 // --builder-trace skips levels played less than this
@@ -32,8 +36,9 @@ TOOL_TRACE_TILES  :: 8                   // and lists this many hot tiles per Bu
 
 TOOL_USAGE :: `usage:
   gnipa                                  play
-  gnipa --agent-run [--port P] [--seed N]
-                                         an agent run in a new folder under build/agent_runs/
+  gnipa --agent-run [--port P] [--seed N | --load save]
+                                         an agent run in a new folder under build/agent_runs/;
+                                         --load starts it from a save, as Continue does
   gnipa --replay <run folder>            play a run's goals back in the window
   gnipa --summary <run folder>           one page on a run, aimed at finding game bugs
   gnipa --pacing <run folder>... [--csv out.csv]
@@ -41,6 +46,8 @@ TOOL_USAGE :: `usage:
   gnipa --builder-trace <run folder|action.log> [--min-frames N] [--tiles N]
                                          what each Builder did, per life and level
   gnipa --hero-soak                      the hero's live chase: deaths per kit, of 80 runs each
+  gnipa --make-save --seed N --out save  a save of seed N just past ritual A (Deep Cave open),
+                                         for --agent-run --load; see agent_playtests.md
 `
 
 Tool_Mode :: enum u8 { Play, Agent_Run, Replay }
@@ -51,6 +58,7 @@ Tool_Run :: struct {
     seed:   u32,
     seeded: bool,
     folder: string,
+    load:   string,  // --agent-run --load: the save the run starts from
 }
 
 // The command line.  A report runs here and says so with exit; play, an agent
@@ -108,6 +116,19 @@ tool_args :: proc(args: []string, out: ^strings.Builder) -> (run: Tool_Run, exit
         if len(args) != 1 do return usage(out, "--hero-soak takes nothing")
         tool_hero_soak(out)
         return {}, true, 0
+    case "--make-save":
+        seed, seeded, path := u32(0), false, ""
+        for i := 1; i < len(args); i += 1 {
+            n, ok := number(args, i)
+            switch {
+            case args[i] == "--seed" && ok:                 seed, seeded = u32(n), true
+            case args[i] == "--out" && i + 1 < len(args): path = args[i + 1]
+            case: return usage(out, fmt.tprintf("--make-save takes --seed N and --out file, not %q", args[i]))
+            }
+            i += 1
+        }
+        if !seeded || path == "" do return usage(out, "--make-save needs --seed N and --out file")
+        return {}, true, 0 if tool_make_save(out, seed, path) else 1
     case "--replay":
         if len(args) != 2 do return usage(out, "--replay takes one run folder")
         return {mode = .Replay, folder = args[1]}, false, 0
@@ -118,10 +139,12 @@ tool_args :: proc(args: []string, out: ^strings.Builder) -> (run: Tool_Run, exit
             switch {
             case args[i] == "--port" && ok && n > 0 && n <= 65535: run.port = n
             case args[i] == "--seed" && ok:                         run.seed, run.seeded = u32(n), true
-            case: return usage(out, fmt.tprintf("--agent-run takes --port 1..65535 and --seed N, not %q", args[i]))
+            case args[i] == "--load" && i + 1 < len(args):         run.load = args[i + 1]
+            case: return usage(out, fmt.tprintf("--agent-run takes --port 1..65535, --seed N and --load save, not %q", args[i]))
             }
             i += 1
         }
+        if run.seeded && run.load != "" do return usage(out, "--agent-run --load takes its world from the save: drop --seed")
         return run, false, 0
     }
     return usage(out, fmt.tprintf("unknown option %q", args[0]))
@@ -135,6 +158,16 @@ tool_args :: proc(args: []string, out: ^strings.Builder) -> (run: Tool_Run, exit
 tool_agent_run :: proc(link: ^Agent_Link, gs: ^Game_State, run: Tool_Run) -> bool {
     exe, exe_err := os.get_executable_path(context.temp_allocator)
     from, _ := os.get_working_directory(context.temp_allocator)  // where the assets are
+    start: []u8  // --load: read before the run moves into its folder
+    if run.load != "" {
+        err: os.Error
+        start, err = os.read_entire_file_from_path(run.load, context.allocator)
+        if err != nil {
+            fmt.eprintfln("agent run: cannot read the save %s: %v", run.load, err)
+            return false
+        }
+    }
+    defer delete(start)
     link.run_port, link.run_seed, link.run_seeded, link.run_dir = run.port, run.seed, run.seeded, TOOL_RUNS_DIR
     agent_title_start(link, gs)
     if !link.listening {
@@ -142,7 +175,27 @@ tool_agent_run :: proc(link: ^Agent_Link, gs: ^Game_State, run: Tool_Run) -> boo
         return false
     }
     here, _ := os.get_working_directory(context.temp_allocator)
+    if run.load != "" && !tool_run_load(gs, start, run.load) {
+        fmt.eprintfln("agent run: %s is not a save this build runs", run.load)
+        return false
+    }
     if hint, kept := tool_run_keep_binary(exe, from, here); exe_err == nil && kept do fmt.println(hint)
+    return true
+}
+
+// A --load run, in its folder: the save it begins from is kept there as
+// TOOL_START_SAVE and loaded as the title's Continue loads one, and the run's
+// own autosave and seed file start from it.  The title stays up: the agent's
+// first dismiss closes it, onto the loaded world.
+tool_run_load :: proc(gs: ^Game_State, data: []u8, name: string, dir := ".") -> bool {
+    start := fmt.tprintf("%s/%s", dir, TOOL_START_SAVE)
+    if os.write_entire_file(start, data) != nil do return false
+    if !load_game_from(gs, start) do return false
+    golem_sweep_orphan_quick_clay(gs)  // as main does after a load: the pool isn't saved
+    camera_snap_y(gs)
+    _ = os.write_entire_file(fmt.tprintf("%s/seed", dir), transmute([]u8)fmt.tprintf("%d\n", gs.world_seed))
+    _ = save_game(gs)
+    log_action(gs, "Run starts from the save %s: world seed %d, level %d", name, gs.world_seed, gs.level_index)
     return true
 }
 
@@ -152,6 +205,188 @@ tool_run_keep_binary :: proc(exe, from, here: string) -> (hint: string, ok: bool
     copy_name := "gnipa.exe" when ODIN_OS == .Windows else "gnipa"
     if os.copy_file(fmt.tprintf("%s/%s", here, copy_name), exe) != nil do return "", false
     return fmt.tprintf("replay it with: cd %s && %s/%s --replay %s", from, here, copy_name, here), true
+}
+
+// ─── --make-save ────────────────────────────────────────────────────────────
+
+// A save just past ritual A on a seed, for playtests that start at the Deep
+// Cave (card 170).  The route a player takes, every step through the game's
+// own handlers: the pickaxe off its ledge, a bench crafted and placed, two Sky
+// Altars crafted, the tier-A foundation and the gate altar raised on the
+// Surface (which reveals Scroll A), the scroll taken from its chest, the gate
+// to the Low Sky, a second foundation and altar there, the ritual, and the
+// sky's return portal home.  No progression flag is set by hand: the unlocks
+// come from Place_Request, Item_Pickup, Ritual_Request and update_ritual.
+// Two shortcuts, and only two: the player is set beside each station instead
+// of walking there, and each step's exact materials are handed over instead
+// of gathered, all of them spent by the end.  Nothing else is ticked, so no
+// time passes and nothing hunts.
+tool_make_save :: proc(out: ^strings.Builder, seed: u32, path: string) -> bool {
+    gs := new(Game_State)
+    defer free(gs)
+    start_new_game_with(gs, seed)  // the title's New Game; empty paths, so nothing is written
+    if why := fixture_past_ritual_a(gs, out); why != "" {
+        fmt.sbprintf(out, "make-save: seed %d: %s\n", seed, why)
+        return false
+    }
+    if !save_game_to(gs, path) {
+        fmt.sbprintf(out, "make-save: cannot write %s\n", path)
+        return false
+    }
+    fmt.sbprintf(out, "wrote %s: seed %d, ritual A done, %s open; start a run from it with --agent-run --load %s\n",
+        path, seed, level_names[LEVEL_CAVE2], path)
+    return true
+}
+
+// The route of tool_make_save on gs, a new game the caller started.  "" when
+// it ends past ritual A with the bag as the route leaves it; else why not.
+// Each step is a line in say, and a step the game refused says "refused".
+fixture_past_ritual_a :: proc(gs: ^Game_State, say: ^strings.Builder) -> string {
+    gs.delta_time = AGENT_STEP
+    inv := &gs.player.inventory
+
+    kit: [Item]int  // what the route leaves in the bag: the start kit, the pickaxe and Scroll A
+    for sl in inv.slots do kit[sl.item] += sl.count
+    pick, found := fixture_find_item(&gs.world, .Pickaxe)
+    if !found do return "no pickaxe on the ledge"
+    fixture_stand(gs, pick, say, "the pickaxe ledge")
+    player_pickup(gs)
+
+    x, g := fixture_site(gs, int(SURFACE_HOME_POS.x), 1)
+    fixture_stand(gs, {i32(x + 5), i32(g - 2)}, say, "the Surface build site")
+    fixture_grant(gs, say, .Plank, 4)
+    fixture_craft(gs, say, .Crafting_Bench)
+    fixture_foundation(gs, say, x, g, .Stone_Block)
+    fixture_place(gs, say, .Crafting_Bench, x + 2, g - 2)
+    fixture_grant(gs, say, .Stone_Block, 12)
+    fixture_grant(gs, say, .Plank, 8)
+    for _ in 0 ..< 2 do fixture_craft(gs, say, .Sky_Altar)
+    fixture_foundation(gs, say, x, g, .Plank)
+    fixture_place(gs, say, .Sky_Altar, x, g - 3)  // the gate: it reveals Scroll A
+
+    chest, _ := fixture_find_tile(&gs.world, .Rune_Scroll_Chest_A)
+    fixture_stand(gs, chest, say, "the Scroll A chest")
+    rune_scroll_chest_take(gs, rune_scroll_chest_record(gs, chest, get_tile(&gs.world, int(chest.x), int(chest.y))), RUNE_SCROLL_CHEST_SLOT)
+
+    gate := sky_gate_portal(gs)
+    level_transition(gs, &gate)
+
+    sx, sg := fixture_site(gs, int(gate.dest_pos.x), int(gate.dest_pos.y) - 4)
+    fixture_foundation(gs, say, sx, sg, .Stone_Block)
+    fixture_foundation(gs, say, sx, sg, .Plank)
+    fixture_place(gs, say, .Sky_Altar, sx, sg - 3)
+
+    for ing in structure_costs[0] do fixture_grant(gs, say, ing.item, ing.count)
+    eq_push(&gs.events, Event{type = .Ritual_Request})
+    process_events(gs)
+    for i := 0; gs.ritual.active && i < 10 * TOOL_FPS; i += 1 do update_ritual(gs)
+    process_events(gs)
+    if !gs.progression.cave_unlocked[0] do return "ritual A did not complete: see the refused step"
+
+    home := level_portals[LEVEL_SKY][0]
+    level_transition(gs, &home)
+
+    kit[.Pickaxe] += 1
+    kit[.Rune_Scroll_A] += 1
+    have: [Item]int
+    for sl in inv.slots do have[sl.item] += sl.count
+    for n, it in have do if it != .None && n != kit[it] {
+        return fmt.tprintf("the bag ends with %d %v, the route leaves %d", n, it, kit[it])
+    }
+    fmt.sbprintf(say, "  ritual A done, %s open, back on the Surface\n", level_names[LEVEL_CAVE2])
+    return ""
+}
+
+// The pile of it in the world: the route's pickaxe lies once.
+@(private="file")
+fixture_find_item :: proc(w: ^World_Grid, it: Item) -> ([2]i32, bool) {
+    for i in 0 ..< GRID_W * GRID_H do if w.items[i] == it && w.item_counts[i] > 0 {
+        return {i32(i % GRID_W), i32(i / GRID_W)}, true
+    }
+    return {}, false
+}
+
+@(private="file")
+fixture_find_tile :: proc(w: ^World_Grid, t: Tile_Type) -> ([2]i32, bool) {
+    for i in 0 ..< GRID_W * GRID_H do if w.terrain[i] == t do return {i32(i % GRID_W), i32(i / GRID_W)}, true
+    return {}, false
+}
+
+// Shortcut one: the player is set down centred on tile, as if walked there.
+@(private="file")
+fixture_stand :: proc(gs: ^Game_State, tile: [2]i32, say: ^strings.Builder, what: string) {
+    gs.player.pos = {f32(tile.x) + 0.5 - PLAYER_W*0.5, f32(tile.y) + 0.5 - PLAYER_H*0.5}
+    fmt.sbprintf(say, "  stand at %s (%d,%d)\n", what, tile.x, tile.y)
+}
+
+// Shortcut two: a step's exact materials, as if gathered.  Holding them
+// reveals their recipes, as a frame of play would.
+@(private="file")
+fixture_grant :: proc(gs: ^Game_State, say: ^strings.Builder, it: Item, n: int) {
+    inventory_insert(&gs.player.inventory, it, n)
+    update_recipe_unlocks(gs)
+    fmt.sbprintf(say, "  grant %d %v\n", n, it)
+}
+
+@(private="file")
+fixture_craft :: proc(gs: ^Game_State, say: ^strings.Builder, it: Item) {
+    before := inventory_count(&gs.player.inventory, it)
+    for r, i in recipe_table do if r.result == it {
+        eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = i32(i)}})
+        process_events(gs)
+        break
+    }
+    if inventory_count(&gs.player.inventory, it) == before do fmt.sbprintf(say, "  refused: craft %v\n", it)
+}
+
+// A Place_Request from the bag slot holding it, as a right-click with it in hand.
+@(private="file")
+fixture_place :: proc(gs: ^Game_State, say: ^strings.Builder, it: Item, x, y: int) {
+    inv := &gs.player.inventory
+    before := inventory_count(inv, it)
+    for sl, i in inv.slots do if sl.item == it && sl.count > 0 { inv.selected = i; break }
+    eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(x), i32(y)}})
+    process_events(gs)
+    if inventory_count(inv, it) == before do fmt.sbprintf(say, "  refused: place %v at (%d,%d)\n", it, x, y)
+}
+
+// One course of tier A's foundation under a capstone at (x, g-3): five stone
+// on the ground row g, or three planks on the stone.
+@(private="file")
+fixture_foundation :: proc(gs: ^Game_State, say: ^strings.Builder, x, g: int, it: Item) {
+    half, row := 2, g - 1
+    if it == .Plank do half, row = 1, g - 2
+    fixture_grant(gs, say, it, 2 * half + 1)
+    for c in x - half ..= x + half do fixture_place(gs, say, it, c, row)
+}
+
+// The column nearest x0 where five columns share a ground row g, scanning down
+// from row top, with three open rows above them and no portal among them, and
+// room for the player to stand 5 to the right.  {0, 0} when there is none.
+fixture_site :: proc(gs: ^Game_State, x0, top: int) -> (x, g: int) {
+    ground :: proc(w: ^World_Grid, c, top: int) -> int {
+        for y in top ..< GRID_H do if is_solid(w, c, y) do return y
+        return -1
+    }
+    fits :: proc(gs: ^Game_State, x, top: int) -> (g: int, ok: bool) {
+        if x + 5 >= GRID_W do return  // room to stand right; off the left edge get_tile is Stone, so no ground row matches
+        g = ground(&gs.world, x, top)
+        for c in x - 2 ..= x + 2 {
+            if ground(&gs.world, c, top) != g do return
+            for y in g - 3 ..= g - 1 {
+                t := get_tile(&gs.world, c, y)
+                if t != .Air && t != .Void do return
+                for &p in level_portals[gs.level_index] do if portal_valid(&p) && (p.tiles[0] == {i32(c), i32(y)} || p.tiles[1] == {i32(c), i32(y)}) do return
+            }
+        }
+        return g, true
+    }
+    for d in 0 ..< GRID_W {
+        for sx in ([2]int{x0 + d, x0 - d}) {
+            if fg, ok := fits(gs, sx, top); ok do return sx, fg
+        }
+    }
+    return
 }
 
 // ─── --replay ───────────────────────────────────────────────────────────────
@@ -177,6 +412,12 @@ tool_replay_start :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State,
     seed, seed_ok := strconv.parse_u64(strings.trim_space(string(seed_text)))
     if seed_err != nil || rows_err != nil || !seed_ok {
         fmt.eprintfln("replay: %s needs a seed and an %s", run, AGENT_ACTS_FILE)
+        return false
+    }
+    // A --load run began from a save, not from its seed: its goals replayed on
+    // the seed's new world would play a different run.
+    if os.exists(fmt.tprintf("%s/%s", run, TOOL_START_SAVE)) {
+        fmt.eprintfln("replay: %s began from a save (--agent-run --load), and a replay starts from the seed", run)
         return false
     }
     h, m, s := time.clock(time.now())
