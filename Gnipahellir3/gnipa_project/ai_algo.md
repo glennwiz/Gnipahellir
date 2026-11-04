@@ -205,7 +205,14 @@ never touches world state.
   not a retreat), in_line (a clear
   `sight_line_clear` between the two), the damage of one blow
   (`hero_threat_damage`, a roamer's from `roamer_table`, a Draugr's a quarter
-  of max hp) and how long it has been in sight.
+  of max hp) and how long it has been in sight. The risen hero holding its
+  post (`risen_hero_guarding`: the player more than `RISEN_GUARD_RANGE` from
+  its stone) is marked `guarding`: it comes for no one outside its ring, so
+  it holds no goal and makes no one wary, and an unarmed hero walks past it
+  as a player runs past (card 169, playtest 133). It still counts as in
+  sight, so a goal into its ring, driven off each time the guard hunts, fails
+  `hunted` after `HERO_HUNTED_PAUSES` with the hero alive. Inside the ring it
+  hunts and is a threat like any other.
 - **Danger map**: `2*HERO_SENSE_REACH+1` columns round the hero, each judged
   as a step from the feet row (`hero_column`): a wall, the drop below, the hp
   the fall rule in `update_player` takes for it (`SAFE_FALL_TILES`,

@@ -15097,6 +15097,127 @@ a_death_at_home_leaves_the_new_player_room_and_a_moment :: proc(t: ^testing.T) {
     }
 }
 
+// The surface's pickaxes on the ground.
+@(private="file")
+grave_test_picks :: proc(gs: ^Game_State) -> (picks: [4][2]i32, n: int) {
+    for it, i in gs.world.items do if it == .Pickaxe && n < len(picks) {
+        picks[n] = {i32(i % GRID_W), i32(i / GRID_W)}
+        n += 1
+    }
+    return
+}
+
+// Card 169 (playtest 133): a stone 5 tiles from the spawn put the risen
+// hero's guard over the spawn and the only pickaxe, and life 2 never got
+// going.  Wherever near them the last hero fell, the ring keeps clear of both.
+@(test)
+the_risen_heros_ring_keeps_clear_of_the_spawn_and_the_pickaxe :: proc(t: ^testing.T) {
+    for seed in u32(1) ..= 8 do for at_pick in ([2]bool{false, true}) {
+        gs := test_state()
+        defer free(gs)
+        game_state_init(gs, seed * 2654435761)
+        gs.player.pos = SURFACE_HOME_POS
+        if at_pick {
+            picks, n := grave_test_picks(gs)
+            testing.expect_value(t, n, 1)
+            gs.player.pos = {f32(picks[0].x) + 0.1, f32(picks[0].y) + 1 - PLAYER_H}
+        }
+        risen_setup(gs)
+        start_new_game_with(gs, seed * 40503)
+        testing.expect(t, gs.grave.active && !gs.grave.pending, "it stands")
+        picks, n := grave_test_picks(gs)
+        testing.expect_value(t, n, 1)
+        keep := [2][2]i32{player_tile(&gs.player), picks[0]}
+        for k in keep do for i in i32(0) ..< 3 {
+            testing.expectf(t, chebyshev(gs.grave.tile + {i, 0}, k) > RISEN_GUARD_RANGE + GRAVE_RING_MARGIN, "seed %d, at the pick %v: the stone at %v, %v kept clear", seed, at_pick, gs.grave.tile, k)
+        }
+        testing.expect(t, risen_hero_guarding(gs, gs.risen.slot, player_tile(&gs.player)), "the new player outside the ring")
+    }
+}
+
+// With no room outside the ring, the grave still stands, only off the spawn.
+@(test)
+a_grave_with_no_room_past_the_ring_stands_off_the_spawn :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
+    spawn := [2]int{int(home.x), int(home.y)}
+    grave_room(gs, spawn.x - 10, spawn.x + 10, spawn.y - 1, spawn.y)
+    for x in 20 ..< 26 do gs.world.items[grid_idx(x, 20)] = .Pickaxe  // more than it keeps: the first only
+    gs.stats.grave = {active = true, hero = 1, tile = {i32(spawn.x), i32(spawn.y)}}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active, "it stands")
+    d := max(i32)
+    for i in i32(0) ..< 3 do d = min(d, chebyshev(gs.grave.tile + {i, 0}, {i32(spawn.x), i32(spawn.y)}))
+    testing.expectf(t, d == GRAVE_SPAWN_CLEAR + 1, "the stone at %v, %d from the spawn: the nearest past GRAVE_SPAWN_CLEAR", gs.grave.tile, d)
+}
+
+// Card 169 (review): with no room past the ring, the stone still keeps
+// GRAVE_SPAWN_CLEAR from the starting pickaxe as well as the spawn: a grave on
+// the pickaxe is what 169 is for.  The hero fell by the pickaxe, far from the
+// spawn: the cells round it are refused, the nearest past it taken.
+@(test)
+a_grave_with_no_room_past_the_ring_stands_off_the_pickaxe :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
+    spawn := [2]i32{i32(home.x), i32(home.y)}
+    grave_room(gs, int(spawn.x) - 10, int(spawn.x) + 16, int(spawn.y) - 1, int(spawn.y))
+    pick := spawn + {8, 0}
+    gs.world.items[grid_idx(int(pick.x), int(pick.y))] = .Pickaxe
+    gs.world.item_counts[grid_idx(int(pick.x), int(pick.y))] = 1
+    gs.stats.grave = {active = true, hero = 1, tile = pick}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active, "it stands")
+    d := [2]i32{max(i32), max(i32)}
+    for k, j in ([2][2]i32{pick, spawn}) do for i in i32(0) ..< 3 do d[j] = min(d[j], chebyshev(gs.grave.tile + {i, 0}, k))
+    testing.expectf(t, d[0] == GRAVE_SPAWN_CLEAR + 1, "the stone at %v, %d from the pickaxe: the nearest past GRAVE_SPAWN_CLEAR", gs.grave.tile, d[0])
+    testing.expectf(t, d[1] > GRAVE_SPAWN_CLEAR, "the stone at %v, %d from the spawn", gs.grave.tile, d[1])
+}
+
+// In open ground the stone stands at the first ring past the guard ring and
+// its margin: one tile nearer the spawn or the pickaxe and the guard would
+// reach them, one further and it stands farther than it needs.  The first
+// pickaxe on the ground is the one kept.
+@(test)
+the_stone_stands_just_past_the_ring_and_its_margin :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
+    spawn := [2]i32{i32(home.x), i32(home.y)}
+    grave_room(gs, 2, GRID_W - 3, int(spawn.y) - 1, int(spawn.y))
+    pick := spawn + {6, 0}
+    gs.world.items[grid_idx(int(pick.x), int(pick.y))] = .Pickaxe
+    gs.world.item_counts[grid_idx(int(pick.x), int(pick.y))] = 1
+    gs.stats.grave = {active = true, hero = 1, tile = pick}
+    grave_raise(gs)
+    testing.expect(t, gs.grave.active, "it stands")
+    d := max(i32)
+    for k in ([2][2]i32{spawn, pick}) do for i in i32(0) ..< 3 do d = min(d, chebyshev(gs.grave.tile + {i, 0}, k))
+    testing.expectf(t, d == RISEN_GUARD_RANGE + GRAVE_RING_MARGIN + 1, "the stone at %v, %d from the nearest kept tile", gs.grave.tile, d)
+}
+
+// A cave has no spawn and no starting pickaxe: its grave stands where the
+// hero fell, whatever lies at the surface's spawn coordinates.
+@(test)
+a_cave_grave_keeps_nothing_clear_of_the_surface_spawn :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    grave_rock(gs)
+    gs.level_index = LEVEL_CAVE2
+    home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
+    spawn := [2]int{int(home.x), int(home.y)}
+    grave_room(gs, spawn.x - 10, spawn.x + 10, spawn.y - 1, spawn.y)
+    gs.world.items[grid_idx(spawn.x + 6, spawn.y)] = .Pickaxe
+    gs.world.item_counts[grid_idx(spawn.x + 6, spawn.y)] = 1
+    gs.stats.grave = {active = true, hero = 1, tile = {i32(spawn.x), i32(spawn.y)}, level = LEVEL_CAVE2}
+    grave_raise(gs)
+    testing.expect_value(t, gs.grave.tile, [2]i32{i32(spawn.x), i32(spawn.y)})
+}
+
 @(test)
 a_full_store_leaves_the_tithe_on_the_ground_beside_the_stone :: proc(t: ^testing.T) {
     gs := test_state()

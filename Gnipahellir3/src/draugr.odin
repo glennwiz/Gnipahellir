@@ -81,7 +81,7 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     }
 
     // The risen hero keeps to their grave until the player comes for it.
-    guarding := risen_hero_here(gs, id) && chebyshev(gs.grave.tile, pt) > RISEN_GUARD_RANGE
+    guarding := risen_hero_guarding(gs, id, pt)
     if guarding do pt = risen_hero_post(gs)
 
     // Player moved off the planned intercept — force a fresh path.

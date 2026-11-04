@@ -2517,6 +2517,126 @@ hero_plan_drops_into_no_burn_or_water :: proc(t: ^testing.T) {
     }
 }
 
+// Card 169 (playtest 133): the risen hero holding its post holds no goal.
+// The stone 12 left of the arena's home, the hero outside its ring, and the
+// guard walking back to its post past the hero: the unarmed hero walks on
+// past it, unclawed.  The same body hunting (no grave of its own) still
+// pauses the goal, as any hunter does.
+@(test)
+hero_unarmed_walks_past_a_guarding_risen_hero :: proc(t: ^testing.T) {
+    for guarding in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        gs.player.pos = {f32(x0 + 2) + 0.1, f32(G) - PLAYER_H}
+        gs.grave = {active = true, hero = 1, tile = {i32(x0 - 12), i32(G - 1)}, level = i32(gs.level_index)}
+        gs.risen = {has_kit = true}
+        gs.risen.kit[0] = {item = .Sword, count = 1}
+        testing.expect(t, risen_hero_rise(gs), "it rises")
+        i := gs.risen.slot
+        stone := gs.grave.tile
+        testing.expect(t, !risen_hero_guarding(gs, i, stone + {RISEN_GUARD_RANGE, 0}) && risen_hero_guarding(gs, i, stone + {RISEN_GUARD_RANGE + 1, 0}), "the ring's edge")
+        gs.enemies.data[i].pos.x = f32(x0 + 12)
+        if !guarding do gs.risen.walking = false  // an Undead hunting like any other
+        exec_test_frames(link, gs, 5)
+        hp := gs.player.hp
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 16, G - 1))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for f := 0; f < 900 && agent_goals_busy(&link.goals); f += 1 do exec_test_frames(link, gs, 1)  // the enemy stays
+        status, reason := go_test_status(link, gs, id)
+        paused := strings.contains(exec_test_pushed(link), `"goal_paused"`)
+        if guarding {
+            testing.expectf(t, status == "done" && !paused && gs.player.hp == hp, "past the guard: %s %s, paused %v, hp %d of %d", status, reason, paused, gs.player.hp, hp)
+            testing.expect(t, chebyshev(builder_tile(&gs.enemies.data[i]), risen_hero_post(gs)) <= chebyshev({i32(x0 + 12), i32(G - 1)}, risen_hero_post(gs)), "the guard went back toward its post")
+        } else {
+            testing.expectf(t, paused, "a hunter holds the goal: %s %s", status, reason)
+        }
+    }
+}
+
+// Card 169 (review): a go into the guard's ring, unarmed.  The guard hunts
+// inside its ring and goes back to its post as the hero runs out of it, and
+// the goal comes up again: it is driven off HERO_HUNTED_PAUSES times, then
+// fails hunted, the hero alive, never walking in to its death.
+@(test)
+hero_unarmed_goal_into_a_guard_ring_ends_hunted :: proc(t: ^testing.T) {
+    for dx in ([2]int{-6, -16}) {  // into the ring, and across it past the stone
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        gs.player.pos = {f32(x0 + 2) + 0.1, f32(G) - PLAYER_H}
+        gs.grave = {active = true, hero = 1, tile = {i32(x0 - 12), i32(G - 1)}, level = i32(gs.level_index)}
+        gs.risen = {has_kit = true}
+        gs.risen.kit[0] = {item = .Sword, count = 1}
+        testing.expect(t, risen_hero_rise(gs), "it rises")
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + dx, G - 1))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for f := 0; f < 60 * 60 && agent_goals_busy(&link.goals); f += 1 do exec_test_frames(link, gs, 1)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "failed" && strings.has_prefix(reason, "hunted") && !gs.player.dead && gs.player.hp > 0, "to x0%+d: %s %s, hp %d", dx, status, reason, gs.player.hp)
+        testing.expect_value(t, hero_test_count(exec_test_pushed(link), `"goal_paused"`), HERO_HUNTED_PAUSES)
+    }
+}
+
+// Card 169: a guard at its post in sight makes no one wary: the pickaxe on
+// its ledge down the shaft (playtest 133), or an ore in a pit, is still
+// worked from the pit's floor.
+@(test)
+hero_a_guard_at_its_post_makes_no_one_wary :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    retreat_test_pit(gs, x0, G, 4)
+    gs.player.pos = {f32(x0 + 2) + 0.1, f32(G) - PLAYER_H}  // outside the ring
+    gs.grave = {active = true, hero = 1, tile = {i32(x0 - 12), i32(G - 1)}, level = i32(gs.level_index)}
+    gs.risen = {has_kit = true}
+    gs.risen.kit[0] = {item = .Sword, count = 1}
+    testing.expect(t, risen_hero_rise(gs), "it rises")
+    exec_test_frames(link, gs, 30)
+    testing.expectf(t, gs.hero.senses.n_threats == 1 && gs.hero.senses.threats[0].guarding, "the guard in sight: %d", gs.hero.senses.n_threats)
+    testing.expect(t, !hero_wary(gs), "not wary")
+    _, ok, _, cornered := hero_work_stand(gs, {i32(x0 + 7), i32(G + 3)}, .Pick, PICK_RANGE)
+    testing.expectf(t, ok && !cornered, "a stand %v, cornered %v", ok, cornered)
+}
+
+// Card 169 (review): a guard at its post nearer the hero than a hunter
+// hides nothing.  The hunter is the threat, the hero is wary of it, and the
+// unarmed goal pauses for it.
+@(test)
+hero_a_guard_nearer_than_a_hunter_hides_nothing :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    gs.player.pos = {f32(x0 + 2) + 0.1, f32(G) - PLAYER_H}
+    gs.grave = {active = true, hero = 1, tile = {i32(x0 - 12), i32(G - 1)}, level = i32(gs.level_index)}
+    gs.risen = {has_kit = true}
+    gs.risen.kit[0] = {item = .Sword, count = 1}
+    testing.expect(t, risen_hero_rise(gs), "it rises")
+    i := gs.risen.slot
+    gs.enemies.data[i].pos.x = f32(x0 + 5)
+    v := hero_test_vargr(gs, f32(x0 + 10), G, {-2, 0})
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 16, G - 1))
+    paused := false
+    for f := 0; f < 120 && !paused; f += 1 {
+        hero_test_tick(link, gs)  // both held where they stand
+        paused = strings.contains(exec_test_pushed(link), `"goal_paused"`)
+    }
+    s := &gs.hero.senses
+    testing.expectf(t, s.n_threats == 2 && s.threats[0].slot == i && s.threats[0].guarding && !s.threats[1].guarding, "the guard nearest: %d threats", s.n_threats)
+    th := hero_threat(&gs.hero)
+    testing.expectf(t, th != nil && th.slot == v, "the hunter is the threat: %v", th)
+    testing.expect(t, hero_wary(gs), "wary of the hunter")
+    testing.expect(t, paused, "the goal pauses for it")
+}
+
 // A home marked on another level is not this one's: home goes to the spawn.
 @(test)
 hero_home_marked_on_another_level_is_not_used :: proc(t: ^testing.T) {
