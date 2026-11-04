@@ -49,6 +49,7 @@ player_has_charm :: proc(p: ^Player, charm: Item) -> bool {
 @(rodata)
 item_stat_bonus := #partial [Item][Stat]i32{
     .Sword        = #partial {.Attack = SWORD_DAMAGE},
+    .Pickaxe      = #partial {.Attack = PICKAXE_DAMAGE},  // a soft blow, aimed on the body (pick_swing_target)
     .Silver_Sword = #partial {.Attack = 3},
     .Gold_Sword   = #partial {.Attack = 5},
     .Aether_Charm = #partial {.Speed = 3},
@@ -91,6 +92,18 @@ stat_label := [Stat]string{
 // swinging merely because armor contributes Attack to the total damage stat.
 is_melee_weapon :: proc(it: Item) -> bool {
     return item_equip_slot[it] == .Weapon && item_stat_bonus[it][.Attack] > 0
+}
+
+// Whatever lands a melee blow from the hand: a weapon, or a tool with an
+// Attack bonus (the pickaxe, softly, and only aimed on a body).
+can_melee :: proc(it: Item) -> bool {
+    eq := item_equip_slot[it]
+    return (eq == .Weapon || eq == .Tool) && item_stat_bonus[it][.Attack] > 0
+}
+
+// The pause after a melee blow: the sword's, or the pickaxe's slower one.
+melee_cooldown :: proc(it: Item) -> f32 {
+    return PICKAXE_SWING_COOLDOWN if item_equip_slot[it] == .Tool else SWORD_COOLDOWN
 }
 
 @(rodata)

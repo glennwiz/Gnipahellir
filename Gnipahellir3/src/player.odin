@@ -34,6 +34,13 @@ MELEE_REACH    :: i32(2)     // chebyshev tiles from player center
 SWORD_DAMAGE   :: 2
 SWORD_COOLDOWN :: f32(0.35)
 
+// The pickaxe hits an enemy too, softly (Glenn, card 168): less than the
+// sword and slower.  A first guess for Glenn's look.  The cursor decides
+// which a pickaxe click is: on an enemy's body in MELEE_REACH it swings at
+// it and chips nothing, anywhere else it mines as ever and swings at nothing.
+PICKAXE_DAMAGE         :: 1
+PICKAXE_SWING_COOLDOWN :: f32(0.5)
+
 // Ranged: the fire wand streams orbs at the cursor while the button is held.
 // Per-shot damage sits between base and silver sword — range is what the
 // wand buys, mana is what it costs (regen 5/s caps sustained fire at half
@@ -73,6 +80,16 @@ melee_target :: proc(gs: ^Game_State) -> (best: int, found: bool) {
         if d < best_d { best_d = d; best = i; found = true }
     }
     return
+}
+
+// The enemy a held pickaxe swings at for a cursor at world pixel `at`: the
+// one under it (enemy_at_world_point, the hover's pick), if in MELEE_REACH.
+// None: the pick mines instead.
+pick_swing_target :: proc(gs: ^Game_State, at: [2]f32) -> (id: int, found: bool) {
+    if held_item(&gs.player) != .Pickaxe do return
+    id = enemy_at_world_point(gs, at)
+    if id < 0 || chebyshev(builder_tile(&gs.enemies.data[id]), player_tile(&gs.player)) > MELEE_REACH do return -1, false
+    return id, true
 }
 
 // Fall damage: safe up to SAFE_FALL_TILES of drop (a full jump arc is ~3),
@@ -256,6 +273,21 @@ update_player :: proc(gs: ^Game_State) {
                 payload = {int_val = player_stat(p, .Attack)},
             })
             log_action(gs, "Player strikes enemy#%d", id)
+        }
+    }
+    // The pickaxe swings only on a click aimed on an enemy's body; that
+    // click chips nothing (player_mine asks the same question).
+    if inp.attack && p.attack_timer <= 0 {
+        if id, found := pick_swing_target(gs, gs.input.mouse_world); found {
+            p.attack_timer = PICKAXE_SWING_COOLDOWN
+            p.mine_timer   = PICK_SWING_TIME  // the pick's swing arc
+            eq_push(&gs.events, Event{
+                type    = .Damage_Dealt,
+                source  = PLAYER_ID,
+                target  = enemy_entity_id(id),
+                payload = {int_val = player_stat(p, .Attack)},
+            })
+            log_action(gs, "Player strikes enemy#%d with the pickaxe", id)
         }
     }
 

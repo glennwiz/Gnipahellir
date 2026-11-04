@@ -3,14 +3,15 @@ package game
 // ─── The fight goal (card 140) ────────────────────────────────────────────────
 //
 // {"do":"fight","kind":"Pond_Frog"} or {"do":"fight","slot":12} fights one
-// enemy until it is gone: the sword when it is in reach, the fire wand at range
-// when there is mana and the line to its body is clear (hero_strike, shared
-// with the brain's own fight and the fight_back reflex).  With no blow from
-// where it stands the hero walks, as a go does but never digging, to the open
-// ground nearest the enemy's row from which one lands.  It never shoots into a
-// wall: from a pit or behind a ridge it walks out first.  Under
-// HERO_FIGHT_RETREAT_FRAC of its hp it backs off, shooting as it goes, and the
-// goal fails once the enemy is HERO_THREAT_FAR away.
+// enemy until it is gone: the sword (else the pickaxe's weak blow, card 168)
+// when it is in reach, the fire wand at range when there is mana and the line
+// to its body is clear (hero_strike, shared with the brain's own fight and the
+// fight_back reflex).  With no blow from where it stands the hero walks, as a
+// go does but never digging, to the open ground nearest the enemy's row from
+// which one lands.  It never shoots into a wall: from a pit or behind a ridge
+// it walks out first.  Under HERO_FIGHT_RETREAT_FRAC of its hp it backs off,
+// shooting as it goes, and the goal fails once the enemy is HERO_THREAT_FAR
+// away.
 
 import "core:encoding/json"
 import "core:fmt"
@@ -66,8 +67,8 @@ hero_fight_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
     g.no_dig = true
     f := &g.fight
     p := &gs.player
-    if hero_held_or_first(gs, is_melee_weapon) < 0 && hero_held_or_first(gs, is_fire_wand) < 0 {
-        agent_text_set(&g.reason, "no_item: no sword or fire wand in the bag")
+    if hero_melee_slot(gs) < 0 && hero_held_or_first(gs, is_fire_wand) < 0 {
+        agent_text_set(&g.reason, "no_item: no sword, pickaxe or fire wand in the bag")
         return false
     }
     if f.has_kind {

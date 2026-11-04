@@ -4213,6 +4213,136 @@ sword_respects_reach :: proc(t: ^testing.T) {
     testing.expect_value(t, e.hp, 6)
 }
 
+// Card 168: a pickaxe click aimed on a builder's body in reach swings at it
+// for PICKAXE_DAMAGE and chips nothing, the held button included; the swing
+// waits out the pickaxe's own, slower cooldown.  Out of reach it swings at
+// nothing.
+@(test)
+pickaxe_swing_hurts_a_builder_softly :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] { idx = i; break }
+    testing.expect(t, idx >= 0, "level 0 should have a builder")
+    e := &gs.enemies.data[idx]
+    gs.player.pos = {76, f32(SURFACE_Y) - PLAYER_H}
+    prev := builder_tile(e)
+    e.pos = {77.5, f32(SURFACE_Y) - BUILDER_H}
+    entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
+    aim_on_body :: proc(gs: ^Game_State, e: ^Enemy) {
+        gs.input.mouse_world = (e.pos + enemy_body_size(e.kind) * 0.5) * CELL_SIZE
+        gs.input.mouse_tile  = builder_tile(e)
+    }
+    // A bare hand on the body swings nothing.
+    gs.player.inventory.selected = -1
+    hp0 := e.hp
+    aim_on_body(gs, e)
+    gs.input.attack = true
+    update_player(gs)
+    process_events(gs)
+    testing.expect(t, gs.player.attack_timer <= 0, "a bare hand swung")
+    testing.expect_value(t, e.hp, hp0)
+
+    test_hold(gs, .Pickaxe)
+
+    before: [11 * 11]Tile_Type
+    for dy in 0 ..< 11 do for dx in 0 ..< 11 do before[dy * 11 + dx] = get_tile(&gs.world, 71 + dx, SURFACE_Y - 5 + dy)
+    hp := e.hp
+    aim_on_body(gs, e)
+    gs.input.attack, gs.input.mine = true, true
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, hp - PICKAXE_DAMAGE)
+    testing.expect_value(t, gs.player.attack_timer, PICKAXE_SWING_COOLDOWN)
+    testing.expect(t, gs.player.mine_timer > 0, "the pick swings (the render's arc reads mine_timer)")
+
+    // The button held on the body: no second blow before the cooldown, and
+    // the pick chips nothing near it.
+    gs.input.attack = false
+    for _ in 0 ..< 60 {
+        aim_on_body(gs, e)
+        update_player(gs)
+        process_events(gs)
+    }
+    testing.expect_value(t, e.hp, hp - PICKAXE_DAMAGE)
+    testing.expect_value(t, gs.player.chip_hits, u8(0))
+    for dy in 0 ..< 11 do for dx in 0 ..< 11 {
+        testing.expectf(t, before[dy * 11 + dx] == get_tile(&gs.world, 71 + dx, SURFACE_Y - 5 + dy),
+            "tile %d,%d changed under a swing", 71 + dx, SURFACE_Y - 5 + dy)
+    }
+
+    // The hover's margin reaches into the grass under its feet: a click
+    // there still swings at the builder, and the button held there chips
+    // none of that grass.
+    under := [2]i32{i32(e.pos.x + BUILDER_W * 0.5), i32(SURFACE_Y)}
+    testing.expect(t, pick_workable(gs, under, true), "the grass under the builder is pick work")
+    grass := get_tile(&gs.world, int(under.x), int(under.y))
+    hp1 := e.hp
+    gs.player.attack_timer = 0
+    gs.input.attack = true
+    for _ in 0 ..< 60 {
+        gs.input.mouse_world = {e.pos.x + BUILDER_W * 0.5, e.pos.y + BUILDER_H + 0.2} * CELL_SIZE
+        gs.input.mouse_tile  = under
+        update_player(gs)
+        process_events(gs)
+        gs.input.attack = false
+    }
+    testing.expect_value(t, e.hp, hp1 - PICKAXE_DAMAGE)
+    testing.expect_value(t, gs.player.chip_hits, u8(0))
+    testing.expect_value(t, get_tile(&gs.world, int(under.x), int(under.y)), grass)
+    e.hp = hp - PICKAXE_DAMAGE
+
+    // A click before PICKAXE_SWING_COOLDOWN has passed swings at nothing,
+    // even after the sword's would have.
+    aim_on_body(gs, e)
+    gs.input.attack = true
+    gs.player.attack_timer = PICKAXE_SWING_COOLDOWN - SWORD_COOLDOWN
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, hp - PICKAXE_DAMAGE)
+    gs.player.attack_timer = 0
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, hp - 2 * PICKAXE_DAMAGE)
+
+    // Out of reach the cursor on its body swings at nothing.
+    gs.player.pos = {66, f32(SURFACE_Y) - PLAYER_H}
+    gs.player.attack_timer = 0
+    aim_on_body(gs, e)
+    update_player(gs)
+    process_events(gs)
+    testing.expect_value(t, e.hp, hp - 2 * PICKAXE_DAMAGE)
+}
+
+// Card 168: with a builder in reach, a pickaxe click on the ground beside it
+// mines as ever (PICK_HITS chips break it) and swings at nothing.
+@(test)
+pickaxe_mining_beside_a_builder_is_unchanged :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    idx := -1
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] { idx = i; break }
+    e := &gs.enemies.data[idx]
+    gs.player.pos = {76, f32(SURFACE_Y) - PLAYER_H}
+    prev := builder_tile(e)
+    e.pos = {77.5, f32(SURFACE_Y) - BUILDER_H}
+    entity_map_move(&gs.world, enemy_entity_id(idx), prev, builder_tile(e))
+    test_hold(gs, .Pickaxe)
+    hp := e.hp
+
+    T := [2]i32{75, i32(SURFACE_Y)}
+    was := get_tile(&gs.world, int(T.x), int(T.y))
+    testing.expect(t, .Mineable in terrain_table[was].flags, "the ground beside the hero is mineable")
+    for n in 0 ..< PICK_HITS {
+        gs.input.attack = true
+        gs.player.attack_timer = 0
+        mine_swing(gs, T)
+        if n < PICK_HITS - 1 do testing.expect_value(t, gs.player.chip_hits, u8(n + 1))
+    }
+    testing.expect(t, get_tile(&gs.world, int(T.x), int(T.y)) != was, "PICK_HITS chips mine the tile")
+    testing.expect_value(t, e.hp, hp)
+}
+
 @(test)
 equip_swaps_through_events_and_never_destroys_gear :: proc(t: ^testing.T) {
     gs := test_state()
