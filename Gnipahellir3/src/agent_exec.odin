@@ -444,6 +444,8 @@ Hero_Brain :: struct {
     break_x:     f32, // where the flight last made headway
     break_t:     f32, // seconds since it did
     break_shut:  bool, // a way got nowhere: a fall that leaves the hero standing is taken
+    flight_hp:   int,  // the hp when no threat was last in mind: what this flight has cost since
+    leap_dir:    i8,   // over a gap this way, held until the feet are down
     potion_t:    f32,  // seconds until the potion reflex may fire again
     path:        Hero_Path,
     nav:         Hero_Nav,
@@ -490,6 +492,7 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b := &gs.hero
     b.swing_t -= gs.delta_time
     hero_sense(gs, b)
+    if hero_threat(b) == nil do b.flight_hp = gs.player.hp
     for row, k in hero_behaviours do if row.score != nil do b.scores[k] = row.score(gs, b, g)
     next := hero_pick(b)
     if next != b.current {
@@ -811,9 +814,15 @@ hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear 
     best_x, best_d := hx - math.sign(th.dx) * HERO_THREAT_FAR, clear
     for spot in s.safe[:s.n_safe] {
         sx := f32(spot.x) + 0.5
+        if math.sign(sx - hx) == math.sign(th.dx) do continue  // never back past it
         if d := abs(sx - tx); d > best_d do best_x, best_d = sx, d
     }
     if th.dist >= clear do b.break_shut = false  // got clear: the next corner is weighed afresh
+    if gs.player.grounded do b.leap_dir = 0
+    if b.leap_dir != 0 {
+        hero_walk(gs, b, b.leap_dir, drop_ok = true)  // in the air over a gap: on to the far side
+        return
+    }
     dir: i8
     if b.break_dir != 0 && math.sign(th.dx) != -f32(b.break_dir) {
         dir = b.break_dir  // still on the way past it
@@ -827,12 +836,20 @@ hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear 
     // standing beats a mauling.  With the threat still off it keeps at it.
     b.break_t += gs.delta_time
     if abs(hx - b.break_x) > 0.5 do b.break_x, b.break_t = hx, 0
+    if b.break_t >= HERO_BREAK_STUCK_S && hero_dig_out(gs, b, dir) do return
     if b.break_t >= HERO_BREAK_STUCK_S && abs(th.dx) < HERO_MAULED_TILES {
         dir = -dir
         b.break_dir, b.break_x, b.break_t, b.break_shut = dir, hx, 0, true
     }
     if col, _ := hero_step(gs, s, dir); !hero_falls_safe(gs) && hero_unsafe(col) {
-        if !col.hazard && col.hurts < gs.player.hp && (col.hurts < th.damage * HERO_PASS_BLOWS || b.break_shut && abs(th.dx) < HERO_MAULED_TILES && col.hurts + th.damage < gs.player.hp) {
+        if _, _, ok := hero_gap_landing(&gs.world, hero_feet(&gs.player), i32(dir)); ok {
+            hero_walk(gs, b, dir, drop_ok = true)  // over it, as a player jumps a gap
+            b.leap_dir = dir
+            gs.agent.cmd.jump = true
+            gs.agent.first    = true
+            return
+        }
+        if !col.hazard && col.hurts < gs.player.hp && (col.hurts < th.damage * HERO_PASS_BLOWS + max(b.flight_hp - gs.player.hp, 0) || b.break_shut && abs(th.dx) < HERO_MAULED_TILES && col.hurts + th.damage < gs.player.hp) {
             hero_walk(gs, b, dir, drop_ok = true)  // a fall that costs less than the blows, or than a mauling
             return
         }
@@ -842,11 +859,45 @@ hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear 
     hero_walk(gs, b, dir)
 }
 
+// Stuck in flight with a pick and nothing to fight with: the tile in the way,
+// at head height or at the feet, dug to open a way out.  A side dig never
+// takes the hero's floor.  False when nothing in the way yields to the pick.
+@(private="file")
+hero_dig_out :: proc(gs: ^Game_State, b: ^Hero_Brain, dir: i8) -> bool {
+    pick := hero_item_slot(gs, .Pickaxe)
+    if pick < 0 || hero_armed(gs) do return false
+    s := &b.senses
+    _, x := hero_step(gs, s, dir)
+    for y in ([2]i32{s.feet_y - 1, s.feet_y}) {
+        t := [2]i32{x, y}
+        tile := get_tile(&gs.world, int(x), int(y))
+        if .Mineable not_in terrain_table[tile].flags || is_structure_tile[tile] do continue  // the pick's own rule
+        c := &gs.agent.cmd
+        if held_item(&gs.player) != .Pickaxe {
+            c.verb, c.verb_arg = .Select, i32(pick)
+            gs.agent.first = true
+            return true
+        }
+        c.has_mine, c.mine, c.aim = true, t, {f32(x) + 0.5, f32(y) + 0.5}
+        return true
+    }
+    return false
+}
+
 // ─── Behaviours ───
 
+// A goal waits while an enemy the hero cannot fight hunts it: flee, which
+// scores whenever a hunter is near, takes over until the hunter is gone.
 @(private="file")
 hero_goal_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
-    return HERO_GOAL_SCORE if g != nil else 0
+    return HERO_GOAL_SCORE if g != nil && !hero_hunted(gs, b) else 0
+}
+
+// Unarmed, with a noticed enemy coming at it inside HERO_THREAT_FAR.
+@(private="file")
+hero_hunted :: proc(gs: ^Game_State, b: ^Hero_Brain) -> bool {
+    th := hero_threat(b)
+    return th != nil && th.closing && th.dist < HERO_THREAT_FAR && !hero_armed(gs)
 }
 
 @(private="file")
@@ -1055,6 +1106,19 @@ hero_dig_tiles :: proc(from, to: [2]i32) -> (tiles: [3][2]i32, n: int) {
     }
 }
 
+// Where a running jump from feet tile a over the gap on side d lands: the
+// first stand within HERO_GAP_MAX columns, with the arc's three rows open
+// over the gap and head room at both ends.
+hero_gap_landing :: proc(w: ^World_Grid, a: [2]i32, d: i32) -> (l: [2]i32, k: i32, ok: bool) {
+    if !hero_open(w, a.x, a.y - 2) do return
+    for k = 2; k <= HERO_GAP_MAX; k += 1 {
+        m := [2]i32{a.x + d * (k - 1), a.y}
+        if !hero_open(w, m.x, m.y) || !hero_open(w, m.x, m.y - 1) || !hero_open(w, m.x, m.y - 2) do return
+        if l = {a.x + d * k, a.y}; hero_stand(w, l) && hero_open(w, l.x, l.y - 2) do return l, k, true
+    }
+    return
+}
+
 // Whether a fall that takes hurts hp leaves the hero above the reflex line.
 hero_fall_ok :: proc(gs: ^Game_State, hurts: int) -> bool {
     if hurts == 0 do return true
@@ -1140,13 +1204,8 @@ hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := tru
                 if !col.hazard && hero_stand(w, land) && hero_fall_ok(gs, col.hurts) {
                     hero_nav_relax(n, &size, o, i, land, 1 + 0.3 * f32(col.drop) + HERO_NAV_HP_COST * f32(col.hurts), .Drop, nb, to)
                 }
-                if hero_open(w, x, y - 2) do for k in i32(2) ..= HERO_GAP_MAX {
-                    m := [2]i32{x + d * (k - 1), y}
-                    if !hero_open(w, m.x, m.y) || !hero_open(w, m.x, m.y - 1) || !hero_open(w, m.x, m.y - 2) do break
-                    if l := ([2]i32{x + d * k, y}); hero_stand(w, l) && hero_open(w, l.x, l.y - 2) {
-                        hero_nav_relax(n, &size, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
-                        break
-                    }
+                if l, k, ok := hero_gap_landing(w, a, d); ok {
+                    hero_nav_relax(n, &size, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
                 }
                 under := get_tile(w, int(f.x), int(f.y + 1))
                 if int(nb) < blocks && (under == .Air || under == .Void) {
