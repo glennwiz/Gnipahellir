@@ -405,6 +405,7 @@ Hero_Threat :: struct {
     damage:   int,   // one blow at the hero
     seen_for: f32,   // seconds in sight
     hunting:  bool,  // after the hero (Hunt or Wave_Hunt), not on an errand of its own
+    guarding: bool,  // the risen hero holding its post: in sight, but it holds no goal and makes no one wary (card 169)
 }
 
 // One column round the hero, judged from the hero's feet row.
@@ -521,8 +522,8 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     hero_sense(gs, b)
     if hero_threat(b) == nil do b.flight_hp, b.turned_dir, b.drop_back = gs.player.hp, 0, false
     b.seen_ago += gs.delta_time
-    if hero_threats_in_sight(b) == 0 do b.flee_pauses = 0
-    for th in b.senses.threats[:b.senses.n_threats] do if th.damage > 0 do b.seen, b.seen_ago = true, 0
+    if hero_threats_in_sight(b) == 0 do b.flee_pauses = 0  // a guard back at its post still counts: a goal into its ring ends hunted (card 169)
+    for th in b.senses.threats[:b.senses.n_threats] do if th.damage > 0 && !th.guarding do b.seen, b.seen_ago = true, 0
     if b.retreat_off && gs.player.grounded && hero_way_out_cheap(&gs.world, hero_feet(&gs.player)) do b.retreat_off = false
     for row, k in hero_behaviours do if row.score != nil do b.scores[k] = row.score(gs, b, g)
     next := hero_pick(b)
@@ -639,6 +640,9 @@ hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
         // 127); one passing by on its own errand is not (seed 999: a Builder
         // fetching ore under the hero's shaft).
         th.hunting = e.builder.goal == .Hunt || e.builder.goal == .Wave_Hunt
+        // The risen hero holding its post comes for no one outside its ring
+        // (card 169, playtest 133).
+        th.guarding = risen_hero_guarding(gs, i, player_tile(p))
         if th.seen_for >= HERO_REACTION_S && (th.in_line || th.dist <= f32(MELEE_REACH) || th.hunting && th.closing && th.dist <= HERO_THREAT_NEAR) do th.noticed = true
         at := s.n_threats
         for at > 0 && s.threats[at - 1].dist > th.dist do at -= 1
@@ -729,7 +733,7 @@ hero_unsafe :: proc(c: Hero_Column) -> bool {
 
 // The nearest threat the hero has noticed.
 hero_threat :: proc(b: ^Hero_Brain) -> ^Hero_Threat {
-    for &th in b.senses.threats[:b.senses.n_threats] do if th.damage > 0 && th.noticed do return &th
+    for &th in b.senses.threats[:b.senses.n_threats] do if th.damage > 0 && th.noticed && !th.guarding do return &th
     return nil
 }
 

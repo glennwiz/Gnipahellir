@@ -18,7 +18,8 @@ import "core:fmt"
 
 GRAVE_TEXT         :: 32   // bytes kept of a cause or place name
 GRAVE_SHAFT_OFFSET :: 3    // tiles right of the shaft mouth: where a grave with no tile looks first
-GRAVE_SPAWN_CLEAR  :: 4    // tiles a surface grave keeps from where a new player appears
+GRAVE_SPAWN_CLEAR  :: 4    // tiles a surface grave keeps from where a new player appears and the starting pickaxe, when nothing keeps it further
+GRAVE_RING_MARGIN  :: 4    // tiles past the risen hero's guard ring a surface grave keeps from the spawn and a pickaxe on the ground: Glenn's to feel
 
 Grave_Record :: struct {
     active:  bool,              // holds a fallen hero (stats) / the stone stands (run)
@@ -108,9 +109,10 @@ grave_tile_open :: proc(tile: Tile_Type) -> bool {
     return tile == .Air || tile == .Void
 }
 
-// Open air, a head of it, ground under it, no pile, nothing to crowd.
+// Open air, a head of it, ground under it, no pile, nothing to crowd, and
+// more than `clear` tiles from each of `keep`.
 @(private="file")
-grave_cell_open :: proc(w: ^World_Grid, level, x, y: int) -> bool {
+grave_cell_open :: proc(w: ^World_Grid, level, x, y: int, keep: [][2]i32, clear: i32) -> bool {
     if !in_bounds(x, y - 1) || !in_bounds(x, y + 1) do return false
     idx := grid_idx(x, y)
     if !grave_tile_open(w.terrain[idx]) || w.items[idx] != .None do return false
@@ -121,11 +123,7 @@ grave_cell_open :: proc(w: ^World_Grid, level, x, y: int) -> bool {
         near := grid_idx(x + dx, y + dy)
         if grave_keep_clear[w.terrain[near]] || tithe_refused[w.items[near]] do return false
     }
-    if level == LEVEL_SURFACE {
-        home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
-        spawn := [2]i32{i32(home.x), i32(home.y)}
-        if chebyshev({i32(x), i32(y)}, spawn) <= GRAVE_SPAWN_CLEAR do return false
-    }
+    for k in keep do if chebyshev({i32(x), i32(y)}, k) <= clear do return false
     for p in level_portals[level] {
         for t in p.tiles {
             if abs(int(t.x) - x) <= 1 && abs(int(t.y) - y) <= 1 do return false
@@ -134,16 +132,35 @@ grave_cell_open :: proc(w: ^World_Grid, level, x, y: int) -> bool {
     return true
 }
 
-// The nearest three open cells in a row: stone, coffer, and where the hero rises.
+// The nearest three open cells in a row: stone, coffer, and where the hero
+// rises.  On the surface the risen hero's guard ring keeps clear of where a
+// new player appears and of the pickaxe that waits for them (playtest 133: a
+// stone 5 tiles from the spawn guarded both, and life 2 never got going);
+// with no such room, the stone still keeps GRAVE_SPAWN_CLEAR from both.
 @(private="file")
 grave_spot :: proc(w: ^World_Grid, level: int, from: [2]i32) -> (tile: [2]i32, ok: bool) {
-    for r in 0 ..< GRID_W {
-        for dy in -r ..= r do for dx in -r ..= r {
-            if max(abs(dx), abs(dy)) != r do continue  // this ring only
-            x, y := int(from.x) + dx, int(from.y) + dy
-            if grave_cell_open(w, level, x, y) && grave_cell_open(w, level, x + 1, y) &&
-               grave_cell_open(w, level, x + 2, y) {
-                return {i32(x), i32(y)}, true
+    // The spawn and the starting pickaxe: a new game's world is fresh, so the
+    // first pickaxe on the ground is the one left for the new player.
+    keep: [2][2]i32
+    n := 0
+    if level == LEVEL_SURFACE {
+        home := SURFACE_HOME_POS + {PLAYER_W*0.5, PLAYER_H*0.5}
+        keep[0], n = {i32(home.x), i32(home.y)}, 1
+        for it, i in w.items {
+            if it != .Pickaxe do continue
+            keep[1], n = {i32(i % GRID_W), i32(i / GRID_W)}, 2
+            break
+        }
+    }
+    for clear in ([2]i32{RISEN_GUARD_RANGE + GRAVE_RING_MARGIN, GRAVE_SPAWN_CLEAR}) {
+        for r in 0 ..< GRID_W {
+            for dy in -r ..= r do for dx in -r ..= r {
+                if max(abs(dx), abs(dy)) != r do continue  // this ring only
+                x, y := int(from.x) + dx, int(from.y) + dy
+                if grave_cell_open(w, level, x, y, keep[:n], clear) && grave_cell_open(w, level, x + 1, y, keep[:n], clear) &&
+                   grave_cell_open(w, level, x + 2, y, keep[:n], clear) {
+                    return {i32(x), i32(y)}, true
+                }
             }
         }
     }
@@ -293,6 +310,12 @@ risen_hero_rise :: proc(gs: ^Game_State) -> bool {
 // The cell past the coffer.
 risen_hero_post :: proc(gs: ^Game_State) -> [2]i32 {
     return gs.grave.tile + {2, 0}
+}
+
+// Enemy slot i is the risen hero holding its post: the one it would go for,
+// at tile `at`, is outside its guard ring.
+risen_hero_guarding :: proc(gs: ^Game_State, i: int, at: [2]i32) -> bool {
+    return risen_hero_here(gs, i) && chebyshev(gs.grave.tile, at) > RISEN_GUARD_RANGE
 }
 
 // The hero's slot means this level's store only: the same number elsewhere is
