@@ -332,6 +332,7 @@ the one below is solid. Moves and their price:
 | drop | off an edge to wherever it lands | 1 + 0.3/tile + `HERO_NAV_HP_COST` per hp; never onto a burn or water, never one that kills or leaves hp under `HERO_LOW_HP_FRAC` |
 | gap | a running jump over open columns, landing up to `HERO_GAP_MAX` over | columns + `HERO_NAV_JUMP_COST` |
 | bridge | a plain block from the bag (`HERO_BRIDGE_BLOCKS`: of stone, dirt, turf and mossy stone the one with the most to spare past what the queued and running craft goals need of it, `hero_craft_reserve`, never a log, plank, ore or sand; card 159) set under the next column, never into a cell holding a pile | 1 + `HERO_NAV_BRIDGE_COST`; at most that spare, counted over every stack |
+| swim | in water (`hero_swim_cell`: the feet in water, the head in water or air, no burn), to any side, up or down; into it from land (at the feet, or falling in: the water breaks the fall); out onto ground level with it, or by strokes onto a stand one row up, with head room (card 174: a stroke lifts the feet at most about 0.9 tile over the water's top, so a bank a tile higher keeps the hero in). Lava is never a move | `HERO_NAV_SWIM_COST` per stride, out onto level ground too (water halves the stride); in 1, a fall in too (no hp); a stroke out onto the bank `HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST`, so a pond a gap jump clears is jumped |
 | dig | with the pick, or by hand through wood: a tunnel (2 tiles), a step cut up (3), a stair down, one down and one across (3); never a shaft, never the floor under the feet, never a tile beside water or lava, never the goal tile's own floor | 1 + `HERO_NAV_DIG_COST` per tile dug |
 
 A drop that hurts at all is taken only when no way without one reaches: the
@@ -365,7 +366,8 @@ not switched off (`{"cmd":"reflexes","potion":false,...}`, `Hero_Reflex`,
 
 - leave_hazard: in lava, water or a burn, or in the air over one, walk (and
   jump) for the nearest column on dry ground, or ground a jump reaches, that
-  no wall stands before;
+  no wall stands before; not water while a go follows a swim step (card 174:
+  the water is its way), a burn at or under the feet still;
 - potion: under `HERO_LOW_HP_FRAC` of max hp, drink a health potion, else eat
   a Sky Egg (`hero_heal_items`, card 156), then not again for
   `HERO_POTION_COOLDOWN_S`;
