@@ -634,6 +634,8 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  state's goals lists each one: queued, running (with left), done, or failed with a reason. do names the kind:\n")
     for row in agent_goal_kinds do fmt.sbprintf(w, "    %s: %s\n", row.name, row.params)
     fmt.sbprintf(w, "  a go or home that cannot get nearer fails: no_route (nothing nearer to reach), blocked (no headway for %.0f s), hazard (the tile burns or drowns)\n", HERO_GO_STUCK_S)
+    fmt.sbprintf(w, "  a work goal picks its tool (the longest mine wand the mana fires, else the pickaxe) and works windows at a person's pace;\n")
+    fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, blocked or full first, then what\n")
     fmt.sbprintf(w, "{{\"cmd\":\"home\",\"at\":[x,y]}}  marks this level's home for the home goal; with no at, the mark goes and home is the surface spawn\n")
     fmt.sbprintf(w, "{{\"cmd\":\"reflexes\",\"potion\":false}}  the hero's reflexes, under every goal, all on at first; answers with each:\n")
     fmt.sbprintf(w, "  leave_hazard: walks and jumps out of lava, water or a burn. potion: drinks a health potion under %.0f%% hp\n", HERO_LOW_HP_FRAC * 100)
@@ -1604,7 +1606,6 @@ agent_death_ready_in :: proc(gs: ^Game_State) -> int {
 }
 
 // By result name.  A result with several recipes prefers one that can be made now.
-@(private="file")
 agent_find_recipe :: proc(gs: ^Game_State, name: string) -> int {
     found := -1
     for &r, i in recipe_table {
@@ -1638,6 +1639,10 @@ agent_input :: proc(gs: ^Game_State) {
     inp.interact   = false
     inp.fly_up     = false
     inp.fly_down   = false
+
+    // The executor's cursor, and the stack it drags, as a mouse shows them.
+    if c.has_cursor do inp.mouse_screen = c.cursor
+    gs.ui.drag_item = c.carry
 
     // Ahead of the dismiss: an act that does both sends the item, then moves on.
     if first && c.verb == .Tithe do eq_push(&gs.events, Event{type = .Tithe_Choose, payload = {int_val = c.verb_arg}})
@@ -1718,6 +1723,12 @@ agent_input :: proc(gs: ^Game_State) {
     case .Crew:    eq_push(&gs.events, Event{type = .Golem_Crew_Toggle})
     case .Select:  gs.player.inventory.selected = int(arg)
     case .Craft:   eq_push(&gs.events, Event{type = .Craft_Request, payload = {int_val = arg}})
+    case .Open_Craft:  // TAB: the bag and crafting, with the recipes of a station in range
+        gs.ui.active_station, _ = nearest_station(gs)
+        gs.ui.show_inventory = true
+        gs.ui.show_crafting  = true
+        place_craft_pair(gs)
+    case .Pick_Recipe: gs.ui.craft_selected = int(arg)
     case .Equip:   eq_push(&gs.events, Event{type = .Equip_Request, payload = {int_val = arg}})
     case .Feed:    eq_push(&gs.events, Event{type = .Smelter_Feed, tile = gs.ui.smelter_tile, payload = {int_val = arg}, count = c.feed_count})
     case .Collect: eq_push(&gs.events, Event{type = .Smelter_Collect, tile = gs.ui.smelter_tile})
