@@ -29,6 +29,7 @@ HERO_CLICK_PAUSE_S  :: f32(0.25)  // on a target before each click, and before a
 HERO_WINDOW_LOOK_S  :: f32(0.4)   // a look at a window once it opens, and again before it shuts
 HERO_MINE_GIVE_UP_S :: f32(6)     // on one tile in reach with nothing given: blocked
 HERO_OPEN_TRIES     :: 4          // ticks a click has to open a window or set a block down
+HERO_PLACE_ASIDE_TICKS :: 30      // ticks on a place's stand to take the body off the tile (card 164)
 HERO_PLACE_NEAR     :: i32(4)     // tiles round home a place near:"home" looks at
 HERO_PLACE_STAND    :: i32(3)     // a place out of reach walks this near
 
@@ -280,7 +281,7 @@ hero_crew_walks :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
 
 @(private="file")
 hero_work_find_machine :: proc(gs: ^Game_State, w: ^Hero_Work, feet: [2]i32) -> string {
-    names := #partial [Agent_Goal_Kind]string{.Store = "barrel", .Feed = "smelter", .Collect = "smelter", .Withdraw = "barrel, silo or smelter"}
+    names := #partial [Agent_Goal_Kind]string{.Store = "barrel", .Feed = "smelter", .Collect = "smelter", .Withdraw = "barrel, chest, silo or smelter"}
     if w.has_at {
         if !hero_work_fits(gs, w.kind, w.at) do return fmt.tprintf("no_station: no %s at [%d,%d]", names[w.kind], w.at.x, w.at.y)
         w.machine = w.at
@@ -304,10 +305,9 @@ hero_work_find_machine :: proc(gs: ^Game_State, w: ^Hero_Work, feet: [2]i32) -> 
         #partial switch tile {
         case .Smelter:
             if sd.in_count == 0 do return "no_item: the furnace holds no ore"
-        case .Barrel, .Rune_Coffer:
-            b := barrel_at(gs, gs.level_index, m)
+        case .Barrel, .Rune_Coffer, .Sky_Rune_Scroll_Chest, .Rune_Scroll_Chest_A, .Rune_Scroll_Chest_B, .Rune_Scroll_Chest_C:
             if w.item == .None do return "no_item: a withdraw from a barrel names the item"
-            if b == nil || hero_barrel_slot(b, w.item) < 0 do return fmt.tprintf("no_item: the barrel holds no %v", w.item)
+            if !hero_barrel_holds(gs, m, w.item) do return fmt.tprintf("no_item: the %s holds no %v", "chest" if is_rune_scroll_chest(tile) else "barrel", w.item)
         }
     }
     return ""
@@ -361,7 +361,7 @@ hero_work_fits :: proc(gs: ^Game_State, kind: Agent_Goal_Kind, t: [2]i32) -> boo
     #partial switch kind {
     case .Store:          return barrel
     case .Feed, .Collect: return tile == .Smelter
-    case .Withdraw:       return barrel || tile == .Smelter || tile == .Silo
+    case .Withdraw:       return barrel || is_rune_scroll_chest(tile) || tile == .Smelter || tile == .Silo  // a scroll chest opens as a barrel (card 164)
     }
     return false
 }
@@ -371,8 +371,16 @@ hero_work_fits :: proc(gs: ^Game_State, kind: Agent_Goal_Kind, t: [2]i32) -> boo
 hero_work_machine :: proc(gs: ^Game_State, w: ^Hero_Work, t: [2]i32) -> bool {
     if !hero_work_fits(gs, w.kind, t) do return false
     if w.kind != .Withdraw do return true
-    b := barrel_at(gs, gs.level_index, t)
-    return b != nil && hero_barrel_slot(b, w.item) >= 0
+    return hero_barrel_holds(gs, t, w.item)
+}
+
+// Whether the barrel at t holds the item.  A scroll chest never opened has no
+// record yet: it holds its own scroll.
+@(private="file")
+hero_barrel_holds :: proc(gs: ^Game_State, t: [2]i32, it: Item) -> bool {
+    if b := barrel_at(gs, gs.level_index, t); b != nil do return hero_barrel_slot(b, it) >= 0
+    held, _ := rune_scroll_chest_item(get_tile(&gs.world, int(t.x), int(t.y)))
+    return held == it
 }
 
 @(private="file")
@@ -492,6 +500,17 @@ hero_work_target :: proc(gs: ^Game_State, g: ^Agent_Goal, t: [2]i32, pile: bool)
     w.start_tile = get_tile(&gs.world, int(t.x), int(t.y))
 }
 
+// In flight with no floor under the feet row, so no walk starts from it (a
+// hover low over the floor still walks).  Flight zeroes the body's speed, so
+// grounded keeps whatever it last was: the floor is read.
+hero_hovering :: proc(gs: ^Game_State) -> bool {
+    p := &gs.player
+    if gs.flight_t <= 0 do return false
+    fy := hero_feet_row(p)
+    for x in i32(p.pos.x) ..= i32(p.pos.x + PLAYER_W - 0.001) do if is_solid(&gs.world, int(x), int(fy + 1)) do return false
+    return true
+}
+
 // One tick on the target tile: into reach, the tool in hand, the button held
 // on it.  Mined once the tile is another.
 @(private="file")
@@ -506,7 +525,14 @@ hero_work_mine :: proc(gs: ^Game_State, g: ^Agent_Goal) -> Hero_Mined {
         return .Failed
     }
     _, safe := hero_dig_safe(&gs.world, t, hero_feet_row(p), i32(p.pos.x), i32(p.pos.x + PLAYER_W - 0.001))
-    if !p.grounded || !hero_work_reaches(reach, rng, hero_feet(p), t) || !safe {
+    // Hovering in flight (card 164, goal 316) the body never comes down to a
+    // walk: it works what it reaches from there, and says so for the rest.
+    hovering := hero_hovering(gs)
+    if (!p.grounded && !hovering) || !hero_work_reaches(reach, rng, hero_feet(p), t) || !safe {
+        if hovering {
+            hero_work_fail(g, fmt.tprintf("unreachable: [%d,%d] is out of reach of the hover in flight", t.x, t.y))
+            return .Unreachable
+        }
         s := g.to
         if !w.walking {
             found, cornered: bool
@@ -659,7 +685,13 @@ hero_place_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
             if !found && cornered do return hero_work_fail(g, fmt.tprintf("cornered: every stand near [%d,%d] has no cheap way out, and the hero is wary", at.x, at.y))
             if !found do return hero_work_fail(g, fmt.tprintf("unreachable: no ground near [%d,%d]", at.x, at.y))
         }
-        hero_work_walk(gs, g, s)
+        if hero_work_walk(gs, g, s) {
+            // On the stand, the body still over the tile: a go ends as the
+            // feet reach the stand's tile, so on to its middle (card 164).
+            w.tries += 1
+            if w.tries > HERO_PLACE_ASIDE_TICKS do return hero_work_fail(g, fmt.tprintf("blocked: the body stays over [%d,%d]", at.x, at.y))
+            c.move = 1 if f32(s.x) + 0.5 > p.pos.x + PLAYER_W * 0.5 else -1
+        }
         return false
     }
     gs.agent.first = true

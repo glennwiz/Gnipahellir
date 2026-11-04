@@ -323,8 +323,23 @@ agent_goal_act_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     gs.agent.cmd   = c
     gs.agent.first = g.first
     g.first        = false
+    if g.frames_left == 1 do hero_act_reach_note(gs)
     g.frames_left -= 1
     return g.frames_left == 0
+}
+
+// An act's pick at a tile it could work but its swing does not reach (card
+// 164: hovering in flight, the tile under the feet) says so, as a toast, on
+// the act's last frame: the act ends done, the tile untouched.
+@(private="file")
+hero_act_reach_note :: proc(gs: ^Game_State) {
+    p := &gs.player
+    t := gs.agent.cmd.mine
+    if !hero_digging(gs) || wand_mine_range[held_item(p)] > 0 do return
+    if !pick_workable(gs, t, held_item(p) == .Pickaxe) do return
+    if c, ok := pick_target(p, gs.agent.cmd.aim * CELL_SIZE); ok && c == t do return
+    if tile_overlaps_player(gs, int(t.x), int(t.y)) do return  // a walkable tile the body stands in is worked
+    notify(gs, "Out of reach: (%d,%d)", t.x, t.y)
 }
 
 @(rodata)
@@ -383,6 +398,7 @@ HERO_RETREAT_SCORE    :: f32(70)    // low with no heal, in a pit: out of it ahe
 HERO_MAULED_TILES     :: f32(1.5)   // a threat this near across is striking: with the way shut, a fall that leaves the hero standing beats it
 HERO_CLEAR_MARGIN     :: f32(4)     // a noticed threat stays in mind this far past HERO_THREAT_FAR
 HERO_HUNTED_PAUSES    :: 3          // paused for flight this often with the threat still in sight, a goal is given up, hunted
+HERO_PAUSE_MAX_S      :: f32(60)    // a goal paused this long at a stretch is given up, held (card 164: 104k frames boxed in)
 HERO_KITE_TILES       :: f32(4)     // with the wand, a threat nearer than this is backed off from as it is shot
 HERO_FIGHT_BACK_S     :: f32(1.5)   // the fight_back reflex answers a blow this long
 HERO_FIGHT_RETREAT_FRAC :: f32(0.3) // a fight goal backs off under this share of max hp
@@ -398,6 +414,7 @@ Hero_Threat :: struct {
     kind:     Enemy_Kind,
     dist:     f32,
     dx:       f32,  // its centre less the hero's, in tiles
+    at:       [2]f32,  // its centre, to tell its own coming from the hero's walk
     closing:  bool,  // it came at the hero within HERO_CLOSING_MEMORY_S
     closing_ago: f32,  // seconds since it last came at the hero
     in_line:  bool,  // nothing solid between: it can come at the hero, and be hit
@@ -446,6 +463,7 @@ Hero_Brain :: struct {
     held:        f32,  // seconds it has run
     paused_goal: int,  // the goal a behaviour has paused, 0 none
     paused_by:   Hero_Behaviour,
+    paused_t:    f32,  // seconds the goal has been paused at a stretch
     idle_told:   bool,
     ledge_t:     f32,  // seconds looking at this edge
     looked:      [2]i32,  // the edge looked at, safe to step
@@ -538,6 +556,13 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b.dug = hero_digging(gs)
 
     if b.paused_goal != 0 && (g == nil || g.id != b.paused_goal) do b.paused_goal = 0  // it ended while paused
+    if g != nil && b.paused_goal == g.id {
+        b.paused_t += gs.delta_time
+        if b.paused_t > HERO_PAUSE_MAX_S {
+            g.status = .Failed
+            agent_text_set(&g.reason, fmt.tprintf("held: paused by %s for %d s", hero_behaviours[b.paused_by].name, int(HERO_PAUSE_MAX_S)))
+        }
+    }
     switch {
     case g != nil && g.status == .Running && b.current != .Work_Goal && b.paused_goal != g.id:
         if b.current == .Flee && hero_threat(b).hunting {  // flee runs only on a noticed threat
@@ -552,6 +577,7 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
         }
         b.paused_goal = g.id
         b.paused_by   = b.current
+        b.paused_t    = 0
         hero_note(q, {kind = .Paused, goal = g.id, why = b.current})
     case g != nil && b.current == .Work_Goal && b.paused_goal == g.id:
         b.paused_goal = 0
@@ -616,18 +642,22 @@ hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
             kind    = e.kind,
             dist    = math.sqrt(d.x * d.x + d.y * d.y),
             dx      = d.x,
+            at      = ec,
             in_line = sight_line_clear(&gs.world, hc, ec, skip_ends = true),
             damage  = hero_enemy_damage(gs, e.kind),
         }
-        // Coming at the hero: moving toward it, or nearer than a tick ago.
-        // Remembered a while, so a stop-and-go hunter reads as coming.
+        // Coming at the hero: moving toward it, or nearer than a tick ago by
+        // its own move; the hero walking at one standing still is not it
+        // coming (card 164, playtest 136).  Remembered a while, so a
+        // stop-and-go hunter reads as coming.
         coming := e.vel.x * -d.x + e.vel.y * -d.y > 0
         th.closing_ago = HERO_CLOSING_MEMORY_S
         for o in old[:old_n] do if o.slot == i && o.kind == e.kind {
             th.seen_for    = o.seen_for + dt
             th.closing_ago = o.closing_ago + dt
             th.noticed     = o.noticed
-            coming ||= th.dist < o.dist - 0.001
+            was := o.at - hc
+            coming ||= th.dist < math.sqrt(was.x * was.x + was.y * was.y) - 0.001
         }
         if coming do th.closing_ago = 0
         th.closing = th.closing_ago < HERO_CLOSING_MEMORY_S
@@ -656,7 +686,12 @@ hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     // The danger map.
     s.origin_x = i32(hc.x)
     s.feet_y   = hero_feet_row(p)
-    for &c, i in s.columns do c = hero_column(&gs.world, int(s.origin_x) + i - HERO_SENSE_REACH, int(s.feet_y))
+    for &c, i in s.columns {
+        c = hero_column(&gs.world, int(s.origin_x) + i - HERO_SENSE_REACH, int(s.feet_y))
+        // A fall through the sky's floor lands on the surface, unhurt
+        // (SKY_FALL_Y): no drop to fear (card 164, playtest 134).
+        if gs.level_index == LEVEL_SKY && f32(int(s.feet_y) + c.drop + 1) - PLAYER_H > SKY_FALL_Y do c.hurts = 0
+    }
 
     // Safe ground: where the hero stands, grounded, nothing burning, no threat near.
     if !p.grounded || hero_here(s).hazard do return
@@ -1266,6 +1301,15 @@ hero_stand :: proc(w: ^World_Grid, t: [2]i32) -> bool {
     return hero_open(w, t.x, t.y) && hero_open(w, t.x, t.y - 1) && is_solid(w, int(t.x), int(t.y + 1))
 }
 
+// A feet tile the hero walks into from the side: a structure, a scroll chest
+// or a door it passes through as the body does (tile_blocks_player), and lands
+// on, so only the walk step reads it (card 164: a 2-high tunnel with a chest
+// in it was no route).
+hero_walk_in :: proc(w: ^World_Grid, t: [2]i32) -> bool {
+    pass :: proc(w: ^World_Grid, x, y: i32) -> bool { return !hero_wet_or_burning(w, x, y) && !tile_blocks_player(get_tile(w, int(x), int(y)), true) }
+    return pass(w, t.x, t.y) && pass(w, t.x, t.y - 1) && is_solid(w, int(t.x), int(t.y + 1))
+}
+
 // Next to water or a burn: dug, it lets the pond or the lava in.
 hero_rim :: proc(w: ^World_Grid, t: [2]i32) -> bool {
     for d in ([4][2]i32{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) do if hero_wet_or_burning(w, t.x + d.x, t.y + d.y) do return true
@@ -1389,7 +1433,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         nb := n.bridges[i]
         for d in ([2]i32{-1, 1}) {
             f := [2]i32{x + d, y}
-            if hero_stand(w, f) && !hero_nav_dug(n, o, s, i, f + {0, 1}) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
+            if hero_walk_in(w, f) && !hero_nav_dug(n, o, s, i, f + {0, 1}) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
             if up := ([2]i32{x + d, y - 1}); hero_stand(w, up) && hero_open(w, x, y - 2) && !hero_nav_dug(n, o, s, i, up + {0, 1}) {
                 hero_nav_relax(n, &size, o, i, up, 1.5, .Walk, nb, to)
             }
