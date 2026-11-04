@@ -6,7 +6,7 @@ import "core:log"
 // ─── Conservation fuzz harness ────────────────────────────────────────────────
 //
 //  Drives the real item-moving handlers (pickup, drop, mine, place, craft,
-//  loot spawn) with a seeded random action stream inside a private arena and
+//  loot spawn, machine ticks) with a seeded random action stream inside a private arena and
 //  checks the ledger after every action: no item may be created or destroyed
 //  except by the table-defined delta of the action that ran.
 //
@@ -18,6 +18,7 @@ import "core:log"
 FUZZ_SEED    :: 0x6E69_7061
 FUZZ_ITERS   :: 3000
 FUZZ_LOG_CAP :: 10
+FUZZ_MACHINE_MIN :: 5  // fewest runs of each machine path (cast, burn, copy, pull) a stream must show
 
 // The fuzz arena: an underground yard rebuilt from scratch so every tile,
 // flag, and pile in it is known.  The ledger still counts the whole grid —
@@ -38,6 +39,39 @@ fuzz_pool := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Iron_Ore, .Silver_Ore, .Fl
 @(rodata)
 fuzz_blocks := [?]Item{.Dirt, .Stone_Block, .Wood_Log, .Crafting_Bench, .Door, .Turret_Pillar, .Flame_Head, .Water_Head, .Earth_Head, .Rainbow_Laser}
 
+// What the machine action runs, and what it lays around one: the feed every
+// machine takes (ores, wood, gems) and some it must refuse.
+@(rodata)
+fuzz_machines := [?]Tile_Type{.Smelter, .Boiler, .Magic_Kettle, .Gem_Replicator, .Silo}
+@(rodata)
+fuzz_feed := [?]Item{.Wood_Log, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Gold_Rare_Ore, .Emerald, .Jade, .Diamond, .Dirt, .Iron_Bar}
+@(rodata)
+fuzz_gems := [?]Item{.Emerald, .Jade, .Diamond, .Hel_Gem}
+
+// One cell of the machine action's 3x3, kept so the arena gets it back.
+@(private = "file")
+Fuzz_Cell :: struct {
+    tile:  Tile_Type,
+    flags: Tile_Flags,
+    sd:    Sim_Tile_Data,
+    item:  Item,
+    count: u8,
+}
+
+// Coverage of the machine action: each path must run FUZZ_MACHINE_MIN times,
+// or the fuzzer proves next to nothing about it.
+@(private = "file")
+Fuzz_Machine_Census :: struct {
+    casts, wood_burnt, gems_burnt, copies, barrel_pulls, silo_intakes: int,
+}
+
+@(private = "file")
+fuzz_store_totals :: proc(gs: ^Game_State) -> (barrels, silos: int) {
+    for &b in gs.sim.barrels do if b.active do barrels += barrel_total(&b)
+    for &s in gs.sim.silos do if s.active do silos += int(silo_total(&s))
+    return
+}
+
 // Own xorshift so the stream never entangles with gs.loot_rng.
 @(private = "file")
 fz_next :: proc(s: ^u64) -> u64 {
@@ -56,8 +90,7 @@ fz_range :: proc(s: ^u64, lo, hi: int) -> int { // inclusive
     return lo + int(fz_next(s) % u64(hi - lo + 1))
 }
 
-// Every place an item count lives.  Barrels/silos are not exercised by this
-// stream (the arena holds none), so their records stay zero.
+// Every place an item count lives.
 @(private = "file")
 fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     tot: [Item]int
@@ -85,6 +118,12 @@ fuzz_ledger :: proc(gs: ^Game_State) -> [Item]int {
     }
     for d in gs.golems.depots do if d.active {
         for s in d.slots do tot[s.item] += int(s.count)
+    }
+    for b in gs.sim.barrels do if b.active {
+        for s in b.slots do if s.count > 0 do tot[s.item] += s.count
+    }
+    for s in gs.sim.silos do if s.active {
+        for slot in s.slots do tot[slot.item] += int(slot.count)
     }
     tot[.None] = 0
     return tot
@@ -146,8 +185,9 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
     }
 
     violations := 0
-    viol_by: [13]int
-    action_names := [13]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash", "depot smash", "monument fall"}
+    viol_by: [14]int
+    action_names := [14]string{"pickup", "drop", "mine", "place", "craft", "loot spawn", "risen hero falls", "smelter feed", "smelter fuel back", "undermine", "monument smash", "depot smash", "monument fall", "machine tick"}
+    census: Fuzz_Machine_Census
     inv := &gs.player.inventory
 
     for iter in 0 ..< FUZZ_ITERS {
@@ -203,8 +243,13 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
         furnace_old: Tile_Type
         depot_at:  [2]i32  // the depot a depot smash raises, and what stood there
         depot_old: Tile_Type
+        mach_at:  [2]int  // the machine a machine tick raises, and the 3x3 it stood in
+        mach_box: [9]Fuzz_Cell
+        mach_kind: Tile_Type
+        frame_bad := false  // a machine frame moved items no rule explains
+        bad_frame: struct { frame, sounds: int, burnt: bool }
 
-        action := fz_range(&rng, 0, 12)
+        action := fz_range(&rng, 0, 13)
         switch action {
         case 0:
             name = "pickup"
@@ -418,6 +463,194 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
                 eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {i32(x), i32(land)}})
             }
             gs.golems.projects[gs.level_index] = {}
+
+        case 13:
+            // A machine runs on its own (card 173): a smelter, boiler, Magic
+            // Kettle, Gem Replicator or silo, ringed by piles, barrels, silos, a
+            // depot and fluids, ticked frame by frame.  Each frame may move items
+            // only between piles, buffers and stores, except by the rule of a
+            // sink or source the frame showed by other means: a cast (its pour
+            // sound) eats a bar's ore and, cold, FUEL_PER_BAR wood for one bar; a
+            // burn (the burn clock restarting) eats one fuel unit, wood for a
+            // boiler, a gem for the kettle; a copy (its sound) adds one seed gem.
+            name = "machine tick"
+            mx := fz_range(&rng, FUZZ_X0 + 1, FUZZ_X0 + FUZZ_W - 2)
+            my := fz_range(&rng, FUZZ_Y0 + 1, FUZZ_Y0 + FUZZ_H - 2)
+            mach_at = {mx, my}
+            for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+                i := grid_idx(mx + dx, my + dy)
+                w := &gs.world
+                mach_box[(dy + 1) * 3 + dx + 1] = {w.terrain[i], w.tile_flags[i], w.sim_data[i], w.items[i], w.item_counts[i]}
+                set_tile(w, mx + dx, my + dy, .Air)
+                w.tile_flags[i], w.sim_data[i], w.items[i], w.item_counts[i] = {}, {}, .None, 0
+            }
+            mach_kind = fuzz_machines[fz_range(&rng, 0, len(fuzz_machines) - 1)]
+            kind := mach_kind
+            T := [2]i32{i32(mx), i32(my)}
+            set_tile(&gs.world, mx, my, kind)
+            if kind == .Silo do silo_on_placed(gs, T)
+            // A kettle mostly gets an open mouth and its drink, or it would
+            // never burn: those two cells are kept out of the random ring.
+            rule, is_boiler := boiler_rule_for(kind)
+            kept := is_boiler && fz_range(&rng, 0, 2) > 0
+            sides := [3][2]i32{{-1, 0}, {1, 0}, {0, 1}}
+            drink := T + sides[fz_range(&rng, 0, 2)]
+            if kept do set_tile(&gs.world, int(drink.x), int(drink.y), rule.source)
+            for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+                if dx == 0 && dy == 0 do continue
+                at := [2]i32{i32(mx + dx), i32(my + dy)}
+                if kept && (at == drink || at == T + {0, -1}) do continue
+                i  := grid_idx(int(at.x), int(at.y))
+                r  := fz_range(&rng, 0, 9)
+                switch {
+                case r < 4:
+                    gs.world.items[i]       = fuzz_feed[fz_range(&rng, 0, len(fuzz_feed) - 1)]
+                    gs.world.item_counts[i] = u8(fz_range(&rng, 1, MAX_STACK))
+                case r < 6:
+                    if !barrel_slot_free(gs) do continue
+                    set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+                    barrel_on_placed(gs, at)
+                    b := barrel_at(gs, gs.level_index, at)
+                    for _ in 0 ..< fz_range(&rng, 0, 6) {
+                        _ = barrel_deposit(b, fuzz_feed[fz_range(&rng, 0, len(fuzz_feed) - 1)], fz_range(&rng, 1, 2 * MAX_STACK))
+                    }
+                case r < 7:
+                    if !silo_slot_free(gs) do continue
+                    set_tile(&gs.world, int(at.x), int(at.y), .Silo)
+                    silo_on_placed(gs, at)
+                    s := silo_at(gs, gs.level_index, at)
+                    for _ in 0 ..< fz_range(&rng, 0, SILO_SLOTS + 1) {
+                        silo_add(s, fuzz_feed[fz_range(&rng, 0, len(fuzz_feed) - 1)], u32(fz_range(&rng, 1, 3 * MAX_STACK)))
+                    }
+                case r < 8:
+                    set_tile(&gs.world, int(at.x), int(at.y), .Golem_Depot)
+                    golem_depot_on_built(gs, at)
+                    d := golem_depot_at(gs, gs.level_index, at)
+                    if d == nil {
+                        set_tile(&gs.world, int(at.x), int(at.y), .Air)
+                        continue
+                    }
+                    for _ in 0 ..< fz_range(&rng, 0, 3) {
+                        _ = golem_depot_add(d, fuzz_feed[fz_range(&rng, 0, len(fuzz_feed) - 1)], u32(fz_range(&rng, 1, 3 * MAX_STACK)))
+                    }
+                case r < 9:
+                    fluids := [3]Tile_Type{.Water, .Lava, .Magic_Lava}
+                    set_tile(&gs.world, int(at.x), int(at.y), fluids[fz_range(&rng, 0, 2)])
+                }
+            }
+            sd := &gs.world.sim_data[grid_idx(mx, my)]
+            #partial switch kind {
+            case .Smelter:
+                if fz_range(&rng, 0, 1) == 0 {
+                    sd.in_item  = smelt_table[fz_range(&rng, 0, len(smelt_table) - 1)].ore
+                    sd.in_count = u8(fz_range(&rng, 1, MAX_STACK))
+                }
+                sd.fuel_count = u8(fz_range(&rng, 0, MAX_STACK))
+                if fz_range(&rng, 0, 1) == 0 {
+                    sd.store_item  = smelt_table[fz_range(&rng, 0, len(smelt_table) - 1)].bar
+                    sd.store_count = u8(fz_range(&rng, 1, MAX_STACK))
+                }
+                sd.growth_timer = f32(fz_range(&rng, 0, 29)) * 0.1
+            case .Boiler:
+                sd.fuel_count   = u8(fz_range(&rng, 0, MAX_STACK))
+                sd.spread_timer = f32(fz_range(&rng, 0, 5)) * 0.1  // near a burn: one puff dries or caps it
+                sd.growth_timer = f32(fz_range(&rng, 0, 19)) * 0.1
+            case .Magic_Kettle:
+                if fz_range(&rng, 0, 1) == 0 {
+                    sd.in_item  = fuzz_gems[fz_range(&rng, 0, len(fuzz_gems) - 1)]
+                    sd.in_count = u8(fz_range(&rng, 1, MAX_STACK))
+                }
+                sd.spread_timer = f32(fz_range(&rng, 0, 5)) * 0.1  // near a burn: one puff dries or caps it
+                sd.growth_timer = f32(fz_range(&rng, 0, 19)) * 0.1
+            case .Gem_Replicator:
+                if fz_range(&rng, 0, 2) > 0 {
+                    sd.in_item  = fuzz_gems[fz_range(&rng, 0, len(fuzz_gems) - 1)]
+                    sd.in_count = 1
+                    period, _ := gem_replicate_time_for(sd.in_item)
+                    sd.growth_timer = period - f32(fz_range(&rng, 0, 50)) * 0.1
+                }
+                if fz_range(&rng, 0, 1) == 0 {
+                    sd.store_item  = fz_range(&rng, 0, 1) == 0 && sd.in_item != .None ? sd.in_item : fuzz_gems[fz_range(&rng, 0, len(fuzz_gems) - 1)]
+                    sd.store_count = u8(fz_range(&rng, 1, MAX_STACK))
+                }
+            }
+            if fz_range(&rng, 0, 2) == 0 do gs.power.charge[grid_idx(mx, my)] = 1000
+            gs.delta_time = fz_range(&rng, 0, 1) == 0 ? 1.0 / 60.0 : 0.5
+            allow_zero = false
+            before = fuzz_ledger(gs)
+
+            prev := before
+            for f in 0 ..< fz_range(&rng, 1, 60) {
+                pre       := sd^
+                is_pw     := powered(gs, mx, my)
+                q_size    := gs.events.size
+                q_tail    := gs.events.tail
+                b0, s0    := fuzz_store_totals(gs)
+                for dy in -1 ..= 1 do for dx in -1 ..= 1 {  // update_sim's scan order, over the 3x3
+                    if tick := tile_on_tick[get_tile(&gs.world, mx + dx, my + dy)]; tick != nil do tick(gs, mx + dx, my + dy)
+                }
+                sounds := 0
+                for k in 0 ..< gs.events.size - q_size {
+                    e := gs.events.events[(q_tail + k) % MAX_EVENTS]
+                    if e.type != .Play_Sound || e.tile != T do continue
+                    if (kind == .Smelter && Sound_ID(e.payload.int_val) == .Smelter_Pour) ||
+                       (kind == .Gem_Replicator && Sound_ID(e.payload.int_val) == .Place) {
+                        sounds += 1
+                    }
+                }
+                burnt := (kind == .Boiler || kind == .Magic_Kettle) && sd.spread_timer > pre.spread_timer
+
+                // Every delta this frame's observations allow; exactly one must match.
+                cands: [len(smelt_table) + len(fuzz_gems) + 1][Item]int
+                n_cands := 0
+                switch {
+                case sounds > 1:
+                    // more than one cast or copy in a frame: no rule allows it
+                case kind == .Smelter && sounds == 1:
+                    for r in smelt_table {
+                        cands[n_cands][r.bar] += 1
+                        cands[n_cands][r.ore] -= r.ore_per_bar
+                        if !is_pw do cands[n_cands][FUEL_ITEM] -= FUEL_PER_BAR
+                        n_cands += 1
+                    }
+                case kind == .Gem_Replicator && sounds == 1:
+                    cands[n_cands][sd.in_item] += 1
+                    n_cands += 1
+                case kind == .Boiler && burnt:
+                    rule, _ := boiler_rule_for(.Boiler)
+                    cands[n_cands][rule.fuel_item] -= 1
+                    n_cands += 1
+                case kind == .Magic_Kettle && burnt:
+                    for g in fuzz_gems {
+                        cands[n_cands][g] -= 1
+                        n_cands += 1
+                    }
+                case sounds == 0:
+                    n_cands = 1  // nothing made or burnt: nothing may change
+                }
+                now := fuzz_ledger(gs)
+                hit := -1
+                for &c, ci in cands[:n_cands] {
+                    if fuzz_delta_is(&prev, &now, &c) { hit = ci; break }
+                }
+                if hit < 0 {
+                    frame_bad = true
+                    bad_frame = {f, sounds, burnt}
+                    break
+                }
+                for v, it in cands[hit] do want[it] += v
+                switch {
+                case kind == .Smelter && sounds == 1:   census.casts += 1
+                case kind == .Gem_Replicator && sounds == 1: census.copies += 1
+                case kind == .Boiler && burnt:          census.wood_burnt += 1
+                case kind == .Magic_Kettle && burnt:    census.gems_burnt += 1
+                }
+                b1, s1 := fuzz_store_totals(gs)
+                if b1 < b0 do census.barrel_pulls += 1
+                if s1 > s0 do census.silo_intakes += 1
+                prev = now
+            }
+            gs.delta_time = 1.0 / 60.0
         }
 
         process_events(gs)
@@ -435,6 +668,22 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             if d := golem_depot_at(gs, gs.level_index, depot_at); d != nil do d^ = {}
             gs.monument_cells[gs.level_index][grid_idx(int(depot_at.x), int(depot_at.y))] = .Air
             set_tile(&gs.world, int(depot_at.x), int(depot_at.y), depot_old)
+        }
+
+        if action == 13 {
+            // The arena gets its 3x3 back; every record raised in it is freed.
+            for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+                x, y := mach_at.x + dx, mach_at.y + dy
+                at := [2]i32{i32(x), i32(y)}
+                if b := barrel_at(gs, gs.level_index, at); b != nil do b^ = {}
+                if s := silo_at(gs, gs.level_index, at); s != nil do s^ = {}
+                if d := golem_depot_at(gs, gs.level_index, at); d != nil do d^ = {}
+                c := mach_box[(dy + 1) * 3 + dx + 1]
+                i := grid_idx(x, y)
+                set_tile(&gs.world, x, y, c.tile)
+                gs.world.tile_flags[i], gs.world.sim_data[i], gs.world.items[i], gs.world.item_counts[i] = c.flags, c.sd, c.item, c.count
+                gs.power.charge[i] = 0
+            }
         }
 
         ok: bool
@@ -461,8 +710,8 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             }
         } else {
             zero: [Item]int
-            ok = fuzz_delta_is(&before, &after, &want) ||
-                 (allow_zero && fuzz_delta_is(&before, &after, &zero))
+            ok = !frame_bad && (fuzz_delta_is(&before, &after, &want) ||
+                 (allow_zero && fuzz_delta_is(&before, &after, &zero)))
         }
 
         if !ok {
@@ -470,6 +719,10 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             viol_by[action] += 1
             if violations <= FUZZ_LOG_CAP {
                 log.errorf("conservation violation #%d -- iter %d, action %s:", violations, iter, name)
+                if frame_bad {
+                    log.errorf("    %v at %v, frame %d: items moved that no cast, burn or copy explains (sounds %d, burnt %v); the frames before it are summed below",
+                        mach_kind, mach_at, bad_frame.frame, bad_frame.sounds, bad_frame.burnt)
+                }
                 for v, it in after {
                     d := v - before[it]
                     if d != 0 || want[it] != 0 {
@@ -485,6 +738,10 @@ items_are_conserved_under_random_play :: proc(t: ^testing.T) {
             if n > 0 do log.errorf("  %s: %d violations", action_names[a], n)
         }
     }
+    log.infof("machine census: %v", census)
+    testing.expectf(t, min(census.casts, census.wood_burnt, census.gems_burnt, census.copies,
+                           census.barrel_pulls, census.silo_intakes) >= FUZZ_MACHINE_MIN,
+        "a machine path ran under %d times: %v", FUZZ_MACHINE_MIN, census)
     testing.expectf(t, violations == 0,
         "%d conservation violations in %d actions (seed 0x%x) -- first %d logged above",
         violations, FUZZ_ITERS, u64(FUZZ_SEED), min(violations, FUZZ_LOG_CAP))
