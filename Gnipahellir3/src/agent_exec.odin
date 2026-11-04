@@ -786,11 +786,25 @@ hero_press :: proc(th: ^Hero_Threat) -> f32 {
     return u
 }
 
-// A sword, or a fire wand with the mana for a shot.
+// A sword, or a fire wand with the mana for a shot; or, against threat th, the
+// pickaxe when it outlasts th (hero_pick_beats, card 176).
 @(private="file")
-hero_armed :: proc(gs: ^Game_State) -> bool {
+hero_armed :: proc(gs: ^Game_State, th: ^Hero_Threat) -> bool {
     return hero_held_or_first(gs, is_melee_weapon) >= 0 ||
-           (hero_held_or_first(gs, is_fire_wand) >= 0 && gs.player.mana >= FIRE_ORB_MANA)
+           (hero_held_or_first(gs, is_fire_wand) >= 0 && gs.player.mana >= FIRE_ORB_MANA) ||
+           hero_pick_beats(gs, th)
+}
+
+// The pickaxe is a weak arm: it counts against a threat (one hero_threat
+// gives, so its damage is above 0) that its PICKAXE_DAMAGE blows fell in
+// fewer blows than the threat's own take to fell the hero at the hp it has
+// now.  A Builder (6 hp, 1 a blow) loses to a whole hero; a Draugr (4 hp, 3 a
+// blow) or a Vargr (8 hp, 2 a blow) does not, so the hero runs.
+hero_pick_beats :: proc(gs: ^Game_State, th: ^Hero_Threat) -> bool {
+    if th == nil || hero_held_or_first(gs, can_melee) < 0 do return false
+    fell := (gs.enemies.data[th.slot].hp + PICKAXE_DAMAGE - 1) / PICKAXE_DAMAGE
+    fall := (gs.player.hp + th.damage - 1) / th.damage
+    return fell < fall
 }
 
 // The melee blow's slot: a weapon (the hand's, else the first), else the
@@ -975,7 +989,7 @@ hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear 
 @(private="file")
 hero_dig_out :: proc(gs: ^Game_State, b: ^Hero_Brain, dir: i8) -> bool {
     pick := hero_item_slot(gs, .Pickaxe)
-    if pick < 0 || hero_armed(gs) do return false
+    if pick < 0 || hero_armed(gs, nil) do return false  // the pick as a weak arm is no arm here: in flight, it digs
     s := &b.senses
     _, x := hero_step(gs, s, dir)
     for y in ([2]i32{s.feet_y - 1, s.feet_y}) {
@@ -1067,7 +1081,7 @@ hero_goal_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 
 @(private="file")
 hero_hunted :: proc(gs: ^Game_State, b: ^Hero_Brain) -> bool {
     th := hero_threat(b)
-    return th != nil && th.closing && th.dist < HERO_THREAT_FAR && (!hero_armed(gs) || b.dug && hero_hp_frac(gs) < HERO_LOW_HP_FRAC)
+    return th != nil && th.closing && th.dist < HERO_THREAT_FAR && (!hero_armed(gs, th) || b.dug && hero_hp_frac(gs) < HERO_LOW_HP_FRAC)
 }
 
 @(private="file")
@@ -1078,7 +1092,7 @@ hero_goal_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
 @(private="file")
 hero_fight_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     th := hero_threat(b)
-    if th == nil || !hero_armed(gs) || !hero_may_fight(gs) || hero_fighting_goal(g) do return 0
+    if th == nil || !hero_armed(gs, th) || !hero_may_fight(gs) || hero_fighting_goal(g) do return 0
     return hero_press(th) * (30 + 60 * hero_hp_frac(gs))
 }
 
@@ -1098,7 +1112,7 @@ hero_flee_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 
     th := hero_threat(b)
     if th == nil || hero_fighting_goal(g) do return 0
     s := 30 + 60 * (1 - hero_hp_frac(gs))
-    if !hero_armed(gs) do s += HERO_UNARMED_FLEE
+    if !hero_armed(gs, th) do s += HERO_UNARMED_FLEE
     // Once running, the hero keeps running until the threat is out of
     // HERO_THREAT_FAR: no turning back toward it at the margin.
     if b.current == .Flee && th.dist < HERO_THREAT_FAR do return s
