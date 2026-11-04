@@ -329,7 +329,8 @@ flame_stays_a_third_to_a_half_of_the_laser :: proc(t: ^testing.T) {
 
 @(test)
 a_burn_does_not_cross_a_portal_or_a_load :: proc(t: ^testing.T) {
-    path :: "gnipahellir_turret_status_scratch.dat"
+    path := test_scratch_path("gnipahellir_turret_status_scratch.dat")
+    defer delete(path)
     defer os.remove(path)
     gs := turret_test_state()
     defer free(gs)

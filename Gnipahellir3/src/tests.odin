@@ -4061,7 +4061,8 @@ loading_a_save_resets_the_transient_raid_director :: proc(t: ^testing.T) {
     // The director and its rumble telegraph are transient by design: a
     // reload cancels unfinished buildup instead of resuming a warning whose
     // target may not even exist in the loaded world.
-    path :: "gnipahellir_raid_load_scratch.dat"
+    path := test_scratch_path("gnipahellir_raid_load_scratch.dat")
+    defer delete(path)
     defer os.remove(path)
 
     gs := test_state()
@@ -10305,7 +10306,8 @@ a_worker_below_its_zone_climbs_only_for_work :: proc(t: ^testing.T) {
 a_snapshot_restore_forgets_dropped_sources :: proc(t: ^testing.T) {
 	// Card 145's review: a same-session load must not keep a source dropped
 	// before it.  snapshot_restore_from rebuilds the state (game_state_init).
-	path :: "gnipahellir_snap_p152_scratch.dat"
+	path := test_scratch_path("gnipahellir_snap_p152_scratch.dat")
+	defer delete(path)
 	defer os.remove(path)
 	gs := test_state(); defer free(gs)
 	testing.expect(t, save_game_to(gs, path), "snapshot written")
@@ -10367,7 +10369,8 @@ pixel_sprite_dims_fit_the_fixed_grid :: proc(t: ^testing.T) {
 @(test)
 pixel_art_save_and_load_round_trips :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
-	path :: "pixel_art_test_scratch.dat"
+	path := test_scratch_path("pixel_art_test_scratch.dat")
+	defer delete(path)
 	defer os.remove(path)
 
 	data := &gs.pixel_art.sprites[.Rune_Scroll_Chest]
@@ -10413,7 +10416,8 @@ pixel_art_load_rejects_missing_or_bad_file :: proc(t: ^testing.T) {
 	gs := test_state(); defer free(gs)
 	testing.expect(t, !load_pixel_art_from(gs, "pixel_art_test_does_not_exist.dat"), "missing file should fail load")
 
-	path :: "pixel_art_test_garbage.dat"
+	path := test_scratch_path("pixel_art_test_garbage.dat")
+	defer delete(path)
 	defer os.remove(path)
 	garbage := []u8{1, 2, 3, 4}
 	_ = os.write_entire_file(path, garbage)
@@ -11259,7 +11263,8 @@ a_v23_save_migrates_without_losing_the_run :: proc(t: ^testing.T) {
 	// Appending Scroll_Of_Waters grew Progression_State (recipe_unlocked was
 	// keyed by [Item]), so v23 saves must be carried across by hand.  Glenn
 	// playtests between sessions — losing the run here is a real loss.
-	path :: "gnipahellir_save_v23_migration_test.dat"
+	path := test_scratch_path("gnipahellir_save_v23_migration_test.dat")
+	defer delete(path)
 	defer os.remove(path)
 
 	old := new(Save_Data_v23)
@@ -11305,7 +11310,8 @@ a_snapshot_restores_the_run_and_refuses_dead_saves :: proc(t: ^testing.T) {
 	// mid-session.  A load rebuilds the whole Game_State boot-style, so
 	// transient state must not leak across, and a refused file must leave
 	// the live run untouched.
-	path :: "gnipahellir_snap_test_scratch.dat"
+	path := test_scratch_path("gnipahellir_snap_test_scratch.dat")
+	defer delete(path)
 	defer os.remove(path)
 
 	gs := test_state(); defer free(gs)
@@ -11435,7 +11441,8 @@ mossy_stone_mines_places_and_grows_mushrooms :: proc(t: ^testing.T) {
 legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 	// The hotbar made the Weapon/Tool equip slots legacy: a load returns any
 	// gear still in them to the bag, so no old save ever loses its wand or pick.
-	path :: "gnipahellir_hand_migration_scratch.dat"
+	path := test_scratch_path("gnipahellir_hand_migration_scratch.dat")
+	defer delete(path)
 	defer os.remove(path)
 
 	gs := test_state(); defer free(gs)
@@ -11454,7 +11461,8 @@ legacy_equipped_hand_gear_migrates_to_the_bag :: proc(t: ^testing.T) {
 
 @(test)
 stats_only_reach_an_armed_path :: proc(t: ^testing.T) {
-	stats :: "gnipahellir_stats_arm_test.dat"
+	stats := test_scratch_path("gnipahellir_stats_arm_test.dat")
+	defer delete(stats)
 	defer os.remove(stats)
 
 	gs := test_state()
@@ -11665,9 +11673,12 @@ a_hanging_pile_falls_at_its_pace_in_the_real_update :: proc(t: ^testing.T) {
 
 @(test)
 rejected_save_survives_the_fresh_runs_autosave :: proc(t: ^testing.T) {
-	save :: "gnipahellir_save_reject_test.dat"
-	bak0 :: "gnipahellir_save_reject_test.dat.0.bak"
-	bak1 :: "gnipahellir_save_reject_test.dat.1.bak"
+	save := test_scratch_path("gnipahellir_save_reject_test.dat")
+	defer delete(save)
+	bak0 := test_scratch_path("gnipahellir_save_reject_test.dat.0.bak")
+	defer delete(bak0)
+	bak1 := test_scratch_path("gnipahellir_save_reject_test.dat.1.bak")
+	defer delete(bak1)
 	defer os.remove(save)
 	defer os.remove(bak0)
 	defer os.remove(bak1)
@@ -11710,7 +11721,8 @@ rejected_save_survives_the_fresh_runs_autosave :: proc(t: ^testing.T) {
 
 @(test)
 rejected_save_with_no_free_slot_turns_autosave_off :: proc(t: ^testing.T) {
-	save :: "gnipahellir_save_full_test.dat"
+	save := test_scratch_path("gnipahellir_save_full_test.dat")
+	defer delete(save)
 	defer os.remove(save)
 	old_run := "a run with nowhere to go"
 	testing.expect(t, os.write_entire_file(save, transmute([]u8)old_run) == nil)
@@ -11741,8 +11753,10 @@ rejected_save_with_no_free_slot_turns_autosave_off :: proc(t: ^testing.T) {
 @(test)
 rejected_save_that_cannot_move_turns_autosave_off :: proc(t: ^testing.T) {
 	when ODIN_OS == .Windows { return }
-	dir :: "gnipahellir_save_readonly_test"
-	save :: "gnipahellir_save_readonly_test/run.dat"
+	dir := test_scratch_path("gnipahellir_save_readonly_test")
+	defer delete(dir)
+	save := fmt.aprintf("%s/run.dat", dir)
+	defer delete(save)
 	testing.expect(t, os.make_directory(dir) == nil)
 	defer os.remove(dir)
 	defer os.remove(save)
@@ -11762,10 +11776,11 @@ rejected_save_that_cannot_move_turns_autosave_off :: proc(t: ^testing.T) {
 @(test)
 rejection_log_reads_the_files_version :: proc(t: ^testing.T) {
 	when !GAME_DEBUG { return }
-	save :: "gnipahellir_save_version_test.dat"
+	save := test_scratch_path("gnipahellir_save_version_test.dat")
+	defer delete(save)
 	defer os.remove(save)
-	defer os.remove(save + ".0.bak")
-	defer os.remove(save + ".1.bak")
+	defer os.remove(fmt.tprintf("%s.0.bak", save))
+	defer os.remove(fmt.tprintf("%s.1.bak", save))
 
 	gs := test_state()
 	defer free(gs)
@@ -11783,27 +11798,41 @@ rejection_log_reads_the_files_version :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(logged, "2 bytes, version -1,"), "too short to hold a version")
 }
 
-// Unarmed means no disk at all, not a write that fails at the end.
+// Unarmed means no disk at all, not a write that fails at the end: a marker
+// at the temp name an unarmed save would write ("" + ".tmp") must survive it.
+// That name is the game's own, so no pid can tag it; the marker is taken with
+// an exclusive create instead, so test runs sharing a folder take turns at it
+// (card 177).  A .tmp that stays put past the wait is a stale one: say so.
 @(test)
 unarmed_save_game_writes_nothing :: proc(t: ^testing.T) {
-	tmp :: ".tmp"
 	marker := "in the way"
-	testing.expect(t, os.write_entire_file(tmp, transmute([]u8)marker) == nil)
-	defer os.remove(tmp)
+	f: ^os.File
+	err: os.Error = os.General_Error.Exist
+	for tries := 0; err != nil && tries < 500; tries += 1 {
+		if tries > 0 do time.sleep(10 * time.Millisecond)
+		f, err = os.open(".tmp", {.Write, .Create, .Excl}, os.Permissions_Default_File)
+	}
+	if !testing.expectf(t, err == nil, "a .tmp stood in this folder for 5 s: a stale one? remove it (%v)", err) do return
+	_, werr := os.write(f, transmute([]u8)marker)
+	os.close(f)
+	defer os.remove(".tmp")
+	testing.expect(t, werr == nil)
 
 	gs := test_state()
 	defer free(gs)
 	testing.expect(t, !save_game(gs), "no path, no save")
-	kept, err := os.read_entire_file_from_path(tmp, context.allocator)
+	kept, rerr := os.read_entire_file_from_path(".tmp", context.allocator)
 	defer delete(kept)
-	testing.expect(t, err == nil, "nothing wrote or removed the temp path")
+	testing.expect(t, rerr == nil, "nothing wrote or removed the temp path")
 	testing.expect_value(t, string(kept), marker)
 }
 
 @(test)
 missing_or_good_save_sets_nothing_aside :: proc(t: ^testing.T) {
-	save :: "gnipahellir_save_quiet_test.dat"
-	bak0 :: "gnipahellir_save_quiet_test.dat.0.bak"
+	save := test_scratch_path("gnipahellir_save_quiet_test.dat")
+	defer delete(save)
+	bak0 := test_scratch_path("gnipahellir_save_quiet_test.dat.0.bak")
+	defer delete(bak0)
 	defer os.remove(save)
 	defer os.remove(bak0)
 
@@ -11823,8 +11852,10 @@ missing_or_good_save_sets_nothing_aside :: proc(t: ^testing.T) {
 
 @(test)
 failed_save_write_leaves_the_last_good_file_whole :: proc(t: ^testing.T) {
-	save :: "gnipahellir_save_atomic_test.dat"
-	tmp :: "gnipahellir_save_atomic_test.dat.tmp"
+	save := test_scratch_path("gnipahellir_save_atomic_test.dat")
+	defer delete(save)
+	tmp := test_scratch_path("gnipahellir_save_atomic_test.dat.tmp")
+	defer delete(tmp)
 	defer os.remove(save)
 	defer os.remove(tmp)
 
@@ -11847,8 +11878,10 @@ failed_save_write_leaves_the_last_good_file_whole :: proc(t: ^testing.T) {
 
 @(test)
 death_takes_the_autosave_and_leaves_stats_and_snapshots :: proc(t: ^testing.T) {
-	save :: "gnipahellir_save_death_test.dat"
-	snap :: "gnipahellir_snap_death_test.dat"
+	save := test_scratch_path("gnipahellir_save_death_test.dat")
+	defer delete(save)
+	snap := test_scratch_path("gnipahellir_snap_death_test.dat")
+	defer delete(snap)
 	defer os.remove(save)
 	defer os.remove(snap)
 
@@ -13255,7 +13288,8 @@ the_action_log_streams_instead_of_dropping :: proc(t: ^testing.T) {
     // A scratch path, never src/action.log — that file is Glenn's playtest
     // ground truth.  Every OTHER test is safe without saying so: a Debug_Log
     // with no path opens no file at all, and only main() arms the real one.
-    path :: "gnipahellir_action_stream_scratch.log"
+    path := test_scratch_path("gnipahellir_action_stream_scratch.log")
+    defer delete(path)
     os.remove(path)
     defer os.remove(path)
 
@@ -13476,7 +13510,8 @@ a_full_world_leaves_the_grave_waiting :: proc(t: ^testing.T) {
 
 @(test)
 a_saved_run_keeps_its_stone_and_a_v24_save_still_loads :: proc(t: ^testing.T) {
-    PATH := "test_grave_save.dat"
+    PATH := test_scratch_path("test_grave_save.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -13539,7 +13574,8 @@ save_1024_fixture :: proc(gs: ^Game_State) -> ^Save_Data_1024 {
 
 @(test)
 a_1024_save_shrinks_to_the_cap_and_keeps_its_bodies :: proc(t: ^testing.T) {
-    PATH := "test_shrink_save.dat"
+    PATH := test_scratch_path("test_shrink_save.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -13596,7 +13632,8 @@ a_1024_save_shrinks_to_the_cap_and_keeps_its_bodies :: proc(t: ^testing.T) {
 
 @(test)
 a_v1_stats_file_migrates_with_every_count :: proc(t: ^testing.T) {
-    PATH := "test_stats_v1.dat"
+    PATH := test_scratch_path("test_stats_v1.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     old := Persistent_Stats_v1{runs_played = 9, runs_won = 2, deepest_cave = 3, total_kills = 411}
     testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)) == nil, "wrote")
@@ -13621,8 +13658,10 @@ a_v1_stats_file_migrates_with_every_count :: proc(t: ^testing.T) {
 
 @(test)
 an_unreadable_stats_file_is_moved_aside_not_lost :: proc(t: ^testing.T) {
-    PATH := "test_stats_bad.dat"
-    ASIDE := "test_stats_bad.dat.unread"
+    PATH := test_scratch_path("test_stats_bad.dat")
+    defer delete(PATH)
+    ASIDE := test_scratch_path("test_stats_bad.dat.unread")
+    defer delete(ASIDE)
     defer os.remove(PATH)
     defer os.remove(ASIDE)
     junk := [5]u8{1, 2, 3, 4, 5}
@@ -13720,7 +13759,8 @@ the_risen_hero_stays_on_the_surface_while_the_player_is_away :: proc(t: ^testing
 
 @(test)
 a_saved_run_keeps_the_hero_and_the_kit :: proc(t: ^testing.T) {
-    PATH := "test_risen_save.dat"
+    PATH := test_scratch_path("test_risen_save.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -13738,7 +13778,8 @@ a_saved_run_keeps_the_hero_and_the_kit :: proc(t: ^testing.T) {
 
 @(test)
 a_v2_stats_file_migrates_and_keeps_the_grave :: proc(t: ^testing.T) {
-    PATH := "test_stats_v2.dat"
+    PATH := test_scratch_path("test_stats_v2.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     old := Persistent_Stats{version = 2, runs_played = 4, total_kills = 12}
     old.grave = {active = true, hero = 4, tithe = .Sword}
@@ -13907,7 +13948,8 @@ a_resumable_run_offers_no_seed :: proc(t: ^testing.T) {
 
 @(test)
 a_saved_run_keeps_its_seed_for_the_levels_to_come :: proc(t: ^testing.T) {
-    PATH := "test_seed_save.dat"
+    PATH := test_scratch_path("test_seed_save.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -13929,7 +13971,8 @@ the_agent_harness_plays_the_typed_seed :: proc(t: ^testing.T) {
 
 @(test)
 a_v3_stats_file_migrates :: proc(t: ^testing.T) {
-    PATH := "test_stats_v3.dat"
+    PATH := test_scratch_path("test_stats_v3.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     old := Persistent_Stats{version = 3, total_kills = 12}
     old.kit[0] = {item = .Sword, count = 1}
@@ -14644,7 +14687,8 @@ a_live_player_cannot_choose_a_tithe :: proc(t: ^testing.T) {
 
 @(test)
 a_chosen_tithe_survives_a_kill_on_the_death_screen :: proc(t: ^testing.T) {
-    PATH := "test_tithe_stats.dat"
+    PATH := test_scratch_path("test_tithe_stats.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -14662,8 +14706,10 @@ a_chosen_tithe_survives_a_kill_on_the_death_screen :: proc(t: ^testing.T) {
 
 @(test)
 a_raise_writes_the_run_and_lets_go_of_the_stats :: proc(t: ^testing.T) {
-    SAVE := "test_raise_save.dat"
-    STATS := "test_raise_stats.dat"
+    SAVE := test_scratch_path("test_raise_save.dat")
+    defer delete(SAVE)
+    STATS := test_scratch_path("test_raise_stats.dat")
+    defer delete(STATS)
     defer os.remove(SAVE)
     defer os.remove(STATS)
     gs := test_state()
@@ -15231,7 +15277,8 @@ a_full_store_leaves_the_tithe_on_the_ground_beside_the_stone :: proc(t: ^testing
 
 @(test)
 a_waiting_grave_survives_a_save_and_stands_after_it :: proc(t: ^testing.T) {
-    PATH := "test_grave_pending.dat"
+    PATH := test_scratch_path("test_grave_pending.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -15338,7 +15385,8 @@ pressing_e_through_the_ceremony_does_not_restart_it :: proc(t: ^testing.T) {
 
 @(test)
 yesterdays_world_reaches_the_stats_file :: proc(t: ^testing.T) {
-    PATH := "test_seed_stats.dat"
+    PATH := test_scratch_path("test_seed_stats.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -15462,7 +15510,8 @@ a_hero_on_the_stashed_surface_maps_through_the_surface_store :: proc(t: ^testing
 
 @(test)
 an_old_file_with_a_dead_hero_or_a_wrong_number_does_not_resume :: proc(t: ^testing.T) {
-    PATH := "test_old_dead.dat"
+    PATH := test_scratch_path("test_old_dead.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -15481,7 +15530,8 @@ an_old_file_with_a_dead_hero_or_a_wrong_number_does_not_resume :: proc(t: ^testi
 
 @(test)
 a_v23_save_keeps_its_enemies_and_stashed_levels :: proc(t: ^testing.T) {
-    PATH := "test_v23_enemies.dat"
+    PATH := test_scratch_path("test_v23_enemies.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     gs := test_state()
     defer free(gs)
@@ -15888,7 +15938,8 @@ the_rainbow_laser_needs_two_pillars :: proc(t: ^testing.T) {
 // in the save changed, so they load as they stood, fire, and come up alone.
 @(test)
 an_old_saves_bare_laser_keeps_working :: proc(t: ^testing.T) {
-    PATH := "_test_bare_laser.dat"
+    PATH := test_scratch_path("_test_bare_laser.dat")
+    defer delete(PATH)
     defer os.remove(PATH)
     PX :: 60
     PY :: SURFACE_Y - 1
@@ -18067,4 +18118,132 @@ barrel_pulls_conserve_items_under_random_loads :: proc(t: ^testing.T) {
         gs.particles.count = 0
     }
     testing.expect_value(t, bad, 0)
+}
+
+// A scratch file's path for this test process: the name with the pid in front,
+// so two odin test runs in one folder never share a file (card 177).  Heap
+// made, since a test may free the temp allocator while the file is in use:
+// the caller deletes it.
+test_scratch_path :: proc(name: string) -> string {
+    return fmt.aprintf("%d_%s", os.get_pid(), name)
+}
+
+// Card 177's guard: no test writes a scratch file under a fixed name.  Every
+// string in a tests*.odin beside this one that names a file (it ends in a file
+// kind below, or is handed straight to a call that makes, opens, writes or
+// removes a path) must go through test_scratch_path on its line, or sit in a
+// tools_test_run call (those names live in that call's own pid-tagged folder),
+// or be one of the few below that no test ever writes.  A bare kind (".tmp")
+// is a name when it is bound or handed to such a call, a suffix otherwise.
+// The game's own fixed paths count too: a test line naming one must join it
+// to a folder ("%s/") or only compare against it.  A name that cannot carry
+// the pid is allowed only on the line that takes it with an exclusive create
+// (.Excl), so runs sharing the folder take turns at it, and in the os.remove
+// that gives it back.
+@(test)
+no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
+    KINDS :: [?]string{".jsonl", ".log", ".sav", ".txt", ".json", ".csv", ".dat", ".tmp", ".bak", ".unread"}
+    MAKERS :: [?]string{"make_directory(", "make_directory_all(", "remove_all(", "os.open(", "write_entire_file(", "os.remove("}
+    GAME_PATHS :: [?]string{"SAVE_FILE", "STATS_FILE", "SETTINGS_FILE", "ACTION_LOG_PATH", "PIXEL_ART_FILE", "AGENT_RUNS_DIR", "TOOL_RUNS_DIR", "TOOL_START_SAVE", "AGENT_ACTS_FILE", "AGENT_FIGHT_FILE"}
+    NEVER_WRITTEN :: [?]string{
+        "tools_test_no_such_folder/x.sav",    // --make-save into a missing folder: refused
+        "x.sav", "past_a.sav",                // arguments a refused or parsed command only reads
+        "pixel_art_test_does_not_exist.dat",  // a load that must find nothing
+        "src/testdata/save_layout.txt", "testdata/save_layout.txt", "testdata/save_layout_v28.txt",  // in the repo
+    }
+    defer free_all(context.temp_allocator)
+    files, err := os.read_all_directory_by_path(#directory, context.temp_allocator)
+    testing.expect(t, err == nil, "the test sources are listed")
+    checked := 0
+    for fi in files {
+        if !strings.has_prefix(fi.name, "tests") || !strings.has_suffix(fi.name, ".odin") do continue
+        data, read_err := os.read_entire_file_from_path(fi.fullpath, context.temp_allocator)
+        testing.expect(t, read_err == nil, fi.name)
+        checked += 1
+        lines := strings.split_lines(string(data), context.temp_allocator)
+        taken := make([dynamic]string, context.temp_allocator)  // names this file takes by exclusive create
+        for line in lines do if strings.contains(line, ".Excl") {
+            q := strings.index_byte(line, '"')
+            e := strings.index_byte(line[q + 1:], '"') if q >= 0 else -1
+            if e >= 0 do append(&taken, line[q + 1:][:e])
+        }
+        for line, n in lines {
+            if strings.contains(line, "test_scratch_path(") || strings.contains(line, "tools_test_run(") do continue
+            code := line[:strings.index(line, "//")] if strings.contains(line, "//") else line
+            if !strings.contains(code, "%s/") && !strings.contains(code, "expect") && !strings.contains(code, "GAME_PATHS ::") {
+                for g in GAME_PATHS {
+                    at := strings.index(code, g)
+                    whole := at >= 0 && (at == 0 || !is_ident_byte(code[at - 1])) && (at + len(g) == len(code) || !is_ident_byte(code[at + len(g)]))
+                    testing.expectf(t, !whole, "%s:%d uses the game's own path %s in the folder the tests run in: join it to a scratch folder", fi.name, n + 1, g)
+                }
+            }
+            // Each "..." on the line, up to a // outside one.
+            for i := 0; i < len(line); i += 1 {
+                if line[i] == '/' && i + 1 < len(line) && line[i + 1] == '/' do break
+                if line[i] != '"' do continue
+                j := i + 1
+                for j < len(line) && line[j] != '"' do j += 1 + int(line[j] == '\\')
+                if j >= len(line) do break
+                lit, before := line[i + 1:j], line[:i]
+                i = j
+                if lit == "" || strings.contains_any(lit, " %\\") do continue
+                handed := false
+                for m in MAKERS do handed ||= strings.has_suffix(before, m)
+                bound := strings.has_suffix(strings.trim_right_space(before), "::") || strings.has_suffix(strings.trim_right_space(before), "=")
+                named := handed
+                for k in KINDS do named ||= strings.has_suffix(lit, k) && (lit != k || bound)  // a bare kind is a suffix unless bound
+                if !named do continue
+                allowed := false
+                for w in NEVER_WRITTEN do allowed ||= lit == w
+                for w in taken do allowed ||= lit == w && (strings.contains(line, ".Excl") || strings.has_suffix(before, "os.remove("))  // the take, and its release
+                testing.expectf(t, allowed, "%s:%d writes %q under a fixed name: put it through test_scratch_path", fi.name, n + 1, lit)
+            }
+        }
+    }
+    testing.expectf(t, checked >= 8, "only %d test sources found beside this one", checked)
+}
+
+// Card 177: the risen hero holding its post does not claw.  The player well
+// outside the guard ring, the hero walks to its post and stands there, in
+// travel's reach of its own goal, and lands no blow on anyone; brought inside
+// the ring beside it, the player is clawed, so the count below can see a claw.
+@(test)
+a_risen_hero_guarding_its_post_does_not_claw :: proc(t: ^testing.T) {
+    for inside in ([2]bool{false, true}) {
+        gs := test_state()
+        defer free(gs)
+        risen_setup(gs)
+        start_new_game(gs)
+        if !gs.risen.walking do risen_hero_rise(gs)
+        testing.expect(t, gs.risen.walking, "it walks")
+        i := gs.risen.slot
+        for k in 0 ..< MAX_ENEMIES do if k != i && gs.enemies.active[k] do despawn_enemy(gs, k)
+        post := risen_hero_post(gs)
+        at := post + {1, 0} if inside else gs.grave.tile + {RISEN_GUARD_RANGE + 18, 0}
+        gs.player.pos = {f32(at.x) + 0.5 - PLAYER_W * 0.5, f32(at.y) + 0.5 - PLAYER_H * 0.5}
+        testing.expect_value(t, risen_hero_guarding(gs, i, player_tile(&gs.player)), !inside)
+        gs.delta_time = 1.0 / 60
+        claws, at_post := 0, 0
+        for _ in 0 ..< 60 * 10 {
+            eq_clear(&gs.events)
+            update_enemies(gs)
+            for n in 0 ..< gs.events.size {
+                e := gs.events.events[(gs.events.head + n) % MAX_EVENTS]
+                if e.type == .Damage_Dealt && e.source == enemy_entity_id(i) && e.target == PLAYER_ID do claws += 1
+            }
+            if chebyshev(builder_tile(&gs.enemies.data[i]), post) <= 1 do at_post += 1
+        }
+        if inside {
+            testing.expectf(t, claws > 0, "beside it in the ring, the player is clawed: %d", claws)
+        } else {
+            testing.expectf(t, at_post > 60, "the hero stands at its post: %d frames", at_post)
+            testing.expectf(t, claws == 0, "guarding, it clawed %d times", claws)
+        }
+    }
+}
+
+// A byte that can be part of an Odin name.
+@(private="file")
+is_ident_byte :: proc(c: u8) -> bool {
+    return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

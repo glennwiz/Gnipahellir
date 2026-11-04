@@ -14,7 +14,7 @@ import "core:testing"
 // A run folder of its own for one test, holding these files.
 @(private="file")
 tools_test_run :: proc(name: string, files: ..[2]string) -> string {
-    folder := fmt.aprintf("tools_test_%s", name)
+    folder := test_scratch_path(fmt.tprintf("tools_test_%s", name))
     os.remove_all(folder)
     os.make_directory_all(folder)
     for f in files do _ = os.write_entire_file(fmt.tprintf("%s/%s", folder, f[0]), f[1])
@@ -241,20 +241,21 @@ pacing_medians_are_over_the_runs_that_got_there :: proc(t: ^testing.T) {
 pacing_reads_a_folder_prints_and_writes_csv :: proc(t: ^testing.T) {
     run := tools_test_run("run1", {"action.log", TWO_LIVES})
     defer tools_test_done(run)
-    csv := "tools_test_pacing.csv"
+    csv := test_scratch_path("tools_test_pacing.csv")
+    defer delete(csv)
     defer os.remove(csv)
     text, code := tools_test_say("--pacing", fmt.tprintf("./%s/", run), "--csv", csv)
     testing.expect_value(t, code, 0)
     testing.expect(t, strings.contains(text, "scroll_b_s: reached 1 of 1, median 150 s, with lost lives 170 s"), text)
     testing.expect(t, strings.contains(text, "gold_10_s: reached 1 of 1, median 210 s, with lost lives 230 s"), text)
-    testing.expect(t, strings.contains(text, "tools_test_run1"), "the run is named by its folder")
+    testing.expect(t, strings.contains(text, run), "the run is named by its folder")
     data, err := os.read_entire_file(csv, context.temp_allocator)
     testing.expect(t, err == nil)
     rows := strings.split_lines(strings.trim_space(string(data)), context.temp_allocator)
     testing.expect_value(t, len(rows), 3)
     testing.expect_value(t, strings.trim_space(rows[0]), "run,life,seed,scroll_b_s,gold_10_s,lasted_s,died,before_s")
-    testing.expect_value(t, strings.trim_space(rows[1]), "tools_test_run1,1,111,,,20.0,True,0.0")
-    testing.expect(t, strings.has_prefix(rows[2], "tools_test_run1,2,222,150.0,210.0,216.6"), rows[2])
+    testing.expect_value(t, strings.trim_space(rows[1]), fmt.tprintf("%s,1,111,,,20.0,True,0.0", run))
+    testing.expect(t, strings.has_prefix(rows[2], fmt.tprintf("%s,2,222,150.0,210.0,216.6", run)), rows[2])
 }
 
 @(test)
@@ -450,7 +451,9 @@ tools_test_replay :: proc(rows, got: string) -> (rep: Tool_Replay, gs: ^Game_Sta
 
 @(test)
 replay_feeds_the_goals_back_on_their_frames_and_lands_the_same :: proc(t: ^testing.T) {
-    rec_path, got_path := "tools_test_replay_rec.jsonl", "tools_test_replay_got.jsonl"
+    rec_path, got_path := test_scratch_path("tools_test_replay_rec.jsonl"), test_scratch_path("tools_test_replay_got.jsonl")
+    defer delete(rec_path)
+    defer delete(got_path)
     defer os.remove(rec_path)
     defer os.remove(got_path)
     gs, link := tools_test_world()
@@ -509,7 +512,9 @@ replay_says_where_a_run_parts_from_its_recording :: proc(t: ^testing.T) {
 
 @(test)
 replay_of_a_changed_world_diverges :: proc(t: ^testing.T) {
-    rec_path, got_path := "tools_test_replay_rec2.jsonl", "tools_test_replay_got2.jsonl"
+    rec_path, got_path := test_scratch_path("tools_test_replay_rec2.jsonl"), test_scratch_path("tools_test_replay_got2.jsonl")
+    defer delete(rec_path)
+    defer delete(got_path)
     defer os.remove(rec_path)
     defer os.remove(got_path)
     gs, link := tools_test_world()
@@ -531,7 +536,8 @@ replay_of_a_changed_world_diverges :: proc(t: ^testing.T) {
 
 @(test)
 replay_stops_at_a_disconnect :: proc(t: ^testing.T) {
-    got_path := "tools_test_replay_got3.jsonl"
+    got_path := test_scratch_path("tools_test_replay_got3.jsonl")
+    defer delete(got_path)
     defer os.remove(got_path)
     rows := `{"f":3,"goal":{"do":"act","move":"right","frames":100},"kind":"act","id":1,"via":"Goal","step":0}` + "\n" +
             `{"f":3,"goal":{"do":"fly"},"kind":"fly","id":9,"via":"Goal","step":0}` + "\n" +
@@ -549,7 +555,8 @@ replay_stops_at_a_disconnect :: proc(t: ^testing.T) {
 // real time, and once the rows are out it plays the last goal to its end.
 @(test)
 replay_ticks_between_goals_and_plays_the_last_one_out :: proc(t: ^testing.T) {
-    got_path := "tools_test_replay_got4.jsonl"
+    got_path := test_scratch_path("tools_test_replay_got4.jsonl")
+    defer delete(got_path)
     defer os.remove(got_path)
     rows := `{"f":3,"goal":{"do":"act","move":"right","frames":30},"kind":"act","id":1,"via":"Goal","step":0}` + "\n" +
             `{"f":400,"goal":{"do":"act","move":"left","frames":30},"kind":"act","id":2,"via":"Goal","step":0}` + "\n"
@@ -579,10 +586,13 @@ turbo_changes_the_drawing_and_nothing_the_game_does :: proc(t: ^testing.T) {
         os.remove(path)
         return
     }
-    plain, plain_rows := play(false, "tools_test_turbo_plain.jsonl")
+    plain_path, turbo_path := test_scratch_path("tools_test_turbo_plain.jsonl"), test_scratch_path("tools_test_turbo_on.jsonl")
+    defer delete(plain_path)
+    defer delete(turbo_path)
+    plain, plain_rows := play(false, plain_path)
     defer free(plain)
     defer delete(plain_rows)
-    turbo, turbo_rows := play(true, "tools_test_turbo_on.jsonl")
+    turbo, turbo_rows := play(true, turbo_path)
     defer free(turbo)
     defer delete(turbo_rows)
     n, same, note := tool_replay_compare(string(plain_rows), string(turbo_rows))
@@ -596,7 +606,8 @@ turbo_changes_the_drawing_and_nothing_the_game_does :: proc(t: ^testing.T) {
 
 @(test)
 replay_closed_mid_way_lets_go_of_its_record :: proc(t: ^testing.T) {
-    path := "tools_test_replay_end.jsonl"
+    path := test_scratch_path("tools_test_replay_end.jsonl")
+    defer delete(path)
     defer os.remove(path)
     gs, link := tools_test_world()
     defer free(gs)
@@ -614,7 +625,8 @@ replay_closed_mid_way_lets_go_of_its_record :: proc(t: ^testing.T) {
 
 @(test)
 a_run_records_each_goals_end_and_each_window :: proc(t: ^testing.T) {
-    path := "tools_test_rows.jsonl"
+    path := test_scratch_path("tools_test_rows.jsonl")
+    defer delete(path)
     defer os.remove(path)
     gs, link := tools_test_world()
     defer free(gs)
@@ -731,7 +743,9 @@ trace_reads_searches_dens_loops_and_levels :: proc(t: ^testing.T) {
 // the replay's queue ends with the same reflexes and mark, and the go ends done.
 @(test)
 replay_carries_reflexes_and_home :: proc(t: ^testing.T) {
-    rec_path, got_path := "tools_test_replay_reflex_rec.jsonl", "tools_test_replay_reflex_got.jsonl"
+    rec_path, got_path := test_scratch_path("tools_test_replay_reflex_rec.jsonl"), test_scratch_path("tools_test_replay_reflex_got.jsonl")
+    defer delete(rec_path)
+    defer delete(got_path)
     defer os.remove(rec_path)
     defer os.remove(got_path)
     gs, link := tools_test_world()

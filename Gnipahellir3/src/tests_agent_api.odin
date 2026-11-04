@@ -656,7 +656,8 @@ agent_fight_log_names_enemies_near_the_player_only :: proc(t: ^testing.T) {
     agent_fight_log(link, gs)
     testing.expect_value(t, link.fight_len, 0)
 
-    path := "agent_fight_test.log"
+    path := test_scratch_path("agent_fight_test.log")
+    defer delete(path)
     defer os.remove(path)
     fd, err := os.open(path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC)
     testing.expect_value(t, err, nil)
@@ -898,7 +899,8 @@ agent_recorded_acts_replay_from_their_rows :: proc(t: ^testing.T) {
             }
         }
     }
-    path := "agent_plan_test.jsonl"
+    path := test_scratch_path("agent_plan_test.jsonl")
+    defer delete(path)
     defer os.remove(path)
 
     gs := new(Game_State)
@@ -1824,25 +1826,28 @@ the_title_bind_gives_up_when_every_port_is_taken :: proc(t: ^testing.T) {
 
 @(test)
 a_sandbox_holds_its_marker_seed_and_a_copy_of_the_sprites :: proc(t: ^testing.T) {
-    root :: "gnipa_agent_sandbox_scratch"
-    art  :: root + "_art.dat"
+    root := test_scratch_path("gnipa_agent_sandbox_scratch")
+    defer delete(root)
+    art  := fmt.aprintf("%s_art.dat", root)
+    defer delete(art)
     defer os.remove_all(root)
     defer os.remove(art)
     bytes := "not the real sprite bank"
     testing.expect(t, os.write_entire_file(art, transmute([]u8)bytes) == nil)
 
-    folder :: root + "/runs/one"
+    folder := fmt.aprintf("%s/runs/one", root)
+    defer delete(folder)
     testing.expect(t, agent_sandbox_make(folder, 4242, art))
-    testing.expect(t, os.exists(folder + "/" + AGENT_SANDBOX_FILE))
-    seed, _ := os.read_entire_file_from_path(folder + "/seed", context.temp_allocator)
+    testing.expect(t, os.exists(fmt.tprintf("%s/%s", folder, AGENT_SANDBOX_FILE)))
+    seed, _ := os.read_entire_file_from_path(fmt.tprintf("%s/seed", folder), context.temp_allocator)
     testing.expect_value(t, string(seed), "4242\n")
-    copied, _ := os.read_entire_file_from_path(folder + "/" + PIXEL_ART_FILE, context.temp_allocator)
+    copied, _ := os.read_entire_file_from_path(fmt.tprintf("%s/%s", folder, PIXEL_ART_FILE), context.temp_allocator)
     testing.expect_value(t, string(copied), bytes)
     source, _ := os.read_entire_file_from_path(art, context.temp_allocator)
     testing.expect_value(t, string(source), bytes)
 
-    testing.expect(t, agent_sandbox_make(root + "/runs/two", 1, root + "_no_art"), "no sprite bank is no failure")
-    testing.expect(t, !os.exists(root + "/runs/two/" + PIXEL_ART_FILE))
+    testing.expect(t, agent_sandbox_make(fmt.tprintf("%s/runs/two", root), 1, fmt.tprintf("%s_no_art", root)), "no sprite bank is no failure")
+    testing.expect(t, !os.exists(fmt.tprintf("%s/runs/two/%s", root, PIXEL_ART_FILE)))
 }
 
 @(test)
@@ -1899,7 +1904,8 @@ the_title_seed_picks_the_agents_world_too :: proc(t: ^testing.T) {
 @(test)
 a_boot_leaves_the_old_action_log_alone_until_a_run_starts :: proc(t: ^testing.T) {
     when !GAME_DEBUG { return }
-    path :: "gnipa_action_held_scratch.log"
+    path := test_scratch_path("gnipa_action_held_scratch.log")
+    defer delete(path)
     os.remove(path)
     defer os.remove(path)
     _ = os.write_entire_file(path, transmute([]u8)string("the last run\n"))
@@ -1931,7 +1937,8 @@ a_boot_leaves_the_old_action_log_alone_until_a_run_starts :: proc(t: ^testing.T)
 @(test)
 a_title_start_releases_the_log_before_the_reset_loses_it :: proc(t: ^testing.T) {
     when !GAME_DEBUG { return }
-    path :: "gnipa_action_title_scratch.log"
+    path := test_scratch_path("gnipa_action_title_scratch.log")
+    defer delete(path)
     os.remove(path)
     defer os.remove(path)
     _ = os.write_entire_file(path, transmute([]u8)string("the last run\n"))
@@ -1991,8 +1998,10 @@ a_won_run_is_a_screen_an_agent_can_read_and_leave :: proc(t: ^testing.T) {
 
 @(test)
 the_sandbox_run_starts_with_nothing_of_the_humans :: proc(t: ^testing.T) {
-    save  :: "gnipa_agent_reset_scratch_save.dat"
-    stats :: "gnipa_agent_reset_scratch_stats.dat"
+    save := test_scratch_path("gnipa_agent_reset_scratch_save.dat")
+    defer delete(save)
+    stats := test_scratch_path("gnipa_agent_reset_scratch_stats.dat")
+    defer delete(stats)
     os.remove(save)
     defer os.remove(stats)
     gs, link := agent_test_world()
@@ -2284,7 +2293,8 @@ agent_talk_is_recorded_and_the_replay_matches :: proc(t: ^testing.T) {
             }
         }
     }
-    path := "agent_talk_test.jsonl"
+    path := test_scratch_path("agent_talk_test.jsonl")
+    defer delete(path)
     defer os.remove(path)
 
     gs := new(Game_State)
@@ -3369,7 +3379,8 @@ agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
-    path := "agent_reflexes_test.jsonl"
+    path := test_scratch_path("agent_reflexes_test.jsonl")
+    defer delete(path)
     defer os.remove(path)
     f, err := os.open(path, {.Write, .Create, .Trunc}, os.Permissions_Default_File)
     testing.expect(t, err == nil)
