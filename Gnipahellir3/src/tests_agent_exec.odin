@@ -4008,7 +4008,7 @@ hero_kites_with_the_wand :: proc(t: ^testing.T) {
         for x in x0 - 50 ..< x0 - 18 do for y in G - 10 ..= G + 12 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
         go_test_give(gs, .Fire_Wand, 1)
         gs.player.mana = gs.player.mana_max
-        link.goals.reflexes_off = {.Fight_Back}
+        if goal do link.goals.reflexes_off = {.Fight_Back}  // off, the brain fights no more (card 161)
         v := hero_test_vargr(gs, f32(x0) + 2.6, G, {})
         gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
         if goal do agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Vargr"}]}`)
@@ -4178,7 +4178,6 @@ hero_flees_shooting :: proc(t: ^testing.T) {
     go_test_give(gs, .Fire_Wand, 1)
     gs.player.mana = gs.player.mana_max
     gs.player.hp = gs.player.hp_max / 5
-    link.goals.reflexes_off = {.Fight_Back}
     v := hero_test_vargr(gs, f32(x0) + 4.1, G, {})
     gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
     fled, shots := 0, 0
@@ -4191,6 +4190,45 @@ hero_flees_shooting :: proc(t: ^testing.T) {
     }
     testing.expect(t, fled > 0, "it fled")
     testing.expectf(t, shots > 0, "%d shots as it fled", shots)
+}
+
+// Card 161: a playtest switched fight_back off and the brain still shot a
+// hunting den owner dead.  Off, the hero strikes no blow of its own at a
+// hunting Builder in reach and range; a fight goal still fights; on, the brain
+// fights it as before.
+@(test)
+hero_fight_back_off_starts_no_fight :: proc(t: ^testing.T) {
+    Case :: struct{on, goal: bool}
+    for c in ([?]Case{{on = false}, {on = false, goal = true}, {on = true}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Sword, 1)
+        go_test_give(gs, .Fire_Wand, 1)
+        gs.player.mana = gs.player.mana_max
+        gs.player.hp_max, gs.player.hp = 100, 100
+        if !c.on do link.goals.reflexes_off = {.Fight_Back}
+        b := fight_test_body(gs, .Builder, x0 + 4, G)
+        gs.enemies.data[b].hp, gs.enemies.data[b].hp_max = 1000, 1000
+        gs.enemies.data[b].builder.goal = .Hunt
+        if c.goal do agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Builder"}]}`)
+        strikes, fought := 0, 0
+        for _ in 0 ..< 60 * 5 {
+            exec_test_frames(link, gs, 1)
+            if gs.hero.current == .Fight do fought += 1
+            if !gs.input.mine || !gs.agent.cmd.has_mine || gs.agent.cmd.mine != builder_tile(&gs.enemies.data[b]) do continue
+            if is_melee_weapon(held_item(&gs.player)) || is_fire_wand(held_item(&gs.player)) do strikes += 1
+        }
+        hurt := gs.enemies.data[b].hp < 1000
+        if !c.on && !c.goal {
+            testing.expectf(t, strikes == 0 && fought == 0 && !hurt, "off: %d strikes, %d frames fighting, builder hp %d", strikes, fought, gs.enemies.data[b].hp)
+        } else {
+            testing.expectf(t, strikes > 0 && hurt, "%v: %d strikes, builder hp %d", c, strikes, gs.enemies.data[b].hp)
+        }
+        if c.on do testing.expectf(t, fought > 0, "on: %d frames the brain fought", fought)
+    }
 }
 
 // Card 156: a Sky Egg heals under the line as a potion does; a potion held too
