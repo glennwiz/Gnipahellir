@@ -16,6 +16,11 @@ what broke, and hands back a report. Glenn reads the reports; feel is still his 
   and the run folder must outlive it. Merge master into `agent-api` first if it is behind.
 - One run at a time on the box, on port 7777 only: `odin build src -out:build/gnipa && timeout <cap> build/gnipa --agent-run --port 7777 --seed <seed>`.
   Playtest cards are chained so they never overlap. If 7777 is taken, wait and say so.
+- A card's cap counts game time (frames / 60), not wall time: the box is shared and
+  the game can fall well behind the clock under load. Pass `timeout` twice the cap
+  as the wall-time backstop, and give frames played and the wall time in RUN.
+- Your client logs every state poll it makes to `client_state.jsonl` in the run
+  folder, so the reviewer can check any value you cite.
 - Drive the game only through the API: a GET on the port is the brief. Send goals over
   the socket from your own short client, one connection for the whole run; the game
   runs in real time and never waits. There is no bot code: the goal kinds in the brief
