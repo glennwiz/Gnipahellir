@@ -5783,13 +5783,20 @@ hero_wary_gathers_in_the_open_not_the_notch :: proc(t: ^testing.T) {
         testing.expectf(t, down != wary, "wary %v: down the notch %v", wary, down)
         testing.expectf(t, (get_tile(&gs.world, x0 + 7, G + 3) == .Wood) == wary, "wary %v: the notch's log left", wary)
         if !wary do continue
-        // The Builder comes for it, for real, out in the open.
+        // The Builder comes for it, for real, out in the open.  The hero is not
+        // cornered there: with the pickaxe it outlasts a Builder (card 176), so
+        // it stands and fells it and lives.
         b := hero_test_vargr(gs, gs.player.pos.x + 9, G, {})
         gs.enemies.data[b].kind = .Builder
         gs.enemies.data[b].builder.goal = .Hunt
         hp := gs.player.hp
-        exec_test_frames(link, gs, 60 * 10)
-        testing.expectf(t, gs.player.hp == hp, "out in the open it keeps its hp: %d to %d", hp, gs.player.hp)
+        fought := 0
+        for _ in 0 ..< 60 * 10 {
+            exec_test_frames(link, gs, 1)
+            if gs.hero.current == .Fight do fought += 1
+        }
+        felled := !gs.enemies.active[b] || gs.enemies.data[b].kind != .Builder
+        testing.expectf(t, !gs.player.dead && felled && fought > 0, "out in the open it fells the Builder: fought %d frames, felled %v, hp %d to %d", fought, felled, hp, gs.player.hp)
     }
     // Mined by item from the notch: the notch's log is passed over, cornered,
     // and the open one is still mined.
@@ -6211,4 +6218,156 @@ hero_plan_takes_no_hurtful_drop_while_a_safe_way_reaches :: proc(t: ^testing.T) 
     testing.expect(t, hero_plan(gs, {X, Y - 1}, foot, path) && hurtful(path), "the tunnel shut: the drop")
     gs.player.hp = 1
     testing.expect(t, !hero_plan(gs, {X, Y - 1}, foot, path), "at 1 hp the fall is refused")
+}
+
+// ─── Card 176: the pickaxe as a weak arm ───
+
+// A hunting enemy of a kind, its feet on row G at x, the game's own AI on.
+@(private="file")
+weak_arm_test_foe :: proc(gs: ^Game_State, kind: Enemy_Kind, x: f32, G: int) -> int {
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    row := enemy_behaviour[kind]
+    e := &gs.enemies.data[id]
+    e^ = Enemy{kind = kind, hp = row.hp, hp_max = row.hp, pos = {x, f32(G) - row.body.y}, facing = -1}
+    e.builder.goal = .Hunt
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    return id
+}
+
+// A whole hero with only a pickaxe, bitten by a Builder, fights back and
+// fells it: six soft blows before its ten hp run out.
+@(test)
+hero_with_a_pickaxe_fights_a_builder_and_wins :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    b := weak_arm_test_foe(gs, .Builder, f32(x0) + 3.1, G)
+    fought, fled := 0, 0
+    for f := 0; f < 1200 && gs.enemies.active[b] && gs.enemies.data[b].kind == .Builder && !gs.player.dead; f += 1 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Fight do fought += 1
+        if gs.hero.current == .Flee do fled += 1
+    }
+    testing.expect(t, !gs.enemies.active[b] || gs.enemies.data[b].kind != .Builder, "the Builder fell")
+    testing.expect(t, !gs.player.dead, "the hero lives")
+    testing.expect(t, gs.player.hp < gs.player.hp_max, "the Builder bit")
+    testing.expectf(t, fought > 0 && fled == 0, "fought %d frames, fled %d", fought, fled)
+}
+
+// The same hero before a Draugr (4 hp, a quarter of the hero's max a blow)
+// runs: four blows each way, and the hero does not outlast it.  So does a
+// pickaxe hero too hurt to outlast a Builder (six blows each way), and a hero
+// with no pickaxe at all.
+@(test)
+hero_with_a_pickaxe_flees_what_it_cannot_beat :: proc(t: ^testing.T) {
+    for c in ([3]struct{kind: Enemy_Kind, hp: int, pick: bool}{{.Undead, 10, true}, {.Builder, 6, true}, {.Builder, 10, false}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        if c.pick do go_test_give(gs, .Pickaxe, 1)
+        gs.player.hp = c.hp
+        weak_arm_test_foe(gs, c.kind, f32(x0) + 4.1, G)
+        fought, fled := 0, 0
+        for _ in 0 ..< 120 {
+            exec_test_frames(link, gs, 1)
+            if gs.hero.current == .Fight do fought += 1
+            if gs.hero.current == .Flee do fled += 1
+        }
+        testing.expectf(t, fled > 0 && fought == 0, "%v at %d hp, pick %v: fought %d frames, fled %d", c.kind, c.hp, c.pick, fought, fled)
+    }
+}
+
+// A sword is an arm against anything, the Draugr included, as before.
+@(test)
+hero_with_a_sword_still_fights_a_draugr :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Sword, 1)
+    weak_arm_test_foe(gs, .Undead, f32(x0) + 4.1, G)
+    fought, fled := 0, 0
+    for _ in 0 ..< 120 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Fight do fought += 1
+        if gs.hero.current == .Flee do fled += 1
+    }
+    testing.expectf(t, fought > 0 && fled == 0, "fought %d frames, fled %d", fought, fled)
+}
+
+// The threat's hp now, not its whole: a Vargr worn to 4 hp falls to four
+// soft blows before its 2-a-blow bites fell a whole hero in five, and a
+// Draugr worn to 3 hp falls to three before its 3-a-blow bites fell the hero
+// in four (its last blow lands on 1 hp left), so the pickaxe hero turns to
+// fight each.  Only the first choice is pinned: a bite that lands first can
+// tip the count, and then the hero runs.
+@(test)
+hero_with_a_pickaxe_fights_a_worn_vargr :: proc(t: ^testing.T) {
+    for c in ([2]struct{kind: Enemy_Kind, hp: int}{{.Vargr, 4}, {.Undead, 3}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        v := weak_arm_test_foe(gs, c.kind, f32(x0) + 4.1, G)
+        gs.enemies.data[v].hp = c.hp
+        first := Hero_Behaviour.None
+        for f := 0; f < 120 && first != .Fight && first != .Flee; f += 1 {
+            exec_test_frames(link, gs, 1)
+            first = gs.hero.current
+        }
+        testing.expectf(t, first == .Fight, "%v at %d hp: the hero's first move is %v", c.kind, c.hp, first)
+    }
+}
+
+// A Builder the pickaxe hero outlasts is no hunter its goal waits out: the
+// goal is never paused to flee it.
+@(test)
+hero_with_a_pickaxe_keeps_its_goal_past_a_builder :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    weak_arm_test_foe(gs, .Builder, f32(x0) + 9.1, G)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":90}]}`)
+    fled := 0
+    for _ in 0 ..< 180 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Flee do fled += 1
+    }
+    pushed := exec_test_pushed(link)
+    testing.expectf(t, fled == 0 && !strings.contains(pushed, `"reason":"flee"`), "fled %d frames: %s", fled, pushed)
+}
+
+// With fight_back off the brain does not fight, so only the hunted rule could
+// pause the goal: a Builder the pickaxe hero outlasts does not make it hunted,
+// and the goal runs on.
+@(test)
+hero_with_a_pickaxe_is_not_hunted_by_a_builder :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    weak_arm_test_foe(gs, .Builder, f32(x0) + 9.1, G)
+    agent_handle_line(link, gs, `{"cmd":"reflexes","fight_back":false}`)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":90}]}`)
+    worked := 0
+    for _ in 0 ..< 120 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Work_Goal do worked += 1
+    }
+    pushed := exec_test_pushed(link)
+    testing.expectf(t, worked > 0 && !strings.contains(pushed, `"goal_paused"`), "worked %d frames: %s", worked, pushed)
 }
