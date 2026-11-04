@@ -157,7 +157,7 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
     },
     .Fight = {
         name   = "fight",
-        params = `kind: an enemy kind (the nearest in sight), or slot: its slot in state; the sword in reach, the fire wand at range with mana, from open ground with a clear line, never digging; backs off at low hp`,
+        params = `kind: an enemy kind (the nearest in sight), or slot: its slot in state; the sword in reach (else the pickaxe, a weak blow), the fire wand at range with mana, from open ground with a clear line, never digging; backs off at low hp`,
         check  = hero_fight_check,
         start  = hero_fight_start,
         tick   = hero_fight_goal_tick,
@@ -751,6 +751,13 @@ hero_armed :: proc(gs: ^Game_State) -> bool {
            (hero_held_or_first(gs, is_fire_wand) >= 0 && gs.player.mana >= FIRE_ORB_MANA)
 }
 
+// The melee blow's slot: a weapon (the hand's, else the first), else the
+// pickaxe's soft one (card 168).  -1 with neither.
+hero_melee_slot :: proc(gs: ^Game_State) -> int {
+    if s := hero_held_or_first(gs, is_melee_weapon); s >= 0 do return s
+    return hero_held_or_first(gs, can_melee)
+}
+
 // The bag slot of a kind of item: the hand's if it holds one, else the first.
 hero_held_or_first :: proc(gs: ^Game_State, is: proc(it: Item) -> bool) -> int {
     inv := &gs.player.inventory
@@ -760,29 +767,32 @@ hero_held_or_first :: proc(gs: ^Game_State, is: proc(it: Item) -> bool) -> int {
 }
 
 // Whether a hero with its feet on s and its centre at hc lands a blow on
-// enemy i: the sword in reach, or the wand with mana in range along a clear
-// line from hc, where the orb leaves, to its body.
+// enemy i: the sword (or the pickaxe) in reach, or the wand with mana in
+// range along a clear line from hc, where the orb leaves, to its body.
 hero_blow_from :: proc(gs: ^Game_State, s: [2]i32, hc: [2]f32, i: int) -> (sword, wand: bool) {
     e := &gs.enemies.data[i]
     ec := e.pos + enemy_body_size(e.kind) * 0.5
     d := ec - hc
-    sword = hero_held_or_first(gs, is_melee_weapon) >= 0 && chebyshev(builder_tile(e), s) <= MELEE_REACH
+    sword = hero_melee_slot(gs) >= 0 && chebyshev(builder_tile(e), s) <= MELEE_REACH
     wand = hero_held_or_first(gs, is_fire_wand) >= 0 && gs.player.mana >= FIRE_ORB_MANA &&
            math.sqrt(d.x * d.x + d.y * d.y) <= HERO_WAND_RANGE && sight_line_clear(&gs.world, hc, ec, skip_ends = true)
     return
 }
 
 // One tick of a blow at enemy i, if one lands from where the hero is: the
-// sword in reach (unless sword_ok is false), else the fire wand.  A dig left
-// the pick in hand: the weapon is taken up first.  The aim is the body's
-// centre.  False when no blow lands from here.
+// sword in reach (unless sword_ok is false), else the fire wand, else the
+// pickaxe's soft blow in reach.  A dig left the pick in hand: the weapon is
+// taken up first.  The aim is the body's centre.  False when no blow lands
+// from here.
 hero_strike :: proc(gs: ^Game_State, b: ^Hero_Brain, i: int, sword_ok := true) -> bool {
     p := &gs.player
     e := &gs.enemies.data[i]
     sword, wand := hero_blow_from(gs, player_tile(p), p.pos + [2]f32{PLAYER_W, PLAYER_H} * 0.5, i)
     slot := -1
-    if sword && sword_ok {
-        slot = hero_held_or_first(gs, is_melee_weapon)
+    melee := hero_melee_slot(gs)
+    weak := melee >= 0 && !is_melee_weapon(p.inventory.slots[melee].item)
+    if sword && sword_ok && !(weak && wand) {
+        slot = melee
     } else if wand {
         slot = hero_held_or_first(gs, is_fire_wand)
     }
@@ -794,10 +804,11 @@ hero_strike :: proc(gs: ^Game_State, b: ^Hero_Brain, i: int, sword_ok := true) -
         return true
     }
     // A wand fires while the button is held and paces its own shots; a sword
-    // swings on a click, which the hero gives every HERO_SWING_S.
-    if is_melee_weapon(held_item(p)) {
+    // swings on a click, which the hero gives every HERO_SWING_S (the
+    // pickaxe's slower swing adds its own extra pause).
+    if can_melee(held_item(p)) {
         if b.swing_t > 0 do return true
-        b.swing_t = HERO_SWING_S
+        b.swing_t = HERO_SWING_S + melee_cooldown(held_item(p)) - SWORD_COOLDOWN
         gs.agent.first = true
     }
     c.has_mine = true
@@ -1696,11 +1707,13 @@ hero_reflex_potion :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     b.potion_t = HERO_POTION_COOLDOWN_S
 }
 
-// A pick or a wand at work on terrain; a weapon's swing is not a dig.
+// A pick or a wand at work on terrain; a weapon's swing, the pickaxe's at an
+// enemy included, is not a dig.
 @(private="file")
 hero_digging :: proc(gs: ^Game_State) -> bool {
     held := held_item(&gs.player)
     c := &gs.agent.cmd
+    if _, swing := pick_swing_target(gs, c.aim * CELL_SIZE); swing do return false
     return c.has_mine && !is_melee_weapon(held) && !is_fire_wand(held) && !is_command_wand(held)
 }
 

@@ -3620,6 +3620,111 @@ hero_fight_back_answers_a_bite :: proc(t: ^testing.T) {
     }
 }
 
+// Card 168: a fight goal with only a pickaxe fights a Builder with it, blow
+// by soft blow, until the Builder falls.
+@(test)
+hero_fight_with_only_a_pickaxe_fights :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    gs.player.hp_max, gs.player.hp = 100, 100
+    e := fight_test_body(gs, .Builder, x0 + 5, G)
+    id, _ := fight_test_run(link, gs, `{"do":"fight","kind":"Builder"}`, e, x0, G, 3600)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s", status, reason)
+    testing.expect(t, !gs.enemies.active[e] || gs.enemies.data[e].kind != .Builder, "the Builder fell")
+    testing.expect_value(t, held_item(&gs.player), Item.Pickaxe)
+}
+
+// Card 168: every pickaxe click the hero gives lands (its pace waits out
+// PICKAXE_SWING_COOLDOWN), and a target over water is struck: a swing is no
+// dig for the rim reflex.  The Vargr is held still, its feet over a pool.
+@(test)
+hero_pickaxe_blows_land_at_its_pace_over_water :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    gs.player.hp_max, gs.player.hp = 1000, 1000
+    v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})
+    e := &gs.enemies.data[v]
+    e.hp, e.hp_max = 1000, 1000
+    at := e.pos
+    set_tile(&gs.world, int(builder_tile(e).x), G, .Water)
+    testing.expect(t, hero_rim(&gs.world, builder_tile(e)), "the Vargr's tile is a rim")
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Vargr"}]}`)
+    clicks := 0
+    for _ in 0 ..< 300 {
+        e.pos, e.vel = at, {}
+        exec_test_frames(link, gs, 1)
+        if gs.input.attack && held_item(&gs.player) == .Pickaxe do clicks += 1
+    }
+    blows := (1000 - e.hp) / PICKAXE_DAMAGE
+    testing.expectf(t, clicks >= 3 && blows == clicks, "%d clicks, %d blows", clicks, blows)
+}
+
+// Card 168: the fight_back reflex answers a bite with the pickaxe when that
+// is all the bag holds, and not with the reflex off.
+@(test)
+hero_fight_back_answers_with_the_pickaxe :: proc(t: ^testing.T) {
+    for on in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        if !on do link.goals.reflexes_off = {.Fight_Back}
+        gs.player.hp_max, gs.player.hp = 100, 40
+        v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        bitten := false
+        for _ in 0 ..< 120 {
+            hp := gs.player.hp
+            exec_test_frames(link, gs, 1)
+            bitten ||= gs.player.hp < hp
+        }
+        testing.expect(t, bitten, "the vargr bit")
+        hurt := 1000 - gs.enemies.data[v].hp
+        if on do testing.expectf(t, hurt > 0 && hurt % PICKAXE_DAMAGE == 0, "struck back for %d", hurt)
+        else do testing.expectf(t, hurt == 0, "struck for %d with the reflex off", hurt)
+    }
+}
+
+// Card 168: with the fire wand's mana, the hero shoots rather than swing the
+// pickaxe's soft blow, the Vargr held in reach of both.
+@(test)
+hero_fight_shoots_before_a_pickaxe_swing :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    go_test_give(gs, .Fire_Wand, 1)
+    gs.player.mana = gs.player.mana_max
+    gs.player.hp_max, gs.player.hp = 1000, 1000
+    v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})
+    e := &gs.enemies.data[v]
+    e.hp, e.hp_max = 1000, 1000
+    at := e.pos
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Vargr"}]}`)
+    shots, swings := 0, 0
+    for _ in 0 ..< 120 {
+        e.pos, e.vel = at, {}  // held in the pickaxe's reach
+        exec_test_frames(link, gs, 1)
+        if !gs.input.mine do continue
+        if is_fire_wand(held_item(&gs.player)) do shots += 1
+        if held_item(&gs.player) == .Pickaxe do swings += 1
+    }
+    testing.expectf(t, shots > 0 && swings == 0, "%d shots, %d pickaxe swings", shots, swings)
+}
+
 // Fight lines the check refuses, and starts with nothing to fight with or at.
 @(test)
 hero_fight_goal_reasons :: proc(t: ^testing.T) {
@@ -3640,7 +3745,7 @@ hero_fight_goal_reasons :: proc(t: ^testing.T) {
     }
     e := fight_test_body(gs, .Pond_Frog, x0 + 6, G)
     id, _ := fight_test_run(link, gs, `{"do":"fight","kind":"Pond_Frog"}`, e, x0, G, 30)
-    work_test_expect_failed(t, link, gs, id, "no_item: no sword or fire wand")
+    work_test_expect_failed(t, link, gs, id, "no_item: no sword, pickaxe or fire wand")
     go_test_give(gs, .Sword, 1)
     id, _ = fight_test_run(link, gs, `{"do":"fight","kind":"Ember_Beetle"}`, e, x0, G, 30)
     work_test_expect_failed(t, link, gs, id, "no_target: no Ember_Beetle in sight")

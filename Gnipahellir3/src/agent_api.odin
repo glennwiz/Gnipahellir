@@ -635,7 +635,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "{{\"cmd\":\"reflexes\",\"potion\":false}}  the hero's reflexes, under every goal, all on at first; answers with each:\n")
     fmt.sbprintf(w, "  leave_hazard: walks and jumps out of lava, water or a burn. potion: drinks a health potion under %.0f%% hp\n", HERO_LOW_HP_FRAC * 100)
     fmt.sbprintf(w, "  floor_dig: never digs the floor under itself over a fall that kills or burns. rim_dig: never digs beside water or lava\n")
-    fmt.sbprintf(w, "  fight_back: strikes back for %.1f s at the enemy that hurt it, with the sword in reach or the wand at range\n", HERO_FIGHT_BACK_S)
+    fmt.sbprintf(w, "  fight_back: strikes back for %.1f s at the enemy that hurt it, with the sword in reach (else the pickaxe, %d damage to the sword's %d) or the wand at range\n", HERO_FIGHT_BACK_S, PICKAXE_DAMAGE, SWORD_DAMAGE)
     fmt.sbprintf(w, "    and is the hero's own fighting: off, it neither fights an enemy that comes at it nor shoots back as it runs; a fight goal still fights\n")
     fmt.sbprintf(w, "{{\"cmd\":\"act\",...}}  one act goal with those fields in place of the queue: it drops what is queued and answers with state when it is done.\n")
     fmt.sbprintf(w, "A refused request answers ok:false with error. State's notes hold the toasts, the only reason some refusals give.\n")

@@ -202,6 +202,8 @@ player_mine :: proc(gs: ^Game_State, dt: f32) {
 	// click.
 	held := held_item(p)
 	if is_melee_weapon(held) || is_command_wand(held) || is_fire_wand(held) {return}
+	// A pickaxe aimed on an enemy in reach swings at it (update_player).
+	if _, on_enemy := pick_swing_target(gs, gs.input.mouse_world); on_enemy {return}
 
 	// Wand: an equipped wand mines the tile under the cursor at any range —
 	// adjacent included — for mana.  Precise cursor aim (and reach) is what the

@@ -3057,7 +3057,7 @@ agent_brief_tells_the_fight :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     brief := agent_write_brief(link, gs)
-    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), blocked or full", "when the hero dies every goal but an act fails with died"}) {
+    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "else the pickaxe, 1 damage to the sword's 2", "the sword in reach (else the pickaxe, a weak blow)", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), blocked or full", "when the hero dies every goal but an act fails with died"}) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
 }
