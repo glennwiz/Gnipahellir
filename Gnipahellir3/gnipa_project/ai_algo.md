@@ -318,21 +318,29 @@ the one below is solid. Moves and their price:
 | jump | a step two up, headroom clear | 2 + `HERO_NAV_JUMP_COST` |
 | drop | off an edge to wherever it lands | 1 + 0.3/tile + `HERO_NAV_HP_COST` per hp; never onto a burn or water, never one that kills or leaves hp under `HERO_LOW_HP_FRAC` |
 | gap | a running jump over open columns, landing up to `HERO_GAP_MAX` over | columns + `HERO_NAV_JUMP_COST` |
-| bridge | a block from the bag set under the next column | 1 + `HERO_NAV_BRIDGE_COST`; at most the blocks in the bag's first block stack |
-| dig | with the pick, or by hand through wood: a tunnel (2 tiles), a step cut up (3), a stair down, one down and one across (3); never a shaft, never the floor under the feet, never a tile beside water or lava | 1 + `HERO_NAV_DIG_COST` per tile dug |
+| bridge | a plain block from the bag (`HERO_BRIDGE_BLOCKS`: of stone, dirt, turf and mossy stone the one with the most to spare past what the queued and running craft goals need of it, `hero_craft_reserve`, never a log, plank, ore or sand; card 159) set under the next column, never into a cell holding a pile | 1 + `HERO_NAV_BRIDGE_COST`; at most that spare, counted over every stack |
+| dig | with the pick, or by hand through wood: a tunnel (2 tiles), a step cut up (3), a stair down, one down and one across (3); never a shaft, never the floor under the feet, never a tile beside water or lava, never the goal tile's own floor | 1 + `HERO_NAV_DIG_COST` per tile dug |
 
 A drop that hurts at all is taken only when no way without one reaches: the
 search runs once with no hurtful drop, and again with them only if that fails
-(card 158). The search ends at the goal tile, or keeps the tile nearest it; an
+(card 158). No walk, step-up, jump or dig stands on a floor a dig of the
+last `HERO_NAV_DUG_BACK` (4) steps on its way takes away; a seeded cave fuzz
+holds the plan to 4, since a shorter look back plans onto cuts 3 and 4 steps
+back (card 159, playtest 127: a stair up cut the floor of
+its own turn back, every plan again the same, and the craft walked west 1500
+frames). The search ends at the goal tile, or keeps the tile nearest it; an
 empty path is `no_route`. A path longer than `HERO_PATH_MAX` keeps its start and is
 planned again from its end. The executor writes only `gs.agent.cmd`: it walks
 toward each step's tile, jumps at a two-high wall or a gap's edge, selects the
 pick (with none, puts a sword or wand away and cuts wood by hand) and mines a
 dig step's tiles from where it stands, selects the block and
-places it for a bridge, and shuts an open window first. It plans again when
+places it for a bridge (a pile come to lie in the cell since: plan again),
+and shuts an open window first. It plans again when
 the path runs out, when the hero lands outside the box between a step's two
 tiles (an edge still holding the body up is inside it), and once after `HERO_GO_REPLAN_S` with no headway; a tile dug
-is headway. `HERO_GO_STUCK_S` with none is `blocked`. A goal tile that burns
+is headway. `HERO_GO_STUCK_S` with none is `blocked`; a goal tile on top of a
+structure (walked through from the side, so not stood on by walking up to it)
+says so (card 159). A goal tile that burns
 or drowns is `hazard` at the start; a solid one means the tile on top of it.
 The ledge row leaves a go alone: its drops are priced already.
 
@@ -349,8 +357,14 @@ not switched off (`{"cmd":"reflexes","potion":false,...}`, `Hero_Reflex`,
   a Sky Egg (`hero_heal_items`, card 156), then not again for
   `HERO_POTION_COOLDOWN_S`;
 - floor_dig: no pick or wand dig of the floor under the body when the fall
-  through it would kill or land in a burn;
+  through it would kill or land in a burn; a body still on another column's
+  floor does not fall (card 159: at x 45.201 the body's edge read into the
+  next column, and its ore was refused as the floor, playtests 127 and 128);
 - rim_dig: no dig of a tile beside water or lava. A weapon's swing is no dig.
+
+A dig refused names itself (`gs.hero.refused_by`, `refused_at`): a work goal
+whose tile a reflex kept the pick off fails `refused: the <reflex> reflex keeps
+the pick off [x,y]` at once, not `blocked` after `HERO_MINE_GIVE_UP_S`.
 - fight_back: hurt, the hero strikes back for `HERO_FIGHT_BACK_S` at the
   nearest enemy of the kind that hurt it (`gs.hurt_by`), the sword in reach or
   the wand at range, unless a verb (a potion) is set or a window is open. It
@@ -389,7 +403,7 @@ with the input a player gives.
 | mine | `tile`, or `item` (+ `near`) | the nearest tile that gives the item round `near` (else the feet), no rim, a tool in the bag that mines it; walks into reach, takes the tool up, holds the button on it until the tile changes |
 | gather | `item`, `count` (1) | piles of it first (a pile lies on the ground: stood in, it is picked up), then the tiles that give it, nearest each time, until the bag holds count; a cut trunk falls and may give more |
 | craft | `item`, `count` (1) | the revealed recipe; walks to its station, opens it (TAB's window for a hand recipe), clicks the card, then CRAFT count times |
-| place | `item`, `at` or `near:"home"` | walks into reach and sets it down; near home walks to the home goal's tile and takes the free tile nearest it that takes the item |
+| place | `item`, `at` or `near:"home"` | walks into reach and sets it down; near home walks to the home goal's tile and takes the free tile nearest it that takes the item; refused in reach, it fails `refused: <the game's own note>` (`place_refusal_full`, the click's note too: the cell, a template's foundation, a machine's gate; card 159) |
 | store | `item`, `count` (all), `at` (else nearest barrel) | drags the bag's stacks of it into the barrel |
 | withdraw | `at`: barrel (+ `item`, `count`), silo, smelter; no `at`: the nearest barrel holding `item` | barrel stacks to the bag; a silo's click empties it (no window); a smelter's ore back |
 | feed | `item` (ore or wood), `count` (all), `at` (else nearest smelter) | drags it onto the furnace's ore or fuel slot |

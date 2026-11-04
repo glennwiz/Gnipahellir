@@ -3,6 +3,7 @@ package game
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
+import "core:math/rand"
 import "core:os"
 import "core:strings"
 import "core:testing"
@@ -1696,6 +1697,36 @@ hero_reflexes_veto_deadly_and_rim_digs :: proc(t: ^testing.T) {
     }
 }
 
+// Card 159 (review): the floor reflex, operand by operand.  A body over the
+// shaft's column and an open one stands on the shaft's floor alone: its dig
+// is refused.  A floor over lava is refused though the fall does not hurt.
+@(test)
+hero_floor_reflex_reads_each_operand :: proc(t: ^testing.T) {
+    for burn in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, .Pickaxe)
+        hx := x0 + 2
+        if burn {
+            gs.player.pos.x = f32(hx) + 0.1
+            set_tile(&gs.world, hx, G + 1, .Air)
+            set_tile(&gs.world, hx, G + 2, .Lava)
+        } else {
+            gs.player.pos.x = f32(hx) + 0.5  // over hx and hx + 1
+            for y in G + 1 ..= G + 12 do set_tile(&gs.world, hx, y, .Air)
+            for y in G ..= G + 12 do set_tile(&gs.world, hx + 1, y, .Air)
+        }
+        exec_test_frames(link, gs, 5)
+        if !burn do gs.player.hp = 3
+        testing.expect(t, gs.player.grounded, "standing")
+        go_test_run(link, gs, fmt.tprintf(`{{"do":"act","mine":[%d,%d],"frames":120}}`, hx, G), 200)
+        testing.expectf(t, is_solid(&gs.world, hx, G), "burn %v: the floor is kept", burn)
+    }
+}
+
 // Under the reflex line with a potion in the bag, the hero drinks one, once.
 @(test)
 hero_drinks_a_potion_under_the_line :: proc(t: ^testing.T) {
@@ -2112,6 +2143,380 @@ hero_plan_spends_no_more_blocks_than_the_bag_holds :: proc(t: ^testing.T) {
     testing.expect(t, bridges(&path) > 2)
 }
 
+// Card 159 (playtest 127: go bridged with Wood_Log from a bag of 90
+// Stone_Block).  A bridge sets down the plain block the bag holds most of,
+// counted over every stack, and never a log or a plank; a bag of those only
+// bridges nothing.  The pit takes more blocks than one stack holds.
+@(test)
+hero_bridge_sets_down_the_commonest_plain_block :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 12 do for y in G ..< G + 26 do set_tile(&gs.world, x, y, .Air)
+    exec_test_frames(link, gs, 5)
+    inv := &gs.player.inventory
+    for &s in inv.slots do s = {}
+    inv.slots[0] = {item = .Wood_Log, count = 20}
+    inv.slots[1] = {item = .Plank, count = 10}
+    testing.expect_value(t, hero_block_slot(gs), -1)
+    inv.slots[2] = {item = .Stone_Block, count = 3}
+    inv.slots[3] = {item = .Dirt, count = 2}
+    inv.slots[4] = {item = .Stone_Block, count = 3}
+    testing.expect_value(t, inv.slots[hero_block_slot(gs)].item, Item.Stone_Block)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 16, G - 1), 60 * 40)
+    work_test_expect_done(t, link, gs, id)
+    for x in x0 + 5 ..= x0 + 12 do testing.expectf(t, get_tile(&gs.world, x, G) == .Air || get_tile(&gs.world, x, G) == .Stone, "x %d: %v", x, get_tile(&gs.world, x, G))
+    testing.expectf(t, inventory_count(inv, .Stone_Block) < 3, "more than one stack set down: %d left", inventory_count(inv, .Stone_Block))
+    testing.expect_value(t, inventory_count(inv, .Dirt), 2)
+    testing.expect_value(t, inventory_count(inv, .Wood_Log), 20)
+    testing.expect_value(t, inventory_count(inv, .Plank), 10)
+}
+
+// Card 159 (review): each plain block bridges, alone in the bag, and none
+// of the others does.
+@(test)
+hero_bridge_blocks_are_the_plain_ones :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    hero_test_arena(gs)
+    inv := &gs.player.inventory
+    for it in Item {
+        for &s in inv.slots do s = {}
+        inv.slots[3] = {item = it, count = 5}
+        plain := it == .Stone_Block || it == .Dirt || it == .Grass_Turf || it == .Mossy_Stone
+        testing.expectf(t, (hero_block_slot(gs) == 3) == plain, "%v bridges: %v", it, hero_block_slot(gs) == 3)
+    }
+}
+
+// Card 159 (playtest 132: a go bridge buried a Dvergr_Forge pile, and mining
+// it back gave the forge).  No block is planned over a pile, nor set down on
+// one that came to lie there after the plan.
+@(test)
+hero_bridge_never_buries_a_pile :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 11 do for y in G ..< G + 26 do set_tile(&gs.world, x, y, .Air)
+    exec_test_frames(link, gs, 5)
+    go_test_give(gs, .Stone_Block, 10)
+    pile := proc(gs: ^Game_State, x, y: int) {
+        gs.world.items[grid_idx(x, y)], gs.world.item_counts[grid_idx(x, y)] = .Dvergr_Forge, 1
+    }
+    from, to := [2]i32{i32(x0), i32(G - 1)}, [2]i32{i32(x0 + 14), i32(G - 1)}
+    path: Hero_Path
+    testing.expect(t, hero_plan(gs, from, to, &path), "the pit bridged")
+    pile(gs, x0 + 5, G)
+    testing.expect(t, !hero_plan(gs, from, to, &path), "not over the pile")
+    gs.world.items[grid_idx(x0 + 5, G)], gs.world.item_counts[grid_idx(x0 + 5, G)] = .None, 0
+
+    // Once the plan is made, a pile lies in the next cell to bridge (put back
+    // each tick, as one held up there would lie): no block goes down on it.
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, to.x, to.y))
+    cell := [2]i32{i32(x0 + 7), i32(G)}
+    path_ := &gs.hero.path
+    due := false
+    for k := 0; k < 60 * 20 && !due; k += 1 {
+        exec_test_frames(link, gs, 1)
+        for st in path_.steps[path_.at:path_.n] do due ||= st.move == .Bridge && st.to + {0, 1} == cell
+    }
+    testing.expect(t, due, "the plan bridges the cell")
+    testing.expect(t, !is_solid(&gs.world, int(cell.x), int(cell.y)), "not yet bridged")
+    buried := false
+    for _ in 0 ..< 120 {
+        if gs.world.item_counts[grid_idx(int(cell.x), int(cell.y))] == 0 do pile(gs, int(cell.x), int(cell.y))
+        exec_test_frames(link, gs, 1)
+        buried ||= is_solid(&gs.world, int(cell.x), int(cell.y))
+    }
+    testing.expect(t, !buried, "no block set down on the pile")
+}
+
+// Card 159 (playtest 127: go 3 dug its own target's floor out, then failed
+// blocked).  A plan never digs the floor of the tile it goes to, and a go into
+// the rock gets there.
+@(test)
+hero_go_never_digs_its_own_goal_floor :: proc(t: ^testing.T) {
+    for d in ([?][2]int{{2, 4}, {4, 6}, {3, 5}, {1, 3}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 5)
+        go_test_give(gs, .Pickaxe, 1)
+        to := [2]i32{i32(x0 + d.x), i32(G - 1 + d.y)}
+        path: Hero_Path
+        testing.expectf(t, hero_plan(gs, {i32(x0), i32(G - 1)}, to, &path), "%v: planned", d)
+        for st in path.steps[:path.n] do if st.move == .Dig {
+            tiles, k := hero_dig_tiles(st.from, st.to)
+            for c in tiles[:k] do testing.expectf(t, c != to + {0, 1}, "%v: step %v>%v digs the goal's floor", d, st.from, st.to)
+        }
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, to.x, to.y), 60 * 30)
+        work_test_expect_done(t, link, gs, id)
+    }
+}
+
+// Card 159 (review): a goal in the rock up and beside a pocket, where the
+// cheapest way up cuts the goal's own floor.  No plan's dig takes it.
+@(test)
+hero_plan_digs_no_goal_floor_from_below :: proc(t: ^testing.T) {
+    for c in ([?][2]i32{{2, 3}, {1, 2}, {2, 2}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        from := [2]i32{i32(x0), i32(G + 8)}
+        to := from + {c.x, -c.y - 1}
+        for p in ([2][2]i32{from, to}) do for y in p.y - 1 ..= p.y do set_tile(&gs.world, int(p.x), int(y), .Air)
+        path: Hero_Path
+        hero_plan(gs, from, to, &path)
+        for st in path.steps[:path.n] do if st.move == .Dig {
+            tiles, k := hero_dig_tiles(st.from, st.to)
+            for q in tiles[:k] do testing.expectf(t, q != to + {0, 1}, "%v: step %v>%v digs the goal's floor", c, st.from, st.to)
+        }
+    }
+}
+
+// Card 159 (review): the bag's blocks count over every stack: two stacks of
+// six bridge a pit that one stack does not.
+@(test)
+hero_bridge_counts_every_stack :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 14 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+    gs.player.inventory.slots[3] = {item = .Stone_Block, count = 6}
+    gs.player.inventory.slots[5] = {item = .Stone_Block, count = 6}
+    path: Hero_Path
+    testing.expect(t, hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 17), i32(G - 1)}, &path), "across on 6 and 6")
+}
+
+// Card 159 (review; the card: never a crafting input): a go bridges with
+// none of the Stone_Block a queued craft still needs, nor does the craft's
+// own walk to its bench.  The Dirt goes down.
+@(test)
+hero_bridge_keeps_what_a_queued_craft_needs :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    reveal_recipe(&gs.progression, .Smelter)
+    go_test_give(gs, .Stone_Block, 10)
+    go_test_give(gs, .Dirt, 6)
+    go_test_give(gs, .Iron_Ore, 2)
+    for x in x0 + 5 ..= x0 + 10 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+    testing.expect_value(t, hero_craft_reserve(gs, .Stone_Block), 0)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}},{{"do":"craft","item":"Smelter"}}]}}`, x0 + 14, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    testing.expect_value(t, hero_craft_reserve(gs, .Stone_Block), 8)
+    for f := 0; f < 60 * 30 && link.goals.slots[0].status != .Done && link.goals.slots[0].status != .Failed; f += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    inv := &gs.player.inventory
+    testing.expectf(t, status == "done", "across: %s %s", status, reason)
+    testing.expectf(t, inventory_count(inv, .Stone_Block) == 10 && inventory_count(inv, .Dirt) < 6, "stone %d, dirt %d", inventory_count(inv, .Stone_Block), inventory_count(inv, .Dirt))
+
+    {
+        // The craft running (the card's item 3): its own walk to the bench
+        // across the chasm bridges with the Dirt, and the Smelter is made of
+        // the Stone.
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 5)
+        reveal_recipe(&gs.progression, .Smelter)
+        go_test_give(gs, .Stone_Block, 10)
+        go_test_give(gs, .Dirt, 6)
+        go_test_give(gs, .Iron_Ore, 2)
+        for x in x0 + 5 ..= x0 + 10 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x0 + 14, G - 1, .Crafting_Bench)
+        id := work_test_run(t, link, gs, `{"do":"craft","item":"Smelter"}`, 60 * 40)
+        work_test_expect_done(t, link, gs, id)
+        inv := &gs.player.inventory
+        testing.expectf(t, inventory_count(inv, .Smelter) == 1 && inventory_count(inv, .Stone_Block) == 2 && inventory_count(inv, .Dirt) < 6, "smelter %d, stone %d, dirt %d", inventory_count(inv, .Smelter), inventory_count(inv, .Stone_Block), inventory_count(inv, .Dirt))
+    }
+}
+
+// Card 159 (review): only a craft goal still to run holds blocks back.  A
+// place of the same item, a craft done, and a craft of a recipe not yet
+// revealed hold none.
+@(test)
+hero_craft_reserve_counts_only_live_crafts :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}},{{"do":"craft","item":"Smelter"}},{{"do":"place","item":"Smelter","at":[%d,%d]}}]}}`, x0 + 14, G - 1, x0 + 3, G - 1))
+    testing.expect_value(t, link.goals.n, 3)
+    testing.expect_value(t, hero_craft_reserve(gs, .Stone_Block), 0)  // the Smelter not revealed: no recipe to read
+    reveal_recipe(&gs.progression, .Smelter)
+    testing.expect_value(t, hero_craft_reserve(gs, .Stone_Block), 8)  // the craft's, not the place's
+    link.goals.slots[1].status = .Done
+    testing.expect_value(t, hero_craft_reserve(gs, .Stone_Block), 0)
+}
+
+// Card 159 (review): a queued craft of count 2 holds back twice its recipe.
+// Two Smelters want 16 Stone of 18: 2 to spare, fewer than the Dirt the bridge
+// leaves, so the 6-wide chasm is bridged with Dirt and all 18 Stone kept.
+@(test)
+hero_bridge_keeps_what_a_count_2_craft_needs :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    reveal_recipe(&gs.progression, .Smelter)
+    go_test_give(gs, .Stone_Block, 18)
+    go_test_give(gs, .Dirt, 6)
+    go_test_give(gs, .Iron_Ore, 4)
+    for x in x0 + 5 ..= x0 + 10 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}},{{"do":"craft","item":"Smelter","count":2}}]}}`, x0 + 14, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    testing.expect_value(t, hero_craft_reserve(gs, .Stone_Block), 16)
+    for f := 0; f < 60 * 30 && link.goals.slots[0].status != .Done && link.goals.slots[0].status != .Failed; f += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    inv := &gs.player.inventory
+    testing.expectf(t, status == "done", "across: %s %s", status, reason)
+    testing.expectf(t, inventory_count(inv, .Stone_Block) == 18 && inventory_count(inv, .Dirt) < 6, "stone %d, dirt %d", inventory_count(inv, .Stone_Block), inventory_count(inv, .Dirt))
+}
+
+// Card 159 (playtest 127: craft walked west for 1500 frames, a stair up
+// cutting the floor of its own turn back, every plan again the same).  No
+// step of a plan stands on a floor an earlier dig of the same plan takes
+// away (a bridge sets its own floor down).
+@(test)
+hero_plan_stands_on_no_floor_it_digs :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    // A pocket deep in the rock, and a cave up and right of it with no floor
+    // to cut a stair on.
+    for y in G + 9 ..= G + 10 do set_tile(&gs.world, x0, y, .Air)
+    for y in G + 7 ..= G + 11 do set_tile(&gs.world, x0 + 1, y, .Air)
+    to := [2]i32{i32(x0 + 3), i32(G - 1)}
+    path: Hero_Path
+    hero_plan(gs, {i32(x0), i32(G + 10)}, to, &path)
+    testing.expect(t, path.n > 0, "a plan, if only as far as the search goes")
+    for st, k in path.steps[:path.n] do if st.move != .Bridge {
+        for e in path.steps[:k] do if e.move == .Dig {
+            tiles, m := hero_dig_tiles(e.from, e.to)
+            for c in tiles[:m] do testing.expectf(t, c != st.to + {0, 1}, "step %d %v>%v stands on what %v>%v digs", k, st.from, st.to, e.from, e.to)
+        }
+    }
+}
+
+// Card 159: the nav's own floors.  Random caves cut in the arena's rock, a
+// plan from a pocket to a cave: no walk, step-up, jump or dig stands on a
+// floor a dig of the 4 steps before it takes away.
+@(test)
+hero_plan_keeps_its_own_floors_in_random_caves :: proc(t: ^testing.T) {
+    r := rand.create(159)
+    gen := rand.default_random_generator(&r)
+    checked := 0
+    for _ in 0 ..< 160 {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        open := 0.25 + 0.25 * rand.float32(gen)
+        for x in x0 - 16 ..= x0 + 20 do for y in G - 9 ..= G + 11 {
+            set_tile(&gs.world, x, y, .Air if y < G - 6 || rand.float32(gen) < open else .Stone)
+        }
+        // A pocket to start in.
+        from := [2]i32{i32(x0 + rand.int_max(8, gen)), i32(G + 2 + rand.int_max(8, gen))}
+        for y in from.y - 1 ..= from.y do set_tile(&gs.world, int(from.x), int(y), .Air)
+        set_tile(&gs.world, int(from.x), int(from.y + 1), .Stone)
+        to := [2]i32{i32(x0 - 12 + rand.int_max(28, gen)), i32(G - 7)}
+        path: Hero_Path
+        hero_plan(gs, from, to, &path)
+        checked += plan_test_own_floors(t, &path)
+    }
+    testing.expectf(t, checked > 200, "steps checked: %d", checked)
+}
+
+// Playtest 127's turn back: a stair dug up and right, a jump back left onto
+// the stair's own cut.  The plan does not take it.
+@(test)
+hero_plan_jumps_onto_no_floor_it_dug :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    x, y := i32(x0), i32(G + 6)
+    for yy in y - 1 ..= y do set_tile(&gs.world, int(x + 2), int(yy), .Air)      // the pocket
+    for yy in y - 3 ..= y do set_tile(&gs.world, int(x), int(yy), .Air)          // a shaft
+    for yy in y - 3 ..= y - 2 do set_tile(&gs.world, int(x + 1), int(yy), .Air)  // the room on its shelf
+    path: Hero_Path
+    hero_plan(gs, {x + 2, y}, {x + 1, y - 2}, &path)
+    testing.expect(t, plan_test_own_floors(t, &path) > 0, "a plan, if only as far as the search goes")
+}
+
+// Each walk, step-up, jump or dig of the path: none stands on a floor a dig
+// of the 4 steps before it takes away (a literal, not HERO_NAV_DUG_BACK: a
+// shorter look back plans onto cuts 3 and 4 steps back).  The steps checked.
+@(private="file")
+plan_test_own_floors :: proc(t: ^testing.T, path: ^Hero_Path) -> (checked: int) {
+    for st, k in path.steps[:path.n] do if st.move == .Walk || st.move == .Jump || st.move == .Dig {
+        for e in path.steps[max(0, k - 4):k] do if e.move == .Dig {
+            tiles, m := hero_dig_tiles(e.from, e.to)
+            for c in tiles[:m] do testing.expectf(t, c != st.to + {0, 1}, "step %d %v>%v stands on what %v>%v digs", k, st.from, st.to, e.from, e.to)
+        }
+        checked += 1
+    }
+    return
+}
+
+// Card 159: the nav's look back stops at the start.  What the nav buffers
+// hold for the start tile is an earlier plan's: here a dig of the floor the
+// first step walks onto.  It does not refuse the walk.
+@(test)
+hero_plan_reads_no_earlier_plan_behind_its_start :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    from := [2]i32{i32(x0), i32(G - 1)}
+    o := [2]i32{clamp(from.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(from.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
+    idx := proc(o, p: [2]i32) -> int { return int(p.y - o.y) * HERO_NAV_W + int(p.x - o.x) }
+    n := &gs.hero.nav
+    for f in ([2][2]i32{from + {1, 1}, from + {-1, 1}}) {
+        n.parent[idx(o, from)], n.move[idx(o, from)] = i16(idx(o, f)), .Dig
+        n.parent[idx(o, f)], n.move[idx(o, f)] = i16(idx(o, f)), .Dig
+        path: Hero_Path
+        to := from + {3 if f.x > from.x else -3, 0}
+        reached := hero_plan(gs, from, to, &path)
+        testing.expectf(t, reached && path.n == 3 && path.steps[0].move == .Walk, "to %v: reached %v, %d steps", to, reached, path.n)
+    }
+}
+
+// Card 159 (coordinator, from card 158's sweep): a drop is never planned
+// into a burn, nor to a stand over water; the same pit dry is dropped into.
+@(test)
+hero_plan_drops_into_no_burn_or_water :: proc(t: ^testing.T) {
+    for under in ([3]Tile_Type{.Air, .Lava, .Water}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        // A pit 4 deep and too wide to jump: the only way in is a drop down
+        // its left column.
+        for x in x0 + 3 ..= x0 + 14 do for y in G ..< G + 4 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x0 + 3, G + 3, under)
+        path: Hero_Path
+        reached := hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 5), i32(G + 3)}, &path)
+        testing.expectf(t, reached == (under == .Air), "%v under the drop: reached %v", under, reached)
+    }
+}
+
 // A home marked on another level is not this one's: home goes to the spawn.
 @(test)
 hero_home_marked_on_another_level_is_not_used :: proc(t: ^testing.T) {
@@ -2513,7 +2918,7 @@ hero_work_goals_fail_with_reasons :: proc(t: ^testing.T) {
     id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"store","item":"Gold_Ore","at":[%d,%d]}}`, x0 + 3, G - 1), 60)
     work_test_expect_failed(t, link, gs, id, "no_item")
     id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Stone_Block","at":[%d,%d]}}`, x0 + 2, G), 60)
-    work_test_expect_failed(t, link, gs, id, "out_of_reach")
+    work_test_expect_failed(t, link, gs, id, "refused: Something is already there")  // card 159: once out_of_reach (playtest 129)
     // A block on top of a stone column nine high: its top is safe ground in
     // reach, but no walk gets up there.
     for y in G - 9 ..< G do set_tile(&gs.world, x0 + 8, y, .Stone)
@@ -2570,6 +2975,118 @@ hero_work_picks_its_tool :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, int(stone.x), int(stone.y)), Tile_Type.Air)
     testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand_Silver)
     testing.expect_value(t, hero_feet(&gs.player), feet)
+}
+
+// Card 159 (playtest 127: a mine and a gather of the Iron_Ore beside the
+// hero's feet failed "gave nothing", the hero standing still).  At x 45.201
+// the body's edge reads into the ore's column, and the floor_dig reflex took
+// the ore for the floor over the cavern; but the hero stood on the stone
+// beside it, and a body still on another column's floor does not fall: the
+// ore is mined.  So too the stone right under the body at x 96.267 in
+// playtest 128 (the card's item 5: it was the same refusal, not a drop lost
+// into the void; mining banks the block).  A tile a reflex does keep the pick
+// off (rim_dig: beside water) fails at once, naming the reflex.
+@(test)
+hero_mine_names_the_reflex_that_refuses_it :: proc(t: ^testing.T) {
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        go_test_give(gs, .Pickaxe, 1)
+        for y in G + 1 ..< G + 12 do set_tile(&gs.world, x0, y, .Air)  // the cavern under the stone
+        gs.player.hp = 2
+        gs.player.pos.x = f32(x0) + 0.267  // over x0, and x0+1's floor
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0, G), 60)
+        work_test_expect_done(t, link, gs, id)
+        testing.expectf(t, gs.player.hp == 2 && hero_feet_row(&gs.player) == i32(G - 1), "no fall: hp %d, feet row %d", gs.player.hp, hero_feet_row(&gs.player))
+    }
+    for rim in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        go_test_give(gs, .Pickaxe, 1)
+        ore := [2]i32{i32(x0 + 1), i32(G)}
+        set_tile(&gs.world, int(ore.x), int(ore.y), .Iron_Ore)
+        if rim {
+            set_tile(&gs.world, x0 + 2, G, .Water)
+        } else {
+            for y in G + 1 ..< G + 12 do set_tile(&gs.world, x0 + 1, y, .Air)  // the cavern under the ore
+            gs.player.hp = 2
+            _, hurts, _ := hero_dig_fall(&gs.world, ore)
+            testing.expectf(t, hurts >= gs.player.hp, "the drop under the ore kills: %d", hurts)
+        }
+        gs.player.pos.x = f32(x0) + 0.21  // the body's edge in the ore's column, its feet on x0's
+        testing.expect_value(t, i32(gs.player.pos.x + PLAYER_W - 0.001), ore.x)
+        hp := gs.player.hp
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 60)
+        if rim {
+            status, reason := go_test_status(link, gs, id)
+            testing.expectf(t, status == "failed" && reason == fmt.tprintf("refused: the rim_dig reflex keeps the pick off [%d,%d]", ore.x, ore.y), "rim: %s %s", status, reason)
+            // The water gone, the same tile is mined.
+            set_tile(&gs.world, x0 + 2, G, .Stone)
+            id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 120)
+            work_test_expect_done(t, link, gs, id)
+        } else {
+            work_test_expect_done(t, link, gs, id)
+            testing.expectf(t, gs.player.hp == hp && hero_feet_row(&gs.player) == i32(G - 1), "no fall: hp %d, feet row %d", gs.player.hp, hero_feet_row(&gs.player))
+        }
+    }
+    // A refusal is of its own tile: an act's dig of the floor over the
+    // cavern refused on its last tick does not fail the mine of a block
+    // beside the hero that follows it.  The act's dig is the floor_dig
+    // reflex's to refuse, and it says so in the brain (a mine goal never
+    // stands on its own target, so only an act meets this refusal).
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    go_test_give(gs, .Pickaxe, 1)
+    for y in G + 1 ..< G + 12 do set_tile(&gs.world, x0, y, .Air)
+    gs.player.hp = 2
+    block := [2]i32{i32(x0 + 1), i32(G - 1)}
+    set_tile(&gs.world, int(block.x), int(block.y), .Stone)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","mine":[%d,%d],"frames":5}},{{"do":"mine","tile":[%d,%d]}}]}}`, x0, G, block.x, block.y))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[1].(json.Float))
+    named := false
+    for k := 0; k < 120 && agent_goals_busy(&link.goals); k += 1 {
+        exec_test_frames(link, gs, 1)
+        named ||= gs.hero.refused && gs.hero.refused_by == .Floor_Dig && gs.hero.refused_at == {i32(x0), i32(G)}
+    }
+    testing.expect(t, named, "the floor_dig reflex named on the act's dig")
+    testing.expect_value(t, get_tile(&gs.world, x0, G), Tile_Type.Stone)
+    work_test_expect_done(t, link, gs, id)
+}
+
+// Card 159 (playtest 128: home marked on the bench failed only "blocked").
+// A structure is walked through from the side, so the top of one on the
+// floor is not stood on by walking up to it: the go fails blocked, naming
+// the structure.  On a pillar, jumped onto from beside it, it is reached.
+@(test)
+hero_home_on_a_structure_says_so :: proc(t: ^testing.T) {
+    for raised in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        bench := [2]i32{i32(x0 + 5), i32(G - 2 if raised else G - 1)}
+        set_tile(&gs.world, int(bench.x), int(bench.y), .Crafting_Bench)
+        if raised do set_tile(&gs.world, x0 + 5, G - 1, .Stone)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"home","at":[%d,%d]}}`, bench.x, bench.y))
+        id := work_test_run(t, link, gs, `{"do":"home"}`, 60 * 8)
+        status, reason := go_test_status(link, gs, id)
+        if raised {
+            testing.expectf(t, status == "done", "on the pillar: %s %s", status, reason)
+        } else {
+            want := fmt.tprintf("blocked: [%d,%d] stands on a Crafting_Bench, which the body walks through from the side", bench.x, bench.y - 1)
+            testing.expectf(t, status == "failed" && reason == want, "on the floor: %s %s", status, reason)
+        }
+    }
 }
 
 // A mine by item finds the nearest tile that gives it, round near, and never
@@ -2715,7 +3232,9 @@ hero_mines_one_log_from_a_falling_trunk :: proc(t: ^testing.T) {
     testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 1)
 }
 
-// A tile the reflexes will not let it dig gives nothing: the goal gives up.
+// A tile the reflexes will not let it dig fails refused, the reflex named
+// (card 159; it was blocked, "gave nothing"); one that gives nothing for
+// another cause, put back as soon as it goes, gives up blocked.
 @(test)
 hero_mine_gives_up_on_a_tile_that_gives_nothing :: proc(t: ^testing.T) {
     gs, link := exec_test_world()
@@ -2728,8 +3247,17 @@ hero_mine_gives_up_on_a_tile_that_gives_nothing :: proc(t: ^testing.T) {
     go_test_give(gs, .Pickaxe, 1)
     exec_test_frames(link, gs, 5)
     id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 3, G - 1), 900)
-    work_test_expect_failed(t, link, gs, id, "blocked")
+    work_test_expect_failed(t, link, gs, id, "refused: the rim_dig reflex")
     testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Stone)
+
+    set_tile(&gs.world, x0 + 4, G - 1, .Air)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"mine","tile":[%d,%d]}}]}}`, x0 + 3, G - 1))
+    id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    for k := 0; k < 900 && agent_goals_busy(&link.goals); k += 1 {
+        exec_test_frames(link, gs, 1)
+        set_tile(&gs.world, x0 + 3, G - 1, .Stone)  // put back as soon as it goes
+    }
+    work_test_expect_failed(t, link, gs, id, "blocked: the Stone")
 }
 
 // A full bag takes no pile in: the gather says so.
@@ -2939,6 +3467,100 @@ hero_gather_lets_a_pile_gone_go :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Air)
 }
 
+// Card 159 (playtest 129: a place goal failed "out_of_reach: Something is
+// already there").  A refused place says the game's own words, labelled
+// refused: the cell's refusal, the foundation a templated structure wants,
+// or the machine's gate, one proc (place_refusal_full) for the click's note
+// and the hero's goal.  The click shows the note as before: a cell refusal
+// once for a held sweep, a gate each click.
+@(test)
+hero_place_refusals_say_the_games_words :: proc(t: ^testing.T) {
+    Case :: struct{item: Item, level: int, deep, miner, full: bool, want: string}
+    tpl_want := fmt.tprintf("The %s needs its ", structure_templates[0].name)
+    for c in ([?]Case{
+        {.Auto_Miner, LEVEL_SURFACE, false, false, false, "The Auto-Miner only wakes inside a spawned dimension"},
+        {.Auto_Miner, LEVEL_DIMENSION, false, true, false, "One miner per expedition - reclaim the working one first"},
+        {.Auto_Miner, LEVEL_DIMENSION, false, false, false, ""},
+        {.Auto_Miner, LEVEL_SURFACE, false, true, false, "The Auto-Miner only wakes inside a spawned dimension"},  // the level first
+        {.Silo, LEVEL_DIMENSION, false, false, false, "The silo needs lasting ground - this world will collapse"},
+        {.Silo, LEVEL_SURFACE, false, false, true, "Every silo is spoken for - reclaim one first"},
+        {.Silo, LEVEL_SURFACE, false, false, false, ""},
+        {.Silo, LEVEL_DIMENSION, false, false, true, "The silo needs lasting ground - this world will collapse"},  // the level first
+        {.Barrel, LEVEL_DIMENSION, false, false, false, "The chest needs lasting ground - this world will collapse"},
+        {.Rune_Coffer, LEVEL_SURFACE, false, false, true, "Every container is spoken for - reclaim one first"},
+        {.Barrel, LEVEL_SURFACE, false, false, false, ""},
+        {.Barrel, LEVEL_DIMENSION, false, false, true, "The chest needs lasting ground - this world will collapse"},  // the level first
+        {.Gem_Replicator, LEVEL_SURFACE, false, false, false, "Gems take root only under pressure - carry it deeper"},
+        {.Gem_Replicator, LEVEL_SKY, true, false, false, "Gems take root only under pressure - carry it deeper"},
+        {.Gem_Replicator, LEVEL_SURFACE, true, false, false, ""},
+        {.Sky_Altar, LEVEL_SURFACE, false, false, false, tpl_want},
+    }) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        if c.deep {
+            // A pocket under the replicator's line, the hero in it.
+            G = REPLICATOR_DEPTH_Y + 1  // the place cell on the line itself
+            for x in x0 - 2 ..= x0 + 4 do for y in G - 3 ..= G {
+                set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+            }
+            gs.player.pos = {f32(x0) + 0.1, f32(G) - PLAYER_H}
+        }
+        gs.level_index = c.level
+        gs.dimension.miner.active = c.miner
+        if c.full {
+            for &s in gs.sim.silos do s.active = true
+            for &b in gs.sim.barrels do b.active = true
+        }
+        why, cell := place_refusal_full(gs, c.item, x0 + 2, G - 1)
+        testing.expectf(t, !cell && strings.has_prefix(why, c.want) && (c.want == "") == (why == ""), "%v: %q", c, why)
+    }
+    {
+        // The altar on its built foundation: nothing to say.
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.level_index = LEVEL_SURFACE
+        for dx in -2 ..= 2 do set_tile(&gs.world, x0 + 3 + dx, G - 1, .Stone)
+        for dx in -1 ..= 1 do set_tile(&gs.world, x0 + 3 + dx, G - 2, .Wood)
+        why, cell := place_refusal_full(gs, .Sky_Altar, x0 + 3, G - 3)
+        testing.expectf(t, why == "" && !cell, "the altar on its foundation: %q %v", why, cell)
+        // Aimed at a stone cell: the cell's refusal comes before the
+        // foundation's, and before a machine's gate.
+        why, cell = place_refusal_full(gs, .Sky_Altar, x0 + 3, G - 1)
+        testing.expectf(t, cell && why == "Something is already there", "the altar on stone: %q %v", why, cell)
+        gs.level_index = LEVEL_SKY
+        why, cell = place_refusal_full(gs, .Gem_Replicator, x0 + 3, G - 1)
+        testing.expectf(t, cell && why == "Something is already there", "the replicator on stone: %q %v", why, cell)
+    }
+
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    why, cell := place_refusal_full(gs, .Stone_Block, x0 + 2, G)
+    testing.expectf(t, cell && why == "Something is already there", "the floor: %q %v", why, cell)
+    // The goal: the gate's words.
+    go_test_give(gs, .Gem_Replicator, 1)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Gem_Replicator","at":[%d,%d]}}`, x0 + 2, G - 1), 60)
+    work_test_expect_failed(t, link, gs, id, "refused: Gems take root only under pressure - carry it deeper")
+    // The click: the gate's note each click, the cell's once.
+    notes := proc(gs: ^Game_State, text: string) -> (n: int) {
+        for k in 0 ..< gs.notify.count do if string(gs.notify.items[k].text[:gs.notify.items[k].len]) == text do n += 1
+        return
+    }
+    gs.player.inventory.selected = hero_item_slot(gs, .Gem_Replicator)
+    for _ in 0 ..< 2 do eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(x0 + 2), i32(G - 1)}})
+    process_events(gs)
+    testing.expect_value(t, notes(gs, "Gems take root only under pressure - carry it deeper"), 2)
+    for _ in 0 ..< 2 do eq_push(&gs.events, Event{type = .Place_Request, tile = {i32(x0 + 2), i32(G)}})
+    process_events(gs)
+    testing.expect_value(t, notes(gs, "Something is already there"), 1)
+}
+
 // A place clicked that does not take, whatever the cause, fails after a few
 // looks rather than waiting on it.
 @(test)
@@ -2957,7 +3579,7 @@ hero_place_that_does_not_take_fails :: proc(t: ^testing.T) {
         exec_test_frames(link, gs, 1)
         set_tile(&gs.world, at.x, at.y, .Air)  // taken back as soon as set
     }
-    work_test_expect_failed(t, link, gs, id, "out_of_reach")
+    work_test_expect_failed(t, link, gs, id, "refused: the game refused")
 }
 
 // Home walled in tight: no tile round it takes the item, and the goal says so.
