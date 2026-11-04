@@ -187,10 +187,10 @@ a_stack_on_ground_still_holds_a_hung_beam :: proc(t: ^testing.T) {
     testing.expect_value(t, get_tile(&gs.world, UX + 2, UY - 1), Tile_Type.Wood)
 }
 
-// A hoard left floating stands, but it is no ground for anything else.
+// A hoard left floating (a coffer: a barrel falls, card 167) stands, but it is no ground for anything else.
 @(test)
 a_floating_hoard_holds_no_beam_up :: proc(t: ^testing.T) {
-    gs := under_site(.Barrel); defer free(gs)
+    gs := under_site(.Rune_Coffer); defer free(gs)
     barrel_on_placed(gs, {UX, UY})
     barrel_at(gs, gs.level_index, {UX, UY}).slots[0] = {.Dirt, 5}
     set_tile(&gs.world, UX, UY + 1, .Void)
@@ -199,7 +199,7 @@ a_floating_hoard_holds_no_beam_up :: proc(t: ^testing.T) {
     set_tile(&gs.world, UX + 2, UY + 1, .Stone)
     eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX + 2, UY + 1}})
     under_frames(gs, 120)
-    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Barrel)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Rune_Coffer)
     testing.expect_value(t, get_tile(&gs.world, UX + 1, UY), Tile_Type.Void)
     testing.expect_value(t, get_tile(&gs.world, UX + 2, UY), Tile_Type.Void)
 }
@@ -323,7 +323,7 @@ a_long_chain_of_pieces_comes_down_in_one_call :: proc(t: ^testing.T) {
 // Card 106: the hoard stays when its ground goes.  A beam hung on it must not.
 @(private = "file")
 under_hoard_site :: proc() -> ^Game_State {
-    gs := under_site(.Barrel)
+    gs := under_site(.Rune_Coffer)
     barrel_on_placed(gs, {UX, UY})
     barrel_at(gs, gs.level_index, {UX, UY}).slots[0] = {.Dirt, 5}
     return gs
@@ -336,7 +336,7 @@ a_beam_on_a_hoard_falls_when_the_ground_goes :: proc(t: ^testing.T) {
     set_tile(&gs.world, UX + 2, UY, .Wood)
     eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX, UY + 1}})
     under_frames(gs, 120)
-    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Barrel)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Rune_Coffer)
     testing.expect_value(t, get_tile(&gs.world, UX + 1, UY), Tile_Type.Void)
     testing.expect_value(t, get_tile(&gs.world, UX + 2, UY), Tile_Type.Void)
 }
@@ -362,7 +362,7 @@ a_beam_on_a_hoard_falls_when_a_piece_under_it_falls :: proc(t: ^testing.T) {
     set_tile(&gs.world, UX + 1, UY, .Wood)
     eq_push(&gs.events, Event{type = .Tile_Mined, source = PLAYER_ID, tile = {UX, UY + 2}})
     under_frames(gs, 120)
-    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Barrel)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Rune_Coffer)
     testing.expect_value(t, get_tile(&gs.world, UX + 1, UY), Tile_Type.Void)
 }
 
@@ -444,10 +444,57 @@ a_turret_comes_down_in_parts :: proc(t: ^testing.T) {
     testing.expect_value(t, ground_count(&gs.world, .Flame_Head), 1)
 }
 
-// A hoard is too heavy to break, under a pick or here; empty, it falls.
+// Glenn, 2026-11-04: a loaded barrel falls like a bench, at once, and every
+// stored stack lands as a ground pile beside the barrel's own item.
 @(test)
-a_loaded_hoard_stands_until_it_is_empty :: proc(t: ^testing.T) {
+a_loaded_barrel_falls_and_spills :: proc(t: ^testing.T) {
     gs := under_site(.Barrel); defer free(gs)
+    tile := [2]i32{UX, UY}
+    barrel_on_placed(gs, tile)
+    b := barrel_at(gs, gs.level_index, tile)
+    b.slots[0] = {.Leaf, 6}
+    b.slots[3] = {.Wood_Log, 40}
+    b.slots[5] = {.Leaf, 2}
+    smash_tile(gs, UX, UY + 1)
+    under_frames(gs, 1)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Void)
+    testing.expect(t, barrel_at(gs, gs.level_index, tile) == nil, "the record goes with the tile")
+    under_frames(gs)
+    expect_landed(t, gs, terrain_table[.Barrel].drop_item)
+    testing.expect_value(t, ground_count(&gs.world, .Leaf), 8)
+    testing.expect_value(t, ground_count(&gs.world, .Wood_Log), 40)
+    when GAME_DEBUG {  // a release build keeps no action.log
+        testing.expect(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]), "undermined: spills 48"), "action.log names the spill")
+    }
+}
+
+// A silo holds wide counts: past a ground stack, they split over cells.
+@(test)
+a_loaded_silo_falls_and_spills :: proc(t: ^testing.T) {
+    gs := under_site(.Silo); defer free(gs)
+    tile := [2]i32{UX, UY}
+    silo_on_placed(gs, tile)
+    s := silo_at(gs, gs.level_index, tile)
+    silo_add(s, .Leaf, 300)
+    silo_add(s, .Wood_Log, 7)
+    smash_tile(gs, UX, UY + 1)
+    under_frames(gs, 1)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Void)
+    testing.expect(t, silo_at(gs, gs.level_index, tile) == nil, "the record goes with the tile")
+    under_frames(gs)
+    testing.expect_value(t, ground_count(&gs.world, terrain_table[.Silo].drop_item), 1)
+    testing.expect_value(t, ground_count(&gs.world, .Leaf), 300)
+    testing.expect_value(t, ground_count(&gs.world, .Wood_Log), 7)
+    when GAME_DEBUG {
+        testing.expect(t, strings.contains(string(gs.debug_log.buf[:gs.debug_log.pos]), "undermined: spills 307"), "action.log names the spill")
+    }
+}
+
+// Only the barrel and the silo fall loaded: a coffer is a hoard too heavy to
+// break, under a pick or here; empty, it falls.
+@(test)
+a_loaded_coffer_stands_until_it_is_empty :: proc(t: ^testing.T) {
+    gs := under_site(.Rune_Coffer); defer free(gs)
     tile := [2]i32{UX, UY}
     barrel_on_placed(gs, tile)
     b := barrel_at(gs, gs.level_index, tile)
@@ -455,12 +502,12 @@ a_loaded_hoard_stands_until_it_is_empty :: proc(t: ^testing.T) {
     smash_tile(gs, UX, UY + 1)
     gs.notify.count = 0
     under_frames(gs)
-    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Barrel)
+    testing.expect_value(t, get_tile(&gs.world, UX, UY), Tile_Type.Rune_Coffer)
     testing.expect_value(t, gs.notify.count, 0)  // no refusal every frame
 
     b.slots[0] = {}
     under_frames(gs)
-    expect_landed(t, gs, .Barrel)
+    expect_landed(t, gs, terrain_table[.Rune_Coffer].drop_item)
     testing.expect(t, barrel_at(gs, gs.level_index, tile) == nil, "the record goes with the tile")
 }
 
