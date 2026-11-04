@@ -5,4 +5,4 @@ State of the house. A dated snapshot: check the board and git log before relying
 - Code: master at 5624aae. Tests are green. Branch cards holds cards 9-16, not yet merged. Work there lands through the coordinator.
 - Machine: Arch Linux with Odin dev-2026-10. Nothing has been tried on Windows lately.
 - Decisions are in Gnipahellir3/gnipa_project/design_review.md section 6.
-- Agent runs: tools/agent_play.sh on port 7777. Never disturb a live one.
+- Agent runs: `build/gnipa --agent-run --port 7777 --seed N` from the agent checkout, one at a time. Never disturb a live one.
