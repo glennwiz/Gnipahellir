@@ -2975,6 +2975,19 @@ agent_brief_says_how_to_aim_within_a_tile :: proc(t: ^testing.T) {
     }
 }
 
+// The brief tells the fight goal, its failures, the fight_back reflex and the
+// work goals' unsafe.
+@(test)
+agent_brief_tells_the_fight :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    brief := agent_write_brief(link, gs)
+    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "unreachable, unsafe, blocked or full"}) {
+        testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
+    }
+}
+
 // Over the socket: a goal's end comes unasked, ahead of the next reply, and a
 // client that goes takes its queue with it.
 @(test)
@@ -3302,7 +3315,7 @@ agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
     link.recording = true
 
     agent_handle_line(link, gs, `{"cmd":"reflexes","potion":false,"rim_dig":false}`)
-    testing.expect_value(t, agent_test_reply(link), `{"re":"reflexes","ok":true,"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false}}` + "\n")
+    testing.expect_value(t, agent_test_reply(link), `{"re":"reflexes","ok":true,"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false,"fight_back":true}}` + "\n")
     testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})
     agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":true,"swim":false}`)
     testing.expect(t, strings.contains(agent_test_reply(link), "swim is not a reflex"))
@@ -3334,7 +3347,7 @@ agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
     testing.expect(t, read_err == nil)
     defer delete(data)
     text := string(data)
-    testing.expect(t, strings.contains(text, `"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false}`))
+    testing.expect(t, strings.contains(text, `"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false,"fight_back":true}`))
     testing.expect(t, strings.contains(text, `"home":[40,30],"level":`))
     testing.expect(t, strings.contains(text, `"home":null`))
     testing.expect(t, strings.contains(text, `"kind":"go"`) && strings.contains(text, `"kind":"home"`))

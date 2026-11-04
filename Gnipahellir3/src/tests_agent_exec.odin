@@ -1021,12 +1021,16 @@ hero_fight_swings_at_a_human_pace :: proc(t: ^testing.T) {
     hero_test_tick(link, gs)
     testing.expect(t, gs.input.mine && !gs.input.move_right, "the wand needs no reach")
     gs.enemies.data[v].pos.x = f32(x0) + HERO_WAND_RANGE + 1.5
-    closed := false
-    for _ in 0 ..< 30 {
+    closed, fired := false, false
+    for _ in 0 ..< 60 {
         hero_test_tick(link, gs)
-        closed ||= gs.input.move_right && gs.input.mine
+        out := gs.enemies.data[v].pos.x - gs.player.pos.x > HERO_WAND_RANGE + 1
+        if out do testing.expect(t, !gs.input.mine, "no shot wasted out of range")
+        closed ||= out && gs.input.move_right
+        fired ||= gs.input.mine
     }
-    testing.expect(t, closed, "out of wand range it closes in, firing")
+    testing.expect(t, closed, "out of wand range it closes in")
+    testing.expect(t, fired, "in range it fires")
 }
 
 // A goal walked to a burn gives up, a jump over a pit is no walk off it, and
@@ -1245,8 +1249,9 @@ hero_flight_from_a_live_vargr_holds :: proc(t: ^testing.T) {
     testing.expect_value(t, paused_goal_moves, 0)
 }
 
-// Cornered at a drop with a threat coming: a fall that leaves the hero
-// standing is taken, a fall that would kill sends it past the threat instead.
+// Cornered at a drop with a threat coming: a fall that costs less than the
+// Vargr's blow is taken, a fall that would kill sends it past the threat
+// instead (one that only costs more is card 140's, with the Builder).
 @(test)
 hero_cornered_at_a_drop_is_never_frozen :: proc(t: ^testing.T) {
     Case :: enum { Survivable, Lethal, Burn }
@@ -1256,7 +1261,8 @@ hero_cornered_at_a_drop_is_never_frozen :: proc(t: ^testing.T) {
         defer free(gs)
         defer free(link)
         x0, G := hero_test_arena(gs)
-        for x in x0 - 12 ..= x0 - 1 do for y in G ..< G + 10 do set_tile(&gs.world, x, y, .Air)
+        depth := 6 if c == .Survivable else 10  // six: a fall of 1 hp, under the Vargr's 2
+        for x in x0 - 12 ..= x0 - 1 do for y in G ..< G + depth do set_tile(&gs.world, x, y, .Air)
         if c == .Burn do for x in x0 - 12 ..= x0 - 1 do set_tile(&gs.world, x, G + 9, .Lava)
         gs.player.pos.x = f32(x0) + 0.05
         exec_test_frames(link, gs, 10)
@@ -1287,7 +1293,7 @@ hero_cornered_at_a_drop_is_never_frozen :: proc(t: ^testing.T) {
             testing.expect_value(t, gs.hero.break_dir, 0)  // past it, the run is plain flight again
         } else {
             exec_test_frames(link, gs, 90)
-            testing.expect(t, gs.player.pos.y + PLAYER_H > f32(G + 9), "it took the drop")
+            testing.expect(t, gs.player.pos.y + PLAYER_H > f32(G + depth - 1), "it took the drop")
             testing.expect(t, gs.player.hp < hp && gs.player.hp > 0, fmt.tprintf("and lived, hp %d", gs.player.hp))
         }
     }
@@ -3410,4 +3416,614 @@ hero_hand_craft_opens_the_windows_as_tab_does :: proc(t: ^testing.T) {
     }
     testing.expect(t, seen, "the crafting window opened")
     work_test_expect_done(t, link, gs, id)
+}
+
+// ─── fight ───
+
+// An enemy of a kind whose body's bottom sits on row `bottom`, at tile x.
+@(private="file")
+fight_test_body :: proc(gs: ^Game_State, kind: Enemy_Kind, x, bottom: int) -> int {
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    row := enemy_behaviour[kind]
+    e := &gs.enemies.data[id]
+    e^ = Enemy{kind = kind, hp = row.hp, hp_max = row.hp, facing = -1,
+               pos = {f32(x) + (1 - row.body.x) * 0.5, f32(bottom) - row.body.y}}
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    return id
+}
+
+@(private="file")
+Fight_Watch :: struct {
+    dug:      int,  // tiles of the arena that changed under the fight
+    blind:    int,  // wand shots with no clear line to the target
+    swings:   int,  // sword blows
+    shots:    int,  // frames the wand fired
+    in_pit:   int,  // wand shots with the hero's feet below row `floor`
+    off_aim:  int,  // shots not aimed at the target's body centre
+    brain:    int,  // frames the brain fought or fled instead of the goal
+}
+
+// A fight goal run to its end, the arena's tiles compared before and after.
+@(private="file")
+fight_test_run :: proc(link: ^Agent_Link, gs: ^Game_State, line: string, target: int, x0, G, max_frames: int, floor := max(int)) -> (id: int, w: Fight_Watch) {
+    W :: 41
+    H :: 23
+    before: [W * H]Tile_Type
+    for dx in 0 ..< W do for dy in 0 ..< H do before[dy * W + dx] = get_tile(&gs.world, x0 - 18 + dx, G - 10 + dy)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+    ids, ok := exec_test_reply(link)["ids"].(json.Array)
+    assert(ok, string(link.out[:link.out_len]))
+    id = int(ids[0].(json.Float))
+    kind := gs.enemies.data[target].kind
+    for f := 0; f < max_frames && agent_goals_busy(&link.goals); f += 1 {
+        // The hero decides on where things are as the frame starts.
+        p := &gs.player
+        e := &gs.enemies.data[target]
+        hc := p.pos + [2]f32{PLAYER_W, PLAYER_H} * 0.5
+        ec := e.pos + enemy_body_size(e.kind) * 0.5
+        feet_row := int(p.pos.y + PLAYER_H - 0.01)
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Fight || gs.hero.current == .Flee do w.brain += 1
+        if !gs.input.mine || !gs.enemies.active[target] || gs.enemies.data[target].kind != kind do continue
+        if c := gs.agent.cmd; c.has_mine && abs(c.aim.x - ec.x) + abs(c.aim.y - ec.y) > 0.01 do w.off_aim += 1
+        if is_melee_weapon(held_item(p)) do w.swings += 1
+        if !is_fire_wand(held_item(p)) do continue
+        w.shots += 1
+        if !sight_line_clear(&gs.world, hc, ec, skip_ends = true) do w.blind += 1
+        if feet_row > floor do w.in_pit += 1
+    }
+    for dx in 0 ..< W do for dy in 0 ..< H do if before[dy * W + dx] != get_tile(&gs.world, x0 - 18 + dx, G - 10 + dy) do w.dug += 1
+    return
+}
+
+// A frog, a beetle and an eel in its pool, each killed with the wand alone.
+@(test)
+hero_fight_kills_a_frog_a_beetle_and_an_eel_with_the_wand :: proc(t: ^testing.T) {
+    for kind in ([3]Enemy_Kind{.Pond_Frog, .Ember_Beetle, .Cave_Eel}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Fire_Wand, 1)
+        gs.player.mana = gs.player.mana_max
+        bottom := G
+        if kind == .Cave_Eel {
+            // A pool four deep from x0+5 to x0+12, the eel at its bottom.
+            for x in x0 + 5 ..= x0 + 12 do for y in G ..< G + 4 do set_tile(&gs.world, x, y, .Water)
+            bottom = G + 3
+        }
+        e := fight_test_body(gs, kind, x0 + 8, bottom)
+        id, w := fight_test_run(link, gs, fmt.tprintf(`{{"do":"fight","kind":"%v"}}`, kind), e, x0, G, 1800)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "%v: %s %s", kind, status, reason)
+        testing.expectf(t, !gs.enemies.active[e] || gs.enemies.data[e].kind != kind, "%v: still alive", kind)
+        testing.expectf(t, w.shots > 0 && w.swings == 0, "%v: %d shots %d swings", kind, w.shots, w.swings)
+        testing.expectf(t, w.blind == 0, "%v: %d shots into a wall", kind, w.blind)
+        testing.expectf(t, w.off_aim == 0, "%v: %d shots not at the body's centre", kind, w.off_aim)
+        testing.expectf(t, w.brain == 0, "%v: %d frames the brain took over the fight", kind, w.brain)
+        testing.expect(t, !gs.player.dead)
+    }
+}
+
+// Run 8: the hero tunnelled under a frog and shot the dirt.  From a trench
+// whose near wall hides the frog it climbs the stair out and shoots from its
+// top step or the ground, digging nothing.
+@(test)
+hero_fight_walks_out_of_a_pit_and_digs_nothing :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    // A trench three deep from x0-2 to x0+2, a stair up out of its right end
+    // toward the frog, the stair's own steps in the way of a shot.
+    for x in x0 - 2 ..= x0 + 2 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, x0 + 3, G, .Air)
+    set_tile(&gs.world, x0 + 3, G + 1, .Air)
+    set_tile(&gs.world, x0 + 4, G, .Air)
+    gs.player.pos = {f32(x0) + 0.1, f32(G + 3) - PLAYER_H}
+    go_test_give(gs, .Fire_Wand, 1)
+    go_test_give(gs, .Pickaxe, 1)  // a pick in the bag: still no digging
+    gs.player.mana = gs.player.mana_max
+    e := fight_test_body(gs, .Pond_Frog, x0 + 10, G)
+    testing.expect(t, !sight_line_clear(&gs.world, gs.player.pos + [2]f32{PLAYER_W, PLAYER_H} * 0.5,
+                                        gs.enemies.data[e].pos + enemy_body_size(.Pond_Frog) * 0.5, skip_ends = true), "the wall hides it")
+    id, w := fight_test_run(link, gs, `{"do":"fight","kind":"Pond_Frog"}`, e, x0, G, 1800, floor = G)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect(t, !gs.enemies.active[e] || gs.enemies.data[e].kind != .Pond_Frog, "the frog is dead")
+    testing.expectf(t, w.dug == 0, "%d tiles dug", w.dug)
+    testing.expectf(t, w.blind == 0 && w.in_pit == 0, "%d shots into a wall, %d from the pit", w.blind, w.in_pit)
+}
+
+// Behind a wall five high that no walk crosses, a frog: a pick in the bag
+// would tunnel through, but a fight never digs; it gives up unreachable.
+@(test)
+hero_fight_never_tunnels_to_a_target :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    for y in G - 5 ..< G do set_tile(&gs.world, x0 + 3, y, .Stone)
+    go_test_give(gs, .Fire_Wand, 1)
+    go_test_give(gs, .Pickaxe, 1)
+    gs.player.mana = gs.player.mana_max
+    e := fight_test_body(gs, .Ember_Beetle, x0 + 9, G)
+    gs.enemies.data[e].hp, gs.enemies.data[e].hp_max = 1000, 1000
+    id, w := fight_test_run(link, gs, `{"do":"fight","kind":"Ember_Beetle"}`, e, x0, G, 60 * 30)
+    work_test_expect_failed(t, link, gs, id, "unreachable")
+    testing.expectf(t, w.dug == 0, "%d tiles dug", w.dug)
+    testing.expectf(t, w.blind == 0, "%d shots into the wall", w.blind)
+}
+
+// Low on hp it backs off, shooting as it goes, and gives the fight up once
+// clear; a sword is not swung while backing off.
+@(test)
+hero_fight_backs_off_at_low_hp :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    // Flat ground far to the left: room to back off into.
+    for x in x0 - 50 ..< x0 - 18 do for y in G - 10 ..= G + 12 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+    go_test_give(gs, .Sword, 1)
+    go_test_give(gs, .Fire_Wand, 1)
+    gs.player.mana = gs.player.mana_max
+    v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})  // in the sword's reach
+    gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+    gs.player.hp_max = 100
+    gs.player.hp = int(HERO_FIGHT_RETREAT_FRAC * f32(gs.player.hp_max)) - 1
+    link.goals.reflexes_off = {.Fight_Back}  // the shots are the goal's own
+    hp0 := gs.player.hp
+    id, w := fight_test_run(link, gs, `{"do":"fight","kind":"Vargr"}`, v, x0, G, 900)
+    work_test_expect_failed(t, link, gs, id, "low_hp")
+    testing.expect(t, !gs.player.dead, "it got away")
+    testing.expect(t, gs.player.hp <= hp0)
+    testing.expectf(t, w.swings == 0 && w.shots > 0, "%d swings, %d shots", w.swings, w.shots)
+    testing.expectf(t, w.brain == 0, "%d frames the brain fled instead", w.brain)
+    e := &gs.enemies.data[v]
+    testing.expect(t, abs(e.pos.x - gs.player.pos.x) >= HERO_THREAT_FAR - 2, "clear of it")
+}
+
+// A bite answered: under half its hp with a sword, the hero runs rather than
+// fights; with fight_back on it swings at the biter as it goes, off it only runs.
+@(test)
+hero_fight_back_answers_a_bite :: proc(t: ^testing.T) {
+    for on in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Sword, 1)
+        if !on do link.goals.reflexes_off = {.Fight_Back}
+        gs.player.hp_max, gs.player.hp = 100, 40
+        v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        bitten, struck, fled := false, 0, false
+        for _ in 0 ..< 120 {
+            hp := gs.player.hp
+            exec_test_frames(link, gs, 1)
+            bitten ||= gs.player.hp < hp
+            fled ||= gs.hero.current == .Flee
+            if gs.input.mine && is_melee_weapon(held_item(&gs.player)) do struck += 1
+        }
+        testing.expect(t, bitten, "the vargr bit")
+        testing.expect(t, fled, "the hero ran")
+        if on do testing.expectf(t, struck > 0, "struck back %d times", struck)
+        else do testing.expectf(t, struck == 0, "struck %d times with the reflex off", struck)
+    }
+}
+
+// Fight lines the check refuses, and starts with nothing to fight with or at.
+@(test)
+hero_fight_goal_reasons :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    for c in ([?][2]string{
+        {`{"do":"fight"}`, "fight needs kind or slot"},
+        {`{"do":"fight","kind":"Frog","slot":3}`, "fight needs kind or slot"},
+        {`{"do":"fight","kind":"Dragon"}`, "fight: kind must name an enemy kind, not Dragon"},
+        {`{"do":"fight","slot":256}`, "fight: slot takes 0 to 255"},
+        {`{"do":"fight","slot":1.5}`, "fight: slot takes 0 to 255"},
+    }) {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, c[0]))
+        testing.expectf(t, strings.contains(string(link.out[:link.out_len]), c[1]), "%s: %s", c[0], string(link.out[:link.out_len]))
+    }
+    e := fight_test_body(gs, .Pond_Frog, x0 + 6, G)
+    id, _ := fight_test_run(link, gs, `{"do":"fight","kind":"Pond_Frog"}`, e, x0, G, 30)
+    work_test_expect_failed(t, link, gs, id, "no_item: no sword or fire wand")
+    go_test_give(gs, .Sword, 1)
+    id, _ = fight_test_run(link, gs, `{"do":"fight","kind":"Ember_Beetle"}`, e, x0, G, 30)
+    work_test_expect_failed(t, link, gs, id, "no_target: no Ember_Beetle in sight")
+    id, _ = fight_test_run(link, gs, `{"do":"fight","slot":200}`, e, x0, G, 30)
+    work_test_expect_failed(t, link, gs, id, "no_target: slot 200 holds no enemy")
+    id, _ = fight_test_run(link, gs, fmt.tprintf(`{{"do":"fight","slot":%d}}`, e), e, x0, G, 900)
+    work_test_expect_done(t, link, gs, id)
+}
+
+
+// Seed 999: fleeing a Builder, the hero walked off a ledge for a 17-tile fall
+// (hp 10 to 3).  Cornered at a drop, it takes a hurt fall only when the fall
+// costs less than the blow running back past the threat would; a Builder's
+// blow is 1 hp, so it runs back past it instead.
+@(test)
+hero_flee_takes_no_fall_that_costs_more_than_the_threat :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    // A chasm seventeen deep from x0-12 to x0-5.
+    for x in x0 - 12 ..= x0 - 5 {
+        for y in G ..< G + 17 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, G + 17, .Stone)
+    }
+    _, hurts, _ := hero_dig_fall(&gs.world, {i32(x0 - 6), i32(G - 1)})
+    testing.expect(t, hurts > ATTACK_DAMAGE * HERO_PASS_BLOWS, "the fall costs more than the blow")
+    gs.player.pos = {f32(x0 - 4) + 0.1, f32(G) - PLAYER_H}
+    go_test_give(gs, .Pickaxe, 1)
+    b := fight_test_body(gs, .Builder, x0, G)
+    gs.enemies.data[b].hp, gs.enemies.data[b].hp_max = 1000, 1000
+    hp := gs.player.hp
+    fled, fell := false, false
+    fled_at, x_fled, x_after := 0, f32(0), f32(0)
+    for f in 0 ..< 600 {
+        exec_test_frames(link, gs, 1)
+        if !fled && gs.hero.current == .Flee do fled_at, x_fled = f, gs.player.pos.x
+        fled ||= gs.hero.current == .Flee
+        if fled && f == fled_at + 24 do x_after = gs.player.pos.x
+        fell ||= hero_feet_row(&gs.player) >= i32(G)
+    }
+    testing.expect(t, fled, "the hero fled")
+    testing.expect(t, !fell, "it never went over the edge")
+    testing.expectf(t, x_after - x_fled > 1, "it turned from the edge at once, not hovering there: %.2f tiles in 0.4 s", x_after - x_fled)
+    testing.expectf(t, hp - gs.player.hp < hurts, "lost %d hp, the fall would cost %d", hp - gs.player.hp, hurts)
+}
+
+// Cornered at the ledge with a wall at its back: no way past.  With the Vargr
+// on it at the ledge the fall, which leaves the hero standing, beats the
+// mauling; never a fall that a blow on the way makes deadly, nor one into
+// lava (that case starts at the ledge with the way already found shut, as
+// lava keeps the hero off it).  With the Vargr held off by the wall, out of
+// reach of the ledge, the hero spends no hp on a fall, and the way is marked
+// shut until the hero is clear
+// of it.  (The Vargr is held where
+// it stands: a raider would dig through the wall.)
+@(test)
+hero_flee_takes_the_fall_when_the_way_past_is_shut :: proc(t: ^testing.T) {
+    Case :: struct{vx: f32, lethal, lava, fall: bool}
+    for c in ([?]Case{{-3.8, false, false, true}, {-2.0, false, false, false}, {-3.8, true, false, false}, {-3.8, false, true, false}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 12 ..= x0 - 5 {
+            for y in G ..< G + 17 do set_tile(&gs.world, x, y, .Air)
+            set_tile(&gs.world, x, G + 17, .Stone)
+            if c.lava do set_tile(&gs.world, x, G + 16, .Lava)
+        }
+        for y in G - 10 ..< G do set_tile(&gs.world, x0 - 2, y, .Stone)  // the wall at its back
+        _, hurts, _ := hero_dig_fall(&gs.world, {i32(x0 - 6), i32(G - 1)})
+        testing.expect(t, hurts > WAVE_DAMAGE * HERO_PASS_BLOWS, "the fall costs more than a blow")
+        gs.player.pos = {f32(x0 - 3) + 0.1, f32(G) - PLAYER_H}
+        if c.lava do gs.player.pos.x, gs.hero.break_shut = f32(x0 - 4) + 0.1, true
+        go_test_give(gs, .Pickaxe, 1)
+        v := hero_test_vargr(gs, f32(x0) + c.vx, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        gs.player.hp_max, gs.player.hp = 20, 20
+        if c.lethal do gs.player.hp = hurts + WAVE_DAMAGE  // standing after the fall, not after a blow too
+        fell, fled, shut := false, false, false
+        for _ in 0 ..< 60 * 15 {
+            hero_test_tick(link, gs)
+            fled ||= gs.hero.current == .Flee
+            shut ||= gs.hero.break_shut
+            fell ||= hero_feet_row(&gs.player) >= i32(G)
+            if gs.player.dead || fell do break
+        }
+        testing.expectf(t, fled, "%v: the hero fled", c)
+        testing.expectf(t, shut, "%v: the way was marked shut", c)
+        testing.expectf(t, fell == c.fall, "%v: fell %v", c, fell)
+        testing.expectf(t, !gs.player.dead, "%v: and lived", c)
+        if fell do continue
+        gs.enemies.data[v].pos.x = gs.player.pos.x + HERO_SAFE_CLEAR + 2
+        for _ in 0 ..< 5 do hero_test_tick(link, gs)
+        testing.expectf(t, !gs.hero.break_shut, "%v: clear of it, the way is not shut", c)
+    }
+}
+
+// Fleeing into a wall with the Vargr still off it: the hero keeps at the wall
+// (a step or a dig may yet open it) rather than turn back toward the Vargr.
+@(test)
+hero_flee_into_a_wall_does_not_turn_back_at_a_threat_off_it :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    for y in G - 10 ..< G do set_tile(&gs.world, x0 + 2, y, .Stone)
+    gs.player.pos = {f32(x0) + 0.5, f32(G) - PLAYER_H}
+    v := hero_test_vargr(gs, f32(x0) - 4, G, {})
+    gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+    fled := false
+    min_x := gs.player.pos.x
+    for _ in 0 ..< 60 * 3 {
+        hero_test_tick(link, gs)
+        fled ||= gs.hero.current == .Flee
+        min_x = min(min_x, gs.player.pos.x)
+    }
+    testing.expect(t, fled, "the hero fled")
+    testing.expectf(t, min_x > f32(x0) - 0.5, "it never turned back toward the Vargr: got to %.2f", min_x - f32(x0))
+}
+
+// A goal walking at a drop with a Vargr on it from behind: the 0.4 s look at
+// the edge gives way the moment the Vargr would take over from the goal.
+@(test)
+hero_ledge_look_waits_for_a_threat :: proc(t: ^testing.T) {
+    for armed in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 12 ..= x0 - 5 {
+            for y in G ..< G + 10 do set_tile(&gs.world, x, y, .Air)
+            set_tile(&gs.world, x, G + 10, .Stone)
+        }
+        if armed do go_test_give(gs, .Sword, 1)
+        gs.player.pos = {f32(x0) - 1, f32(G) - PLAYER_H}
+        v := hero_test_vargr(gs, f32(x0) + 3.1, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":120}]}`)
+        looked_pressed, answered := 0, false
+        for _ in 0 ..< 120 {
+            exec_test_frames(link, gs, 1)
+            b := &gs.hero
+            pressed := max(b.scores[.Fight], b.scores[.Flee]) > HERO_GOAL_SCORE + HERO_SWITCH_MARGIN
+            if b.current == .Avoid_Ledge && pressed do looked_pressed += 1
+            answered ||= b.current == (.Fight if armed else .Flee)
+        }
+        // At most the tick the edge comes up, while the goal is under
+        // HERO_MIN_HOLD_S and no rival may take over from it yet.
+        testing.expectf(t, looked_pressed <= 1, "armed %v: %d frames looking at the edge with the Vargr on it", armed, looked_pressed)
+        testing.expect(t, answered)
+        testing.expect(t, hero_feet_row(&gs.player) < i32(G), "not over the edge")
+    }
+}
+
+// By kind, the nearest in view: past the view's edge is not in sight.  By
+// slot, the fight ends when the slot is given up, even if another kind fills it.
+@(test)
+hero_fight_picks_its_target :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Fire_Wand, 1)
+    gs.player.mana = gs.player.mana_max
+    near := fight_test_body(gs, .Ember_Beetle, x0 + 4, G)
+    far := fight_test_body(gs, .Ember_Beetle, x0 + 9, G)
+    gs.enemies.data[far].hp, gs.enemies.data[far].hp_max = 1000, 1000
+    frog := fight_test_body(gs, .Pond_Frog, x0 + AGENT_VIEW_W / 2 + 1, G)
+    id, _ := fight_test_run(link, gs, `{"do":"fight","kind":"Pond_Frog"}`, frog, x0, G, 30)
+    work_test_expect_failed(t, link, gs, id, "no_target")
+    id, _ = fight_test_run(link, gs, `{"do":"fight","kind":"Ember_Beetle"}`, near, x0, G, 1800)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect(t, !gs.enemies.active[near], "the near one fought")
+    testing.expect(t, gs.enemies.active[far], "the far one left")
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"fight","slot":%d}}]}}`, far))
+    id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    exec_test_frames(link, gs, 5)
+    despawn_enemy(gs, far)
+    fight_test_body(gs, .Mole, x0 - 10, G)  // into the dead beetle's lower slot
+    testing.expect_value(t, hero_test_vargr(gs, f32(x0) + 9.1, G, {}), far)
+    gs.enemies.data[far].hp, gs.enemies.data[far].hp_max = 1000, 1000
+    exec_test_frames(link, gs, 3)
+    work_test_expect_done(t, link, gs, id)
+}
+
+// With the wand, a Vargr nearer than HERO_KITE_TILES is backed off from as it
+// is shot: by a fight goal and by the brain's own fight.
+@(test)
+hero_kites_with_the_wand :: proc(t: ^testing.T) {
+    for goal in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 50 ..< x0 - 18 do for y in G - 10 ..= G + 12 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+        go_test_give(gs, .Fire_Wand, 1)
+        gs.player.mana = gs.player.mana_max
+        link.goals.reflexes_off = {.Fight_Back}
+        v := hero_test_vargr(gs, f32(x0) + 2.6, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        if goal do agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Vargr"}]}`)
+        x := gs.player.pos.x
+        shots := 0
+        for _ in 0 ..< 60 {
+            exec_test_frames(link, gs, 1)
+            if gs.input.mine do shots += 1
+        }
+        testing.expectf(t, shots > 0, "goal %v: shot", goal)
+        testing.expectf(t, x - gs.player.pos.x > 2, "goal %v: backed off %.1f", goal, x - gs.player.pos.x)
+    }
+}
+
+// Out of mana with only the wand: no shot, no fight from the brain, and a
+// fight goal keeps away and waits for the mana rather than giving up.  (The
+// brain flees, as card 149 has it.)
+@(test)
+hero_with_an_empty_wand_keeps_away :: proc(t: ^testing.T) {
+    for goal in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 50 ..< x0 - 18 do for y in G - 10 ..= G + 12 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+        go_test_give(gs, .Fire_Wand, 1)
+        gs.player.mana, gs.player.mana_regen = 0, 0
+        link.goals.reflexes_off = {.Fight_Back}
+        v := hero_test_vargr(gs, f32(x0) + 3.1, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        id := -1
+        if goal {
+            agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Vargr"}]}`)
+            id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        }
+        shots, fought, away := 0, 0, f32(0)
+        frames := int((HERO_FIGHT_WAIT_S + 1) * 60)
+        for _ in 0 ..< frames {
+            exec_test_frames(link, gs, 1)
+            if gs.input.mine do shots += 1
+            if gs.hero.current == .Fight do fought += 1
+            away += abs(gs.enemies.data[v].pos.x - gs.player.pos.x) / f32(frames)
+        }
+        testing.expectf(t, shots == 0, "goal %v: %d shots with no mana", goal, shots)
+        testing.expectf(t, fought == 0, "goal %v: %d frames fighting unarmed", goal, fought)
+        if goal {
+            testing.expectf(t, away > 3, "kept %.1f away on the mean", away)
+            status, reason := go_test_status(link, gs, id)
+            testing.expectf(t, status == "running", "%s %s", status, reason)
+        }
+    }
+}
+
+// The stand a fight walks to is on the target's row when one is in range,
+// and the hero's centre there is where the orb leaves from.
+@(test)
+hero_fight_stands_on_the_targets_row :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 6 ..= x0 + 12 do set_tile(&gs.world, x, G - 3, .Stone)  // a shelf
+    go_test_give(gs, .Fire_Wand, 1)
+    gs.player.mana = gs.player.mana_max
+    e := fight_test_body(gs, .Ember_Beetle, x0 + 6, G - 3)  // at the edge: the ground below sees it too
+    f := Hero_Fight{target = e, target_kind = .Ember_Beetle}
+    sw, wa := hero_blow_from(gs, {i32(x0 + 1), i32(G - 1)}, hero_fight_centre({i32(x0 + 1), i32(G - 1)}), e)
+    testing.expect(t, wa && !sw, "a shot lands from the ground nearer the hero")
+    s, ok := hero_fight_stand(gs, &f)
+    testing.expect(t, ok)
+    testing.expect_value(t, s.y, i32(G - 4))
+    p := &gs.player
+    hc := hero_fight_centre(player_tile(p))
+    testing.expectf(t, abs(hc.x - (p.pos.x + PLAYER_W * 0.5)) < 0.15 && abs(hc.y - (p.pos.y + PLAYER_H * 0.5)) < 0.15, "%v", hc)
+}
+
+// The weapon in hand is the one fought with: of two swords, no swap.
+@(test)
+hero_fights_with_the_sword_in_hand :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.player.inventory.slots[1] = {item = .Sword, count = 1}
+    gs.player.inventory.selected = 1
+    v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})
+    gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+    swaps, swings := 0, 0
+    for _ in 0 ..< 90 {
+        hero_test_tick(link, gs)
+        if gs.agent.cmd.verb == .Select do swaps += 1
+        if gs.input.mine do swings += 1
+    }
+    testing.expect(t, swings > 0)
+    testing.expect_value(t, swaps, 0)
+}
+
+// fight_back: struck by a Vargr, the hero strikes back at that Vargr, not at
+// a frog nearer it or a Vargr out of reach; for HERO_FIGHT_BACK_S, then no
+// more; never with a window open, and a potion due goes first.
+@(test)
+hero_fight_back_answers_the_one_that_hurt_it :: proc(t: ^testing.T) {
+    Case :: enum { Plain, Window, Potion }
+    for c in Case {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        // Boxed in: the hero cannot run, the Vargr stays in reach.
+        for y in G - 3 ..< G do for x in ([2]int{x0 - 1, x0 + 3}) do set_tile(&gs.world, x, y, .Stone)
+        gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+        gs.player.hp_max, gs.player.hp = 100, 40
+        if c == .Potion {
+            gs.player.inventory.slots[1] = {item = .Potion_Health, count = 1}
+            gs.player.inventory.selected = 1
+            low := HERO_LOW_HP_FRAC
+            gs.player.hp = int(low * 100) + 1  // a bite takes it under the potion line
+        }
+        v := hero_test_vargr(gs, f32(x0) + 1.6, G, {})
+        frog := fight_test_body(gs, .Pond_Frog, x0, G)  // nearer than the Vargr
+        far := hero_test_vargr(gs, f32(x0) + 9.1, G, {})
+        for i in ([3]int{v, frog, far}) do gs.enemies.data[i].hp, gs.enemies.data[i].hp_max = 1000, 1000
+        hp0 := gs.player.hp
+        for f := 0; f < 300 && gs.player.hp == hp0; f += 1 do exec_test_frames(link, gs, 1)
+        testing.expectf(t, gs.hurt_by == enemy_kind_names[.Vargr], "%v: bitten (%s)", c, gs.hurt_by)
+        if c == .Window do gs.ui.show_inventory = true
+        if c == .Potion {
+            hero_test_tick(link, gs)
+            testing.expect_value(t, gs.agent.cmd.verb, Agent_Verb.Equip)  // the potion, not a swap to the sword
+        }
+        // Everyone held where they stand from here: no more bites.
+        early, late, off := 0, 0, 0
+        for k in 0 ..< int(HERO_FIGHT_BACK_S * 60) * 2 {
+            open := agent_window_open(gs)
+            hero_test_tick(link, gs)
+            if !gs.input.mine do continue
+            if c == .Window && open do early += 1000
+            if gs.agent.cmd.mine != builder_tile(&gs.enemies.data[v]) do off += 1
+            if f32(k) < HERO_FIGHT_BACK_S * 60 - 2 do early += 1
+            else if f32(k) > HERO_FIGHT_BACK_S * 60 + 2 do late += 1
+        }
+        switch c {
+        case .Plain:
+            testing.expectf(t, early > 0 && late == 0 && off == 0, "early %d late %d off %d", early, late, off)
+        case .Window:
+            testing.expectf(t, early < 1000, "a strike with the window open")
+        case .Potion:
+            testing.expect_value(t, inventory_count(&gs.player.inventory, .Potion_Health), 0)
+        }
+    }
+}
+
+// Fleeing with only the wand, the hero shoots back as it runs.
+@(test)
+hero_flees_shooting :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    for x in x0 - 50 ..< x0 - 18 do for y in G - 10 ..= G + 12 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+    go_test_give(gs, .Fire_Wand, 1)
+    gs.player.mana = gs.player.mana_max
+    gs.player.hp = gs.player.hp_max / 5
+    link.goals.reflexes_off = {.Fight_Back}
+    v := hero_test_vargr(gs, f32(x0) + 4.1, G, {})
+    gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+    fled, shots := 0, 0
+    for _ in 0 ..< 90 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Flee {
+            fled += 1
+            if gs.input.mine do shots += 1
+        }
+    }
+    testing.expect(t, fled > 0, "it fled")
+    testing.expectf(t, shots > 0, "%d shots as it fled", shots)
 }
