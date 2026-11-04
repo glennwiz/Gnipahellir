@@ -10,7 +10,6 @@ Protocol: top of `src/agent_api.odin`. Afterwards run `build/gnipa --summary <ru
 first, then read `action.log` and `fight.log` only where it points.
 `<run>/gnipa --replay <run>` plays a run back in the window. `--pacing` and
 `--builder-trace` are the other reports; `build/gnipa --help` lists them.
-Reuse and improve `tools/agent_bot/`: a fix there lasts, a fix in your head does not.
 
 ## While you think
 
@@ -66,7 +65,7 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - `guard` kills Builders by default. To keep an owner alive for a den test, set
   `sparebuilder`, but keep away: he bites 1 a second, and if he dies beside you he rises as
   a Draugr that claws 3 on the next frame (ended life 2 of run 5).
-- Lava: move out, never jump in place; plan ticks run on while burning, so flee before any plan.
+- Lava: move out, never jump in place; the game runs on while you think, so flee first.
 - A sky hole in the deck drops you to L0 at (147,92): free, and drops in the hole go with you.
 - Plain Cloud drops 20% of the time, Cloud_Ore always.
 - Check the level after every portal step: run 6 life 3 ran the sky script on L0 and flew into the shaft, 32 tiles, dead.
@@ -74,8 +73,8 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Do not let flight lapse over an island: 21 tiles is 9 damage. Over void you fall to L0 free.
 - Run 7: `fight` dug toward enemies for line of sight and took the floor (fell on a Draugr, dead)
   and a pool rim (the Deep Cave pool drained). It now skips cells below the feet or by water/lava.
-- A plan is blind: run 7 life 1 idled a 300-tick plan beside a hunting Builder, 10 to 3 hp.
-  Do not think long with a Builder in the view; scripts set `GNIPA_AGENT_TURBO=1` to skip `endplan`.
+- Do not think long with a Builder in the view: run 7 life 1 stood 300 ticks beside a hunting
+  Builder, 10 to 3 hp.
 - Walks need a stuck check: p1 jumped 30 s at a trunk at x 88. `walkj` now gives up after two
   jumps that do not move x.
 - `path` refuses water; standing in spilt water there is no path at all. Set `b.waterok=True`.

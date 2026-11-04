@@ -27,9 +27,8 @@ AGENT_GOAL_LINE  :: 512  // one goal as recorded; a longer one is refused
 
 Agent_Goal_Status :: enum u8 { Empty, Queued, Running, Done, Failed }
 Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect, Fight }
-// How a goal came: the old act and wait answer with state when it is done, and a
-// plan's goals stop together.
-Agent_Goal_Via    :: enum u8 { Goal, Act, Wait, Plan }
+// How a goal came: the old act answers with state when it is done.
+Agent_Goal_Via    :: enum u8 { Goal, Act }
 
 Agent_Goal :: struct {
     id:          int,
@@ -37,7 +36,6 @@ Agent_Goal :: struct {
     kind:        Agent_Goal_Kind,
     via:         Agent_Goal_Via,
     told:        bool,  // its end has been settled: pushed, recorded, answered
-    step:        int,   // a plan goal's place in its plan
     cmd:         Agent_Command,
     frames:      int,
     frames_left: int,
@@ -60,7 +58,6 @@ Agent_Goals :: struct {
     n:            int,
     next_id:      int,
     ran:          bool,  // this tick played a goal's frame
-    plan_stopped: Agent_Text,  // why a plan's step could not start, until the next plan
     notes:        [HERO_NOTES_MAX]Hero_Note,  // what the hero did with the goals: a ring
     note_count:   int,  // every note ever, so the link knows what it has not pushed
     reflexes_off: bit_set[Hero_Reflex],  // the reflexes the agent switched off
@@ -189,7 +186,7 @@ update_agent_goals :: proc(gs: ^Game_State) {
 }
 
 // The running goal, or the first queued one that starts.  One that cannot start
-// fails, and a plan's failed step ends its plan.
+// fails.
 @(private="file")
 agent_goals_current :: proc(gs: ^Game_State, q: ^Agent_Goals) -> ^Agent_Goal {
     for &g in q.slots[:q.n] {
@@ -197,23 +194,12 @@ agent_goals_current :: proc(gs: ^Game_State, q: ^Agent_Goals) -> ^Agent_Goal {
         if g.status != .Queued do continue
         if !agent_goal_kinds[g.kind].start(gs, &g) {
             g.status = .Failed
-            if g.via == .Plan do agent_goals_stop_plan(q, &g)
             continue
         }
         g.status = .Running
         return &g
     }
     return nil
-}
-
-@(private="file")
-agent_goals_stop_plan :: proc(q: ^Agent_Goals, failed: ^Agent_Goal) {
-    agent_text_set(&q.plan_stopped, fmt.tprintf("step %d: %s", failed.step, string(failed.reason.buf[:failed.reason.len])))
-    for &g in q.slots[:q.n] {
-        if g.via != .Plan || g.status != .Queued do continue
-        g.status = .Failed
-        agent_text_set(&g.reason, "plan stopped")
-    }
 }
 
 // Whether any goal is waiting or playing.
@@ -236,7 +222,7 @@ agent_goals_room :: proc(q: ^Agent_Goals) -> int {
 }
 
 // Queues one goal and gives its id; the caller has checked the room.
-agent_goals_push :: proc(q: ^Agent_Goals, kind: Agent_Goal_Kind, via: Agent_Goal_Via, line: string, step := 0) -> int {
+agent_goals_push :: proc(q: ^Agent_Goals, kind: Agent_Goal_Kind, via: Agent_Goal_Via, line: string) -> int {
     if q.n == AGENT_GOALS_MAX {
         for &g, i in q.slots[:q.n] {
             if (g.status != .Done && g.status != .Failed) || !g.told do continue
@@ -247,7 +233,7 @@ agent_goals_push :: proc(q: ^Agent_Goals, kind: Agent_Goal_Kind, via: Agent_Goal
     }
     q.next_id += 1
     g := &q.slots[q.n]
-    g^ = {id = q.next_id, status = .Queued, kind = kind, via = via, step = step}
+    g^ = {id = q.next_id, status = .Queued, kind = kind, via = via}
     g.len = copy(g.line[:], line)
     q.n += 1
     return g.id
@@ -295,7 +281,7 @@ agent_goal_act_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
     g.cmd         = c
     g.frames      = frames
     g.frames_left = frames
-    g.first       = g.via != .Wait  // a wait is no act: nothing fires on its first tick
+    g.first       = true
     return true
 }
 

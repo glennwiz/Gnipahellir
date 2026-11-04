@@ -242,12 +242,11 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
     case "goal" in rec:
         name, _ := rec["kind"].(json.String)
         via_name, _ := rec["via"].(json.String)
-        step, _ := agent_int(rec, "step")
         kind, known := agent_goal_find_kind(name)
         via := Agent_Goal_Via.Goal
         for v in Agent_Goal_Via do if fmt.tprint(v) == via_name do via = v
         if !known do return
-        agent_goal_add(link, gs, kind, via, agent_canonical(rec["goal"]), step)
+        agent_goal_add(link, gs, kind, via, agent_canonical(rec["goal"]))
     case "clear" in rec:
         agent_goals_clear(link, gs, "cancelled")
     case "cancel" in rec:

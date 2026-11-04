@@ -41,21 +41,12 @@ package game
 //   {"cmd":"reflexes","potion":false,...}           switch the hero's reflexes; answers with each
 //   {"cmd":"home","at":[x,y]}                       mark this level's home for the home goal; no
 //                                                   at clears it
-//   {"cmd":"plan","acts":[{"move":"left","frames":30},...]}
-//                                                   acts queued as goals, no reply per step;
-//                                                   an act or a plan drops the rest;
-//                                                   state, warp, craft and window verbs are
-//                                                   judged when the step starts, and one
-//                                                   that fails ends the plan: state then
-//                                                   carries plan_stopped
 //                                                   a view's "solid" chars stop the body from
 //                                                   every side, "floor" ones hold it up: the
 //                                                   body walks through structures and stands
 //                                                   on them, and passes doors both ways
-//   {"cmd":"wait","frames":30}                      play ticks with no act, as an idle wait
-//   {"cmd":"realtime","on":false}                   wait between goals (on by default)
-//   {"cmd":"idle","on":false}                       hold between goals, no idle ticks; turns
-//                                                   realtime off
+//   {"cmd":"plan"|"wait"|"idle"|"realtime",...}   retired (card 154): ok:false, use goals;
+//                                                   the game never waits for a client
 //   {"cmd":"objective","goal":"...","step":"..."}   tell the watcher what you are up to;
 //                                                   a new goal files the old one, with
 //                                                   "result":"failed" if it did not work
@@ -72,9 +63,10 @@ package game
 // While a client is connected the game runs in real time: every frame ticks,
 // goal or none, and the executor plays the queue.  Every tick is a fixed 1/60 s
 // step, and the keyboard and mouse are ignored.  Realtime off is the old waiting
-// game: it ticks while a goal plays, and between goals idles at quarter speed
-// with empty input for up to AGENT_IDLE_MAX ticks, then holds.  Disconnecting
-// hands the game straight back to the keyboard.
+// game, kept for tests and --replay and out of a client's reach: it ticks while a
+// goal plays, and between goals idles at quarter speed with empty input for up to
+// AGENT_IDLE_MAX ticks, then holds (idle_off holds at once).  Disconnecting hands
+// the game straight back to the keyboard.
 //
 // Replies carry "re":<cmd>.  Once a client has sent a goals command the game
 // also pushes event lines unasked, each with "event": goal_done, goal_failed
@@ -98,10 +90,8 @@ package game
 // feeds the goal rows back on their frames and stops at a disconnect.
 //
 // GNIPA_AGENT_TURBO=1 is for harness runs: the window draws about once a second, so
-// ticks stop waiting for the display.  The sim never sees that, but idle ticks and
-// plans follow wall time in any run, so only a run with idling off and no plans
-// plays the same twice at the same speed; the frame clock in acts.jsonl does not
-// care, which is why a replay goes by it.
+// ticks stop waiting for the display.  The sim never sees that; the frame clock in
+// acts.jsonl does not care either, which is why a replay goes by it.
 //
 // An agent run writes a save and truncates action.log in the working directory,
 // so agent_open refuses to run anywhere that does not hold AGENT_SANDBOX_FILE.
@@ -131,7 +121,6 @@ AGENT_STEP         :: f32(1.0 / 60.0)
 AGENT_MAX_FRAMES   :: 600
 AGENT_IDLE_EVERY   :: 4    // render frames per tick of a plan or an idle wait
 AGENT_IDLE_MAX     :: 180  // ticks per wait, 3 s of game time; a first guess
-AGENT_PLAN_MAX     :: 32   // steps in one plan
 AGENT_PUSH_MAX     :: 32 * 1024  // event lines waiting for the next send; past this they drop
 AGENT_VIEW_ZOOM    :: f32(2.5) // the framing a watching human gets; the wheel still changes it
 AGENT_VIEW_W       :: 41   // default tile view, centered on the player
@@ -180,7 +169,7 @@ Agent_Link :: struct {
     turbo:       bool,           // draw_game only every AGENT_TURBO_DRAW
     last_draw:   time.Tick,
     realtime:    bool,           // tick every frame, goal or none
-    idle_off:    bool,
+    idle_off:    bool,           // the waiting game holds between goals, no idle ticks (tests)
     idle_step:   int,            // render frames since the last slow tick
     idle_ticks:  int,            // idle ticks in this wait, recorded when it ends
     goals:       Agent_Goals,
@@ -642,10 +631,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  leave_hazard: walks and jumps out of lava, water or a burn. potion: drinks a health potion under %.0f%% hp\n", HERO_LOW_HP_FRAC * 100)
     fmt.sbprintf(w, "  floor_dig: never digs the floor under itself over a fall that kills or burns. rim_dig: never digs beside water or lava\n")
     fmt.sbprintf(w, "  fight_back: strikes back for %.1f s at the enemy that hurt it, with the sword in reach or the wand at range\n", HERO_FIGHT_BACK_S)
-    fmt.sbprintf(w, "{{\"cmd\":\"plan\",\"acts\":[{{...}},...]}}  up to %d acts queued as act goals; an act drops the rest\n", AGENT_PLAN_MAX)
-    fmt.sbprintf(w, "  an act or a wait drops what is queued and answers with state when it is done\n")
-    fmt.sbprintf(w, "{{\"cmd\":\"wait\",\"frames\":30}}  ticks with no input. {{\"cmd\":\"realtime\",\"on\":false}}  the game waits for you between goals\n")
-    fmt.sbprintf(w, "{{\"cmd\":\"idle\",\"on\":false}}  holds the game between goals, with no idle ticks\n")
+    fmt.sbprintf(w, "An act drops what is queued and answers with state when it is done.\n")
     fmt.sbprintf(w, "A refused request answers ok:false with error. State's notes hold the toasts, the only reason some refusals give.\n")
     fmt.sbprintf(w, "A view's rows are one character per tile: legend names them, solid stops you, floor holds you up. enemies lists only what is inside the view, x,y the top-left of a w x h body in tiles.\n")
     fmt.sbprintf(w, "screen is title, settings, snapshots, menu, dead, book, won or play. dismiss gets past any but play, and starts the next life after dead or won.\n")
@@ -661,7 +647,6 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "It does not: while you are connected the game runs in real time at a fixed step, 60 ticks a second, and the keyboard is ignored.\n")
     fmt.sbprintf(w, "Only the death screen and the menus stop play. Queue goals before a long think, and pick safe ones.\n")
     fmt.sbprintf(w, "The hero never moves while a window is open: a goal that would closes it first, and one that works the window holds still.\n")
-    fmt.sbprintf(w, "With realtime off it ticks only while a goal plays, and between goals idles at a quarter speed for up to %d ticks, then holds.\n", AGENT_IDLE_MAX)
 
     fmt.sbprintf(w, "\nEVENTS\n")
     fmt.sbprintf(w, "Every reply carries \"re\", the cmd it answers. After your first goals command the game also sends lines unasked,\n")
@@ -703,13 +688,13 @@ agent_drive :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     return agent_slow_beat(link)
 }
 
-// The client can always talk, except while an act or wait it sent is pending:
+// The client can always talk, except while an act it sent is pending:
 // those answer when they are done, and the next line waits for that.  A listen
 // holds the next line until it has answered.
 agent_listening :: proc(link: ^Agent_Link) -> bool {
     if link.awaiting do return false
     h := agent_goals_head(&link.goals)
-    return h == nil || (h.via != .Act && h.via != .Wait)
+    return h == nil || h.via != .Act
 }
 
 // A listen answers with state once the watcher has said something, or at its end.
@@ -787,8 +772,8 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
     agent_watch(link, gs)
 }
 
-// A goal's end: recorded, pushed, and for an act or wait sent the old way,
-// answered with state.
+// A goal's end: recorded, pushed, and for an act sent the old way, answered
+// with state.
 @(private="file")
 agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     g.told = true
@@ -805,10 +790,10 @@ agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     } else {
         agent_push_event(link, gs, "goal_failed", fmt.tprintf(`"id":%d,"reason":%s`, g.id, agent_quote(string(g.reason.buf[:g.reason.len]))))
     }
-    // An act or wait was judged live on the frame it came, and starts on it, so
-    // it ends done, or failed at a ledge.
-    if g.via == .Act || g.via == .Wait {
-        agent_reply_state(link, gs, nil, "act" if g.via == .Act else "wait")
+    // An act was judged live on the frame it came, and starts on it, so it ends
+    // done, or failed at a ledge.
+    if g.via == .Act {
+        agent_reply_state(link, gs, nil, "act")
         link.reply_due = true
     }
 }
@@ -868,18 +853,14 @@ agent_quote :: proc(text: string) -> string {
 }
 
 // A goal for the queue: queued, and recorded with the frame it came on.
-agent_goal_add :: proc(link: ^Agent_Link, gs: ^Game_State, kind: Agent_Goal_Kind, via: Agent_Goal_Via, line: string, step := 0) -> int {
-    id := agent_goals_push(&link.goals, kind, via, line, step)
-    agent_record_op(link, gs, fmt.tprintf(`"goal":%s,"kind":"%s","id":%d,"via":"%v","step":%d`, line, agent_goal_kinds[kind].name, id, via, step))
+agent_goal_add :: proc(link: ^Agent_Link, gs: ^Game_State, kind: Agent_Goal_Kind, via: Agent_Goal_Via, line: string) -> int {
+    id := agent_goals_push(&link.goals, kind, via, line)
+    agent_record_op(link, gs, fmt.tprintf(`"goal":%s,"kind":"%s","id":%d,"via":"%v"`, line, agent_goal_kinds[kind].name, id, via))
     return id
 }
 
-// Ends a goal that has not finished: a running plan step records how much of it
-// was played.
+// Ends a goal that has not finished.
 agent_goal_cancel :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal, why: string) {
-    if g.status == .Running && g.via == .Plan && g.frames > g.frames_left {
-        agent_record_act(link, gs, g, g.frames - g.frames_left)
-    }
     g.status = .Failed
     agent_text_set(&g.reason, why)
     agent_goal_tell(link, gs, g)
@@ -960,13 +941,12 @@ agent_fight_flush :: proc(link: ^Agent_Link) {
 // One line per finished act: the request as sent, and where it left the player,
 // which is what a replay checks itself against.
 @(private="file")
-agent_record_act :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal, played := 0) {
+agent_record_act :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     if !link.recording do return
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     p := &gs.player
-    cut := fmt.tprintf(`"played":%d,`, played) if played > 0 else ""
-    line := fmt.tprintf(`{{"f":%d,%s"act":%s,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f,"lvl":%d,"enemies":%d}}` + "\n",
-        gs.frame, cut, string(g.line[:g.len]), p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index, gs.enemies.count)
+    line := fmt.tprintf(`{{"f":%d,"act":%s,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f,"lvl":%d,"enemies":%d}}` + "\n",
+        gs.frame, string(g.line[:g.len]), p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index, gs.enemies.count)
     os.write_string(link.acts_file, line)
 }
 
@@ -1013,9 +993,6 @@ agent_record_mark :: proc(link: ^Agent_Link, gs: ^Game_State, mark: string) {
 
 @(private="file")
 agent_drop_client :: proc(link: ^Agent_Link, gs: ^Game_State) {
-    if h := agent_goals_head(&link.goals); h != nil && h.status == .Running && h.via == .Plan && h.frames > h.frames_left {
-        agent_record_act(link, gs, h, h.frames - h.frames_left)
-    }
     agent_record_idle(link, gs)
     agent_record_mark(link, gs, "disconnect")
     net.close(link.client)
@@ -1074,24 +1051,19 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         if v, ok := agent_int(root, "w"); ok do view.w = v
         if v, ok := agent_int(root, "h"); ok do view.h = v
         agent_reply_state(link, gs, &view, cmd)
-    case "act", "wait":
+    case "act":
         // The old protocol: one act goal in place of whatever was queued, and the
         // reply waits until it is done.
-        problem: string
-        if cmd == "act" {
-            _, _, problem = agent_parse_act(gs, root)
-        } else if frames, ok := agent_int(root, "frames"); !ok || frames < 1 || frames > AGENT_MAX_FRAMES {
-            problem = fmt.tprintf("frames must be 1..%d", AGENT_MAX_FRAMES)
-        }
+        _, _, problem := agent_parse_act(gs, root)
         canonical := agent_canonical(value)
-        if problem == "" && len(canonical) > AGENT_GOAL_LINE do problem = fmt.tprintf("%s too long to record", cmd)
+        if problem == "" && len(canonical) > AGENT_GOAL_LINE do problem = "act too long to record"
         if problem != "" {
             agent_reply_error(link, cmd, problem)
             return
         }
-        agent_goals_clear(link, gs, fmt.tprintf("replaced by a %s", cmd))  // and so a slot is free
+        agent_goals_clear(link, gs, "replaced by an act")  // and so a slot is free
         agent_record_idle(link, gs)
-        agent_goal_add(link, gs, .Act, .Act if cmd == "act" else .Wait, canonical)
+        agent_goal_add(link, gs, .Act, .Act, canonical)
         link.out_len = 0
     case "goals":
         agent_goals_command(link, gs, root)
@@ -1105,59 +1077,10 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         }
         agent_home_set(link, gs, at, gs.level_index, present)
         agent_reply_text(link, cmd, `"ok":true`)
-    case "realtime":
-        on, ok := root["on"].(json.Boolean)
-        if !ok {
-            agent_reply_error(link, cmd, "realtime needs on:true or on:false")
-            return
-        }
-        link.realtime = on
-        agent_record_mark(link, gs, "realtime on" if on else "realtime off")
-        agent_reply_text(link, cmd, `"ok":true`)
-    case "plan":
-        acts, ok := root["acts"].(json.Array)
-        if !ok || len(acts) > AGENT_PLAN_MAX {
-            agent_reply_error(link, cmd, fmt.tprintf("plan needs acts, at most %d", AGENT_PLAN_MAX))
-            return
-        }
-        // All or nothing: a bad step must not leave half a plan playing.
-        lines: [AGENT_PLAN_MAX]string
-        ticks := 0
-        for act, i in acts {
-            o, is_act := act.(json.Object)
-            if !is_act {
-                agent_reply_error(link, cmd, "a plan step is not an object")
-                return
-            }
-            _, frames, problem := agent_parse_act(gs, o, false)
-            if step_cmd, named := o["cmd"]; named {
-                if s, is_text := step_cmd.(json.String); !is_text || s != "act" do problem = "a plan step can only be an act"
-            }
-            lines[i] = agent_canonical(act)
-            if problem == "" && len(lines[i]) > AGENT_GOAL_LINE do problem = "plan step too long to record"
-            if problem != "" {
-                agent_reply_error(link, cmd, fmt.tprintf("step %d: %s", i, problem))
-                return
-            }
-            ticks += frames
-        }
-        agent_goals_clear(link, gs, "replaced by a plan")  // which frees the whole queue
-        agent_record_idle(link, gs)
-        link.goals.plan_stopped = {}
-        for i in 0 ..< len(acts) do agent_goal_add(link, gs, .Act, .Plan, lines[i], i)
-        agent_reply_text(link, cmd, fmt.tprintf(`"ok":true,"steps":%d,"ticks":%d`, len(acts), ticks))
-    case "idle":
-        on, ok := root["on"].(json.Boolean)
-        if !ok {
-            agent_reply_error(link, cmd, "idle needs on:true or on:false")
-            return
-        }
-        if !on {
-            agent_record_idle(link, gs)
-            link.realtime = false  // holding between goals is the waiting game
-        }
-        link.idle_off = !on
-        agent_reply_text(link, cmd, `"ok":true`)
+    case "plan", "wait", "idle", "realtime":
+        // Retired (card 154): goals took their place, and the game never waits
+        // for a client.
+        agent_reply_error(link, cmd, fmt.tprintf("%s is retired, use goals", cmd))
     case "objective":
         goal, has_goal := root["goal"].(json.String)
         step, has_step := root["step"].(json.String)
@@ -1198,7 +1121,7 @@ agent_handle_line :: proc(link: ^Agent_Link, gs: ^Game_State, line: string) {
         link.awaiting    = true
         link.await_until = time.tick_add(time.tick_now(), time.Duration(seconds) * time.Second)
     case:
-        agent_reply_error(link, cmd, "unknown cmd: use state, act, goals, plan, wait, realtime, idle, objective, say or listen")
+        agent_reply_error(link, cmd, "unknown cmd: use state, act, goals, reflexes, home, objective, say or listen")
     }
 }
 
@@ -1919,13 +1842,11 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
     link.out_len = strings.builder_len(b)
 }
 
-// The queue, finished goals and all, and what is left of a plan.
+// The queue, finished goals and all.
 @(private="file")
 agent_write_goals :: proc(b: ^strings.Builder, q: ^Agent_Goals) {
-    plan_left := 0
     strings.write_string(b, `"goals":[`)
     for &g, i in q.slots[:q.n] {
-        if g.via == .Plan && g.status == .Queued do plan_left += 1
         if i > 0 do strings.write_byte(b, ',')
         fmt.sbprintf(b, `{{"id":%d,"do":"%s","status":"%s"`, g.id, agent_goal_kinds[g.kind].name, agent_goal_status_names[g.status])
         if g.status == .Running do fmt.sbprintf(b, `,"left":%d`, g.frames_left)
@@ -1935,12 +1856,7 @@ agent_write_goals :: proc(b: ^strings.Builder, q: ^Agent_Goals) {
         }
         strings.write_byte(b, '}')
     }
-    fmt.sbprintf(b, `],"plan_left":%d,`, plan_left)
-    if q.plan_stopped.len > 0 {
-        strings.write_string(b, `"plan_stopped":`)
-        json_write_string(b, string(q.plan_stopped.buf[:q.plan_stopped.len]))
-        strings.write_byte(b, ',')
-    }
+    strings.write_string(b, `],`)
 }
 
 // Sky flocks with a bird inside the view, by their V's point.  Scenery: they

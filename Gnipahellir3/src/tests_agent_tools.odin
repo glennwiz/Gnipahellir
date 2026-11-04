@@ -406,8 +406,8 @@ tools_test_record :: proc(link: ^Agent_Link, path: string) {
     link.acts_file, link.recording = f, true
 }
 
-// A run in real time: goals, the old act and wait, a plan an act cuts, and a
-// cancel, each on its own frame, with idle frames between.
+// A run in real time: goals, the old act, goals an act cuts, and a cancel, each
+// on its own frame, with idle frames between.
 @(private="file")
 tools_test_play :: proc(link: ^Agent_Link, gs: ^Game_State, frames: int, wait_off := false) {
     link.connected, link.realtime = true, true
@@ -415,13 +415,14 @@ tools_test_play :: proc(link: ^Agent_Link, gs: ^Game_State, frames: int, wait_of
         switch frame {
         case 5:   agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":40},{"do":"act","move":"left","jump":true,"frames":30}]}`)
         case 90:  agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":20}`)
-        case 130: agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":40},{"move":"left","frames":50}]}`)
+        case 130: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":40},{"do":"act","move":"left","frames":50}]}`)
         case 150: agent_handle_line(link, gs, `{"cmd":"act","move":"right","jump":true,"frames":15}`)
         case 200: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":60},{"do":"act","move":"right","frames":60}]}`)
         case 210: agent_handle_line(link, gs, `{"cmd":"objective","goal":"walk about","step":"left"}`)
         case 215: agent_handle_line(link, gs, `{"cmd":"say","text":"turning"}`)
         case 220: agent_handle_line(link, gs, `{"cmd":"goals","cancel":7}`)
-        case 240: agent_handle_line(link, gs, `{"cmd":"wait","frames":25}`)
+        case 240: agent_handle_line(link, gs, `{"cmd":"act","frames":25}`)
+        case 270: agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":10}`)
         }
         if agent_drive(link, gs) {
             game_update(gs)
@@ -459,7 +460,7 @@ replay_feeds_the_goals_back_on_their_frames_and_lands_the_same :: proc(t: ^testi
     os.close(link.acts_file)
     data, _ := os.read_entire_file(rec_path, context.allocator)
     defer delete(data)
-    for want in ([]string{`"via":"Goal"`, `"via":"Act"`, `"via":"Plan"`, `"via":"Wait"`, `"cancel":7`, `"clear":true`, `"played":`, `"done":1`, `"failed":4`, `"failed":7`, `"failed":8`}) {
+    for want in ([]string{`"via":"Goal"`, `"via":"Act"`, `"cancel":7`, `"clear":true`, `"done":1`, `"failed":4`, `"failed":7`, `"failed":8`}) {
         testing.expect(t, strings.contains(string(data), want), want)
     }
 
