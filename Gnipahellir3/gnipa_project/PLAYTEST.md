@@ -121,6 +121,6 @@ sleeps: "the dimension is played out."
 
 ## Known stubs (deliberate, don't file as bugs)
 
-- Potions exist but are unobtainable/unusable
-  *(Iron_Bucket now works — right-click a water/lava cell to fill, an open cell
+- *(Health Potions are no longer a stub: 3 Flower at a Bench, right-click in
+  the bag to drink. Iron_Bucket now works — right-click a water/lava cell to fill, an open cell
   to pour. One load at a time, however many buckets you carry.)*
