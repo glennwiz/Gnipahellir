@@ -4,6 +4,11 @@ Rules for every playtest card (cards 127 on). Each card names a scenario, a seed
 its checks. An agent plays the game through the agent API as a player, writes down
 what broke, and hands back a report. Glenn reads the reports; feel is still his call.
 
+## When
+
+- Playtests run only while Glenn is at work, or when Glenn asks for one (his rule, 2026-11-03).
+  The coordinator readies them; if Glenn says he is back, finish the run in progress and stop.
+
 ## Where and how
 
 - Run in the shared agent checkout, `/home/glennwiz/dev/Gnipahellir-agent-api/Gnipahellir3`
