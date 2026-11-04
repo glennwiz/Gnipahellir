@@ -3816,13 +3816,18 @@ hero_goal_waits_while_a_hunter_it_cannot_fight_comes :: proc(t: ^testing.T) {
 // high to jump, a hero with a pick digs through the wall and gets away, the
 // pick taken in hand first; with no pick it is held there, and a hero with a
 // wand to fight with keeps the wand in hand.  A wall the pick cannot take,
-// stone it cannot cut or a structure, is never swung at.
+// stone it cannot cut or a structure, is never swung at.  Card 158 (playtest
+// 127: the idle hero dug through its own shelter and fell 36 tiles): a wall of
+// placed blocks is never swung at, and a wall over a pit never has its foot
+// dug, which would open the drop.
 @(test)
 hero_cornered_with_a_pick_digs_out :: proc(t: ^testing.T) {
-    Case :: struct{pick, wand, out: bool, wall, foot: Tile_Type}  // foot: the wall's lowest tile
+    Case :: struct{pick, wand, out: bool, wall, foot: Tile_Type, placed, pit: bool}  // foot: the wall's lowest tile
     for c in ([?]Case{
-        {true, false, true, .Stone, .Stone}, {false, false, false, .Stone, .Stone}, {true, true, false, .Stone, .Stone},
-        {true, false, false, .Rune_Stone, .Rune_Stone}, {true, false, false, .Rune_Stone, .Smelter},
+        {true, false, true, .Stone, .Stone, false, false}, {false, false, false, .Stone, .Stone, false, false},
+        {true, true, false, .Stone, .Stone, false, false},
+        {true, false, false, .Rune_Stone, .Rune_Stone, false, false}, {true, false, false, .Rune_Stone, .Smelter, false, false},
+        {true, false, false, .Stone, .Stone, true, false}, {true, false, false, .Stone, .Stone, false, true},
     }) {
         gs, link := exec_test_world()
         defer free(gs)
@@ -3832,26 +3837,126 @@ hero_cornered_with_a_pick_digs_out :: proc(t: ^testing.T) {
         for x in x0 - 12 ..= x0 - 1 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
         for y in G - 4 ..< G - 1 do set_tile(&gs.world, x0 + 1, y, c.wall)
         set_tile(&gs.world, x0 + 1, G - 1, c.foot)
+        if c.placed do for y in G - 4 ..< G do gs.world.tile_flags[grid_idx(x0 + 1, y)] += {.Placed}
+        if c.pit do for y in G ..< G + 12 do set_tile(&gs.world, x0 + 1, y, .Air)
         go_test_give(gs, .Stone_Block, 1)
         gs.player.inventory.selected = hero_item_slot(gs, .Stone_Block)  // the pick not in hand
         if c.pick do go_test_give(gs, .Pickaxe, 1)
         if c.wand do go_test_give(gs, .Fire_Wand, 1)
         hero_test_vargr(gs, f32(x0) - 3, G, {})
-        out, fell, picked, swung := false, false, false, false
+        out, fell, picked, swung, foot := false, false, false, false, false
         for _ in 0 ..< 60 * 8 {
             hero_test_tick(link, gs)
             out    ||= gs.player.pos.x > f32(x0) + 2
             fell   ||= hero_feet_row(&gs.player) >= i32(G)
             picked ||= held_item(&gs.player) == .Pickaxe
             swung  ||= gs.agent.cmd.has_mine && gs.agent.cmd.mine.x == i32(x0 + 1)
+            foot   ||= gs.agent.cmd.has_mine && gs.agent.cmd.mine == {i32(x0 + 1), i32(G - 1)}
         }
         testing.expectf(t, out == c.out, "%v: got out %v", c, out)
         testing.expectf(t, !fell, "%v: never over the edge", c)
         if c.wand do testing.expectf(t, !picked, "%v: the wand stays in hand", c)
         if c.wall == .Rune_Stone do testing.expectf(t, !swung, "%v: the pick never swung at a wall it cannot take", c)
+        if c.placed do testing.expectf(t, !swung, "%v: the pick never swung at placed blocks", c)
+        if c.pit do testing.expectf(t, !foot, "%v: the wall's foot over the pit never dug", c)
     }
 }
 
+// Card 158 (playtest 127, frame 28080): the shelter the hero built at the
+// left edge, rebuilt from the run (seed 4101 and the run's mines and places),
+// x 0-31 rows 56-106: S a placed stone, B the bench, M the smelter, W wood,
+// i ore, ' ' the cave's void.  Hurt to 4 hp, a pick in the bag, the queue
+// empty and a hunting Vargr held below it in the shaft at its back, the hero
+// mines none of its own blocks and takes no fall (in the run it dug the
+// shelter's east wall and the floor, gap-jumped east into the cavern and fell
+// 36 tiles).
+@(test)
+hero_holds_in_the_playtest_127_shelter :: proc(t: ^testing.T) {
+    SHELTER :: [?]string{
+        "##.#######################....##",
+        "##.########################...##",
+        "##.#########################....",
+        "##.##########################...",
+        "##.##################i########..",
+        "##.#####  ##i#######  #########.",
+        "##.i  #   ########i   i#########",
+        "##.SSS#S  # #######   ##i###i###",
+        "##.S   S    # #i##      ########",
+        "##.S.  S    #  ##        i######",
+        "##...BMS                  #####i",
+        "###i#SSS                  ######",
+        "######.                   ##i###",
+        "#######                    #####",
+        "######i##   W#        .       ##",
+        "#########    #        ..       .",
+        "###i#####    ##   W# #...      #",
+        "## # ####   #i#    #####.      .",
+        "###  ####   ###    i#####    #  ",
+        "###  ####    #     ######WWWW..#",
+        "###     #         #######    # #",
+        "####    #         #### ##      #",
+        "####              ###  #     # #",
+        "####i             #i#           ",
+        "######            ####       #  ",
+        "#i####            #####         ",
+        "###i##            ####i#     #  ",
+        "#### #            ######        ",
+        "###                ####      #  ",
+        "##                 #            ",
+        "#i            #  ##          ###",
+        "###           #####             ",
+        "###           ###i              ",
+        "###            ##              #",
+        "####                      #   ##",
+        "#i####                    ###..#",
+        "######                    .###..",
+        "#####                     #####.",
+        "#####                     ######",
+        "####   ##                 #  ## ",
+        "#i#     #                       ",
+        "##                              ",
+        "##i          ###                ",
+        "###         #####               ",
+        "###         ##i##               ",
+        "####        ####      #         ",
+        "#####     # ####  #  ###   ###i ",
+        "######    ######################",
+        "#######   #################i####",
+        "##############i###i#############",
+        "################################",
+    }
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    for x in 0 ..< 48 do for y in 40 ..< GRID_H do set_tile(&gs.world, x, y, .Stone)
+    for row, j in SHELTER do for ch, x in row {
+        y := 56 + j
+        tt: Tile_Type
+        switch ch {
+        case '.': tt = .Air
+        case ' ': tt = .Void
+        case 'B': tt = .Crafting_Bench
+        case 'M': tt = .Smelter
+        case 'W': tt = .Wood
+        case 'i': tt = .Iron_Ore
+        case: tt = .Stone
+        }
+        set_tile(&gs.world, x, y, tt)
+        if ch == 'S' do gs.world.tile_flags[grid_idx(x, y)] += {.Placed}
+    }
+    gs.player.pos, gs.player.vel = {6.20, 64.20}, {}
+    gs.player.hp = 4
+    go_test_give(gs, .Pickaxe, 1)
+    hero_test_vargr(gs, 2.40, 67, {})
+    for _ in 0 ..< 60 * 30 do hero_test_tick(link, gs)
+    mined := 0
+    for row, j in SHELTER do for ch, x in row do if ch == 'S' && (get_tile(&gs.world, x, 56 + j) != .Stone || .Placed not_in gs.world.tile_flags[grid_idx(x, 56 + j)]) do mined += 1
+    testing.expectf(t, mined == 0, "%d of its own blocks mined", mined)
+    testing.expectf(t, gs.player.hp == 4 && hero_feet_row(&gs.player) < 70, "no fall: hp %d, feet row %d", gs.player.hp, hero_feet_row(&gs.player))
+}
 // Card 155.  Cornered at a drop by a Builder: the fall that costs more than
 // one blow is refused while the flight has cost nothing, and taken once the
 // blows already taken in this flight cost more than it.
@@ -5104,4 +5209,279 @@ hero_retreat_with_no_spot_left_gives_up :: proc(t: ^testing.T) {
         hero_test_tick(link, gs)
         testing.expect(t, gs.hero.current != .Retreat, "no retreat with no spot in the ring")
     }
+}
+
+// ─── Hero safety from playtests 127-129 (card 158) ───
+
+// Card 158: an unarmed hero on a go past a Vargr that keeps coming does not
+// flap between the goal and flight every tick (playtest 129: 884 pauses): it
+// flees well clear before the goal comes back, and gives the goal up, hunted,
+// after HERO_HUNTED_PAUSES pauses.  The next goal counts afresh, and the count
+// clears when nothing is in sight.  A Vargr on an errand of its own is fled
+// from but never counted.
+@(test)
+hero_flee_from_a_hunter_does_not_flap :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    v := hero_test_vargr(gs, f32(x0) + 14, G, {-RAIDER_SPEED, 0})
+    gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+    for id in 1 ..= 2 {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 20, G - 1))
+        pauses := 0
+        for _ in 0 ..< 60 * 20 {
+            was := gs.hero.paused_goal
+            hero_test_tick(link, gs)
+            if was == 0 && gs.hero.paused_goal != 0 do pauses += 1
+        }
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, pauses == HERO_HUNTED_PAUSES, "goal %d: %d pauses, then given up: %d", id, HERO_HUNTED_PAUSES, pauses)
+        testing.expectf(t, status == "failed" && reason == "hunted: a Vargr keeps coming", "goal %d given up, hunted: %s %s", id, status, reason)
+    }
+    despawn_enemy(gs, v)
+    hero_test_tick(link, gs)
+    testing.expect_value(t, gs.hero.flee_pauses, 0)
+
+    // Only flight counts: a goal paused to fight, the count already at the
+    // line, runs on.
+    gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+    gs.player.hp = gs.player.hp_max
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 20, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    hero_test_tick(link, gs)
+    v = hero_test_vargr(gs, gs.player.pos.x + 3, G, {-RAIDER_SPEED, 0})
+    gs.hero.flee_goal, gs.hero.flee_pauses = id, HERO_HUNTED_PAUSES
+    for k := 0; k < 60 && gs.hero.paused_goal == 0; k += 1 do hero_test_tick(link, gs)
+    testing.expectf(t, gs.hero.paused_goal == id && gs.hero.paused_by == .Fight, "paused to fight: %v by %v", gs.hero.paused_goal, gs.hero.paused_by)
+    status, _ := go_test_status(link, gs, id)
+    testing.expectf(t, status == "running", "a fight pause is no flight: %s", status)
+
+    // Only a hunter counts: the same go past a Vargr on an errand of its own
+    // is paused for flight as often, but never given up as hunted (the
+    // headway rule may still end it).
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        v := hero_test_vargr(gs, f32(x0) + 14, G, {-RAIDER_SPEED, 0})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        gs.enemies.data[v].builder.goal = .Fetch_Mineral
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 20, G - 1))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        pauses := 0
+        for _ in 0 ..< 60 * 20 {
+            was := gs.hero.paused_goal
+            hero_test_tick(link, gs)
+            if was == 0 && gs.hero.paused_goal != 0 do pauses += 1
+        }
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, pauses > HERO_HUNTED_PAUSES, "paused for flight %d times", pauses)
+        testing.expectf(t, !strings.has_prefix(reason, "hunted") && gs.hero.flee_pauses == 0, "never hunted: %s %s, count %d", status, reason, gs.hero.flee_pauses)
+    }
+}
+
+// Card 158: a go takes a drop that hurts only when no way without one reaches
+// (playtest 127: home fell 13 tiles, a level 2 go fell twice).  To the foot
+// of a 2-wide shaft 8 deep: with nothing to go down by, the fall (Glenn: a
+// fall like the pickaxe ledge's is meant, it teaches fall damage); with a
+// pick, a stair dug; with a stair cut to the foot, the long walk round.
+@(test)
+hero_go_takes_no_hurtful_drop_when_a_safe_way_exists :: proc(t: ^testing.T) {
+    Way :: enum { Nothing, Pick, Stair }
+    for way in Way {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        for x in x0 + 5 ..= x0 + 6 do for y in G ..< G + 8 do set_tile(&gs.world, x, y, .Air)
+        to := [2]i32{i32(x0 + 5), i32(G + 7)}
+        hurts := hero_column(&gs.world, x0 + 5, G - 1).hurts
+        testing.expectf(t, hurts > 0, "the shaft's fall hurts: %d", hurts)
+        switch way {
+        case .Nothing:
+        case .Pick:   go_test_give(gs, .Pickaxe, 1)
+        case .Stair:
+            // Down to the right from the surface at x0+14 to the shaft's foot.
+            for i in 0 ..= 7 do for y in G + 5 - i ..= G + 7 - i do set_tile(&gs.world, x0 + 7 + i, y, .Air)
+        }
+        hp := gs.player.hp
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, to.x, to.y), 60 * 40)
+        work_test_expect_done(t, link, gs, id)
+        lost := hp - gs.player.hp
+        testing.expectf(t, lost == (hurts if way == .Nothing else 0), "%v: lost %d hp (the fall takes %d)", way, lost, hurts)
+    }
+}
+
+// Card 158 (playtest 127: idle, the hero stood while a Builder dug up at it
+// through the rock, and was bitten): a threat coming at the hero within
+// HERO_THREAT_NEAR, hunting, is noticed with no line to it, and the hero gets
+// clear; one that is not coming, is coming from deeper than that, or only
+// passes on its own errand (seed 999: a Builder fetching ore) stays unnoticed
+// behind the rock, unless it is in reach.
+@(test)
+hero_notices_a_hunter_digging_up_at_it :: proc(t: ^testing.T) {
+    Case :: struct{coming: bool, deep: int, goal: Builder_Goal, noticed: bool}  // deep: rows of rock under the floor
+    for c in ([]Case{{true, 2, .Wave_Hunt, true}, {true, 2, .Hunt, true}, {false, 2, .Wave_Hunt, false}, {true, 8, .Wave_Hunt, false}, {true, 2, .Fetch_Mineral, false}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        for x in x0 - 1 ..= x0 + 1 do for y in G + c.deep ..< G + c.deep + 2 do set_tile(&gs.world, x, y, .Air)  // a pocket under the floor
+        v := hero_test_vargr(gs, f32(x0), G + c.deep + 2, {0, -RAIDER_SPEED} if c.coming else {})
+        gs.enemies.data[v].builder.goal = c.goal
+        if c.deep == 8 do testing.expectf(t, f32(c.deep) > HERO_THREAT_NEAR && f32(c.deep) + 2 < HERO_THREAT_FAR, "deep %d is past near, short of far", c.deep)
+        noticed, fled := false, false
+        for _ in 0 ..< 60 {
+            hero_test_tick(link, gs)
+            th := hero_threat(&gs.hero)
+            noticed ||= th != nil
+            if th != nil do testing.expect(t, !th.in_line, "no line through the rock")
+            fled ||= abs(gs.player.pos.x - f32(x0)) > 2
+        }
+        testing.expectf(t, noticed == c.noticed && fled == c.noticed, "%v: noticed %v, got clear %v", c, noticed, fled)
+    }
+    // One in reach through a thin wall is noticed even on its own errand and
+    // standing still: it can strike from there.
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    for y in G - 4 ..< G do set_tile(&gs.world, x0 + 1, y, .Stone)
+    v := hero_test_vargr(gs, f32(x0) + 2, G, {})
+    gs.enemies.data[v].builder.goal = .Fetch_Mineral
+    th: ^Hero_Threat
+    for k := 0; k < 30 && th == nil; k += 1 {
+        hero_test_tick(link, gs)
+        th = hero_threat(&gs.hero)
+    }
+    testing.expectf(t, th != nil && !th.in_line && th.dist <= f32(MELEE_REACH) && !th.closing, "in reach behind the wall, still: noticed: %v", th)
+}
+
+// Card 158: when the hero dies every running or queued goal but an act fails
+// with died, as the next life may be a new world; an act stays, to work the
+// death screen, and goals queued on the death screen run in the next life.
+@(test)
+hero_death_fails_every_goal_but_an_act :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}},{{"do":"gather","item":"Wood_Log","count":1}},{{"do":"act","frames":5}}]}}`, x0 + 20, G - 1))
+    ids := exec_test_reply(link)["ids"].(json.Array)
+    exec_test_frames(link, gs, 5)
+    go_id, gather_id, act_id := int(ids[0].(json.Float)), int(ids[1].(json.Float)), int(ids[2].(json.Float))
+    status, _ := go_test_status(link, gs, go_id)
+    testing.expect_value(t, status, "running")
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID,
+        payload = {int_val = 100}, cause = .Lava})
+    exec_test_frames(link, gs, 2)
+    testing.expect(t, gs.player.dead, "dead")
+    for id in ([]int{go_id, gather_id}) {
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "failed" && reason == "died", "goal %d: %s %s", id, status, reason)
+    }
+    status, _ = go_test_status(link, gs, act_id)
+    testing.expectf(t, status != "failed", "the act stays: %s", status)
+    // Goals queued on the death screen are for the next life: they wait, and
+    // run once it starts, whatever a player opens over the death screen and
+    // shuts again first (the menu, its settings, the snapshots, the title),
+    // and after a client drops and reconnects there.
+    for k := 0; k < 600 && gs.player.death_timer <= DEATH_INPUT_DELAY; k += 1 do exec_test_frames(link, gs, 1)
+    agent_handle_line(link, gs, `{"cmd":"goals","clear":true}`)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"gather","item":"Wood_Log","count":1}]}`)
+    next_id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    for overlay in ([?]^bool{&gs.ui.show_menu, &gs.ui.show_settings, &gs.ui.show_snapshots, &gs.ui.show_title}) {
+        for _ in 0 ..< 3 {
+            overlay^ = true
+            exec_test_frames(link, gs, 1)
+        }
+        overlay^ = false
+        exec_test_frames(link, gs, 3)
+        status, reason := go_test_status(link, gs, next_id)
+        testing.expectf(t, status != "failed", "after a round trip to %s: %s %s", agent_screen(gs), status, reason)
+    }
+    // A client that drops and reconnects on the death screen starts afresh
+    // (agent_frame zeroes gs.agent), and what it queues is for the next life.
+    link.goals = {}
+    gs.agent = {}
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"gather","item":"Wood_Log","count":1}]}`)
+    next_id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    exec_test_frames(link, gs, 3)
+    {
+        status, reason := go_test_status(link, gs, next_id)
+        testing.expectf(t, status != "failed", "after a reconnect: %s %s", status, reason)
+    }
+    eq_push(&gs.events, Event{type = .New_Game_Request})  // the death screen dismissed
+    for k := 0; k < 600 && agent_screen(gs) != "play"; k += 1 do exec_test_frames(link, gs, 1)
+    testing.expect_value(t, agent_screen(gs), "play")
+    exec_test_frames(link, gs, 5)
+    next_status, next_reason := go_test_status(link, gs, next_id)
+    testing.expectf(t, next_status == "running", "the next life's gather runs: %s %s", next_status, next_reason)
+}
+
+// Card 158: a noticed threat stays in mind until it is HERO_CLEAR_MARGIN past
+// HERO_THREAT_FAR, line or no line.
+@(test)
+hero_threat_stays_in_mind_past_the_far_line :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    v := hero_test_vargr(gs, f32(x0) + 6, G, {})
+    for k := 0; k < 60 && gs.hero.current != .Flee; k += 1 do hero_test_tick(link, gs)
+    testing.expect(t, gs.hero.current == .Flee, "fleeing")
+    // Put the Vargr off right of the hero by `off`, a wall between them.
+    put := proc(gs: ^Game_State, v: int, G: int, off: f32) -> (wall: int) {
+        e := &gs.enemies.data[v]
+        e.pos.x = gs.player.pos.x + PLAYER_W * 0.5 + off - BUILDER_W * 0.5
+        wall = int(gs.player.pos.x) + 4
+        for y in G - 4 ..< G do set_tile(&gs.world, wall, y, .Stone)
+        return
+    }
+    wall := put(gs, v, G, HERO_THREAT_FAR + HERO_CLEAR_MARGIN / 2)
+    hero_test_tick(link, gs)
+    th := hero_threat(&gs.hero)
+    testing.expect(t, th != nil && !th.in_line, "past far, behind the wall: still in mind")
+    for y in G - 4 ..< G do set_tile(&gs.world, wall, y, .Air)
+    put(gs, v, G, HERO_THREAT_FAR + HERO_CLEAR_MARGIN + 2)
+    hero_test_tick(link, gs)
+    testing.expect(t, hero_threat(&gs.hero) == nil, "past the margin: out of mind")
+}
+
+// Card 158, the go search by hand.  A drop that hurts is planned only when no
+// way without one reaches: the long way round by a tunnel beats a 1-hp drop
+// that costs less, and the reflex line still refuses a fall.
+@(test)
+hero_plan_takes_no_hurtful_drop_while_a_safe_way_reaches :: proc(t: ^testing.T) {
+    hurtful :: proc(path: ^Hero_Path) -> bool {
+        for st in path.steps[:path.n] do if st.move == .Drop && f32(st.to.y - st.from.y) > SAFE_FALL_TILES do return true
+        return false
+    }
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    X, Y := i32(x0), i32(G)
+    path := &gs.hero.path
+    for x in x0 + 5 ..= x0 + 6 do for y in G ..< G + 6 do set_tile(&gs.world, x, y, .Air)  // a shaft 6 deep: a 1-hp drop
+    // A stair down at the arena's far side, then a tunnel back to the shaft's foot.
+    for i in 0 ..= 5 do for y in G + i - 2 ..= G + i do set_tile(&gs.world, x0 - 16 + i, y, .Air)
+    for x in x0 - 10 ..= x0 + 4 do for y in G + 4 ..= G + 5 do set_tile(&gs.world, x, y, .Air)
+    foot := [2]i32{X + 5, Y + 5}
+    testing.expect_value(t, hero_column(&gs.world, x0 + 5, G - 1).hurts, 1)
+    testing.expect(t, hero_plan(gs, {X, Y - 1}, foot, path), "reached the long way")
+    testing.expect(t, !hurtful(path), "with no drop that hurts")
+    for y in G + 4 ..= G + 5 do set_tile(&gs.world, x0 - 2, y, .Stone)
+    testing.expect(t, hero_plan(gs, {X, Y - 1}, foot, path) && hurtful(path), "the tunnel shut: the drop")
+    gs.player.hp = 1
+    testing.expect(t, !hero_plan(gs, {X, Y - 1}, foot, path), "at 1 hp the fall is refused")
 }

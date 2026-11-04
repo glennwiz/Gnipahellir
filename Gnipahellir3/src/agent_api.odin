@@ -616,6 +616,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  a work goal picks its tool (the longest mine wand the mana fires, else the pickaxe) and works windows at a person's pace;\n")
     fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), blocked or full first, then what\n")
     fmt.sbprintf(w, "  a fight is done when its enemy is gone; it fails with no_item, no_target, unreachable or low_hp (backed off) first\n")
+    fmt.sbprintf(w, "  when the hero dies every goal but an act fails with died: queue again for the next life\n")
     fmt.sbprintf(w, "  an act holds its keys for 1..%d ticks at 60 a second; it fails only when its verb is refused as it starts, or at a drop that hurts or a burn ahead\n", AGENT_MAX_FRAMES)
     fmt.sbprintf(w, "The act fields, for an act goal:\n")
     fmt.sbprintf(w, "  move: left, right, none. jump, down, interact, dismiss, warp: true\n")

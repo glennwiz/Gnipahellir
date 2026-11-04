@@ -377,10 +377,12 @@ HERO_SWING_S          :: f32(0.45)  // between sword swings; the sword itself al
 HERO_WAND_RANGE       :: f32(8)     // a fire wand shoots at a threat this close
 HERO_PASS_BLOWS       :: 1          // blows a threat gets in as the hero runs back past it
 HERO_BREAK_STUCK_S    :: f32(0.5)   // a flight with no headway this long: the way is shut
-HERO_WARY_S           :: f32(30)    // a threat in the senses this recently, noticed or not, keeps the hero wary
+HERO_WARY_S           :: f32(8)     // a threat in the senses this recently, noticed or not, keeps the hero wary
 HERO_WARY_EXIT_HP     :: 2          // while wary, a work stand needs a way out that costs at most this
 HERO_RETREAT_SCORE    :: f32(70)    // low with no heal, in a pit: out of it ahead of a work goal
 HERO_MAULED_TILES     :: f32(1.5)   // a threat this near across is striking: with the way shut, a fall that leaves the hero standing beats it
+HERO_CLEAR_MARGIN     :: f32(4)     // a noticed threat stays in mind this far past HERO_THREAT_FAR
+HERO_HUNTED_PAUSES    :: 3          // paused for flight this often with the threat still in sight, a goal is given up, hunted
 HERO_KITE_TILES       :: f32(4)     // with the wand, a threat nearer than this is backed off from as it is shot
 HERO_FIGHT_BACK_S     :: f32(1.5)   // the fight_back reflex answers a blow this long
 HERO_FIGHT_RETREAT_FRAC :: f32(0.3) // a fight goal backs off under this share of max hp
@@ -399,9 +401,10 @@ Hero_Threat :: struct {
     closing:  bool,  // it came at the hero within HERO_CLOSING_MEMORY_S
     closing_ago: f32,  // seconds since it last came at the hero
     in_line:  bool,  // nothing solid between: it can come at the hero, and be hit
-    noticed:  bool,  // answered: in sight HERO_REACTION_S and in line or in reach; once so, kept within HERO_THREAT_FAR
+    noticed:  bool,  // answered: in sight HERO_REACTION_S and in line, in reach, or hunting and coming at the hero within HERO_THREAT_NEAR; once so, kept within HERO_THREAT_FAR + HERO_CLEAR_MARGIN
     damage:   int,   // one blow at the hero
     seen_for: f32,   // seconds in sight
+    hunting:  bool,  // after the hero (Hunt or Wave_Hunt), not on an errand of its own
 }
 
 // One column round the hero, judged from the hero's feet row.
@@ -463,6 +466,8 @@ Hero_Brain :: struct {
     retreat:     Agent_Goal,  // the retreat's walk, a go goal the brain runs itself
     retreat_off: bool, // a retreat found no way out: none again until the hero stands where the way out is cheap
     flight_hp:   int,  // the hp when no threat was last in mind: what this flight has cost since
+    flee_goal:   int,  // the goal flights have paused while a threat stayed in sight
+    flee_pauses: int,  // and how often
     leap_dir:    i8,   // over a gap this way, held until the feet are down
     potion_t:    f32,  // seconds until the potion reflex may fire again
     path:        Hero_Path,
@@ -513,6 +518,7 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     hero_sense(gs, b)
     if hero_threat(b) == nil do b.flight_hp, b.turned_dir, b.drop_back = gs.player.hp, 0, false
     b.seen_ago += gs.delta_time
+    if hero_threats_in_sight(b) == 0 do b.flee_pauses = 0
     for th in b.senses.threats[:b.senses.n_threats] do if th.damage > 0 do b.seen, b.seen_ago = true, 0
     if b.retreat_off && gs.player.grounded && hero_way_out_cheap(&gs.world, hero_feet(&gs.player)) do b.retreat_off = false
     for row, k in hero_behaviours do if row.score != nil do b.scores[k] = row.score(gs, b, g)
@@ -530,6 +536,16 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     if b.paused_goal != 0 && (g == nil || g.id != b.paused_goal) do b.paused_goal = 0  // it ended while paused
     switch {
     case g != nil && g.status == .Running && b.current != .Work_Goal && b.paused_goal != g.id:
+        if b.current == .Flee && hero_threat(b).hunting {  // flee runs only on a noticed threat
+            // Driven off again and again by a hunter that stays in sight: give it up.
+            if b.flee_goal != g.id do b.flee_goal, b.flee_pauses = g.id, 0
+            b.flee_pauses += 1
+            if b.flee_pauses > HERO_HUNTED_PAUSES {
+                g.status = .Failed
+                agent_text_set(&g.reason, fmt.tprintf("hunted: a %v keeps coming", hero_threat(b).kind))  // flee runs only on a noticed threat
+                break
+            }
+        }
         b.paused_goal = g.id
         b.paused_by   = b.current
         hero_note(q, {kind = .Paused, goal = g.id, why = b.current})
@@ -614,8 +630,13 @@ hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
         // Noticed once, a threat stays in mind while it is near, as it would
         // for a person: a bump that cuts the line for a step does not make the
         // wolf go away.
-        th.noticed = th.noticed && th.dist < HERO_THREAT_FAR
-        if th.seen_for >= HERO_REACTION_S && (th.in_line || th.dist <= f32(MELEE_REACH)) do th.noticed = true
+        th.noticed = th.noticed && th.dist < HERO_THREAT_FAR + HERO_CLEAR_MARGIN
+        // One hunting the hero and coming at it near is noticed through the
+        // rock too, as a player sees a Builder digging up at them (playtest
+        // 127); one passing by on its own errand is not (seed 999: a Builder
+        // fetching ore under the hero's shaft).
+        th.hunting = e.builder.goal == .Hunt || e.builder.goal == .Wave_Hunt
+        if th.seen_for >= HERO_REACTION_S && (th.in_line || th.dist <= f32(MELEE_REACH) || th.hunting && th.closing && th.dist <= HERO_THREAT_NEAR) do th.noticed = true
         at := s.n_threats
         for at > 0 && s.threats[at - 1].dist > th.dist do at -= 1
         if at == HERO_THREATS_MAX do continue
@@ -908,6 +929,8 @@ hero_dig_out :: proc(gs: ^Game_State, b: ^Hero_Brain, dir: i8) -> bool {
         t := [2]i32{x, y}
         tile := get_tile(&gs.world, int(x), int(y))
         if .Mineable not_in terrain_table[tile].flags || is_structure_tile[tile] do continue  // the pick's own rule
+        if .Placed in gs.world.tile_flags[grid_idx(int(x), int(y))] do continue  // the player's own building
+        if _, safe := hero_dig_safe(&gs.world, t, y - 1, x, x); !safe do continue  // stood on, it would drop the hero far
         c := &gs.agent.cmd
         if held_item(&gs.player) != .Pickaxe {
             c.verb, c.verb_arg = .Select, i32(pick)
@@ -1152,10 +1175,12 @@ hero_note_names := [Hero_Note_Kind]string{
 // would: hero_plan searches the feet tiles round the hero (a fixed window, a
 // fixed budget) for walks, step-ups, jumps, gap jumps and drops, a block from
 // the bag set down as a bridge, and digs with the pick (a tunnel, a step cut
-// up, a stair down: one down and one across, never a shaft).  Each step has a
-// price: a drop costs nothing to SAFE_FALL_TILES and HERO_NAV_HP_COST per hp
-// the fall rule takes after, and one that would kill or leave the hero under
-// the reflex line is never taken; burning and water tiles are never stood in,
+// up, a stair down: one down and one across, never a shaft).  Each step has a price: a drop costs nothing to
+// SAFE_FALL_TILES and HERO_NAV_HP_COST per hp the fall rule takes after, and
+// one that would kill or leave the hero under the reflex line is never taken.
+// A drop that hurts at all is taken only when no way without one reaches
+// (card 158: the search runs once without them first); burning and water
+// tiles are never stood in,
 // and a pond or lava rim is never dug.  hero_go_tick follows the path through
 // gs.agent.cmd alone, replans when knocked off it or stuck, and fails the goal
 // with no_route (nothing nearer can be reached), blocked (no headway for
@@ -1296,6 +1321,11 @@ hero_nav_h :: proc(a, b: [2]i32) -> f32 {
 // reaches it, else the tile nearest it the search found.  An empty path: no
 // tile nearer than from.
 hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := true) -> (reached: bool) {
+    return hero_plan_once(gs, from, to, out, dig, hurt_ok = false) || hero_plan_once(gs, from, to, out, dig, hurt_ok = true)
+}
+
+@(private="file")
+hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool) -> (reached: bool) {
     n := &gs.hero.nav
     w := &gs.world
     o := [2]i32{clamp(from.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(from.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
@@ -1340,7 +1370,7 @@ hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := tru
                 // over the gap, or a block set down to walk on.
                 col := hero_column(w, int(f.x), int(f.y))
                 land := [2]i32{f.x, f.y + i32(col.drop)}
-                if !col.hazard && hero_stand(w, land) && hero_fall_ok(gs, col.hurts) {
+                if !col.hazard && hero_stand(w, land) && (col.hurts == 0 || hurt_ok && hero_fall_ok(gs, col.hurts)) {
                     hero_nav_relax(n, &size, o, i, land, 1 + 0.3 * f32(col.drop) + HERO_NAV_HP_COST * f32(col.hurts), .Drop, nb, to)
                 }
                 if l, k, ok := hero_gap_landing(w, a, d); ok {
@@ -1432,6 +1462,19 @@ agent_goal_home_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
     }
     agent_text_set(&g.reason, "no_route: no home on this level")
     return false
+}
+
+// At the death every goal but an act ends: its life is over, and the next life
+// may be a new world.  An act stays, to work the death screen.  Run once, by
+// the death itself (Player_Died), so a goal queued on the death screen is for
+// the next life whatever opens over the screen or reconnects meanwhile.
+agent_goals_died :: proc(gs: ^Game_State) {
+    q := gs.agent.goals
+    if q == nil do return
+    for &d in q.slots[:q.n] do if d.kind != .Act && (d.status == .Queued || d.status == .Running) {
+        d.status = .Failed
+        agent_text_set(&d.reason, "died")
+    }
 }
 
 // The feet tile of the surface spawn.
