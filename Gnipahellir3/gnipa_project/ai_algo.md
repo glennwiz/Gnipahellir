@@ -232,6 +232,7 @@ One row per behaviour, a score proc and a run proc:
 | flee | press x (30 + 60 x (1 - hp fraction)), +`HERO_UNARMED_FLEE` (40) unarmed | to the safe spot farthest from the threat at least `HERO_SAFE_CLEAR` from it, never one back past the threat, else straight away; a gap the jump arc clears (up to `HERO_GAP_MAX`, head room over take-off, gap and landing) it jumps as a player does, held until its feet are down (card 155); cornered at a drop it will not walk, it takes the drop only if the fall costs less hp than `HERO_PASS_BLOWS` of the threat's blows plus the hp this flight has already cost (card 155: blows taken since no threat was in mind) (every threat is slower than the hero, so running back past it costs that much at most) and no burn waits below, else runs past the threat and keeps going until it is behind. A way that makes no headway for `HERO_BREAK_STUCK_S` with the threat on it (within `HERO_MAULED_TILES` across) is shut: an unarmed hero with a pick first digs through the wall ahead, head or feet tile, any the pick takes (no structure), the pick taken in hand first (card 155); else it turns back, and at a drop with the threat on it takes a fall that leaves it standing even after one more blow, burns excepted, rather than be mauled; with the threat still off it keeps at the way it is going; the shut mark clears when it gets clear. Drops both ways (card 156): a flight that turned back from a drop, or from a way found shut with the threat on it (dearer than any fall), takes the drop on the other side if it hurts no more, else turns once more and takes the first, each only if the hero stands after one more blow; no running back and forth past the threat. The turn is forgotten when it gets clear or no threat is in mind. The gap jump only leaves the ground: in the air it carried the hero over drops it could not clear. With only the wand it shoots as it runs; 0 while a fight goal runs |
 | ledge | `HERO_LEDGE_SCORE` (100) when the goal walks the hero into a step that hurts or burns, or into a drop of `HERO_LEDGE_LOOK_TILES`+ not yet looked at | stand and look `HERO_LEDGE_LOOK_S`; then step if the fall is free, else fail the goal ("a 10-tile drop ahead", "a burn ahead") |
 | idle | `HERO_IDLE_SCORE` (10) with the queue empty | stand; with a threat noticed, make for safe ground as flee does, cornered included; on a burn, back to the last safe spot |
+| retreat | `HERO_RETREAT_SCORE` (70) when the hero is spent (under `HERO_LOW_HP_FRAC` with no heal in the bag), no threat is noticed, the queue is empty or a work goal runs (never a go, home or fight: the client's own walk), the retreat has not given up, and the hero stands where the way out costs more than `HERO_WARY_EXIT_HP`, with a remembered safe spot whose way out does not (card 157) | a go walk the brain runs itself (`gs.hero.retreat`) toward the latest such safe spot, digging with the pick as a go does; the spot holds while its own way out stays cheap (the walk's own spots may push it out of the ring), and if it closes on the way the next spot that has one is picked, and with none left the retreat gives up; the way out is judged from the ground only, so a jump on the way never ends it; it ends when the hero stands anywhere the way out is cheap; a walk that fails gives up (`retreat_off`) until the hero stands on cheap ground again |
 
 *Press* is how much the nearest noticed threat matters: 1 within
 `HERO_THREAT_NEAR`, falling to 0 at `HERO_THREAT_FAR`, halved for one out there
@@ -263,7 +264,7 @@ The running goal is the goal row. When another row wins, the goal stays
 running with its frames unspent; when the goal row wins again it carries on
 from where it was. A connected client hears (after its first `goals`):
 
-- `goal_paused` `{id, reason}` — reason fight, flee or ledge;
+- `goal_paused` `{id, reason}` — reason fight, flee, ledge or retreat;
 - `goal_resumed` `{id, reason}` — the reason that paused it;
 - `idle` `{threats}` — once each time the queue runs dry, with the number of
   enemies in sight then that can hurt the hero.
@@ -392,6 +393,17 @@ fall). The stand search refuses a stand on top of the tile, and a hero already
 standing on it steps aside first. A lone ore sticking into a cave is mined from
 the side or, with no side in reach, a named tile fails `unsafe` and a mine by
 item or a gather passes it over.
+
+A wary hero takes no stand a hunter would corner it at (card 157). Wary is a
+threat in the senses inside `HERO_WARY_S`, noticed or not, or spent (under
+`HERO_LOW_HP_FRAC` with no Health Potion or Sky Egg in the bag). Wary, a stand
+whose way out (`hero_exit_cost`) costs more than `HERO_WARY_EXIT_HP` hp is
+skipped, and with none left the goal fails as `cornered`: mine, place and every window kind (card 157); a gather or a mine by item passes the tile over and, when none is left and one it passed over was cornered, fails `cornered` too, never a false `no_item` or `unreachable`. The way out is
+walked each way for `HERO_THREAT_FAR` steps as a player walks: a step up of one
+or two tiles with head room, a walk or a free drop, a gap the jump arc clears.
+It costs the hp of the first drop that hurts (`hero_column`'s fall rule), 0 if
+the way runs on clear, and nothing gets through a wall, water or a burn; a
+feet tile in a burn or water has no way out.
 
 Windows are worked as a person works them (Glenn 2026-11-03): the click on the
 machine opens it, `HERO_WINDOW_LOOK_S` of looking, then for each step the

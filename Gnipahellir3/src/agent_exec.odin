@@ -377,6 +377,9 @@ HERO_SWING_S          :: f32(0.45)  // between sword swings; the sword itself al
 HERO_WAND_RANGE       :: f32(8)     // a fire wand shoots at a threat this close
 HERO_PASS_BLOWS       :: 1          // blows a threat gets in as the hero runs back past it
 HERO_BREAK_STUCK_S    :: f32(0.5)   // a flight with no headway this long: the way is shut
+HERO_WARY_S           :: f32(30)    // a threat in the senses this recently, noticed or not, keeps the hero wary
+HERO_WARY_EXIT_HP     :: 2          // while wary, a work stand needs a way out that costs at most this
+HERO_RETREAT_SCORE    :: f32(70)    // low with no heal, in a pit: out of it ahead of a work goal
 HERO_MAULED_TILES     :: f32(1.5)   // a threat this near across is striking: with the way shut, a fall that leaves the hero standing beats it
 HERO_KITE_TILES       :: f32(4)     // with the wand, a threat nearer than this is backed off from as it is shot
 HERO_FIGHT_BACK_S     :: f32(1.5)   // the fight_back reflex answers a blow this long
@@ -385,7 +388,7 @@ HERO_SAFE_CLEAR       :: f32(8)     // safe ground has no threat nearer than thi
 HERO_SAFE_SPACING     :: i32(2)     // tiles between remembered safe spots
 HERO_LOOSE_ROWS       :: 4          // rows above the head searched for loose blocks
 
-Hero_Behaviour :: enum u8 { None, Work_Goal, Fight, Flee, Avoid_Ledge, Idle }
+Hero_Behaviour :: enum u8 { None, Work_Goal, Fight, Flee, Avoid_Ledge, Idle, Retreat }
 
 // An enemy on screen.
 Hero_Threat :: struct {
@@ -455,6 +458,10 @@ Hero_Brain :: struct {
     turned_from: int,  // what that drop hurts (a burn: max(int))
     drop_back:   bool, // the drop turned from is the cheaper: the hero goes back and takes it
     dug:         bool, // the last tick dug
+    seen:        bool, // a threat has been in the senses
+    seen_ago:    f32,  // seconds since one was
+    retreat:     Agent_Goal,  // the retreat's walk, a go goal the brain runs itself
+    retreat_off: bool, // a retreat found no way out: none again until the hero stands where the way out is cheap
     flight_hp:   int,  // the hp when no threat was last in mind: what this flight has cost since
     leap_dir:    i8,   // over a gap this way, held until the feet are down
     potion_t:    f32,  // seconds until the potion reflex may fire again
@@ -476,6 +483,7 @@ hero_behaviours := #partial [Hero_Behaviour]Hero_Behaviour_Row{
     .Flee        = {"flee",  hero_flee_score,  hero_flee_run},
     .Avoid_Ledge = {"ledge", hero_ledge_score, hero_ledge_run},
     .Idle        = {"idle",  hero_idle_score,  hero_idle_run},
+    .Retreat     = {"retreat", hero_retreat_score, hero_retreat_run},
 }
 
 // One blow at the hero, by kind; a roamer's is its roamer_table bite.  -1: a
@@ -504,6 +512,9 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b.swing_t -= gs.delta_time
     hero_sense(gs, b)
     if hero_threat(b) == nil do b.flight_hp, b.turned_dir, b.drop_back = gs.player.hp, 0, false
+    b.seen_ago += gs.delta_time
+    for th in b.senses.threats[:b.senses.n_threats] do if th.damage > 0 do b.seen, b.seen_ago = true, 0
+    if b.retreat_off && gs.player.grounded && hero_way_out_cheap(&gs.world, hero_feet(&gs.player)) do b.retreat_off = false
     for row, k in hero_behaviours do if row.score != nil do b.scores[k] = row.score(gs, b, g)
     next := hero_pick(b)
     if next != b.current {
@@ -909,6 +920,63 @@ hero_dig_out :: proc(gs: ^Game_State, b: ^Hero_Brain, dir: i8) -> bool {
     return false
 }
 
+// Wary: a threat was in the senses lately, or the hero is low with nothing
+// to heal it.  A wary hero works only where it can get away cheaply.
+hero_wary :: proc(gs: ^Game_State) -> bool {
+    b := &gs.hero
+    return b.seen && b.seen_ago < HERO_WARY_S || hero_spent(gs)
+}
+
+// Under HERO_LOW_HP_FRAC with nothing in the bag to heal it.
+hero_spent :: proc(gs: ^Game_State) -> bool {
+    if hero_hp_frac(gs) >= HERO_LOW_HP_FRAC do return false
+    for it in hero_heal_items do if hero_item_slot(gs, it) >= 0 do return false
+    return true
+}
+
+// A way out of feet tile a that costs at most HERO_WARY_EXIT_HP: a tile the
+// wary hero works from, and the retreat walks to.
+hero_way_out_cheap :: proc(w: ^World_Grid, a: [2]i32) -> bool {
+    return hero_exit_cost(w, a) <= HERO_WARY_EXIT_HP
+}
+
+// What the cheapest way out from feet tile a costs: walked each way as a
+// player walks for HERO_THREAT_FAR steps (a step up of one or two tiles where
+// the body fits, a walk or a free drop, a gap the jump arc clears), the hp of
+// the first drop that hurts, 0 for a way that runs on clear.  A wall, water or
+// a burn is no way out, and a feet tile in a burn or water has none (rock is
+// judged as dug out: a work stand may be dug).
+hero_exit_cost :: proc(w: ^World_Grid, a: [2]i32) -> int {
+    if hero_wet_or_burning(w, a.x, a.y) do return max(int)
+    return min(hero_way_out(w, a, -1), hero_way_out(w, a, 1))
+}
+
+@(private="file")
+hero_way_out :: proc(w: ^World_Grid, a: [2]i32, d: i32) -> int {
+    at := a
+    for _ in 0 ..< int(HERO_THREAT_FAR) {
+        x := at.x + d
+        if !hero_open(w, x, at.y) || !hero_open(w, x, at.y - 1) {
+            up := i32(0)
+            for u in i32(1) ..= 2 do if up == 0 && hero_open(w, x, at.y - u) && hero_open(w, x, at.y - u - 1) && hero_open(w, at.x, at.y - u - 1) do up = u
+            if up == 0 || hero_wet_or_burning(w, x, at.y) do return max(int)
+            at = {x, at.y - up}
+            continue
+        }
+        col := hero_column(w, int(x), int(at.y))
+        if col.hazard do return max(int)
+        if col.hurts > 0 {
+            if l, _, ok := hero_gap_landing(w, at, d); ok {
+                at = l
+                continue
+            }
+            return col.hurts
+        }
+        at = {x, at.y + i32(col.drop)}
+    }
+    return 0
+}
+
 // ─── Behaviours ───
 
 // A goal waits while an enemy the hero cannot fight hunts it: flee, which
@@ -1022,6 +1090,53 @@ hero_idle_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
     if !hero_here(s).hazard || s.n_safe == 0 do return
     spot := s.safe[(s.safe_next + HERO_SAFE_MAX - 1) % HERO_SAFE_MAX]
     hero_walk_to(gs, b, f32(spot.x) + 0.5)
+}
+
+// Spent (hero_spent), nothing hunting it, idle or at a work goal, and standing
+// where a hunter would corner it (hero_exit_cost over HERO_WARY_EXIT_HP): back
+// toward the last safe spot with a cheap way out, the work goal paused until
+// the hero stands anywhere the way out is cheap.
+@(private="file")
+hero_retreat_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
+    if hero_threat(b) != nil || !hero_spent(gs) do return 0
+    if g != nil && agent_goal_kinds[g.kind].check != hero_work_check do return 0
+    if b.retreat_off do return 0
+    if !gs.player.grounded do return HERO_RETREAT_SCORE if b.current == .Retreat else 0  // the way out is judged from the ground
+    if hero_way_out_cheap(&gs.world, hero_feet(&gs.player)) do return 0
+    // The spot being walked to holds while its way out stays cheap, though
+    // the walk's own spots push it out of the ring.
+    if b.current == .Retreat && hero_way_out_cheap(&gs.world, b.retreat.to) do return HERO_RETREAT_SCORE
+    _, ok := hero_retreat_spot(gs, b)
+    return HERO_RETREAT_SCORE if ok else 0
+}
+
+// The latest safe spot with a cheap way out.
+@(private="file")
+hero_retreat_spot :: proc(gs: ^Game_State, b: ^Hero_Brain) -> ([2]i32, bool) {
+    s := &b.senses
+    for k in 1 ..= s.n_safe {
+        spot := s.safe[(s.safe_next + HERO_SAFE_MAX - k) % HERO_SAFE_MAX]
+        if hero_way_out_cheap(&gs.world, spot) do return spot, true
+    }
+    return {}, false
+}
+
+@(private="file")
+hero_retreat_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
+    r := &b.retreat
+    // A fresh walk, or the spot walked to lost its cheap way out on the way:
+    // the next that has one.
+    if b.held == 0 || !hero_way_out_cheap(&gs.world, r.to) {
+        spot, ok := hero_retreat_spot(gs, b)
+        if !ok {
+            b.retreat_off = true  // no spot left to walk to: give up, as a walk that fails does
+            return
+        }
+        r^ = {}  // no failure left from the last
+        hero_go_start(gs, r, spot)  // refuses only a burn or water, which has no way out
+    }
+    hero_go_tick(gs, r)
+    if r.status == .Failed do b.retreat_off = true
 }
 
 @(rodata)

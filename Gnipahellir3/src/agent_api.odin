@@ -614,7 +614,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     for row in agent_goal_kinds do fmt.sbprintf(w, "    %s: %s\n", row.name, row.params)
     fmt.sbprintf(w, "  a go or home that cannot get nearer fails: no_route (nothing nearer to reach), blocked (no headway for %.0f s), hazard (the tile burns or drowns)\n", HERO_GO_STUCK_S)
     fmt.sbprintf(w, "  a work goal picks its tool (the longest mine wand the mana fires, else the pickaxe) and works windows at a person's pace;\n")
-    fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, unsafe, blocked or full first, then what\n")
+    fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), blocked or full first, then what\n")
     fmt.sbprintf(w, "  a fight is done when its enemy is gone; it fails with no_item, no_target, unreachable or low_hp (backed off) first\n")
     fmt.sbprintf(w, "  an act holds its keys for 1..%d ticks at 60 a second; it fails only when its verb is refused as it starts, or at a drop that hurts or a burn ahead\n", AGENT_MAX_FRAMES)
     fmt.sbprintf(w, "The act fields, for an act goal:\n")
@@ -658,7 +658,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "\nEVENTS\n")
     fmt.sbprintf(w, "Every reply carries \"re\", the cmd it answers. After your first goals command the game also sends lines unasked,\n")
     fmt.sbprintf(w, "each with \"event\" and the frame \"f\": goal_done (id), goal_failed (id, reason), hurt (by, hp), died (by), level_changed (level), heard (text),\n")
-    fmt.sbprintf(w, "goal_paused and goal_resumed (id, reason: fight, flee or ledge), idle (threats) once the queue runs dry.\n")
+    fmt.sbprintf(w, "goal_paused and goal_resumed (id, reason: fight, flee, ledge or retreat), idle (threats) once the queue runs dry.\n")
     fmt.sbprintf(w, "The hero has its own sense of danger: it fights or flees an enemy that comes at it and goes back to the goal after,\n")
     fmt.sbprintf(w, "stops at a drop the fall would hurt from (the goal fails, reason says the drop), and keeps to safe ground when idle.\n")
 

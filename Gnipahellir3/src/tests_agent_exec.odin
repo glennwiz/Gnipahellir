@@ -2989,11 +2989,11 @@ hero_work_stand_is_the_nearest :: proc(t: ^testing.T) {
     defer free(link)
     x0, G := hero_test_arena(gs)
     ore := [2]i32{i32(x0 + 6), i32(G)}
-    s, ok, _ := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+    s, ok, _, _ := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
     testing.expect(t, ok, "a stand")
     testing.expect_value(t, s, [2]i32{i32(x0 + 5), i32(G - 1)})
     gs.player.pos.x = f32(x0 + 12)
-    s, ok, _ = hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+    s, ok, _, _ = hero_work_stand(gs, ore, .Pick, PICK_RANGE)
     testing.expect_value(t, s, [2]i32{i32(x0 + 7), i32(G - 1)})
 }
 
@@ -3375,7 +3375,7 @@ hero_work_stand_digs_only_with_a_pick_and_when_worth_it :: proc(t: ^testing.T) {
     set_tile(&gs.world, x0 + 4, G, .Air)  // a pocket beside it, two high, open from above
     set_tile(&gs.world, x0 + 4, G + 1, .Air)
     go_test_give(gs, .Pickaxe, 1)
-    s, ok, _ := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+    s, ok, _, _ := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
     testing.expect(t, ok, "a stand")
     testing.expect_value(t, s, [2]i32{i32(x0 + 4), i32(G + 1)})
 
@@ -4555,5 +4555,553 @@ hero_crew_goals_say_why_not :: proc(t: ^testing.T) {
     for line in ([]string{`{"do":"crew_call"}`, `{"do":"crew_pickup","golem":99}`, `{"do":"crew_mode","golem":0,"mode":"Dance"}`}) {
         agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
         testing.expect(t, strings.contains(string(link.out[:link.out_len]), "error"), line)
+    }
+}
+
+// ─── Wary and the retreat (card 157) ───
+
+// Card 157: the cheapest way out of a feet tile, walked as a player walks: a
+// pit four deep has none, two deep it is a step up (none with a lid over it
+// that leaves no head room), a cliff costs its fall
+// (on the left, the way the other side is walled), a gap the jump clears costs
+// nothing, a burn below or water at the feet is no way, a burn on the feet
+// tile itself has none, a slot too low for the body is no way, and a free
+// drop to a ledge is walked on and the cliff past it judged from the ledge.
+@(test)
+hero_exit_cost_reads_the_ways_out :: proc(t: ^testing.T) {
+    Layout :: enum { Pit4, Pit2, Lid, Cliff, Gap, Lava, Pond, Ledge, Burn, Slot }
+    for l in Layout {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        feet := [2]i32{i32(x0), i32(G - 1)}
+        want := 0
+        // dir: the open side; the other is walled four high.
+        dir := -1 if l == .Cliff else 1
+        if l != .Pit4 && l != .Pit2 && l != .Lid do for y in G - 4 ..< G do set_tile(&gs.world, x0 - dir, y, .Stone)
+        x1 := x0 + 3 * dir  // the first column past the floor
+        far := x0 + 18 * dir
+        lo, hi := min(x1, far), max(x1, far)
+        switch l {
+        case .Pit4, .Pit2, .Lid:
+            d := 4 if l == .Pit4 else 2
+            for x in x0 ..= x0 + 1 do for y in G ..< G + d do set_tile(&gs.world, x, y, .Air)
+            if l == .Lid do for x in x0 ..= x0 + 1 do set_tile(&gs.world, x, G - 2, .Stone)  // no head room to climb
+            feet.y = i32(G + d - 1)
+            want = 0 if l == .Pit2 else max(int)
+        case .Cliff, .Lava:
+            for x in lo ..= hi do for y in G ..< G + 10 do set_tile(&gs.world, x, y, .Air)
+            if l == .Lava do for x in lo ..= hi do set_tile(&gs.world, x, G + 9, .Lava)
+            want = max(int) if l == .Lava else hero_column(&gs.world, x1, G - 1).hurts
+        case .Gap:
+            for x in x1 ..= x1 + 1 do for y in G ..< G + 10 do set_tile(&gs.world, x, y, .Air)
+        case .Pond:
+            set_tile(&gs.world, x0 + 1, G - 1, .Water)
+            want = max(int)
+        case .Slot:
+            // The way ahead is a slot one tile high: no walking through it.
+            for x in x0 + 1 ..= x0 + 22 do for y in G - 6 ..= G - 2 do set_tile(&gs.world, x, y, .Stone)
+            want = max(int)
+        case .Burn:
+            set_tile(&gs.world, x0, G - 1, .Lava)  // the open floor right of it is a way, but not from in the lava
+            want = max(int)
+        case .Ledge:
+            for x in lo ..= hi do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Air)
+            for x in x0 + 8 ..= hi do for y in G ..< G + 10 do set_tile(&gs.world, x, y, .Air)
+            want = hero_column(&gs.world, x0 + 8, G + 2).hurts
+            testing.expectf(t, want > 0 && want != hero_column(&gs.world, x0 + 8, G - 1).hurts, "the cliff past the ledge hurts %d, less than from up top", want)
+        }
+        if l == .Cliff do testing.expectf(t, want > HERO_WARY_EXIT_HP, "the cliff hurts: %d", want)
+        testing.expectf(t, hero_exit_cost(&gs.world, feet) == want, "%v: cost %d, want %d", l, hero_exit_cost(&gs.world, feet), want)
+    }
+}
+
+// Card 157: wary with a threat in the senses inside HERO_WARY_S, noticed or
+// not, or low with no heal in the bag.
+@(test)
+hero_is_wary_after_a_threat_or_when_spent :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    testing.expect(t, !hero_wary(gs), "nothing seen, full hp: not wary")
+    for _ in 0 ..< int(HERO_WARY_S * 60) + 10 do hero_test_tick(link, gs)
+    testing.expect(t, !hero_wary(gs), "HERO_WARY_S of nothing: not wary")
+    // A sighting this late still counts from now.
+    v := hero_test_vargr(gs, f32(x0) + 10, G, {})
+    hero_test_tick(link, gs)
+    testing.expect(t, hero_wary(gs), "a Vargr in sight: wary")
+    despawn_enemy(gs, v)
+    hero_test_tick(link, gs)
+    testing.expect(t, hero_wary(gs), "gone a tick: still wary")
+    gs.hero.seen_ago = HERO_WARY_S - 0.05
+    for _ in 0 ..< 6 do hero_test_tick(link, gs)
+    testing.expect(t, !hero_wary(gs), "HERO_WARY_S later: not wary")
+    gs.hero.seen_ago = HERO_WARY_S - 0.01
+    testing.expect(t, hero_wary(gs), "just inside HERO_WARY_S: wary")
+    gs.hero.seen_ago = HERO_WARY_S
+    testing.expect(t, !hero_wary(gs), "at HERO_WARY_S: not wary")
+    // A frog does no harm: it makes no one wary.
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    gs.enemies.data[id] = Enemy{kind = .Pond_Frog, hp = 2, hp_max = 2, pos = {f32(x0) + 6, f32(G) - 1}}
+    testing.expect_value(t, hero_enemy_damage(gs, .Pond_Frog), 0)
+    for _ in 0 ..< 3 do hero_test_tick(link, gs)
+    testing.expect(t, gs.hero.senses.n_threats > 0 && !hero_wary(gs), "a frog in sight: not wary")
+    despawn_enemy(gs, id)
+    gs.player.hp_max, gs.player.hp = 10, 3
+    testing.expect(t, !hero_wary(gs), "at the line, 3 of 10: not spent")
+    gs.player.hp = 2
+    testing.expect(t, hero_wary(gs), "low with no heal: wary")
+    for it in hero_heal_items {
+        go_test_give(gs, it, 1)
+        testing.expectf(t, !hero_wary(gs), "low with a %v: not wary", it)
+        inventory_remove(&gs.player.inventory, it, 1)
+    }
+}
+
+// A pit at x0+5..x0+6, d deep, its floor at row G+d.
+@(private="file")
+retreat_test_pit :: proc(gs: ^Game_State, x0, G, d: int) {
+    for x in x0 + 5 ..= x0 + 6 do for y in G ..< G + d do set_tile(&gs.world, x, y, .Air)
+}
+
+// Card 157: a wary hero takes no work stand a hunter would corner it at: an
+// ore in reach only from the floor of a pit is worked from there unwary, and
+// has no stand wary.
+@(test)
+hero_wary_takes_no_stand_in_a_pit :: proc(t: ^testing.T) {
+    for wary in ([]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        retreat_test_pit(gs, x0, G, 4)
+        ore := [2]i32{i32(x0 + 7), i32(G + 3)}
+        if wary do gs.player.hp = max(1, gs.player.hp_max / 5)
+        testing.expect_value(t, hero_wary(gs), wary)
+        s, ok, _, cornered := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+        testing.expectf(t, ok == !wary && cornered == wary, "wary %v: a stand %v, cornered %v", wary, ok, cornered)
+        if !wary do testing.expect_value(t, s, [2]i32{i32(x0 + 6), i32(G + 3)})
+    }
+}
+
+// Card 157: a wary hero takes a stand whose way out costs HERO_WARY_EXIT_HP
+// and no more: on a mesa walled on the left, the cliff on the right 7 deep
+// (2 hp) is taken, 9 deep (3 hp) is not.
+@(test)
+hero_wary_stand_bound_is_the_exit_hp :: proc(t: ^testing.T) {
+    for deep in ([]int{7, 9}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for y in G - 4 ..< G do set_tile(&gs.world, x0 - 1, y, .Stone)
+        for x in x0 + 3 ..= x0 + 22 do for y in G ..< G + deep do set_tile(&gs.world, x, y, .Air)
+        cost := hero_exit_cost(&gs.world, {i32(x0 + 1), i32(G - 1)})
+        testing.expectf(t, cost == (HERO_WARY_EXIT_HP if deep == 7 else HERO_WARY_EXIT_HP + 1), "%d deep: the way out costs %d", deep, cost)
+        testing.expectf(t, hero_way_out_cheap(&gs.world, {i32(x0 + 1), i32(G - 1)}) == (deep == 7), "%d deep: cheap only at the bound", deep)
+        gs.hero.seen = true  // a threat lately: wary
+        testing.expect(t, hero_wary(gs), "wary")
+        _, ok, _, cornered := hero_work_stand(gs, {i32(x0 + 1), i32(G)}, .Pick, PICK_RANGE)
+        testing.expectf(t, ok == (deep == 7) && cornered == (deep == 9), "%d deep: a stand %v, cornered %v", deep, ok, cornered)
+    }
+}
+
+// Card 157: every goal kind that walks to a work stand, wary with its only
+// stands on the floor of a pit twelve deep (no way out), fails cornered, not
+// with a false unreachable or no_item: mine by tile and by item, gather,
+// place, the window kinds and a cracked golem's pickup.
+@(test)
+hero_wary_work_in_a_pit_fails_cornered :: proc(t: ^testing.T) {
+    Case :: struct{line: string, why: string, sealed: bool}  // sealed: a second ore, walled in rock the pick cannot cut: no stand, not cornered
+    for c in ([]Case{
+        {`{"do":"mine","tile":AT}`,                    "cornered: every stand in reach", false},
+        {`{"do":"mine","item":"Iron_Ore","near":AT}`,  "cornered: every Iron_Ore in reach", false},
+        {`{"do":"gather","item":"Iron_Ore","count":1}`,      "cornered: every Iron_Ore in reach", false},
+        {`{"do":"mine","item":"Iron_Ore","near":AT}`,  "cornered: every Iron_Ore in reach", true},
+        {`{"do":"gather","item":"Iron_Ore","count":1}`,      "cornered: every Iron_Ore in reach", true},
+        {`{"do":"place","item":"Stone_Block","at":AT}`, "cornered: every stand near", false},
+        {`{"do":"craft","item":"Smelter"}`,                  "cornered: every stand in reach", false},
+        {`{"do":"store","item":"Stone_Block","at":AT}`, "cornered: every stand in reach", false},
+        {`{"do":"withdraw","item":"Stone_Block","at":AT}`, "cornered: every stand in reach", false},
+        {`{"do":"feed","item":"Iron_Ore","at":AT}`,     "cornered: every stand in reach", false},
+        {`{"do":"collect"}`,                                 "cornered: every stand in reach", false},
+        {`{"do":"crew_pickup","golem":0}`,                   "cornered: every stand in reach", false},
+    }) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        retreat_test_pit(gs, x0, G, 12)
+        // The only ore the search finds is the one in the pit's wall.
+        for y in 0 ..< GRID_H do for x in 0 ..< GRID_W do if get_tile(&gs.world, x, y) == .Iron_Ore do set_tile(&gs.world, x, y, .Stone)
+        wall := [2]i32{i32(x0 + 7), i32(G + 11)}  // in the pit's wall, by its floor
+        floor := [2]i32{i32(x0 + 5), i32(G + 11)}
+        at := wall
+        go_test_give(gs, .Pickaxe, 1)
+        go_test_give(gs, .Stone_Block, 8)
+        switch {
+        case strings.contains(c.line, "mine"), strings.contains(c.line, "gather"):
+            set_tile(&gs.world, int(wall.x), int(wall.y), .Iron_Ore)
+            // Unreachable, not cornered: tried after the pit's, it must not
+            // wipe the cornered skip out.
+            if c.sealed {
+                for x in x0 - 15 ..= x0 - 13 do for y in G + 7 ..= G + 11 do set_tile(&gs.world, x, y, .Rune_Stone)
+                set_tile(&gs.world, x0 - 14, G + 9, .Iron_Ore)
+            }
+        case strings.contains(c.line, "place"):  at = floor
+        case strings.contains(c.line, "craft"):
+            set_tile(&gs.world, int(wall.x), int(wall.y), .Crafting_Bench)
+            go_test_give(gs, .Iron_Ore, 2)
+        case strings.contains(c.line, "store"), strings.contains(c.line, "withdraw"):
+            set_tile(&gs.world, int(wall.x), int(wall.y), .Barrel)
+            b := &gs.sim.barrels[0]
+            b.active, b.level, b.tile = true, gs.level_index, wall
+            barrel_deposit(b, .Stone_Block, 4)
+        case strings.contains(c.line, "feed"), strings.contains(c.line, "collect"):
+            set_tile(&gs.world, int(wall.x), int(wall.y), .Smelter)
+            go_test_give(gs, .Iron_Ore, 2)
+            gs.world.sim_data[grid_idx(int(wall.x), int(wall.y))].store_count = 1  // a bar in the tray
+        case strings.contains(c.line, "crew"):
+            go_test_give(gs, .Command_Wand, 1)
+            golem := crew_test_golem(gs, 0, 5, G + 12, .Broken)
+            testing.expectf(t, chebyshev(golem_tile(golem), {i32(x0 + 4), i32(G - 1)}) > PLAYER_REACH, "%s: no stand off the pit reaches the golem", c.line)
+        }
+        exec_test_frames(link, gs, 2)
+        gs.hero.seen = true
+        testing.expectf(t, hero_wary(gs), "%s: wary", c.line)
+        line, _ := strings.replace_all(c.line, "AT", fmt.tprintf("[%d,%d]", at.x, at.y), context.temp_allocator)
+        id := work_test_run(t, link, gs, line, 900)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "failed" && strings.has_prefix(reason, c.why), "%s: want %q, got %s %s", line, c.why, status, reason)
+        testing.expectf(t, hero_feet_row(&gs.player) < i32(G), "%s: the hero never went down", line)
+    }
+}
+
+// The hero, its safe ring filled on the arena floor right of the pit, put in a
+// pit six deep with hp, and a pick if asked.
+@(private="file")
+retreat_test_world :: proc(hp_frac: f32, pick: bool) -> (gs: ^Game_State, link: ^Agent_Link, x0, G: int) {
+    gs, link = exec_test_world()
+    exec_test_frames(link, gs, 10)
+    x0, G = hero_test_arena(gs)
+    gs.player.pos.x = f32(x0 + 12) + 0.1
+    for _ in 0 ..< 20 do hero_test_tick(link, gs)
+    retreat_test_pit(gs, x0, G, 6)
+    if pick do go_test_give(gs, .Pickaxe, 1)
+    gs.player.pos = {f32(x0 + 5) + 0.1, f32(G + 6) - PLAYER_H}
+    gs.player.vel = {}
+    gs.player.hp = max(1, int(f32(gs.player.hp_max) * hp_frac))
+    return
+}
+
+// Card 157: spent (low, no heal) in a pit with nothing hunting it, the idle
+// hero digs its way out toward the last safe spot with a cheap way out, on the
+// pit's right; with hp it stays where it is.
+@(test)
+hero_spent_retreats_out_of_a_pit :: proc(t: ^testing.T) {
+    for spent in ([]bool{true, false}) {
+        gs, link, x0, _ := retreat_test_world(0.2 if spent else 1, true)
+        defer free(gs)
+        defer free(link)
+        feet := hero_feet(&gs.player)
+        testing.expect(t, hero_exit_cost(&gs.world, feet) > HERO_WARY_EXIT_HP, "in the pit: no cheap way out")
+        starts := 0
+        for _ in 0 ..< 60 * 30 {
+            was := gs.hero.current
+            hero_test_tick(link, gs)
+            if gs.hero.current == .Retreat && was != .Retreat do starts += 1
+        }
+        testing.expectf(t, starts == (1 if spent else 0), "spent %v: retreats begun %d", spent, starts)
+        out := gs.player.grounded && hero_exit_cost(&gs.world, hero_feet(&gs.player)) <= HERO_WARY_EXIT_HP
+        testing.expectf(t, out == spent, "spent %v: out of the pit %v at %v", spent, out, hero_feet(&gs.player))
+        if spent do testing.expectf(t, hero_feet(&gs.player).x > i32(x0 + 6), "out on the side of the safe spot: %v", hero_feet(&gs.player))
+        testing.expect(t, gs.hero.current != .Retreat, "the retreat ended")
+        if !spent do testing.expect_value(t, hero_feet(&gs.player), feet)
+    }
+}
+
+// Card 157: with no way out (no pick, six deep) the retreat gives up once and
+// does not try again until the hero stands where the way out is cheap; the
+// next retreat, with a pick, starts fresh and gets out.
+@(test)
+hero_retreat_with_no_way_gives_up_once :: proc(t: ^testing.T) {
+    gs, link, x0, G := retreat_test_world(0.2, false)
+    defer free(gs)
+    defer free(link)
+    starts := 0
+    for _ in 0 ..< 60 * 10 {
+        was := gs.hero.current
+        hero_test_tick(link, gs)
+        if gs.hero.current == .Retreat && was != .Retreat do starts += 1
+    }
+    testing.expect_value(t, starts, 1)
+    testing.expect(t, gs.hero.retreat_off, "it gave up")
+    testing.expect(t, gs.hero.current != .Retreat, "and stopped")
+    // In the air over cheap ground is not standing there: the way out is
+    // judged from the ground.
+    gs.player.pos, gs.player.vel, gs.player.grounded = {f32(x0) + 0.1, f32(G) - PLAYER_H - 3}, {}, false
+    hero_test_tick(link, gs)
+    testing.expect(t, !gs.player.grounded && hero_exit_cost(&gs.world, hero_feet(&gs.player)) <= HERO_WARY_EXIT_HP, "airborne over cheap ground")
+    testing.expect(t, gs.hero.retreat_off, "airborne, it still has given up")
+    gs.player.pos = {f32(x0) + 0.1, f32(G) - PLAYER_H}
+    for _ in 0 ..< 10 {
+        hero_test_tick(link, gs)
+        testing.expect(t, gs.hero.current != .Retreat, "no retreat on cheap ground")
+    }
+    testing.expect(t, !gs.hero.retreat_off, "on cheap ground it may retreat again")
+    go_test_give(gs, .Pickaxe, 1)
+    gs.player.pos = {f32(x0 + 5) + 0.1, f32(G + 6) - PLAYER_H}
+    for _ in 0 ..< 60 * 30 do hero_test_tick(link, gs)
+    testing.expectf(t, hero_exit_cost(&gs.world, hero_feet(&gs.player)) <= HERO_WARY_EXIT_HP, "with a pick it got out: %v", hero_feet(&gs.player))
+    testing.expect(t, !gs.hero.retreat_off, "and did not give up")
+}
+
+// Card 157: no retreat with a threat noticed (flee and fight have it, even when
+// they score under the retreat), nor with no safe spot that has a cheap way out.
+@(test)
+hero_retreat_waits_on_a_threat_and_needs_a_spot :: proc(t: ^testing.T) {
+    {
+        gs, link, x0, G := retreat_test_world(0.2, true)
+        defer free(gs)
+        defer free(link)
+        for x in x0 - 5 ..= x0 + 4 do for y in G ..< G + 6 do set_tile(&gs.world, x, y, .Air)  // a wide pit
+        hero_test_vargr(gs, f32(x0) - 5, G + 6, {})
+        under := 0  // ticks with the Vargr in mind and flee scoring under the retreat
+        for _ in 0 ..< 120 {
+            hero_test_tick(link, gs)
+            if hero_threat(&gs.hero) == nil do continue
+            if gs.hero.scores[.Flee] < HERO_RETREAT_SCORE do under += 1
+            testing.expect(t, gs.hero.current != .Retreat, "no retreat with a threat in mind")
+        }
+        testing.expectf(t, under > 0, "the Vargr noticed, flee under the retreat: %d ticks", under)
+    }
+    gs, link, _, _ := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    gs.hero.senses.n_safe = 0
+    for _ in 0 ..< 120 {
+        hero_test_tick(link, gs)
+        testing.expect(t, gs.hero.current != .Retreat, "no spot: no retreat")
+    }
+}
+
+// Card 157: a work goal in the pit is paused for the retreat and goes on after
+// from a stand with a way out (the stair the retreat cut is one); a go goal is
+// the client's own walk and is not paused.
+@(test)
+hero_retreat_pauses_work_not_a_go :: proc(t: ^testing.T) {
+    {
+        gs, link, x0, G := retreat_test_world(0.2, true)
+        defer free(gs)
+        defer free(link)
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 7, G + 5), 60 * 30)
+        pushed := exec_test_pushed(link)
+        testing.expectf(t, hero_test_count(pushed, `"goal_paused"`) == 1 && hero_test_count(pushed, `"reason":"retreat"`) == 2, "one pause and its resume, for the retreat: %s", pushed)
+        work_test_expect_done(t, link, gs, id)
+        testing.expect(t, hero_exit_cost(&gs.world, hero_feet(&gs.player)) <= HERO_WARY_EXIT_HP, "it worked from a stand with a way out")
+    }
+    gs, link, x0, G := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 - 8, G - 1), 60 * 30)
+    work_test_expect_done(t, link, gs, id)
+    testing.expectf(t, !strings.contains(exec_test_pushed(link), `"reason":"retreat"`), "no retreat during a go: %s", exec_test_pushed(link))
+}
+
+// Card 157, the seed-999 shape: a Builder seen lately, the gather's nearest
+// log lies in a notch (a pit four deep, no way out) and another stands in the
+// open further off.  Wary, the hero takes the open one and never goes down the
+// notch; when the Builder comes for it there, it keeps its hp.  Unwary it goes
+// down for the near one.  A cornered stand never fails work that has an open
+// one: mined by item from the notch, the open log is still mined, and a place
+// or a store in reach of both the notch's floor and its rim is done from the
+// rim.
+@(test)
+hero_wary_gathers_in_the_open_not_the_notch :: proc(t: ^testing.T) {
+    for wary in ([]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        retreat_test_pit(gs, x0, G, 4)
+        set_tile(&gs.world, x0 + 7, G + 3, .Wood)   // in the notch's wall
+        set_tile(&gs.world, x0 - 12, G - 1, .Wood)  // in the open
+        go_test_give(gs, .Pickaxe, 1)
+        if wary {
+            b := hero_test_vargr(gs, f32(x0) - 16, G, {})
+            gs.enemies.data[b].kind = .Builder
+            for _ in 0 ..< 3 do hero_test_tick(link, gs)
+            despawn_enemy(gs, b)
+        }
+        testing.expect_value(t, hero_wary(gs), wary)
+        down := false
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"gather","item":"Wood_Log","count":1}]}`)
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for k := 0; k < 60 * 30 && link.goals.slots[0].status == .Running || k == 0; k += 1 {
+            hero_test_tick(link, gs)
+            down ||= hero_feet_row(&gs.player) >= i32(G)
+        }
+        work_test_expect_done(t, link, gs, id)
+        testing.expectf(t, down != wary, "wary %v: down the notch %v", wary, down)
+        testing.expectf(t, (get_tile(&gs.world, x0 + 7, G + 3) == .Wood) == wary, "wary %v: the notch's log left", wary)
+        if !wary do continue
+        // The Builder comes for it, for real, out in the open.
+        b := hero_test_vargr(gs, gs.player.pos.x + 9, G, {})
+        gs.enemies.data[b].kind = .Builder
+        gs.enemies.data[b].builder.goal = .Hunt
+        hp := gs.player.hp
+        exec_test_frames(link, gs, 60 * 10)
+        testing.expectf(t, gs.player.hp == hp, "out in the open it keeps its hp: %d to %d", hp, gs.player.hp)
+    }
+    // Mined by item from the notch: the notch's log is passed over, cornered,
+    // and the open one is still mined.
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    retreat_test_pit(gs, x0, G, 4)
+    set_tile(&gs.world, x0 + 7, G + 3, .Wood)
+    set_tile(&gs.world, x0 - 12, G - 1, .Wood)
+    go_test_give(gs, .Pickaxe, 1)
+    b := hero_test_vargr(gs, f32(x0) - 16, G, {})
+    gs.enemies.data[b].kind = .Builder
+    for _ in 0 ..< 3 do hero_test_tick(link, gs)
+    despawn_enemy(gs, b)
+    testing.expect(t, hero_wary(gs), "wary")
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","item":"Wood_Log","near":[%d,%d]}}`, x0 + 7, G + 3), 60 * 30)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect(t, get_tile(&gs.world, x0 + 7, G + 3) == .Wood, "the notch's log left")
+    testing.expect(t, get_tile(&gs.world, x0 - 12, G - 1) != .Wood, "the open one mined")
+    // A place inside the notch, reached from its floor (cornered) and from the
+    // rim (open): placed from the rim.
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        retreat_test_pit(gs, x0, G, 4)
+        go_test_give(gs, .Stone_Block, 4)
+        gs.hero.seen = true
+        testing.expect(t, hero_wary(gs), "wary")
+        at := [2]i32{i32(x0 + 5), i32(G + 1)}
+        _, ok, _, cornered := hero_work_stand(gs, at, .Place, HERO_PLACE_STAND)
+        testing.expect(t, ok && cornered, "a stand on the rim, the floor's cornered")
+        gs.player.pos = {f32(x0 - 12) + 0.1, f32(G) - PLAYER_H}  // out of reach: it walks to a stand
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Stone_Block","at":[%d,%d]}}`, at.x, at.y), 60 * 30)
+        work_test_expect_done(t, link, gs, id)
+        testing.expect(t, is_solid(&gs.world, int(at.x), int(at.y)), "placed")
+        testing.expect(t, hero_feet_row(&gs.player) < i32(G), "never went down")
+    }
+    // A barrel in the notch's wall, in reach of its floor (cornered) and of
+    // the rim (open): stored into from the rim.
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        retreat_test_pit(gs, x0, G, 4)
+        at := [2]i32{i32(x0 + 7), i32(G + 1)}
+        set_tile(&gs.world, int(at.x), int(at.y), .Barrel)
+        b := &gs.sim.barrels[0]
+        b.active, b.level, b.tile = true, gs.level_index, at
+        go_test_give(gs, .Stone_Block, 4)
+        exec_test_frames(link, gs, 2)
+        gs.hero.seen = true
+        testing.expect(t, hero_wary(gs), "wary")
+        gs.player.pos = {f32(x0 - 12) + 0.1, f32(G) - PLAYER_H}
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"store","item":"Stone_Block","at":[%d,%d]}}`, at.x, at.y), 60 * 30)
+        work_test_expect_done(t, link, gs, id)
+        testing.expect(t, hero_feet_row(&gs.player) < i32(G), "never went down")
+    }
+}
+
+// Card 157: a retreat whose spot loses its cheap way out on the walk picks the
+// next spot that still has one, and never holds at the old.  The surface round
+// the pit is walled at x0+2; the last spot, x0+12, has its way out right until
+// a wall goes up at x0+14 as the retreat begins, boxing it in with the pit; the
+// spots before, x0-10 to x0-4, lie outside the box with the open arena past.
+@(test)
+hero_retreat_picks_again_when_its_spot_closes :: proc(t: ^testing.T) {
+    gs, link, x0, G := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    for y in G - 4 ..< G do set_tile(&gs.world, x0 + 2, y, .Stone)
+    s := &gs.hero.senses
+    // Older spots out past x0-4, enough that the walk's own spots leave one.
+    for k in 0 ..< 4 do s.safe[k] = {i32(x0 - 10 + 2 * k), i32(G - 1)}
+    s.safe[4] = {i32(x0 + 12), i32(G - 1)}  // the last
+    s.n_safe, s.safe_next = 5, 5
+    testing.expect(t, hero_exit_cost(&gs.world, s.safe[4]) <= HERO_WARY_EXIT_HP, "x0+12 has a way out")
+    for k := 0; k < 120 && gs.hero.current != .Retreat; k += 1 do hero_test_tick(link, gs)
+    testing.expect(t, gs.hero.current == .Retreat, "retreating")
+    for y in G - 4 ..< G do set_tile(&gs.world, x0 + 14, y, .Stone)
+    testing.expect(t, hero_exit_cost(&gs.world, {i32(x0 + 12), i32(G - 1)}) > HERO_WARY_EXIT_HP, "the box shut")
+    testing.expect(t, hero_exit_cost(&gs.world, s.safe[3]) <= HERO_WARY_EXIT_HP, "x0-4 still has a way out")
+    for _ in 0 ..< 60 * 40 do hero_test_tick(link, gs)
+    testing.expect(t, gs.hero.current != .Retreat, "the retreat ended")
+    testing.expectf(t, hero_exit_cost(&gs.world, hero_feet(&gs.player)) <= HERO_WARY_EXIT_HP, "on cheap ground: %v", hero_feet(&gs.player) - {i32(x0), i32(G)})
+}
+
+// Card 157: a retreat whose last spot is lost on the walk, its way out shut
+// while the hero is in the air or the spot itself turned to lava, and no other
+// spot left, ends at once: it never walks toward a spot it does not have, and
+// in the air, where the retreat holds, it gives up as a failed walk does.  On
+// the ground the score drops at once: it stops without giving up.
+@(test)
+hero_retreat_with_no_spot_left_gives_up :: proc(t: ^testing.T) {
+    How :: enum { Air, Lava, Ground }
+    for how in How {
+        lava := how == .Lava
+        gs, link, x0, G := retreat_test_world(0.2, true)
+        defer free(gs)
+        defer free(link)
+        for y in G - 4 ..< G do set_tile(&gs.world, x0 + 2, y, .Stone)
+        s := &gs.hero.senses
+        spot := [2]i32{i32(x0 + 12), i32(G - 1)}
+        s.safe[0], s.n_safe, s.safe_next = spot, 1, 1
+        for k := 0; k < 120 && gs.hero.current != .Retreat; k += 1 do hero_test_tick(link, gs)
+        testing.expectf(t, gs.hero.current == .Retreat && gs.hero.retreat.to == spot, "%v: retreating to the one spot", how)
+        switch how {
+        case .Lava:
+            set_tile(&gs.world, int(spot.x), int(spot.y), .Lava)
+        case .Ground:
+            testing.expect(t, gs.player.grounded, "grounded as the box shuts")
+            for y in G - 4 ..< G do set_tile(&gs.world, x0 + 14, y, .Stone)
+        case .Air:
+            // Shut as the hero is in the air, where the retreat holds.
+            gs.player.pos.y -= 1.5
+            gs.player.vel, gs.player.grounded = {}, false
+            for y in G - 4 ..< G do set_tile(&gs.world, x0 + 14, y, .Stone)
+        }
+        for _ in 0 ..< 60 {
+            hero_test_tick(link, gs)
+            if gs.hero.current == .Retreat do testing.expectf(t, gs.hero.retreat.to == spot, "%v: walking to %v, not the spot", how, gs.hero.retreat.to)
+        }
+        testing.expectf(t, gs.hero.current != .Retreat, "%v: given up: %v", how, gs.hero.current)
+        if how == .Air do testing.expect(t, gs.hero.retreat_off, "in the air with no spot left: given up for good")
+        // On the ground the lost spot drops the retreat's score at once: it
+        // stops, but may retreat again once a spot turns up.
+        if how == .Ground do testing.expect(t, !gs.hero.retreat_off, "on the ground with no spot left: stopped, not given up")
+    }
+    // The spot an old retreat walked to, still cheap, starts no new one when
+    // no spot is in the ring.
+    gs, link, x0, G := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    gs.hero.senses.n_safe = 0
+    gs.hero.retreat.to = {i32(x0 - 8), i32(G - 1)}
+    testing.expect(t, hero_way_out_cheap(&gs.world, gs.hero.retreat.to), "the old spot is cheap")
+    for _ in 0 ..< 60 {
+        hero_test_tick(link, gs)
+        testing.expect(t, gs.hero.current != .Retreat, "no retreat with no spot in the ring")
     }
 }
