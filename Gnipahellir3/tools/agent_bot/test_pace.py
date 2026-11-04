@@ -1,124 +1,11 @@
 #!/usr/bin/env python3
-"""python3 tools/test_agent_pacing.py"""
+"""python3 tools/agent_bot/test_pace.py  (the bot and its harness; they go with card 154)"""
 import contextlib, csv, io, json, os, socket, subprocess, sys, tempfile, time, unittest
 from unittest import mock
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_bot"))
-import agent_pacing as ap
 import pace
 import b as bot
-
-TWO_LIVES = """\
-[f0000000] === run start 2026-11-02 15:05:22 - save v28 ===
-[f0000000] World seed 111
-[f0000600] Player takes Gold_Bar x4 from smelter at (1,2)
-[f0001200] Player dies at (40,64) after 20 s
-[f0000000] New game - world seed 222
-continuation line with no frame
-[f0003000] Player takes Silver_Bar x9 from smelter at (1,2)
-[f0006000] Player takes Rune Scroll A from permanent chest at (1,1)
-[f0009000] Player takes Rune Scroll B from permanent chest at (12,101)
-[f0009060] Player takes Rune Scroll B from permanent chest at (12,101)
-[f0012000] Player takes Gold_Bar x9 from smelter at (1,2)
-[f0012600] Player takes Gold_Bar x1 from smelter at (1,2)
-[f0013000] Player takes Gold_Bar x5 from smelter at (1,2)
-""".splitlines()
-
-
-class Parse(unittest.TestCase):
-    def setUp(self):
-        self.lives = ap.parse(TWO_LIVES)
-
-    def test_a_new_game_starts_a_life_with_its_own_seed(self):
-        self.assertEqual([l["seed"] for l in self.lives], [111, 222])
-
-    def test_marks_land_in_the_life_that_made_them(self):
-        one, two = self.lives
-        self.assertIsNone(one["scroll_b_s"])
-        self.assertEqual(two["scroll_b_s"], 150)
-
-    def test_scroll_a_does_not_count_and_the_first_b_does(self):
-        self.assertEqual(self.lives[1]["scroll_b_s"], 9000 / 60)
-
-    def test_ten_bars_add_up_across_collections_and_only_gold(self):
-        self.assertEqual(self.lives[1]["gold_10_s"], 12600 / 60)
-        self.assertEqual(self.lives[1]["bars"], 15)
-
-    def test_bars_do_not_carry_over_a_death(self):
-        self.assertIsNone(self.lives[0]["gold_10_s"])
-        self.assertEqual(self.lives[0]["bars"], 4)
-
-    def test_nine_bars_are_not_ten(self):
-        lives = ap.parse(["[f0000060] Player takes Gold_Bar x9 from smelter at (1,2)"])
-        self.assertIsNone(lives[0]["gold_10_s"])
-
-    def test_exactly_ten_is_ten(self):
-        lives = ap.parse(["[f0000060] Player takes Gold_Bar x10 from smelter at (1,2)"])
-        self.assertEqual(lives[0]["gold_10_s"], 1)
-
-    def test_death_and_length(self):
-        self.assertTrue(self.lives[0]["died"])
-        self.assertFalse(self.lives[1]["died"])
-        self.assertEqual(self.lives[0]["lasted_s"], 20)
-        self.assertEqual(self.lives[1]["lasted_s"], 13000 / 60)
-
-
-class Rows(unittest.TestCase):
-    def test_before_counts_the_lives_lost_on_the_way(self):
-        r = ap.rows("a", ap.parse(TWO_LIVES))
-        self.assertEqual([x["life"] for x in r], [1, 2])
-        self.assertEqual([x["before_s"] for x in r], [0, 20])
-        self.assertEqual(r[1]["run"], "a")
-
-    def test_first_takes_the_earliest_life_and_adds_what_came_before(self):
-        r = [{"scroll_b_s": None, "before_s": 0}, {"scroll_b_s": 5, "before_s": 7}, {"scroll_b_s": 1, "before_s": 30}]
-        self.assertEqual(ap.first(r, "scroll_b_s"), (5, 12))
-        self.assertIsNone(ap.first(r[:1], "scroll_b_s"))
-
-
-class Summary(unittest.TestCase):
-    def run_of(self, b, gold=None, before=0):
-        return [{"scroll_b_s": b, "gold_10_s": gold, "before_s": before}]
-
-    def test_medians_are_over_the_runs_that_got_there_and_say_how_many(self):
-        s = ap.summary([self.run_of(10, 100), self.run_of(30), self.run_of(20, before=5), self.run_of(None)])
-        self.assertEqual(s["scroll_b_s"], {"reached": 3, "of": 4, "median_s": 20, "median_with_deaths_s": 25})
-        self.assertEqual(s["gold_10_s"]["reached"], 1)
-        self.assertEqual(s["gold_10_s"]["median_s"], 100)
-
-    def test_no_run_got_there(self):
-        s = ap.summary([self.run_of(None)])
-        self.assertIsNone(s["gold_10_s"]["median_s"])
-        self.assertEqual(ap.fmt(None), "-")
-        self.assertEqual(ap.fmt(149.6), "150")
-
-
-class Main(unittest.TestCase):
-    def test_reads_a_folder_prints_and_writes_csv(self):
-        with tempfile.TemporaryDirectory() as d:
-            run = os.path.join(d, "run1")
-            os.mkdir(run)
-            with open(os.path.join(run, "action.log"), "w") as f:
-                f.write("\n".join(TWO_LIVES))
-            out = os.path.join(d, "o.csv")
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                ap.main([run + "/", "--csv", out])
-            text = buf.getvalue()
-            self.assertIn("scroll_b_s: reached 1 of 1, median 150 s, with lost lives 170 s", text)
-            self.assertIn("gold_10_s: reached 1 of 1, median 210 s, with lost lives 230 s", text)
-            self.assertIn("run1", text)
-            with open(out) as f:
-                got = list(csv.DictReader(f))
-            self.assertEqual(len(got), 2)
-            self.assertEqual(got[1]["seed"], "222")
-            self.assertEqual(got[1]["scroll_b_s"], "150.0")
-            self.assertEqual(got[0]["scroll_b_s"], "")
-
-    def test_no_folders_says_how(self):
-        with self.assertRaises(SystemExit):
-            ap.main([])
 
 
 class Play(unittest.TestCase):
@@ -254,58 +141,6 @@ class PaceMain(unittest.TestCase):
     def test_no_seeds_says_how(self):
         with self.assertRaises(SystemExit):
             pace.main(["out"])
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-class Bridge(unittest.TestCase):
-    """The real bridge.py against a fake game: what is the first line the game hears?"""
-
-    def first_line(self, turbo):
-        game_port, bridge_port = free_port(), free_port()
-        env = {k: v for k, v in os.environ.items() if k != "GNIPA_AGENT_TURBO"}
-        env.update(GNIPA_AGENT_PORT=str(game_port), GNIPA_BRIDGE_PORT=str(bridge_port))
-        if turbo:
-            env["GNIPA_AGENT_TURBO"] = "1"
-        with socket.socket() as listener:
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(("127.0.0.1", game_port))
-            listener.listen(1)
-            listener.settimeout(10)
-            bridge = subprocess.Popen([sys.executable, "-B", os.path.join(os.path.dirname(pace.__file__), "bridge.py")],
-                                      env=env, stdout=subprocess.DEVNULL)
-            try:
-                game, _ = listener.accept()
-                game.settimeout(10)
-                reader = game.makefile("rb")
-                game_lines = []
-
-                def answer():
-                    game_lines.append(json.loads(reader.readline()))
-                    game.sendall(b'{"ok":true}\n')
-
-                if turbo:
-                    answer()  # the bridge waits on this before it serves anyone
-                self.assertTrue(pace.wait_port(bridge_port, 10))
-                client = socket.create_connection(("127.0.0.1", bridge_port), timeout=10)
-                client.sendall(b'{"cmd":"state"}\n')
-                answer()
-                client.close()
-                game.close()
-                return game_lines
-            finally:
-                bridge.kill()
-                bridge.wait()
-
-    def test_a_turbo_bridge_turns_idling_off_before_anything_else(self):
-        self.assertEqual(self.first_line(True), [{"cmd": "idle", "on": False}, {"cmd": "state"}])
-
-    def test_a_plain_bridge_leaves_idling_alone(self):
-        self.assertEqual(self.first_line(False), [{"cmd": "state"}])
 
 
 class EndPlan(unittest.TestCase):

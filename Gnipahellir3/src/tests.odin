@@ -13498,7 +13498,7 @@ a_saved_run_keeps_its_seed_for_the_levels_to_come :: proc(t: ^testing.T) {
 
 @(test)
 the_agent_harness_plays_the_typed_seed :: proc(t: ^testing.T) {
-    // GNIPA_SEED is how tools/agent_play.sh passes its seed.
+    // GNIPA_SEED is how a GNIPA_AGENT_PORT run is given its seed.
     os.set_env("GNIPA_SEED", "12345")
     defer os.unset_env("GNIPA_SEED")
     testing.expect_value(t, new_game_world_seed(), u32(12345))

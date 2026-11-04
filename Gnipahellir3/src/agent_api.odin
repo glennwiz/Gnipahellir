@@ -8,7 +8,10 @@ package game
 // plain-text brief (agent_write_brief) and is closed, a JSON object makes it the
 // client, anything else is refused.  So a connection that has said nothing yet
 // does not drive the game, and the brief is served while a client plays.  Up to
-// AGENT_PENDING_MAX connections wait on their first line at once.
+// AGENT_PENDING_MAX connections wait on their first line at once.  A JSON first
+// line while a client drives makes a watcher: up to AGENT_READERS_MAX of them ask
+// for state and hear every event line.  A watcher that sends anything else while
+// nobody drives takes the game, so a client that lost its connection comes back.
 //
 // Protocol: one JSON object per line each way.
 //   {"cmd":"state"}                                 full state, x/y/w/h pick the tile view
@@ -87,19 +90,20 @@ package game
 // left the player.  The same goals on the same frames from the same GNIPA_SEED
 // play out the same: the frame clock starts at the first connect, the step is
 // fixed, and a New Game while driving derives its seeds from the last one.
-// tools/agent_replay.py plays the old act lines of a waiting run back, and stops
-// at a `realtime` mark or a disconnect.
+// Each goal's end is a row too ("done" or "failed" with the id), and so is each
+// window opening or closing ("window"), for `gnipa --summary`.  `gnipa --replay`
+// feeds the goal rows back on their frames and stops at a disconnect.
 //
 // GNIPA_AGENT_TURBO=1 is for harness runs: the window draws about once a second, so
 // ticks stop waiting for the display.  The sim never sees that, but idle ticks and
 // plans follow wall time in any run, so only a run with idling off and no plans
-// stays the same; tools/agent_bot/pace.py runs that way, and tools/test_agent_turbo.py
-// checks it.
+// plays the same twice at the same speed; the frame clock in acts.jsonl does not
+// care, which is why a replay goes by it.
 //
 // An agent run writes a save and truncates action.log in the working directory,
 // so agent_open refuses to run anywhere that does not hold AGENT_SANDBOX_FILE.
-// tools/agent_play.sh builds such a folder.  The title option builds its own and
-// moves the process into it, so every relative path the game writes lands there.
+// The title option, and `gnipa --agent-run`, build such a folder and move the
+// process into it, so every relative path the game writes lands there.
 
 import "base:runtime"
 import "core:encoding/json"
@@ -112,7 +116,7 @@ import "core:strings"
 import "core:time"
 
 AGENT_PORT_ENV     :: "GNIPA_AGENT_PORT"
-AGENT_TITLE_ENV    :: "GNIPA_AGENT_TITLE" // a port: boot as if [A] was pressed, for tools/test_agent_title.py
+AGENT_TITLE_ENV    :: "GNIPA_AGENT_TITLE" // a port: boot as if [A] was pressed
 AGENT_TITLE_PORT   :: 7878 // the first port the title tries
 AGENT_TITLE_PORTS  :: 16   // and how many, so a second game still gets one
 AGENT_RUNS_DIR     :: "agent_runs"
@@ -136,6 +140,7 @@ AGENT_SEND_TIMEOUT :: 2 * time.Second // a client that stops reading is dropped
 AGENT_LISTEN_S     :: 60   // a listen's wait when it names none
 AGENT_LISTEN_MAX_S :: 600
 AGENT_PENDING_MAX  :: 4    // connections waiting on their first line; a newer one past this sheds the oldest
+AGENT_READERS_MAX  :: 4    // watching clients beside the one that drives
 
 // Printable, JSON-safe, one per distinct tile type seen in a view.
 AGENT_ACTS_FILE    :: "acts.jsonl"
@@ -157,6 +162,15 @@ Agent_Pending :: struct {
     buf:  [AGENT_LINE_MAX]u8,
 }
 
+// A watching client: its unread request bytes and the event lines it has not had.
+Agent_Reader :: struct {
+    sock:     net.TCP_Socket,
+    in_len:   int,
+    in_buf:   [AGENT_LINE_MAX]u8,
+    push_len: int,
+    push:     [AGENT_PUSH_MAX]u8,
+}
+
 Agent_Link :: struct {
     listening:   bool,
     connected:   bool,
@@ -172,6 +186,7 @@ Agent_Link :: struct {
     seen_dead:   bool,
     seen_level:  int,
     seen_notes:  int,            // goals.note_count as last pushed
+    seen_window: bool,
     push_len:    int,
     push:        [AGENT_PUSH_MAX]u8,  // event lines not yet sent
     awaiting:    bool,           // a listen waits for the watcher's line
@@ -181,6 +196,12 @@ Agent_Link :: struct {
     client:      net.TCP_Socket,
     pending:     [AGENT_PENDING_MAX]Agent_Pending, // oldest first
     pending_n:   int,
+    readers:     [AGENT_READERS_MAX]Agent_Reader,
+    readers_n:   int,
+    run_port:    int,            // gnipa --agent-run: this port only, and the next three fields
+    run_seed:    u32,
+    run_seeded:  bool,
+    run_dir:     string,
     brief:       [AGENT_BRIEF_MAX]u8,
     panel:       Agent_Panel,
     reply_due:   bool,           // an act finished: its state waits in out
@@ -207,7 +228,7 @@ agent_open :: proc(link: ^Agent_Link) {
         os.exit(1)
     }
     if !os.exists(AGENT_SANDBOX_FILE) {
-        fmt.eprintfln("%s is set but this folder has no %s file: an agent run would overwrite the save and action.log here. Use tools/agent_play.sh.",
+        fmt.eprintfln("%s is set but this folder has no %s file: an agent run would overwrite the save and action.log here. Use gnipa --agent-run.",
             AGENT_PORT_ENV, AGENT_SANDBOX_FILE)
         os.exit(1)
     }
@@ -257,12 +278,8 @@ agent_title_start :: proc(link: ^Agent_Link, gs: ^Game_State) {
     gs.ui.agent_requested = false
     gs.ui.agent_failed    = true
 
-    base := AGENT_TITLE_PORT
-    if n, ok := strconv.parse_int(os.get_env(AGENT_TITLE_ENV, context.temp_allocator)); ok do base = n
-    sock, port, bound := agent_title_bind(base)
+    sock, port, seed, folder, bound := agent_run_choice(link, gs)
     if !bound do return
-    seed   := title_chosen_seed(gs)
-    folder := agent_run_folder(port)
     if !agent_sandbox_make(folder, seed) || os.set_working_directory(folder) != nil {
         net.close(sock)
         return
@@ -274,6 +291,25 @@ agent_title_start :: proc(link: ^Agent_Link, gs: ^Game_State) {
     action_log_release(gs)
     log_action(gs, "World seed %d", seed)
     fmt.printfln("agent api: listening on 127.0.0.1:%d, run folder %s", port, folder)
+}
+
+// The port, seed and folder of a new run: the title's, or what gnipa --agent-run
+// named in link.  A named port is that port or nothing.
+agent_run_choice :: proc(link: ^Agent_Link, gs: ^Game_State) -> (sock: net.TCP_Socket, port: int, seed: u32, folder: string, bound: bool) {
+    port = link.run_port
+    if port > 0 {
+        err: net.Network_Error
+        sock, err = agent_bind(port)
+        bound = err == nil
+    } else {
+        base := AGENT_TITLE_PORT
+        if n, ok := strconv.parse_int(os.get_env(AGENT_TITLE_ENV, context.temp_allocator)); ok do base = n
+        sock, port, bound = agent_title_bind(base)
+    }
+    if !bound do return
+    seed   = link.run_seed if link.run_seeded else title_chosen_seed(gs)
+    folder = agent_run_folder(port, link.run_dir if link.run_dir != "" else AGENT_RUNS_DIR)
+    return
 }
 
 // The state the sandbox starts from: a new world, none of the human's stats, and
@@ -305,14 +341,14 @@ agent_title_bind :: proc(base: int) -> (sock: net.TCP_Socket, port: int, ok: boo
 
 // The port keeps two games from sharing a folder started in the same second.
 @(private="file")
-agent_run_folder :: proc(port: int) -> string {
+agent_run_folder :: proc(port: int, dir: string) -> string {
     now := time.now()
     y, mo, d := time.date(now)
     h, mi, s := time.clock(now)
-    return fmt.tprintf("%s/%04d%02d%02d-%02d%02d%02d-%d", AGENT_RUNS_DIR, y, int(mo), d, h, mi, s, port)
+    return fmt.tprintf("%s/%04d%02d%02d-%02d%02d%02d-%d", dir, y, int(mo), d, h, mi, s, port)
 }
 
-// A folder a run can live in, as tools/agent_play.sh builds one.  The sprite bank
+// A folder a run can live in.  The sprite bank
 // is reloaded from disk on every New Game, so it comes along.
 agent_sandbox_make :: proc(folder: string, seed: u32, art := PIXEL_ART_FILE) -> bool {
     if os.make_directory_all(folder) != nil do return false
@@ -356,6 +392,7 @@ agent_close :: proc(link: ^Agent_Link, gs: ^Game_State) {
         os.close(link.fight_file)
     }
     for link.pending_n > 0 do agent_pending_close(link, 0)
+    for link.readers_n > 0 do agent_reader_drop(link, 0)
     link.listening = false
 }
 
@@ -374,6 +411,10 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
         if !agent_read_pending(link, gs, i) do i += 1  // a served one leaves, and the next takes its index
     }
     if link.connected && (agent_listening(link) || link.awaiting) do agent_read(link, gs)
+    // After the client's read: a client gone this frame lets a watcher take over.
+    for i := 0; i < link.readers_n; {
+        if agent_serve_reader(link, gs, i) do i += 1  // one that left gives its index to the next
+    }
     if !link.connected {
         gs.agent = {}  // back to the keyboard, with nothing of the last act left to replay
         return true
@@ -427,10 +468,18 @@ agent_read_pending :: proc(link: ^Agent_Link, gs: ^Game_State, i: int) -> (left:
     case !strings.has_prefix(strings.trim_left_space(line), "{"):
         // Not only tidiness: a web page can POST here, and its body must not play.
         agent_pending_send(p.sock, `{"ok":false,"error":"send one JSON object per line, or GET for the brief"}` + "\n")
+    case link.connected && link.readers_n == AGENT_READERS_MAX:
+        agent_pending_send(p.sock, `{"ok":false,"error":"another agent is playing and every watcher's place is taken"}` + "\n")
     case link.connected:
-        agent_pending_send(p.sock, `{"ok":false,"error":"another agent is playing: one client at a time"}` + "\n")
+        r := &link.readers[link.readers_n]
+        r.sock, r.push_len = p.sock, 0
+        r.in_len = copy(r.in_buf[:], p.buf[:p.len])
+        link.readers_n += 1
+        agent_pending_close(link, i, false)
+        return true
     case:
-        agent_promote(link, gs, i)
+        agent_promote(link, gs, p.sock, p.buf[:p.len])
+        agent_pending_close(link, i, false)
         return true
     }
     agent_pending_close(link, i)
@@ -444,14 +493,79 @@ agent_pending_send :: proc(sock: net.TCP_Socket, text: string) {
     net.send_tcp(sock, transmute([]u8)text)
 }
 
-// The first JSON line: this connection is the client from here, that line first.
+// A watcher's turn: its waiting events, then each whole line it sent.  State is
+// answered; anything else is refused while a client drives, and takes the game
+// when none does.  False when it has left the list, dropped or promoted.
 @(private="file")
-agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, i: int) {
-    p := &link.pending[i]
-    link.client       = p.sock
+agent_serve_reader :: proc(link: ^Agent_Link, gs: ^Game_State, i: int) -> (stays: bool) {
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    r := &link.readers[i]
+    sent := agent_reader_send(r, r.push[:r.push_len])
+    r.push_len = 0
+    for sent {
+        nl := strings.index_byte(string(r.in_buf[:r.in_len]), '\n')
+        if nl < 0 {
+            // A full buffer reads 0, and goes: a line this long is not the protocol.
+            n, err := net.recv_tcp(r.sock, r.in_buf[r.in_len:])
+            if err == .Would_Block || err == .Timeout do return true
+            if err != nil || n == 0 do break
+            r.in_len += n
+            continue
+        }
+        line := string(r.in_buf[:nl])
+        cmd  := agent_line_cmd(line)
+        if !link.connected && cmd != "state" {
+            agent_promote(link, gs, r.sock, r.in_buf[:r.in_len])
+            agent_reader_drop(link, i, false)
+            return false
+        }
+        if cmd == "state" {
+            unread := link.panel.heard_len  // the watcher's lines are the driver's to take
+            agent_handle_line(link, gs, line)
+            link.panel.heard_len = unread
+        } else {
+            agent_reply_error(link, cmd, "another agent drives: a watcher can only ask for state")
+        }
+        sent = agent_reader_send(r, link.out[:link.out_len])
+        r.in_len = copy(r.in_buf[:], r.in_buf[nl + 1:r.in_len])
+    }
+    agent_reader_drop(link, i)
+    return false
+}
+
+// A request's cmd, or "" for a line that has none.
+@(private="file")
+agent_line_cmd :: proc(line: string) -> string {
+    value, _ := json.parse_string(line, allocator = context.temp_allocator)
+    root, _ := value.(json.Object)  // not an object: no cmd
+    cmd, _ := root["cmd"].(json.String)
+    return cmd
+}
+
+@(private="file")
+agent_reader_send :: proc(r: ^Agent_Reader, data: []u8) -> bool {
+    net.set_blocking(r.sock, true)
+    net.set_option(r.sock, .Send_Timeout, AGENT_SEND_TIMEOUT)
+    n, err := net.send_tcp(r.sock, data)
+    net.set_blocking(r.sock, false)
+    return err == nil && n == len(data)
+}
+
+// Drops watcher i; the younger ones move up.
+@(private="file")
+agent_reader_drop :: proc(link: ^Agent_Link, i: int, close := true) {
+    if close do net.close(link.readers[i].sock)
+    copy(link.readers[i:link.readers_n], link.readers[i + 1:link.readers_n])
+    link.readers_n -= 1
+}
+
+// The first JSON line: this connection is the client from here, the bytes it has
+// sent first.
+@(private="file")
+agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, sock: net.TCP_Socket, sent: []u8) {
+    link.client       = sock
     link.connected    = true
-    link.in_len       = copy(link.in_buf[:], p.buf[:p.len])
-    agent_pending_close(link, i, false)
+    link.in_len       = copy(link.in_buf[:], sent)
     link.realtime     = true
     link.panel        = {}
     link.goals        = {}
@@ -481,7 +595,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "address: 127.0.0.1:%d, loopback only\n", link.port)
     fmt.sbprintf(w, "world seed: %d\n", gs.world_seed)
     fmt.sbprintf(w, "screen: %s, level %d, frame %d\n", agent_screen(gs), gs.level_index, gs.frame)
-    fmt.sbprintf(w, "client: %s\n", "another agent is connected, one at a time" if link.connected else "none, the socket is free")
+    fmt.sbprintf(w, "client: %s\n", "another agent is connected: a second connection watches (state and events)" if link.connected else "none, the socket is free")
     objective: [128]u8
     fmt.sbprintf(w, "the game's objective line: %s\n", current_objective(gs, objective[:]))
     if link.panel.goal.len > 0 {
@@ -654,6 +768,10 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
     for &g in link.goals.slots[:link.goals.n] {
         if (g.status == .Done || g.status == .Failed) && !g.told do agent_goal_tell(link, gs, &g)
     }
+    if open := agent_window_open(gs); open != link.seen_window {
+        link.seen_window = open
+        agent_record_op(link, gs, `"window":true` if open else `"window":false`)
+    }
     agent_watch(link, gs)
 }
 
@@ -663,6 +781,11 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
 agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     g.told = true
     if g.status == .Done && g.via != .Goal do agent_record_act(link, gs, g)
+    if g.status == .Done {
+        agent_record_op(link, gs, fmt.tprintf(`"done":%d`, g.id))
+    } else {
+        agent_record_op(link, gs, fmt.tprintf(`"failed":%d,"reason":%s`, g.id, agent_quote(string(g.reason.buf[:g.reason.len]))))
+    }
     agent_fight_flush(link)
     flush_action_log(gs)  // what a reply reports is already on disk
     if g.status == .Done {
@@ -714,11 +837,14 @@ agent_watch :: proc(link: ^Agent_Link, gs: ^Game_State) {
     link.seen_level = gs.level_index
 }
 
-// One event line for the client, if it speaks goals.  A client this far behind
-// loses events; state's goals still say how each one ended.
+// One event line for every watcher, and for the client if it speaks goals.  A
+// client this far behind loses events; state's goals still say how each one ended.
 agent_push_event :: proc(link: ^Agent_Link, gs: ^Game_State, event, fields: string) {
-    if !link.events_on do return
     line := fmt.tprintf(`{{"event":"%s","f":%d,%s}}` + "\n", event, gs.frame, fields)
+    for &r in link.readers[:link.readers_n] {
+        if r.push_len + len(line) <= len(r.push) do r.push_len += copy(r.push[r.push_len:], line)
+    }
+    if !link.events_on do return
     if link.push_len + len(line) > len(link.push) do return
     link.push_len += copy(link.push[link.push_len:], line)
 }

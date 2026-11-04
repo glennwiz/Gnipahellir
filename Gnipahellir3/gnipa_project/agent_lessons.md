@@ -4,10 +4,12 @@ Read this before an agent run, and update it after one. Keep it true, not long:
 replace or delete a lesson when it stops being true.
 
 From "How the bot plays" on, this file ships in the game: the brief a GET gets ends with it.
-How to run: `tools/agent_play.sh` starts the game in a new `build/agent_runs/<time>/`.
-Protocol: top of `src/agent_api.odin`. Afterwards run `tools/agent_summary.py <run>`
+How to run: `odin build src -out:build/gnipa`, then `build/gnipa --agent-run [--port P] [--seed N]`
+starts the game in a new `build/agent_runs/<time>-<port>/`, with a copy of itself.
+Protocol: top of `src/agent_api.odin`. Afterwards run `build/gnipa --summary <run>`
 first, then read `action.log` and `fight.log` only where it points.
-`tools/agent_replay.py <run>` plays a run back in the window.
+`<run>/gnipa --replay <run>` plays a run back in the window. `--pacing` and
+`--builder-trace` are the other reports; `build/gnipa --help` lists them.
 Reuse and improve `tools/agent_bot/`: a fix there lasts, a fix in your head does not.
 
 ## While you think
@@ -22,8 +24,10 @@ with `g.goal("kill Garm", "perch at the east wall")`.
 call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 
 ## How the bot plays
-- Hold one connection for the whole run through `bridge.py`. A disconnect lets the
-  game run on in real time with the player standing there, and ends replay.
+- Hold one connection for the whole run. A disconnect lets the game run on in real
+  time with the player standing there, and ends replay. A lost connection comes back:
+  connect again and send a JSON line. A second connection while one drives watches:
+  it gets state and every event line, and drives once the first is gone.
 - Each life is a new world. Scripts tuned to one map fail on the next: check the
   view, and do not assume tiles.
 - Every script needs a guard in its loop, flight and `noguard` loops included: leave

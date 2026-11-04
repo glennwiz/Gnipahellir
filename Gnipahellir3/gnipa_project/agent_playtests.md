@@ -9,7 +9,7 @@ what broke, and hands back a report. Glenn reads the reports; feel is still his 
 - Run in the shared agent checkout, `/home/glennwiz/dev/Gnipahellir-agent-api/Gnipahellir3`
   (branch `agent-api`), not in your seat worktree: a closed seat's worktree is deleted,
   and the run folder must outlive it. Merge master into `agent-api` first if it is behind.
-- One run at a time on the box, on port 7777 only: `timeout <cap> tools/agent_play.sh 7777 <seed>`.
+- One run at a time on the box, on port 7777 only: `odin build src -out:build/gnipa && timeout <cap> build/gnipa --agent-run --port 7777 --seed <seed>`.
   Playtest cards are chained so they never overlap. If 7777 is taken, wait and say so.
 - Drive the game only through the API (`GET /v1/meta` is the brief, `tools/agent_bot/`
   is the bot). No synthetic keys or mouse, no debug menus, no save editing.
