@@ -17253,3 +17253,444 @@ a_pillar_is_refused_unless_it_can_help :: proc(t: ^testing.T) {
     set_tile(&gs.world, 60, 79, .Stone)
     testing.expect(t, builder_pillar_toward(e, id, gs, {60, 60}, "no path"), "rock overhead is dug")
 }
+
+// ─── The barrel as a hopper (card 166) ───────────────────────────────────────
+//
+//  A smelter or boiler with no ground pile to eat draws from a barrel beside
+//  it, and every pull flies a stream of motes barrel -> machine.  Silos stay a
+//  sink: the smelter casts into them and never draws from them.
+
+@(private = "file")
+hopper_barrel :: proc(gs: ^Game_State, x, y: int) -> ^Barrel_State {
+    set_tile(&gs.world, x, y, .Barrel)
+    barrel_on_placed(gs, {i32(x), i32(y)})
+    return barrel_at(gs, gs.level_index, {i32(x), i32(y)})
+}
+
+@(private = "file")
+hopper_barrel_count :: proc(b: ^Barrel_State, it: Item) -> (n: int) {
+    for s in b.slots do if s.item == it do n += s.count
+    return
+}
+
+// Live motes homing on a machine tile: the pull's particle stream.
+@(private = "file")
+hopper_motes_into :: proc(gs: ^Game_State, x, y: int) -> (n: int) {
+    c := tile_center({i32(x), i32(y)})
+    for p in gs.particles.data do if p.active && p.homing && p.target == c do n += 1
+    return
+}
+
+@(test)
+a_barrel_beside_a_smelter_feeds_its_ore_and_wood :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Wood_Log, 0}   // a stale empty slot is skipped
+    b.slots[3] = {.Iron_Ore, 30}
+    b.slots[7] = {.Wood_Log, 40}
+
+    for _ in 0 ..< 2 { update_sim(gs); eq_clear(&gs.events) }  // one pull a tick: wood, then ore
+
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    when GAME_DEBUG {  // a release build keeps no action.log
+        log := string(gs.debug_log.buf[:gs.debug_log.pos])
+        testing.expect(t, strings.contains(log, fmt.tprintf("Smelter at (%d,%d) pulls 40 Wood_Log from the barrel at (%d,%d)", sx, sy, sx + 1, sy)), "action.log names the pull")
+    }
+    testing.expect_value(t, int(sd.fuel_count), 40)
+    testing.expect_value(t, sd.in_item, Item.Iron_Ore)
+    testing.expect_value(t, int(sd.in_count), 30)
+    testing.expect_value(t, barrel_total(b), 0)
+    testing.expect_value(t, b.slots[3].item, Item.None)  // an emptied slot frees its item
+    testing.expect_value(t, b.slots[7].item, Item.None)
+
+    // And it runs: the barrel-fed furnace casts a bar.
+    for _ in 0 ..< int(SMELT_TIME / gs.delta_time) + 4 { update_sim(gs); eq_clear(&gs.events) }
+    testing.expect_value(t, sd.store_item, Item.Iron_Bar)
+    testing.expect(t, sd.store_count >= 1, "the barrel-fed smelter casts")
+}
+
+@(test)
+a_ground_pile_still_feeds_first_and_the_barrel_waits :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Wood_Log, 10}
+    pile := grid_idx(sx - 1, sy)
+    gs.world.items[pile], gs.world.item_counts[pile] = .Wood_Log, 5
+
+    update_sim(gs); eq_clear(&gs.events)
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, int(sd.fuel_count), 5)
+    testing.expect_value(t, gs.world.items[pile], Item.None)
+    testing.expect_value(t, hopper_barrel_count(b, .Wood_Log), 10)
+    testing.expect_value(t, hopper_motes_into(gs, sx, sy), 0)  // a ground pull flies nothing
+
+    update_sim(gs); eq_clear(&gs.events)
+    testing.expect_value(t, int(sd.fuel_count), 15)
+    testing.expect_value(t, barrel_total(b), 0)
+}
+
+@(test)
+a_barrel_pull_stops_at_the_machines_cap :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Wood_Log, 50}
+    b.slots[1] = {.Iron_Ore, 50}
+    b.slots[2] = {.Silver_Ore, 20}
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.fuel_count = u8(SMELTER_FUEL_CAP - 9)
+    sd.in_item, sd.in_count = .Iron_Ore, u8(SMELTER_IN_CAP - 4)
+
+    for _ in 0 ..< 4 { smelter_autopull(gs, sx, sy, sd); eq_clear(&gs.events) }
+
+    testing.expect_value(t, int(sd.fuel_count), SMELTER_FUEL_CAP)
+    testing.expect_value(t, int(sd.in_count), SMELTER_IN_CAP)
+    testing.expect_value(t, sd.in_item, Item.Iron_Ore)
+    testing.expect_value(t, hopper_barrel_count(b, .Wood_Log), 41)
+    testing.expect_value(t, hopper_barrel_count(b, .Iron_Ore), 46)
+    testing.expect_value(t, hopper_barrel_count(b, .Silver_Ore), 20)  // never mixed into iron
+
+    // Loaded with silver, iron in the barrel is refused.
+    sd.in_item, sd.in_count = .Silver_Ore, 2
+    b.slots[2] = {}
+    smelter_autopull(gs, sx, sy, sd)
+    testing.expect_value(t, sd.in_item, Item.Silver_Ore)
+    testing.expect_value(t, int(sd.in_count), 2)
+    testing.expect_value(t, hopper_barrel_count(b, .Iron_Ore), 46)
+}
+
+@(test)
+a_smelter_takes_nothing_but_ore_and_wood_from_a_barrel :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Dirt, 40}
+    b.slots[1] = {.Iron_Bar, 7}
+    b.slots[2] = {.Wood_Log, 30}
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.fuel_count = u8(SMELTER_FUEL_CAP)  // the wood has nowhere to go either
+
+    for _ in 0 ..< 4 { update_sim(gs); eq_clear(&gs.events) }
+
+    testing.expect_value(t, sd.in_item, Item.None)
+    testing.expect_value(t, int(sd.in_count), 0)
+    testing.expect_value(t, b.slots[0], Inventory_Slot{.Dirt, 40})
+    testing.expect_value(t, b.slots[1], Inventory_Slot{.Iron_Bar, 7})
+    testing.expect_value(t, b.slots[2], Inventory_Slot{.Wood_Log, 30})
+    testing.expect_value(t, hopper_motes_into(gs, sx, sy), 0)
+}
+
+// Every one of the 8 neighbours is a hopper, diagonals included, and a
+// barrel pull is the tick's one pull: wood first, the ore the tick after.
+@(test)
+a_barrel_on_any_of_the_8_neighbours_feeds_a_smelter_one_pull_a_tick :: proc(t: ^testing.T) {
+    for dy in -1 ..= 1 do for dx in -1 ..= 1 {
+        if dx == 0 && dy == 0 do continue
+        gs := test_state(); defer free(gs)
+        sx, sy := GRID_W/2, SURFACE_Y - 3
+        set_tile(&gs.world, sx, sy, .Smelter)
+        b := hopper_barrel(gs, sx + dx, sy + dy)
+        b.slots[0] = {.Iron_Ore, 12}
+        b.slots[1] = {.Wood_Log, 20}
+        sd := &gs.world.sim_data[grid_idx(sx, sy)]
+
+        smelter_autopull(gs, sx, sy, sd)
+        testing.expectf(t, int(sd.fuel_count) == 20 && sd.in_count == 0,
+            "offset (%d,%d): the wood first, the ore waits a tick (fuel %d, ore %d)", dx, dy, sd.fuel_count, sd.in_count)
+        smelter_autopull(gs, sx, sy, sd)
+        testing.expectf(t, sd.in_item == .Iron_Ore && sd.in_count == 12 && barrel_total(b) == 0,
+            "offset (%d,%d): the ore follows (ore %v %d, barrel %d)", dx, dy, sd.in_item, sd.in_count, barrel_total(b))
+    }
+}
+
+// A smelter in the grid's corner looks past the edge safely, and a barrel tile
+// with no record behind it is skipped for the real one.
+@(test)
+a_corner_smelter_skips_the_edge_and_a_recordless_barrel :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    set_tile(&gs.world, 0, 0, .Smelter)
+    set_tile(&gs.world, 1, 0, .Barrel)   // terrain only, no record
+    b := hopper_barrel(gs, 1, 1)
+    b.slots[0] = {.Wood_Log, 9}
+    sd := &gs.world.sim_data[grid_idx(0, 0)]
+    smelter_autopull(gs, 0, 0, sd)
+    testing.expect_value(t, int(sd.fuel_count), 9)
+    testing.expect_value(t, barrel_total(b), 0)
+}
+
+// A grave's Rune_Coffer keeps its record in the barrel table, but its tithe
+// is no hopper: only a .Barrel tile feeds a machine.
+@(test)
+a_smelter_never_eats_a_rune_coffers_tithe :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    set_tile(&gs.world, sx + 1, sy, .Rune_Coffer)
+    barrel_on_placed(gs, {i32(sx + 1), i32(sy)})
+    c := barrel_at(gs, gs.level_index, {i32(sx + 1), i32(sy)})
+    c.slots[0] = {.Iron_Ore, 1}
+    c.slots[1] = {.Wood_Log, 3}
+
+    for _ in 0 ..< 3 { update_sim(gs); eq_clear(&gs.events) }
+
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, int(sd.in_count), 0)
+    testing.expect_value(t, int(sd.fuel_count), 0)
+    testing.expect_value(t, barrel_total(c), 4)
+}
+
+@(test)
+a_cave_smelter_draws_from_its_own_levels_barrel :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    at := [2]i32{i32(sx + 1), i32(sy)}
+    surface := hopper_barrel(gs, sx + 1, sy)   // a record on LEVEL_SURFACE at the same tile
+    surface.slots[0] = {.Iron_Ore, 30}
+    surface.slots[1] = {.Wood_Log, 30}
+
+    gs.level_index = LEVEL_CAVE2
+    set_tile(&gs.world, sx, sy, .Smelter)
+    cave := hopper_barrel(gs, sx + 1, sy)
+    testing.expect(t, cave != nil && cave != surface, "the cave has its own barrel record")
+    cave.slots[0] = {.Silver_Ore, 6}
+    cave.slots[1] = {.Wood_Log, 8}
+
+    for _ in 0 ..< 4 { update_sim(gs); eq_clear(&gs.events) }
+
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, int(sd.fuel_count), 8)
+    testing.expect_value(t, sd.in_item, Item.Silver_Ore)
+    testing.expect_value(t, int(sd.in_count), 6)
+    testing.expect_value(t, barrel_total(cave), 0)
+    testing.expect_value(t, surface.slots[0], Inventory_Slot{.Iron_Ore, 30})
+    testing.expect_value(t, surface.slots[1], Inventory_Slot{.Wood_Log, 30})
+    testing.expect(t, barrel_at(gs, LEVEL_SURFACE, at) == surface, "the surface record stands")
+}
+
+// The ground comes first for ore and gems too, not only for fuel: a pile
+// beside the machine loads, and the barrel waits untouched.
+@(test)
+a_ground_ore_pile_loads_before_the_barrels_ore :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Iron_Ore, 10}
+    b.slots[1] = {.Silver_Ore, 6}   // the same ore waits its turn too
+    pile := grid_idx(sx - 1, sy)
+    gs.world.items[pile], gs.world.item_counts[pile] = .Silver_Ore, 4
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.fuel_count = u8(SMELTER_FUEL_CAP)  // the tick's one pull is the ore's
+
+    smelter_autopull(gs, sx, sy, sd)
+    testing.expect_value(t, sd.in_item, Item.Silver_Ore)
+    testing.expect_value(t, int(sd.in_count), 4)
+    testing.expect_value(t, gs.world.items[pile], Item.None)
+    testing.expect_value(t, b.slots[0], Inventory_Slot{.Iron_Ore, 10})
+    testing.expect_value(t, b.slots[1], Inventory_Slot{.Silver_Ore, 6})
+    testing.expect_value(t, hopper_motes_into(gs, sx, sy), 0)
+}
+
+@(test)
+a_ground_gem_loads_a_kettle_before_the_barrels_gem :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    rule := boiler_rules[1]
+    bx, by := boiler_build(gs, rule)
+    b := hopper_barrel(gs, bx - 1, by)
+    b.slots[0] = {.Jade, 2}
+    b.slots[1] = {.Emerald, 4}
+    pile := grid_idx(bx - 1, by - 1)
+    gs.world.items[pile], gs.world.item_counts[pile] = .Emerald, 3
+    sd := &gs.world.sim_data[grid_idx(bx, by)]
+
+    testing.expect(t, machine_autopull_tiered_fuel(gs, bx, by, sd, BOILER_FUEL_CAP), "the pile is pulled")
+    testing.expect_value(t, sd.in_item, Item.Emerald)
+    testing.expect_value(t, int(sd.in_count), 3)
+    testing.expect_value(t, gs.world.items[pile], Item.None)
+    testing.expect_value(t, b.slots[0], Inventory_Slot{.Jade, 2})
+    testing.expect_value(t, b.slots[1], Inventory_Slot{.Emerald, 4})
+}
+
+// A machine already at its cap takes nothing from a barrel holding more of the
+// same: no "pulls 0", no motes, the barrel as it was.  Smelter ore and wood,
+// boiler fuel, kettle gems.
+@(test)
+a_full_machine_pulls_nothing_from_a_barrel :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Iron_Ore, 5}
+    b.slots[1] = {.Wood_Log, 5}
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    sd.fuel_count = u8(SMELTER_FUEL_CAP)
+    sd.in_item, sd.in_count = .Iron_Ore, u8(SMELTER_IN_CAP)
+    for _ in 0 ..< 3 do smelter_autopull(gs, sx, sy, sd)
+    testing.expect_value(t, b.slots[0], Inventory_Slot{.Iron_Ore, 5})
+    testing.expect_value(t, b.slots[1], Inventory_Slot{.Wood_Log, 5})
+    testing.expect_value(t, hopper_motes_into(gs, sx, sy), 0)
+
+    rule := boiler_rules[0]
+    bx, by := boiler_build(gs, rule)
+    kb := hopper_barrel(gs, bx - 1, by)
+    kb.slots[0] = {rule.fuel_item, 5}
+    bsd := &gs.world.sim_data[grid_idx(bx, by)]
+    bsd.fuel_count = u8(BOILER_FUEL_CAP)
+    testing.expect(t, !machine_autopull_fuel(gs, bx, by, bsd, rule.fuel_item, BOILER_FUEL_CAP), "a full boiler pulls nothing")
+    testing.expect_value(t, kb.slots[0], Inventory_Slot{rule.fuel_item, 5})
+
+    kb.slots[0] = {.Emerald, 5}
+    bsd.fuel_count = 0
+    bsd.in_item, bsd.in_count = .Emerald, u8(BOILER_FUEL_CAP)
+    testing.expect(t, !machine_autopull_tiered_fuel(gs, bx, by, bsd, BOILER_FUEL_CAP), "a full kettle pulls nothing")
+    testing.expect_value(t, kb.slots[0], Inventory_Slot{.Emerald, 5})
+    testing.expect_value(t, hopper_motes_into(gs, bx, by), 0)
+    when GAME_DEBUG {  // a release build keeps no action.log
+        log := string(gs.debug_log.buf[:gs.debug_log.pos])
+        testing.expect(t, !strings.contains(log, "pulls 0"), "no empty pull reaches action.log")
+    }
+}
+
+@(test)
+a_boiler_takes_its_fuel_from_a_barrel :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    rule := boiler_rules[0]
+    bx, by := boiler_build(gs, rule)
+    b := hopper_barrel(gs, bx - 1, by)
+    b.slots[5] = {rule.fuel_item, 5}
+    b.slots[6] = {.Iron_Ore, 5}   // not fuel: stays put
+
+    for _ in 0 ..< 10 { update_sim(gs); update_fluid(gs); eq_clear(&gs.events) }
+
+    sd := &gs.world.sim_data[grid_idx(bx, by)]
+    testing.expect_value(t, hopper_barrel_count(b, rule.fuel_item), 0)
+    testing.expect_value(t, hopper_barrel_count(b, .Iron_Ore), 5)
+    testing.expect(t, sd.fuel_count == 4 && sd.spread_timer > 0, "five pulled, one burning")
+}
+
+@(test)
+a_magic_kettle_takes_gems_from_a_barrel_one_kind_at_a_time :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    rule := boiler_rules[1]
+    bx, by := boiler_build(gs, rule)
+    b := hopper_barrel(gs, bx - 1, by)
+    b.slots[0] = {.Iron_Ore, 9}   // not a gem
+    b.slots[1] = {.Emerald, 3}
+    b.slots[2] = {.Jade, 2}
+    sd := &gs.world.sim_data[grid_idx(bx, by)]
+
+    testing.expect(t, machine_autopull_tiered_fuel(gs, bx, by, sd, BOILER_FUEL_CAP), "the gem is pulled")
+    testing.expect_value(t, sd.in_item, Item.Emerald)
+    testing.expect_value(t, int(sd.in_count), 3)
+    testing.expect(t, !machine_autopull_tiered_fuel(gs, bx, by, sd, BOILER_FUEL_CAP), "jade does not mix into emerald")
+    testing.expect_value(t, hopper_barrel_count(b, .Jade), 2)
+    testing.expect_value(t, hopper_barrel_count(b, .Iron_Ore), 9)
+}
+
+@(test)
+a_barrel_pull_flies_motes_from_barrel_to_machine :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    b.slots[0] = {.Wood_Log, 4}
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+
+    testing.expect_value(t, hopper_motes_into(gs, sx, sy), 0)
+    smelter_autopull(gs, sx, sy, sd)
+    testing.expect(t, hopper_motes_into(gs, sx, sy) > 0, "a pull spawns a stream into the smelter")
+    from := tile_center({i32(sx + 1), i32(sy)})
+    for p in gs.particles.data do if p.active && p.homing {
+        testing.expect_value(t, p.pos, from)  // it starts at the barrel
+    }
+
+    // Full machine: no pull, no motes.
+    for &p in gs.particles.data do p = {}
+    gs.particles.count = 0
+    sd.fuel_count = u8(SMELTER_FUEL_CAP)
+    sd.in_item, sd.in_count = .Iron_Ore, u8(SMELTER_IN_CAP)
+    b.slots[0] = {.Wood_Log, 4}
+    smelter_autopull(gs, sx, sy, sd)
+    testing.expect_value(t, hopper_motes_into(gs, sx, sy), 0)
+    testing.expect_value(t, hopper_barrel_count(b, .Wood_Log), 4)
+}
+
+@(test)
+a_smelter_never_draws_from_a_silo :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    tile := [2]i32{i32(sx + 1), i32(sy)}
+    set_tile(&gs.world, sx + 1, sy, .Silo)
+    silo_on_placed(gs, tile)
+    s := silo_at(gs, gs.level_index, tile)
+    silo_add(s, .Iron_Ore, 30)
+    silo_add(s, .Wood_Log, 30)
+
+    for _ in 0 ..< 4 { update_sim(gs); eq_clear(&gs.events) }
+
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    testing.expect_value(t, int(sd.in_count), 0)
+    testing.expect_value(t, int(sd.fuel_count), 0)
+    testing.expect_value(t, silo_total(s), u32(60))
+}
+
+// Random barrels and half-loaded machines: every pull only moves items, never
+// past a cap, and a buffer never holds two kinds.
+@(test)
+barrel_pulls_conserve_items_under_random_loads :: proc(t: ^testing.T) {
+    gs := test_state(); defer free(gs)
+    sx, sy := GRID_W/2, SURFACE_Y - 1
+    set_tile(&gs.world, sx, sy, .Smelter)
+    b := hopper_barrel(gs, sx + 1, sy)
+    sd := &gs.world.sim_data[grid_idx(sx, sy)]
+    pool := [?]Item{.None, .Iron_Ore, .Silver_Ore, .Gold_Ore, .Wood_Log, .Emerald, .Jade, .Dirt, .Iron_Bar}
+    rng: u64 = 0x166
+    roll :: proc(s: ^u64, n: int) -> int {
+        s^ = s^ * 6364136223846793005 + 1442695040888963407
+        return int((s^ >> 33) % u64(n))
+    }
+    ledger :: proc(b: ^Barrel_State, sd: ^Sim_Tile_Data) -> (tot: [Item]int) {
+        for s in b.slots do tot[s.item] += s.count
+        tot[sd.in_item] += int(sd.in_count)
+        tot[FUEL_ITEM] += int(sd.fuel_count)
+        tot[.None] = 0
+        return
+    }
+    bad := 0
+    for trial in 0 ..< 400 {
+        for &s in b.slots {
+            it := pool[roll(&rng, len(pool))]
+            s = {it, it == .None ? 0 : 1 + roll(&rng, MAX_STACK)}
+        }
+        sd^ = {}
+        kettle := trial % 2 == 1
+        if kettle {
+            if roll(&rng, 2) == 0 { sd.in_item, sd.in_count = .Emerald, u8(1 + roll(&rng, BOILER_FUEL_CAP)) }
+        } else {
+            sd.fuel_count = u8(roll(&rng, SMELTER_FUEL_CAP + 1))
+            if roll(&rng, 2) == 0 { sd.in_item, sd.in_count = .Silver_Ore, u8(1 + roll(&rng, SMELTER_IN_CAP)) }
+        }
+        before := ledger(b, sd)
+        for _ in 0 ..< 1 + roll(&rng, 20) {
+            if kettle do _ = machine_autopull_tiered_fuel(gs, sx, sy, sd, BOILER_FUEL_CAP)
+            else do smelter_autopull(gs, sx, sy, sd)
+        }
+        after := ledger(b, sd)
+        cap := kettle ? BOILER_FUEL_CAP : SMELTER_IN_CAP
+        if before != after || int(sd.in_count) > cap || int(sd.fuel_count) > SMELTER_FUEL_CAP ||
+           (sd.in_count > 0) != (sd.in_item != .None) {
+            bad += 1
+        }
+        for s in b.slots do if (s.count > 0) != (s.item != .None) do bad += 1
+        for &p in gs.particles.data do p = {}
+        gs.particles.count = 0
+    }
+    testing.expect_value(t, bad, 0)
+}

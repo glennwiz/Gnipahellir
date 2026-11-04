@@ -631,6 +631,12 @@ machine_autopull_fuel :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data, it
             return true
         }
     }
+    if slot, at := adjacent_barrel_slot(gs, x, y, nil, item); slot != nil {
+        take := min(slot.count, cap - int(sd.fuel_count))
+        sd.fuel_count += u8(take)
+        machine_barrel_pull(gs, x, y, slot, at, take)
+        return true
+    }
     return false
 }
 
@@ -663,6 +669,14 @@ machine_autopull_tiered_fuel :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_D
             return true
         }
     }
+    if slot, at := adjacent_barrel_slot(gs, x, y, is_tiered_fuel, sd.in_item); slot != nil {
+        have := sd.in_item == slot.item ? int(sd.in_count) : 0
+        take := min(slot.count, cap - have)
+        sd.in_item  = slot.item
+        sd.in_count = u8(have + take)
+        machine_barrel_pull(gs, x, y, slot, at, take)
+        return true
+    }
     return false
 }
 
@@ -694,6 +708,60 @@ smelter_autopull :: proc(gs: ^Game_State, x, y: int, sd: ^Sim_Tile_Data) {
             return  // one pile per tick keeps it cheap
         }
     }
+    if slot, at := adjacent_barrel_slot(gs, x, y, is_smelt_ore, sd.in_item); slot != nil {
+        have := sd.in_item == slot.item ? int(sd.in_count) : 0
+        take := min(slot.count, SMELTER_IN_CAP - have)
+        sd.in_item  = slot.item
+        sd.in_count = u8(have + take)
+        machine_barrel_pull(gs, x, y, slot, at, take)
+    }
+}
+
+// The barrel as a hopper (card 166): when no ground pile feeds a machine, the
+// first slot of a barrel on one of its 8 neighbours holding an item it takes
+// (accepts, when set; only that item, when only is set) is drawn from
+// instead.  Barrels only, not silos: a silo is the smelter's out-chute and
+// vacuums its own neighbours, so it stays a sink.
+adjacent_barrel_slot :: proc(gs: ^Game_State, x, y: int, accepts: proc(it: Item) -> bool, only: Item) -> (^Inventory_Slot, [2]i32) {
+    for dy in -1 ..= 1 {
+        for dx in -1 ..= 1 {
+            if dx == 0 && dy == 0 do continue
+            nx, ny := x + dx, y + dy
+            if !in_bounds(nx, ny) do continue
+            if gs.world.terrain[grid_idx(nx, ny)] != .Barrel do continue
+            at := [2]i32{i32(nx), i32(ny)}
+            b := barrel_at(gs, gs.level_index, at)
+            if b == nil do continue
+            for &s in b.slots {
+                if s.item == .None || s.count <= 0 do continue
+                if only != .None && s.item != only do continue
+                if accepts != nil && !accepts(s.item) do continue
+                return &s, at
+            }
+        }
+    }
+    return nil, {}
+}
+
+// Move n out of a barrel slot the machine at (x, y) has just banked, and show
+// it: a stream of motes in the item's colour flies barrel -> machine.
+machine_barrel_pull :: proc(gs: ^Game_State, x, y: int, slot: ^Inventory_Slot, at: [2]i32, n: int) {
+    it := slot.item
+    slot.count -= n
+    if slot.count == 0 do slot.item = .None
+    spawn_item_transfer_motes(gs, tile_center(at), tile_center({i32(x), i32(y)}), it)
+    log_action(gs, "%v at (%d,%d) pulls %d %v from the barrel at (%d,%d)",
+        gs.world.terrain[grid_idx(x, y)], x, y, n, it, at.x, at.y)
+}
+
+is_smelt_ore :: proc(it: Item) -> bool {
+    _, ok := smelt_rule_for(it)
+    return ok
+}
+
+is_tiered_fuel :: proc(it: Item) -> bool {
+    _, ok := gem_burn_time_for(it)
+    return ok
 }
 
 // Hand-feeding via the furnace window: the dragged bag stack loads the
