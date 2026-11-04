@@ -8,6 +8,8 @@ what broke, and hands back a report. Glenn reads the reports; feel is still his 
 
 - Playtests run only while Glenn is at work, or when Glenn asks for one (his rule, 2026-11-03).
   The coordinator readies them; if Glenn says he is back, finish the run in progress and stop.
+- While a playtest runs, at most one other seat works on the box (Glenn, 2026-11-04), so
+  the game keeps near 60 fps. The coordinator holds new seats until the run ends.
 
 ## Where and how
 
