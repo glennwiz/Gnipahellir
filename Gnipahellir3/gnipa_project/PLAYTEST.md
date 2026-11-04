@@ -60,6 +60,18 @@ a second stack into VOID permanently erases the first and retains the new one.
 playtest, grep it for `strike`, `WARNING`, `Player` to reconstruct the
 session. This is how the builder-freeze regression was diagnosed.
 
+## Agent play
+
+An agent plays the same game through a local socket: title option
+`[A] Let an agent play`, or `gnipa --agent-run [--port P] [--seed N]`, which runs
+in a new folder under `build/agent_runs/`. A GET on the port is the brief. The
+game runs in real time and never pauses for the agent; the agent only queues
+goals (go, home, mine, gather, craft, place, store, withdraw, feed, collect,
+fight, and act for raw keys), and the game turns each into the same keys and
+mouse a player uses. Watch it in the window; Enter talks to it. Afterwards
+`gnipa --summary <run>`, `--replay <run>` (`gnipa --help` lists the reports).
+Agent playtest rules: `agent_playtests.md`.
+
 ## The full loop (v1.0 progression)
 
 1. **Cave 1**: hole in the grass at map center → shaft down. Blueprint A +

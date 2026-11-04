@@ -137,13 +137,14 @@ AGENT_READERS_MAX  :: 4    // watching clients beside the one that drives
 // Printable, JSON-safe, one per distinct tile type seen in a view.
 AGENT_ACTS_FILE    :: "acts.jsonl"
 AGENT_FIGHT_FILE   :: "fight.log"
+AGENT_RUN_LOGS     :: "acts.jsonl, action.log and fight.log" when GAME_DEBUG else "acts.jsonl and fight.log" // a release build writes no action.log
 AGENT_FIGHT_RANGE  :: 30      // tiles from the player
 AGENT_FIGHT_BUF    :: 64 * 1024
 
 // What a run has learned, from the lessons a run keeps up.  The file's head is about
 // this repo's harness, not the game.
 AGENT_LESSONS      :: #load("../gnipa_project/agent_lessons.md", string)
-AGENT_LESSONS_FROM :: "## How the bot plays"
+AGENT_LESSONS_FROM :: "## How to play it"
 
 AGENT_TILE_CHARS :: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#*+-=~:;.,!?@$%^&()[]{}<>/|_"
 
@@ -606,7 +607,17 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "\nCOMMANDS\n")
     fmt.sbprintf(w, "{{\"cmd\":\"state\",\"x\":0,\"y\":0,\"w\":%d,\"h\":%d}}  all optional: the default view is %dx%d round you, and the whole level is yours to read\n",
         GRID_W, GRID_H, AGENT_VIEW_W, AGENT_VIEW_H)
-    fmt.sbprintf(w, "{{\"cmd\":\"act\",...,\"frames\":30}}  plays 1..%d ticks at 60 a second, then replies with state\n", AGENT_MAX_FRAMES)
+    fmt.sbprintf(w, "{{\"cmd\":\"goals\",\"add\":[{{\"do\":\"go\",\"to\":[90,60]}},{{\"do\":\"act\",\"move\":\"right\",\"frames\":30}},...]}}  queues goals, played in order while the game runs; answers their ids\n")
+    fmt.sbprintf(w, "  You only send goals: the game turns each into the keys and mouse a player would use, so a goal can do nothing a player cannot.\n")
+    fmt.sbprintf(w, "  The queue holds %d; a full one answers ok:false. {{\"cmd\":\"goals\",\"cancel\":id}} or \"clear\":true drops goals, which then end failed\n", AGENT_GOALS_MAX)
+    fmt.sbprintf(w, "  state's goals lists each one: queued, running (with left), done, or failed with a reason. do names the kind:\n")
+    for row in agent_goal_kinds do fmt.sbprintf(w, "    %s: %s\n", row.name, row.params)
+    fmt.sbprintf(w, "  a go or home that cannot get nearer fails: no_route (nothing nearer to reach), blocked (no headway for %.0f s), hazard (the tile burns or drowns)\n", HERO_GO_STUCK_S)
+    fmt.sbprintf(w, "  a work goal picks its tool (the longest mine wand the mana fires, else the pickaxe) and works windows at a person's pace;\n")
+    fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, unsafe, blocked or full first, then what\n")
+    fmt.sbprintf(w, "  a fight is done when its enemy is gone; it fails with no_item, no_target, unreachable or low_hp (backed off) first\n")
+    fmt.sbprintf(w, "  an act holds its keys for 1..%d ticks at 60 a second; it fails only when its verb is refused as it starts, or at a drop that hurts or a burn ahead\n", AGENT_MAX_FRAMES)
+    fmt.sbprintf(w, "The act fields, for an act goal:\n")
     fmt.sbprintf(w, "  move: left, right, none. jump, down, interact, dismiss, warp: true\n")
     fmt.sbprintf(w, "  one of mine, place, use, reclaim: [x,y] in tiles. Tiles are %dx%d; state's player x,y are tiles too\n", GRID_W, GRID_H)
     fmt.sbprintf(w, "    whole numbers aim at the tile's centre; fractions aim at that point within it (10.0 is the tile's left edge)\n")
@@ -618,33 +629,27 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "    zone: [x0,y0,x1,y1]  drags the Gather zone, up to %dx%d tiles. crew: true  flips this level's golems between Gather and Build\n", GOLEM_ZONE_MAX_W, GOLEM_ZONE_MAX_H)
     fmt.sbprintf(w, "    monument: Clay_Hearth, Golem_Depot or World_Anchor, with at: [x,y] in reach  the anchor Build golems raise it from\n")
     fmt.sbprintf(w, "  state's crew lists the golems, and this level's zone and monument. birds lists the sky flocks in view: scenery, harmless\n")
-    fmt.sbprintf(w, "{{\"cmd\":\"goals\",\"add\":[{{\"do\":\"act\",\"move\":\"right\",\"frames\":30}},...]}}  queues goals, played in order while the game runs; answers their ids\n")
-    fmt.sbprintf(w, "  The queue holds %d; a full one answers ok:false. {{\"cmd\":\"goals\",\"cancel\":id}} or \"clear\":true drops goals, which then end failed\n", AGENT_GOALS_MAX)
-    fmt.sbprintf(w, "  state's goals lists each one: queued, running (with left), done, or failed with a reason. do names the kind:\n")
-    for row in agent_goal_kinds do fmt.sbprintf(w, "    %s: %s\n", row.name, row.params)
-    fmt.sbprintf(w, "  a go or home that cannot get nearer fails: no_route (nothing nearer to reach), blocked (no headway for %.0f s), hazard (the tile burns or drowns)\n", HERO_GO_STUCK_S)
-    fmt.sbprintf(w, "  a work goal picks its tool (the longest mine wand the mana fires, else the pickaxe) and works windows at a person's pace;\n")
-    fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, unsafe, blocked or full first, then what\n")
-    fmt.sbprintf(w, "  a fight is done when its enemy is gone; it fails with no_item, no_target, unreachable or low_hp (backed off) first\n")
     fmt.sbprintf(w, "{{\"cmd\":\"home\",\"at\":[x,y]}}  marks this level's home for the home goal; with no at, the mark goes and home is the surface spawn\n")
     fmt.sbprintf(w, "{{\"cmd\":\"reflexes\",\"potion\":false}}  the hero's reflexes, under every goal, all on at first; answers with each:\n")
     fmt.sbprintf(w, "  leave_hazard: walks and jumps out of lava, water or a burn. potion: drinks a health potion under %.0f%% hp\n", HERO_LOW_HP_FRAC * 100)
     fmt.sbprintf(w, "  floor_dig: never digs the floor under itself over a fall that kills or burns. rim_dig: never digs beside water or lava\n")
     fmt.sbprintf(w, "  fight_back: strikes back for %.1f s at the enemy that hurt it, with the sword in reach or the wand at range\n", HERO_FIGHT_BACK_S)
-    fmt.sbprintf(w, "An act drops what is queued and answers with state when it is done.\n")
+    fmt.sbprintf(w, "{{\"cmd\":\"act\",...}}  one act goal with those fields in place of the queue: it drops what is queued and answers with state when it is done.\n")
     fmt.sbprintf(w, "A refused request answers ok:false with error. State's notes hold the toasts, the only reason some refusals give.\n")
     fmt.sbprintf(w, "A view's rows are one character per tile: legend names them, solid stops you, floor holds you up. enemies lists only what is inside the view, x,y the top-left of a w x h body in tiles.\n")
     fmt.sbprintf(w, "screen is title, settings, snapshots, menu, dead, book, won or play. dismiss gets past any but play, and starts the next life after dead or won.\n")
 
     fmt.sbprintf(w, "\nFIRST STEPS\n")
+    fmt.sbprintf(w, "A trip: {{\"cmd\":\"goals\",\"add\":[{{\"do\":\"go\",\"to\":[x,y]}}]}}, then read the events for goal_done or goal_failed.\n")
     fmt.sbprintf(w, "A walk: {{\"cmd\":\"act\",\"move\":\"right\",\"frames\":60}}. move is the key; a key the game does not know does nothing and gives no error.\n")
     fmt.sbprintf(w, "Walking is about 4 tiles a second and stops when the act ends. A jump clears about 2 tiles. Falls hurt from a few tiles up.\n")
     fmt.sbprintf(w, "Read the whole level once: items lists what lies on the ground by tile cell, and walking through a cell takes up what lies there. The pickaxe is the first thing to find.\n")
-    fmt.sbprintf(w, "select takes the slot number from state's inventory, not a hotbar key. Bare hands mine, slowly: a log can take 200 frames with no word until it drops.\n")
+    fmt.sbprintf(w, "select takes the slot number from state's inventory, not a hotbar key. Bare hands mine only %s, at %d times a pickaxe's hits, with no word until it drops; nothing else yields without the pickaxe.\n", terrain_table[BARE_HAND_TILE].name, BARE_HAND_MULT)
     fmt.sbprintf(w, "This address's HTTP side only reads the brief; everything else is the socket.\n")
 
     fmt.sbprintf(w, "\nHOW THE GAME WAITS\n")
     fmt.sbprintf(w, "It does not: while you are connected the game runs in real time at a fixed step, 60 ticks a second, and the keyboard is ignored.\n")
+    fmt.sbprintf(w, "Real time is fixed: no command pauses or slows it, goal or none, thinking or not.\n")
     fmt.sbprintf(w, "Only the death screen and the menus stop play. Queue goals before a long think, and pick safe ones.\n")
     fmt.sbprintf(w, "The hero never moves while a window is open: a goal that would closes it first, and one that works the window holds still.\n")
 
@@ -654,6 +659,10 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "goal_paused and goal_resumed (id, reason: fight, flee or ledge), idle (threats) once the queue runs dry.\n")
     fmt.sbprintf(w, "The hero has its own sense of danger: it fights or flees an enemy that comes at it and goes back to the goal after,\n")
     fmt.sbprintf(w, "stops at a drop the fall would hurt from (the goal fails, reason says the drop), and keeps to safe ground when idle.\n")
+
+    fmt.sbprintf(w, "\nTHE GAME BINARY\n")
+    fmt.sbprintf(w, "One binary does everything: the run, its replay and its reports. Every run folder holds %s.\n", AGENT_RUN_LOGS)
+    strings.write_string(w, TOOL_USAGE)
 
     fmt.sbprintf(w, "\nOBJECTIVE PANEL\n")
     fmt.sbprintf(w, "The human reads your panel in the window, so keep it true:\n")
@@ -670,7 +679,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "Stay alive through the ceremony. screen says won, and a dismiss starts over.\n")
 
     fmt.sbprintf(w, "\nLESSONS FROM EARLIER RUNS\n")
-    fmt.sbprintf(w, "Names like goto and harvest are one bot's helpers, not commands.\n\n")
+    fmt.sbprintf(w, "These come from earlier runs, most of them by a scripted bot before goals.\n\n")
     lessons := AGENT_LESSONS
     strings.write_string(w, lessons[strings.index(lessons, AGENT_LESSONS_FROM):])
     return strings.to_string(b)

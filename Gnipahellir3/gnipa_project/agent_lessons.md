@@ -3,7 +3,7 @@
 Read this before an agent run, and update it after one. Keep it true, not long:
 replace or delete a lesson when it stops being true.
 
-From "How the bot plays" on, this file ships in the game: the brief a GET gets ends with it.
+From "How to play it" on, this file ships in the game: the brief a GET gets ends with it.
 How to run: `odin build src -out:build/gnipa`, then `build/gnipa --agent-run [--port P] [--seed N]`
 starts the game in a new `build/agent_runs/<time>-<port>/`, with a copy of itself.
 Protocol: top of `src/agent_api.odin`. Afterwards run `build/gnipa --summary <run>`
@@ -13,26 +13,26 @@ first, then read `action.log` and `fight.log` only where it points.
 
 ## While you think
 
-The game no longer stops between acts. Between tool calls it plays your plan at
-about 15 ticks a second, then idles for 3 game seconds, then holds. So before a
-long think, end the script with `g.plan({...},{...})` sized to the think, and
-pick safe moves: a plan is blind, and only your next act overrides it. State has
-`plan_left`, and `plan_stopped` if a step could not start. Keep the watcher told
-with `g.goal("kill Garm", "perch at the east wall")`.
-`B` now sends a default plan when a script exits (mine beside the body, else stand);
-call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
+The game never stops for you: it runs in real time whether you send anything or
+not, and nothing pauses it. Before a long think, queue goals sized to it
+(`{"cmd":"goals","add":[...]}`, up to 32) and pick safe ones. The hero fights or
+flees what comes at it and goes back to the goal after, but it cannot know your
+plan: a goal near a Builder is still a risk. Read the event lines (goal_done,
+goal_failed, goal_paused, hurt) instead of polling state, and keep the watcher
+told with `{"cmd":"objective","goal":"kill Garm","step":"perch at the east wall"}`.
+Hold one connection, from one client: never drive from two at once.
 
-## How the bot plays
+## How to play it
 - Hold one connection for the whole run. A disconnect lets the game run on in real
   time with the player standing there, and ends replay. A lost connection comes back:
   connect again and send a JSON line. A second connection while one drives watches:
   it gets state and every event line, and drives once the first is gone.
-- Each life is a new world. Scripts tuned to one map fail on the next: check the
+- Each life is a new world. Plans tuned to one map fail on the next: check the
   view, and do not assume tiles.
-- Every script needs a guard in its loop, flight and `noguard` loops included: leave
-  when `in_tile` is a hazard or HP is falling. Runs 2 and 3 both ended in lava retrying
-  one move; run 3 died holding the ring and a potion. `fly` now warps when hurt.
-- A failed step must not replan the same step. Count repeats and pick another goal.
+- Watch hp and the tile you stand in on every leg, flight included, and leave when it
+  is a hazard or hp is falling. Runs 2 and 3 both ended in lava retrying one move; run 3
+  died holding the ring and a potion.
+- A failed goal must not be sent again unchanged. Count repeats and pick another goal.
 - `mine` on a tile out of reach chips the nearest reachable tile, which can dig out
   your floor. Check reach first.
 - Do not path through your own altar, bench or floor.
@@ -43,50 +43,43 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - `enemies` lists only what is inside the requested view, so ask for a wide view.
 - Warp does nothing on level 0, chamber included ("Already on the surface"). Check it
   moved you before relying on it: life 1 of run 4 walked into the shaft and fell 21 tiles.
-- `walkj` along the surface walks into the shaft at x 96-97. Bridge it first.
-- Falling off the sky lands you in the chamber at no cost, but a `goto` left running then
-  paths on L0 for sky coordinates. Check `level` after each leg.
+- Walking along the surface walks into the shaft at x 96-97. Bridge it first.
+- Falling off the sky lands you in the chamber at no cost, but a go still queued then
+  walks L0 to sky coordinates. Check `level` after each leg.
 - Stations need a neighbour tile: a smelter in open air fails with no note. Windows close
   after an act, so `use` again before `collect`.
-- Print map columns before flying to a tile. A misread cost 20 tiles of fall, hp 10 to 2.
-- `harvest` on stone nets zero when it bridges gaps: use `quarry`. Solid stone is the
+- Read the map's columns in state before flying to a tile. A misread cost 20 tiles of fall, hp 10 to 2.
+- Mining stone that bridges gaps nets zero blocks: mine solid stone. Solid stone is the
   rows from 104 down on L0, and rows 55-59 on the surface; the chamber is thin islands.
-- Keep 20 blocks in reserve. At zero, `goto` and `harvest` loop on Pillar and burn minutes.
-- `quarry` digs your own altar base logs: start it away from the base.
-- `sel` returns False if the item is missing; a place after it uses whatever is held
-  (a log landed where the altar should be). Check the craft worked.
+- Keep 20 blocks in reserve: a go bridges and pillars with blocks from the bag.
+- Mining by the base digs your own altar base logs: mine away from it.
+- A place sets down whatever is held: check the craft worked and the slot holds the item
+  (a log landed where the altar should be).
 - Read `notes` after a place or craft that did nothing: it is the only reason given.
-- Drops fall now. Stone mined over a void falls away, so `harvest` on chamber islands nets
-  zero and strands you with no blocks. Mine the ceiling above your floor, or `quarry` row 105.
-  Check block count before a long `goto`: 50 rows up is 50 blocks.
+- Drops fall now. Stone mined over a void falls away, so mining chamber islands nets
+  zero and strands you with no blocks. Mine the ceiling above your floor, or row 105.
+  Check block count before a long go up: 50 rows up is 50 blocks.
 - Do not stand a bench on (141,94): Scroll A needs that tile free, and also free of drops.
 - A view's `solid` chars stop the body from every side, `floor` ones hold it up. Structures
   are floor but not solid; doors are neither.
-- `guard` kills Builders by default. To keep an owner alive for a den test, set
-  `sparebuilder`, but keep away: he bites 1 a second, and if he dies beside you he rises as
+- A den owner left alive bites 1 a second, so keep away; if he dies beside you he rises as
   a Draugr that claws 3 on the next frame (ended life 2 of run 5).
 - Lava: move out, never jump in place; the game runs on while you think, so flee first.
 - A sky hole in the deck drops you to L0 at (147,92): free, and drops in the hole go with you.
 - Plain Cloud drops 20% of the time, Cloud_Ore always.
-- Check the level after every portal step: run 6 life 3 ran the sky script on L0 and flew into the shaft, 32 tiles, dead.
+- Check the level after every portal step: run 6 life 3 ran its sky moves on L0 and flew into the shaft, 32 tiles, dead.
 - Scroll C sits at (12,101) on Cave 3. A smashed L0 altar goes back on the Stone base until Scroll C is found.
 - Do not let flight lapse over an island: 21 tiles is 9 damage. Over void you fall to L0 free.
-- Run 7: `fight` dug toward enemies for line of sight and took the floor (fell on a Draugr, dead)
-  and a pool rim (the Deep Cave pool drained). It now skips cells below the feet or by water/lava.
 - Do not think long with a Builder in the view: run 7 life 1 stood 300 ticks beside a hunting
   Builder, 10 to 3 hp.
-- Walks need a stuck check: p1 jumped 30 s at a trunk at x 88. `walkj` now gives up after two
-  jumps that do not move x.
-- `path` refuses water; standing in spilt water there is no path at all. Set `b.waterok=True`.
-  A block cannot go into a water cell ("Something is already there"), and water is no
+- A walk can stick: p1 jumped 30 s at a trunk at x 88. A go gives up as blocked instead.
+- A block cannot go into a water cell ("Something is already there"), and water is no
   neighbour for placing ("It needs something solid beside it").
 - Walls: a Vargr goes for natural rock first. Run 7 life 2 walled the chamber in placed stone
   and wood, and both Vargr dug in under the natural floor (placed stone took them about 4 s).
 - The death screen refuses `tithe` for about 90 frames ("not ready yet"): wait, then retry.
 - Sky Egg: 2 per nest, no regrowth, `equip` eats it for +2 hp.
 - A Rain Wisp's drip soaks you and slows flight; a flight home ran out 3 tiles short.
-- In a walled pocket, `fight`'s line-of-sight dig still opens your own wall at foot level
-  (run 7 life 3 dug (108,53) and let the Vargr in). Turn it off when walled in.
 - Crew over the API (run 8): select the Clay_Golem and `place` anywhere to bind it, then the wand
   and `place:[x,y]` to set it down. Wand 2 Clay + 2 Plank + 1 Iron_Bar, golem 4 Clay + 1 Iron_Bar,
   both instant at a bench; Clay is 1 Stone_Block for 2, no station. The basic wand holds ONE golem.
@@ -98,8 +91,8 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
 - Bare hands mine only Wood. Without the pickaxe there is no stone, so no Fire Wand.
 - A grave lands where you die and its risen hero (12 hp, claws 3) guards 12 tiles round it. Dying
   near the shaft puts it on the pickaxe ledge: run 8 lost lives 3 to 5 to that loop. Die far from the shaft.
-- `noguard` while walking lets an Ember Beetle chew you from 10 to 1 (run 8 life 5).
-- Watching the crew with `noguard` let a Vargr wave kill run 8 life 7 in 4 s: watch with guard on.
+- With no eye on enemies, an Ember Beetle chewed run 8 life 5 from 10 to 1 on a walk, and a
+  Vargr wave killed life 7 in 4 s while it watched the crew.
 - Gather zones undermine what stands in them: a bench and smelter in the zone fell to items and the
   crew hauled them to its pile (run 8 life 7). Keep the base outside the zone and its margin.
 
@@ -109,14 +102,14 @@ call `b.think(*acts,sec=20)` to choose your own. Never run two scripts at once.
   ritual A, cave 2 and Scroll B, gold, ritual B, sky base, Scroll C, ritual C.
 - Worlds differ in cave shape by seed; ore placement looked the same between runs.
 - Swirl blessing: 20 s flight at 14 tiles/s, carried through levels. Fly in 8 ways
-  (`airline`): cave 3 arrives with 11 s left against 7 on the axial `flyto`.
+  (diagonals too): cave 3 arrives with 11 s left against 7 flying only along the axes.
 - Gold: 20 ore and 2 Jade took about 15 minutes in west cave 2.
 - Jade Ring (1 iron bar + jade) warps to the surface. Make it before Garm; it saved
   the run many times. Home to chamber is 20 s.
 - Fuel is 2 logs per bar: bring 32 or more. Trees need clear Air above and grow only
   on the active level, in 40 s. Flower beds likewise, in 120 s.
 - Cloud drops float in the cell, so stand in them. Stone bridge on row 80, wand on the roof
-  above, jump under each drop: `skyfarm` took 3 columns for 5 Cloud Stone.
+  above, jump under each drop: that took 3 columns for 5 Cloud Stone.
 - Tree farm: Tree_Grower is 2 planks + 4 leaves, known once you hold planks. Needs Air
   above, so surface or sky, never a Void cave. Set in the grass the walk stays flat.
   Untested for yield: run 4 ended before a harvest, and a Vargr wave smashed 5 growers.
