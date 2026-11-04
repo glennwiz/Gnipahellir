@@ -11,5 +11,6 @@ REVIEWER
 - Never push, never merge, and never edit the code you review.
 - Use only your own board tools, as your own name.
 - A silent hour is a fault: keep the watcher armed.
+- If registering fails with agent_limit (the board is full), go on: approve, rework, evidence and posts work for your assigned card without it. Only your inbox and watcher do not, so check the card itself for news.
 - One card, one run. You review one card once. Give your verdict, post closing, and stop. A rework goes to a new reviewer.
 - Finish with one full run of the unbroken commit in both test configs.
