@@ -3740,9 +3740,15 @@ hero_flee_takes_the_fall_when_the_way_past_is_shut :: proc(t: ^testing.T) {
         testing.expectf(t, fell == c.fall, "%v: fell %v", c, fell)
         testing.expectf(t, !gs.player.dead, "%v: and lived", c)
         if fell do continue
+        testing.expectf(t, gs.hero.turned_dir != 0, "%v: the shut way counts as a turned end", c)
         gs.enemies.data[v].pos.x = gs.player.pos.x + HERO_SAFE_CLEAR + 2
         for _ in 0 ..< 5 do hero_test_tick(link, gs)
         testing.expectf(t, !gs.hero.break_shut, "%v: clear of it, the way is not shut", c)
+        testing.expectf(t, gs.hero.turned_dir == 0 && !gs.hero.drop_back, "%v: and the turn is forgotten", c)
+        gs.hero.turned_dir, gs.hero.drop_back = 1, true
+        despawn_enemy(gs, v)
+        for _ in 0 ..< 2 do hero_test_tick(link, gs)
+        testing.expectf(t, gs.hero.turned_dir == 0 && !gs.hero.drop_back, "%v: with no threat in mind, too", c)
     }
 }
 
@@ -4185,4 +4191,133 @@ hero_flees_shooting :: proc(t: ^testing.T) {
     }
     testing.expect(t, fled > 0, "it fled")
     testing.expectf(t, shots > 0, "%d shots as it fled", shots)
+}
+
+// Card 156: a Sky Egg heals under the line as a potion does; a potion held too
+// goes first, in hero_heal_items' order.
+@(test)
+hero_eats_a_sky_egg_under_the_line :: proc(t: ^testing.T) {
+    for both in ([]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        hero_test_arena(gs)
+        go_test_give(gs, .Sky_Egg, 1)
+        if both do go_test_give(gs, .Potion_Health, 1)
+        exec_test_frames(link, gs, 5)
+        gs.player.hp = 1
+        exec_test_frames(link, gs, 3)
+        testing.expectf(t, gs.player.hp > 1, "potion too %v: it healed", both)
+        testing.expect_value(t, inventory_count(&gs.player.inventory, .Sky_Egg), 1 if both else 0)
+        testing.expect_value(t, inventory_count(&gs.player.inventory, .Potion_Health), 0)
+    }
+}
+
+// Card 156: on a mesa between two drops, each dearer than a blow, a Vargr
+// coming on: the hero turns back from the first drop at most once, and takes
+// the cheaper of the two, going back for it when the second is dearer.  No
+// running back and forth past the Vargr.
+@(test)
+hero_with_drops_both_ways_takes_the_cheaper_once :: proc(t: ^testing.T) {
+    // dl, dr: the drops' depths; lava: a burn under the left one; left: the one
+    // to take; turns: the most times the hero may turn back.
+    Case :: struct{dl, dr: int, lava: bool, left: bool, turns: int}
+    for c in ([?]Case{
+        {12, 9,  false, false, 1},  // the first, left, dearer: on to the right
+        {9,  12, false, true,  2},  // the first cheaper: back to it, once
+        {9,  9,  false, false, 1},  // as dear: the one it is at
+        {13, 16, true,  false, 1},  // a burn costs more than any fall
+    }) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 14 ..= x0 - 5 do for y in G ..< G + c.dl do set_tile(&gs.world, x, y, .Air)
+        for x in x0 + 5 ..= x0 + 14 do for y in G ..< G + c.dr do set_tile(&gs.world, x, y, .Air)
+        if c.lava do for x in x0 - 14 ..= x0 - 5 do set_tile(&gs.world, x, G + c.dl - 1, .Lava)
+        hl := hero_column(&gs.world, x0 - 5, G - 1).hurts
+        hr := hero_column(&gs.world, x0 + 5, G - 1).hurts
+        testing.expectf(t, min(hl, hr) > WAVE_DAMAGE * HERO_PASS_BLOWS, "%v: drops of %d and %d, both dearer than a blow", c, hl, hr)
+        if c.lava do testing.expectf(t, hero_column(&gs.world, x0 - 5, G - 1).hazard && hl < hr, "%v: a burn under the cheaper fall", c)
+        gs.player.hp_max, gs.player.hp = 20, 20
+        gs.player.pos = {f32(x0 - 3) + 0.1, f32(G) - PLAYER_H}
+        v := hero_test_vargr(gs, f32(x0) + 2, G, {})
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        turns, last := 0, i8(0)
+        for _ in 0 ..< 60 * 20 {
+            hero_test_tick(link, gs)
+            if gs.player.dead || hero_feet_row(&gs.player) >= i32(G) do break
+            d := i8(0)
+            if gs.input.move_left do d = -1
+            if gs.input.move_right do d = 1
+            if d != 0 && last != 0 && d != last && gs.player.grounded do turns += 1
+            if d != 0 do last = d
+        }
+        testing.expectf(t, !gs.player.dead, "%v: the hero lived", c)
+        testing.expectf(t, hero_feet_row(&gs.player) >= i32(G), "%v: it took a drop", c)
+        testing.expectf(t, (gs.player.pos.x < f32(x0)) == c.left, "%v: the cheaper one (%d left, %d right), at x %.1f", c, hl, hr, gs.player.pos.x - f32(x0))
+        testing.expectf(t, turns <= c.turns, "%v: turned %d times", c, turns)
+    }
+}
+
+// Card 156: the flee's gap jump only leaves the ground.  Held a hair over the
+// take-off, off its feet, the hero starts no leap: in the air one carried it
+// on over drops it could not clear (seed 1).
+@(test)
+hero_flee_starts_no_gap_jump_in_the_air :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 4 ..< x0 + 6 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+    hero_test_vargr(gs, f32(x0) - 3, G, {})
+    gs.player.hp = 2
+    fled := false
+    for _ in 0 ..< 60 {
+        gs.player.pos = {f32(x0 + 3) + 0.2, f32(G) - PLAYER_H - 0.3}
+        gs.player.vel, gs.player.grounded = {}, false
+        hero_test_tick(link, gs)
+        fled ||= gs.hero.current == .Flee
+        testing.expect_value(t, gs.hero.leap_dir, 0)
+    }
+    testing.expect(t, fled, "the hero fled")
+    _, _, ok := hero_gap_landing(&gs.world, {i32(x0 + 3), i32(G - 1)}, 1)
+    testing.expect(t, ok, "from the ground the gap is jumpable")
+}
+
+// Card 156: a work dig yields to a hunter under HERO_LOW_HP_FRAC, sword or no:
+// the hunted pause covers an armed hero then.  With its health up the armed
+// hero is not hunted, and does not flee from the dig.
+@(test)
+hero_low_on_health_leaves_a_dig_even_armed :: proc(t: ^testing.T) {
+    for low in ([]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        go_test_give(gs, .Pickaxe, 1)
+        go_test_give(gs, .Sword, 1)
+        for y in G - 3 ..< G do set_tile(&gs.world, x0 + 1, y, .Stone)
+        if low do gs.player.hp = max(1, gs.player.hp_max / 5)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"mine","tile":[%d,%d]}}]}}`, x0 + 1, G - 1))
+        for k := 0; k < 300 && !gs.hero.dug; k += 1 do hero_test_tick(link, gs)
+        testing.expectf(t, gs.hero.dug, "low %v: the goal is digging", low)
+        hero_test_vargr(gs, f32(x0) - 5, G, {RAIDER_SPEED, 0})
+        fled := false
+        for _ in 0 ..< 30 {
+            hero_test_tick(link, gs)
+            fled ||= gs.hero.current == .Flee && link.goals.slots[0].status == .Running
+        }
+        testing.expectf(t, fled == low, "low %v: fled %v", low, fled)
+        testing.expectf(t, hero_test_count(exec_test_pushed(link), `"reason":"flee"`) == (1 if low else 0), "low %v: one pause, held: %s", low, exec_test_pushed(link))
+        if !low {
+            // Health up, the armed hero is no quarry: the dig goes on, unpaused.
+            testing.expectf(t, !strings.contains(exec_test_pushed(link), `"goal_paused"`), "low false: no pause at all: %s", exec_test_pushed(link))
+            testing.expect_value(t, gs.hero.current, Hero_Behaviour.Work_Goal)
+            testing.expect_value(t, link.goals.slots[0].status, Agent_Goal_Status.Running)
+        }
+    }
 }

@@ -430,6 +430,10 @@ Hero_Brain :: struct {
     break_x:     f32, // where the flight last made headway
     break_t:     f32, // seconds since it did
     break_shut:  bool, // a way got nowhere: a fall that leaves the hero standing is taken
+    turned_dir:  i8,   // this flight turned back from a drop met going this way; 0: none yet
+    turned_from: int,  // what that drop hurts (a burn: max(int))
+    drop_back:   bool, // the drop turned from is the cheaper: the hero goes back and takes it
+    dug:         bool, // the last tick dug
     flight_hp:   int,  // the hp when no threat was last in mind: what this flight has cost since
     leap_dir:    i8,   // over a gap this way, held until the feet are down
     potion_t:    f32,  // seconds until the potion reflex may fire again
@@ -478,7 +482,7 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b := &gs.hero
     b.swing_t -= gs.delta_time
     hero_sense(gs, b)
-    if hero_threat(b) == nil do b.flight_hp = gs.player.hp
+    if hero_threat(b) == nil do b.flight_hp, b.turned_dir, b.drop_back = gs.player.hp, 0, false
     for row, k in hero_behaviours do if row.score != nil do b.scores[k] = row.score(gs, b, g)
     next := hero_pick(b)
     if next != b.current {
@@ -489,6 +493,7 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
         b.held += gs.delta_time
     }
     hero_behaviours[b.current].run(gs, b, g)
+    b.dug = hero_digging(gs)
 
     if b.paused_goal != 0 && (g == nil || g.id != b.paused_goal) do b.paused_goal = 0  // it ended while paused
     switch {
@@ -803,7 +808,7 @@ hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear 
         if math.sign(sx - hx) == math.sign(th.dx) do continue  // never back past it
         if d := abs(sx - tx); d > best_d do best_x, best_d = sx, d
     }
-    if th.dist >= clear do b.break_shut = false  // got clear: the next corner is weighed afresh
+    if th.dist >= clear do b.break_shut, b.turned_dir, b.drop_back = false, 0, false  // got clear: the next corner is weighed afresh
     if gs.player.grounded do b.leap_dir = 0
     if b.leap_dir != 0 {
         hero_walk(gs, b, b.leap_dir, drop_ok = true)  // in the air over a gap: on to the far side
@@ -824,21 +829,26 @@ hero_get_clear :: proc(gs: ^Game_State, b: ^Hero_Brain, th: ^Hero_Threat, clear 
     if abs(hx - b.break_x) > 0.5 do b.break_x, b.break_t = hx, 0
     if b.break_t >= HERO_BREAK_STUCK_S && hero_dig_out(gs, b, dir) do return
     if b.break_t >= HERO_BREAK_STUCK_S && abs(th.dx) < HERO_MAULED_TILES {
+        if b.turned_dir == 0 do b.turned_dir, b.turned_from = dir, max(int)  // a shut way costs more than any fall
         dir = -dir
         b.break_dir, b.break_x, b.break_t, b.break_shut = dir, hx, 0, true
     }
     if col, _ := hero_step(gs, s, dir); !hero_falls_safe(gs) && hero_unsafe(col) {
-        if _, _, ok := hero_gap_landing(&gs.world, hero_feet(&gs.player), i32(dir)); ok {
+        if _, _, ok := hero_gap_landing(&gs.world, hero_feet(&gs.player), i32(dir)); ok && gs.player.grounded {
             hero_walk(gs, b, dir, drop_ok = true)  // over it, as a player jumps a gap
             b.leap_dir = dir
             gs.agent.cmd.jump = true
             gs.agent.first    = true
             return
         }
-        if !col.hazard && col.hurts < gs.player.hp && (col.hurts < th.damage * HERO_PASS_BLOWS + max(b.flight_hp - gs.player.hp, 0) || b.break_shut && abs(th.dx) < HERO_MAULED_TILES && col.hurts + th.damage < gs.player.hp) {
-            hero_walk(gs, b, dir, drop_ok = true)  // a fall that costs less than the blows, or than a mauling
+        if !col.hazard && col.hurts < gs.player.hp && (col.hurts < th.damage * HERO_PASS_BLOWS + max(b.flight_hp - gs.player.hp, 0) || (b.turned_dir == -dir && col.hurts <= b.turned_from || b.turned_dir == dir && b.drop_back) && col.hurts + th.damage < gs.player.hp || b.break_shut && abs(th.dx) < HERO_MAULED_TILES && col.hurts + th.damage < gs.player.hp) {
+            hero_walk(gs, b, dir, drop_ok = true)  // a fall that costs less than the blows, a mauling, or the drop behind
             return
         }
+        // Drops both ways: the cheaper is taken, and the hero turns at most
+        // once more to reach it.  No running back and forth past the threat.
+        if b.turned_dir == -dir do b.drop_back = true
+        else if b.turned_dir == 0 do b.turned_dir, b.turned_from = dir, max(int) if col.hazard else col.hurts
         dir = -dir
         b.break_dir, b.break_x, b.break_t = dir, hx, 0
     }
@@ -879,11 +889,12 @@ hero_goal_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 
     return HERO_GOAL_SCORE if g != nil && !hero_hunted(gs, b) else 0
 }
 
-// Unarmed, with a noticed enemy coming at it inside HERO_THREAT_FAR.
+// Unarmed, or digging under HERO_LOW_HP_FRAC even armed (a dig pins the hero
+// where it stands), with a noticed enemy coming at it inside HERO_THREAT_FAR.
 @(private="file")
 hero_hunted :: proc(gs: ^Game_State, b: ^Hero_Brain) -> bool {
     th := hero_threat(b)
-    return th != nil && th.closing && th.dist < HERO_THREAT_FAR && !hero_armed(gs)
+    return th != nil && th.closing && th.dist < HERO_THREAT_FAR && (!hero_armed(gs) || b.dug && hero_hp_frac(gs) < HERO_LOW_HP_FRAC)
 }
 
 @(private="file")
@@ -1480,12 +1491,18 @@ hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     }
 }
 
+// What heals, in the order the hero takes it: a right-click on any of them in
+// the bag eats or drinks it.
+@(rodata)
+hero_heal_items := [?]Item{.Potion_Health, .Sky_Egg}
+
 @(private="file")
 hero_reflex_potion :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     p := &gs.player
     c := &gs.agent.cmd
     if b.potion_t > 0 || c.verb != .None || f32(p.hp) >= HERO_LOW_HP_FRAC * f32(p.hp_max) do return
-    slot := hero_item_slot(gs, .Potion_Health)
+    slot := -1
+    for it in hero_heal_items do if slot < 0 do slot = hero_item_slot(gs, it)
     if slot < 0 do return
     c.verb, c.verb_arg = .Equip, i32(slot)
     gs.agent.first = true
