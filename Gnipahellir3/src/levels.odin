@@ -1,6 +1,8 @@
 package game
 
 import "core:fmt"
+import "core:slice"
+import "core:strings"
 
 // ─── Levels ───────────────────────────────────────────────────────────────────
 //
@@ -338,6 +340,15 @@ rune_scroll_places := [MAX_PROGRESSION_TIERS]string{
     "in Gnipahellir",
 }
 
+// The level each tier's rune scroll chest lies on, for the objective's hints.
+@(rodata)
+rune_scroll_levels := [MAX_PROGRESSION_TIERS]int{LEVEL_SURFACE, LEVEL_CAVE2, LEVEL_CAVE3}
+
+// The objective's compass hint (card 165): within OBJECTIVE_NEAR tiles a way
+// reads as nothing, past OBJECTIVE_FAR as "far".  First guesses, Glenn's call.
+OBJECTIVE_NEAR :: 4
+OBJECTIVE_FAR  :: 30
+
 // Raising the Sky Altar reveals Rune Scroll A in the sealed portal chamber
 // (carved by carve_level0_portals) — one goal at a time for new players.
 // Idempotent: no respawn once found or while it already lies anywhere.  A tile
@@ -370,6 +381,41 @@ bench_placed :: proc(gs: ^Game_State) -> bool {
         }
     }
     return false
+}
+
+// A compass hint from the player to a tile on its level: up or down, east or
+// west, never the tile itself.  "close by" within OBJECTIVE_NEAR both ways.
+objective_hint :: proc(gs: ^Game_State, to: [2]i32, buf: []u8) -> string {
+    d := to - player_tile(&gs.player)
+    far :: proc(n: i32) -> string { return "far " if abs(n) > OBJECTIVE_FAR else "" }
+    up := ""
+    if d.y > OBJECTIVE_NEAR do up = "below"
+    if d.y < -OBJECTIVE_NEAR do up = "above"
+    across := ""
+    if d.x > OBJECTIVE_NEAR do across = "east"
+    if d.x < -OBJECTIVE_NEAR do across = "west"
+    switch {
+    case up != "" && across != "": return fmt.bprintf(buf, "%s%s, %sto the %s", far(d.y), up, far(d.x), across)
+    case up != "":                 return fmt.bprintf(buf, "%s%s", far(d.y), up)
+    case across != "":             return fmt.bprintf(buf, "%sto the %s", far(d.x), across)
+    }
+    return "close by"
+}
+
+// The first tile of a kind on the current level.
+objective_find :: proc(gs: ^Game_State, t: Tile_Type) -> (at: [2]i32, ok: bool) {
+    for tt, i in gs.world.terrain do if tt == t do return {i32(i % GRID_W), i32(i / GRID_W)}, true
+    return
+}
+
+// The gate on the current level toward `level`: the one straight there, else
+// the level's first (slot 0).  The levels are a chain (sky, surface, cave 2,
+// cave 3) and only cave 2 has two gates, one to each neighbour, so slot 0 is
+// the way whenever none goes straight there.  The dimension has none: no hint.
+objective_gate :: proc(gs: ^Game_State, level: int) -> (at: [2]i32, ok: bool) {
+    for &pt in level_portals[gs.level_index] do if portal_valid(&pt) && pt.dest_level == level do return pt.tiles[0], true
+    first := &level_portals[gs.level_index][0]
+    return first.tiles[0], portal_valid(first)
 }
 
 // The HUD objective line: the first incomplete step of the progression loop,
@@ -414,15 +460,67 @@ current_objective :: proc(gs: ^Game_State, buf: []u8) -> string {
         return fmt.bprintf(buf, "The Sky Altar is down - raise it again on a %s foundation",
             structure_templates[0].name)
     }
+    hint: [48]u8
     if !p.rune_scroll_found[tier] {
-        return fmt.bprintf(buf, "Find %s %s",
-            item_table[tier_rune_scrolls[tier]].name, rune_scroll_places[tier])
+        scroll := tier_rune_scrolls[tier]
+        name := item_table[scroll].name
+        chest, _ := rune_scroll_chest_tile(scroll)
+        // Its chest open in front of the player: the scroll is dragged out.
+        if gs.ui.show_barrel && get_tile(&gs.world, int(gs.ui.barrel_tile.x), int(gs.ui.barrel_tile.y)) == chest {
+            return fmt.bprintf(buf, "Drag %s out of the chest into your bag", name)
+        }
+        if gs.level_index == rune_scroll_levels[tier] {
+            if at, ok := objective_find(gs, chest); ok {
+                return fmt.bprintf(buf, "Find %s in its sealed chest - %s", name, objective_hint(gs, at, hint[:]))
+            }
+        } else if at, ok := objective_gate(gs, rune_scroll_levels[tier]); ok {
+            return fmt.bprintf(buf, "Find %s %s - through the %s %s", name, rune_scroll_places[tier],
+                terrain_table[get_tile(&gs.world, int(at.x), int(at.y))].name, objective_hint(gs, at, hint[:]))
+        }
+        return fmt.bprintf(buf, "Find %s %s", name, rune_scroll_places[tier])
     }
     c := structure_costs[tier]
-    return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s - [%v] at the altar in the %s",
-        c[0].count, item_table[c[0].item].name,
-        c[1].count, item_table[c[1].item].name,
-        gs.bindings[.Interact], level_names[LEVEL_SKY])
+    // The ritual answers only at a Sky Altar in the sky, and the sky has none
+    // until the player raises one on the tier's foundation.
+    if gs.level_index == LEVEL_SKY {
+        if at, ok := objective_find(gs, .Sky_Altar); ok {
+            return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s - [%v] at the Sky Altar, %s",
+                c[0].count, item_table[c[0].item].name, c[1].count, item_table[c[1].item].name,
+                gs.bindings[.Interact], objective_hint(gs, at, hint[:]))
+        }
+        tpl := structure_template_for(gs, .Sky_Altar)
+        return fmt.bprintf(buf, "Build a %s here: a Sky Altar on %s", tpl.name, objective_template_parts(tpl, hint[:]))
+    }
+    if slice.contains(gs.levels.worlds[LEVEL_SKY].terrain[:], Tile_Type.Sky_Altar) {
+        return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s - [%v] at the altar in the %s",
+            c[0].count, item_table[c[0].item].name,
+            c[1].count, item_table[c[1].item].name,
+            gs.bindings[.Interact], level_names[LEVEL_SKY])
+    }
+    return fmt.bprintf(buf, "Sky ritual: %d %s + %d %s - build a %s in the %s, [%v] at it",
+        c[0].count, item_table[c[0].item].name, c[1].count, item_table[c[1].item].name,
+        structure_templates[tier].name, level_names[LEVEL_SKY], gs.bindings[.Interact])
+}
+
+// A foundation's support blocks by kind, top row first: "3 Wood, 5 Stone".
+objective_template_parts :: proc(tpl: ^Structure_Template, buf: []u8) -> string {
+    kinds: [8]Tile_Type
+    counts: [8]int
+    n := 0
+    for line in tpl.rows do for glyph in line {
+        tile, kind := structure_template_cell(glyph)
+        if kind != .Support do continue
+        k := 0
+        for k < n && kinds[k] != tile do k += 1
+        if k == n do kinds[k], n = tile, n + 1
+        counts[k] += 1
+    }
+    b := strings.builder_from_bytes(buf)
+    for k in 0 ..< n {
+        if k > 0 do strings.write_string(&b, ", ")
+        fmt.sbprintf(&b, "%d %s", counts[k], terrain_table[kinds[k]].name)
+    }
+    return strings.to_string(b)
 }
 
 handle_ritual_request :: proc(gs: ^Game_State) {

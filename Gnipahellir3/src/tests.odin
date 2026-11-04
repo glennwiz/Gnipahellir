@@ -3326,6 +3326,259 @@ objective_line_walks_the_loop :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(s, "GARM"), "endgame points at the boss")
 }
 
+// Card 165: an objective line as the HUD shows it, checked whole on its way
+// out: it fits the 127 bytes the HUD and state format it into (the same line
+// from a roomy buffer), and state carries it byte for byte.  Every line the
+// objective tests read goes through here, so a cut buffer or a line that
+// outgrows 127 bytes turns them red.
+objective_test_line :: proc(t: ^testing.T, gs: ^Game_State, buf: []u8, link: ^Agent_Link, loc := #caller_location) -> string {
+    roomy: [512]u8
+    full := current_objective(gs, roomy[:])
+    s := current_objective(gs, buf[:127])
+    testing.expectf(t, s == full, "the line outgrows the HUD's 127 bytes: %s", full, loc = loc)
+    agent_reply_state(link, gs, nil, "state")
+    testing.expectf(t, strings.contains(string(link.out[:link.out_len]), fmt.tprintf(`"objective":%s,`, agent_quote(full))),
+        "state does not carry %q whole", full, loc = loc)
+    return s
+}
+
+// Card 165: each step of the loop names its next concrete move and a compass
+// hint (never a tile), from the scroll's sealed chest to the altar the sky
+// lacks.  Every line is pinned whole, so Glenn reads them here.
+@(test)
+objective_line_says_where_and_what_to_build :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    buf: [128]u8
+    link := new(Agent_Link)
+    defer free(link)
+    stand :: proc(gs: ^Game_State, x, feet: int) {
+        gs.player.pos = {f32(x) + 0.1, f32(feet) - PLAYER_H}
+    }
+    E := gs.bindings[.Interact]
+
+    // Gate up: Scroll A's chest lies deep below, east of the surface spawn.
+    set_tile(&gs.world, 90, 90, .Crafting_Bench)
+    gs.progression.sky_altar_pos = {10, SURFACE_Y - 1}
+    set_tile(&gs.world, 10, SURFACE_Y - 1, .Sky_Altar)
+    spawn_deep_rune_scroll(gs)
+    chest, ok := objective_find(gs, .Rune_Scroll_Chest_A)
+    testing.expect(t, ok, "Scroll A's chest stands")
+    stand(gs, 30, SURFACE_Y)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - far below, far to the east")
+    stand(gs, int(chest.x) - 10, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - to the east")
+    stand(gs, int(chest.x) - 1, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - close by")
+    stand(gs, int(chest.x), int(chest.y) + 12)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - above")
+    stand(gs, int(chest.x) - 40, int(chest.y) + 40)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - far above, far to the east")
+    stand(gs, int(chest.x) - 1, int(chest.y) + 1)
+
+    // Its chest open: drag the scroll out.
+    testing.expect(t, rune_scroll_chest_record(gs, chest, .Rune_Scroll_Chest_A) != nil)
+    gs.ui.show_barrel, gs.ui.barrel_tile = true, chest
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Drag Rune Scroll A out of the chest into your bag")
+    gs.ui.show_barrel = false
+    // Another container's window says nothing of the scroll: a barrel, or
+    // another rune chest (a claimed one stays as storage).
+    set_tile(&gs.world, int(chest.x) - 2, int(chest.y), .Barrel)
+    gs.ui.show_barrel, gs.ui.barrel_tile = true, chest - {2, 0}
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - close by")
+    for other in ([2]Tile_Type{.Sky_Rune_Scroll_Chest, .Rune_Scroll_Chest_B}) {
+        set_tile(&gs.world, int(chest.x) - 3, int(chest.y), other)
+        gs.ui.barrel_tile = chest - {3, 0}
+        testing.expectf(t, objective_test_line(t, gs, buf[:], link) == "Find Rune Scroll A in its sealed chest - close by", "%v window: %s", other, objective_test_line(t, gs, buf[:], link))
+    }
+    gs.ui.show_barrel = false
+
+    // The hint's edges: OBJECTIVE_NEAR tiles still reads as no way, and
+    // OBJECTIVE_FAR tiles is not yet far.
+    stand(gs, int(chest.x) - OBJECTIVE_NEAR, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - close by")
+    stand(gs, int(chest.x) - OBJECTIVE_NEAR - 1, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - to the east")
+    stand(gs, int(chest.x) - OBJECTIVE_FAR, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - to the east")
+    stand(gs, int(chest.x) - OBJECTIVE_FAR - 1, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A in its sealed chest - far to the east")
+    stand(gs, int(chest.x) - 1, int(chest.y) + 1)
+
+    // Scroll in the bag, no altar in the sky yet.
+    gs.progression.rune_scroll_found[0] = true
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf("Sky ritual: 8 Cloud Stone + 4 Plank - build a Stone Altar in the Low Sky, [%v] at it", E))
+    // In the sky with no altar: what to build.
+    up := sky_gate_portal(gs)
+    level_transition(gs, &up)
+    testing.expect_value(t, gs.level_index, LEVEL_SKY)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Build a Stone Altar here: a Sky Altar on 3 Wood, 5 Stone")
+    pt := player_tile(&gs.player)
+    set_tile(&gs.world, int(pt.x) + 12, int(pt.y), .Sky_Altar)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf("Sky ritual: 8 Cloud Stone + 4 Plank - [%v] at the Sky Altar, to the east", E))
+    // Back on the surface, the sky's altar stands.
+    down := level_portals[LEVEL_SKY][0]
+    level_transition(gs, &down)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf("Sky ritual: 8 Cloud Stone + 4 Plank - [%v] at the altar in the Low Sky", E))
+
+    // Ritual A done: Scroll B lies in the Deep Cave, through the Cave Entrance.
+    gs.progression.sky_structure_complete[0] = true
+    stand(gs, 30, SURFACE_Y)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll B in the Deep Cave - through the Cave Entrance far below, far to the east")
+    stand(gs, int(chest.x) - 1, int(chest.y) + 1)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll B in the Deep Cave - through the Cave Entrance close by")
+    gate := level_portals[LEVEL_SURFACE][0]
+    level_transition(gs, &gate)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll B in its sealed chest - far below, far to the west")
+    // Ritual B needs the Silver-Gold Altar in the sky.
+    gs.progression.rune_scroll_found[1] = true
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf("Sky ritual: 12 Cloud Stone + 6 Silver Bar - [%v] at the altar in the Low Sky", E))
+    gs.progression.sky_structure_complete[1] = true
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll C in Gnipahellir - through the Cave Entrance far below, far to the east")
+
+    // From the sky, the way to a cave starts at the Sky Entrance; a fresh sky
+    // on tier B asks for the Silver-Gold Altar's foundation.
+    gs.progression.sky_structure_complete[1] = false
+    gs.progression.rune_scroll_found[1] = false
+    up = sky_gate_portal(gs)
+    level_transition(gs, &up)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll B in the Deep Cave - through the Sky Entrance close by")
+    gs.progression.rune_scroll_found[1] = true
+    at, _ := objective_find(gs, .Sky_Altar)
+    set_tile(&gs.world, int(at.x), int(at.y), .Air)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Build a Silver-Gold Altar here: a Sky Altar on 3 Gold Ore, 3 Silver Ore, 9 Stone")
+    // Off the sky with that altar gone, tier B's foundation is the one named.
+    down = level_portals[LEVEL_SKY][0]
+    level_transition(gs, &down)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf("Sky ritual: 12 Cloud Stone + 6 Silver Bar - build a Silver-Gold Altar in the Low Sky, [%v] at it", E))
+    up = sky_gate_portal(gs)
+    level_transition(gs, &up)
+
+    // In the Deep Cave on tier C: the gate straight to Gnipahellir, not the
+    // one back up.  In Gnipahellir with Scroll A still to find (a debug walk):
+    // its only gate, never the empty table entry that reads as the Surface.
+    gs.progression.sky_structure_complete[1] = true
+    down = level_portals[LEVEL_SKY][0]
+    level_transition(gs, &down)
+    gate = level_portals[LEVEL_SURFACE][0]
+    level_transition(gs, &gate)
+    testing.expect_value(t, gs.level_index, LEVEL_CAVE2)
+    stand(gs, 170, 103)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll C in Gnipahellir - through the Cave Entrance to the east")
+    deeper := level_portals[LEVEL_CAVE2][1]
+    level_transition(gs, &deeper)
+    testing.expect_value(t, gs.level_index, LEVEL_CAVE3)
+    gs.progression.sky_structure_complete = {}
+    gs.progression.rune_scroll_found = {}
+    stand(gs, 30, 60)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A deep beneath the Surface - through the Cave Entrance far above, far to the east")
+    // A dimension has no gate in the table: the line names only the place.
+    gs.level_index = LEVEL_DIMENSION
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A deep beneath the Surface")
+}
+
+// Card 165 rework: each tier's lines read its own row of every table: the
+// chest on its own level, the drag out of its own chest, the ritual's costs
+// and foundation in and out of the sky; and tier A's gate from each level.
+@(test)
+objective_line_names_each_tier_and_level :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    buf: [128]u8
+    link := new(Agent_Link)
+    defer free(link)
+    stand :: proc(gs: ^Game_State, x, feet: int) {
+        gs.player.pos = {f32(x) + 0.1, f32(feet) - PLAYER_H}
+    }
+    go :: proc(gs: ^Game_State, from, slot: int) {
+        pt := level_portals[from][slot]
+        level_transition(gs, &pt)
+    }
+    up :: proc(gs: ^Game_State) {
+        pt := sky_gate_portal(gs)
+        level_transition(gs, &pt)
+    }
+    set_tile(&gs.world, 90, 90, .Crafting_Bench)
+    gs.progression.sky_altar_pos = {10, SURFACE_Y - 1}
+    set_tile(&gs.world, 10, SURFACE_Y - 1, .Sky_Altar)
+    spawn_deep_rune_scroll(gs)
+
+    // Tier A's gate from the Deep Cave and from the sky.
+    go(gs, LEVEL_SURFACE, 0)
+    stand(gs, 60, 40)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A deep beneath the Surface - through the Cave Entrance above, far to the east")
+    go(gs, LEVEL_CAVE2, 0)
+    up(gs)
+    stand(gs, 80, 80)
+    testing.expect_value(t, objective_test_line(t, gs, buf[:], link), "Find Rune Scroll A deep beneath the Surface - through the Sky Entrance to the east")
+    go(gs, LEVEL_SKY, 0)
+
+    // Per tier: the chest, its drag out, and the ritual's four lines
+    // (no sky altar, in the sky with none, in the sky with one, off it).
+    // %v is the Interact binding.
+    want := [MAX_PROGRESSION_TIERS][6]string{
+        {"Find Rune Scroll A in its sealed chest - to the east", "Drag Rune Scroll A out of the chest into your bag",
+         "Sky ritual: 8 Cloud Stone + 4 Plank - build a Stone Altar in the Low Sky, [%v] at it",
+         "Build a Stone Altar here: a Sky Altar on 3 Wood, 5 Stone",
+         "Sky ritual: 8 Cloud Stone + 4 Plank - [%v] at the Sky Altar, to the east",
+         "Sky ritual: 8 Cloud Stone + 4 Plank - [%v] at the altar in the Low Sky"},
+        {"Find Rune Scroll B in its sealed chest - to the east", "Drag Rune Scroll B out of the chest into your bag",
+         "Sky ritual: 12 Cloud Stone + 6 Silver Bar - build a Silver-Gold Altar in the Low Sky, [%v] at it",
+         "Build a Silver-Gold Altar here: a Sky Altar on 3 Gold Ore, 3 Silver Ore, 9 Stone",
+         "Sky ritual: 12 Cloud Stone + 6 Silver Bar - [%v] at the Sky Altar, to the east",
+         "Sky ritual: 12 Cloud Stone + 6 Silver Bar - [%v] at the altar in the Low Sky"},
+        {"Find Rune Scroll C in its sealed chest - to the east", "Drag Rune Scroll C out of the chest into your bag",
+         "Sky ritual: 20 Cloud Stone + 10 Gold Bar - build a Golden Altar in the Low Sky, [%v] at it",
+         "Build a Golden Altar here: a Sky Altar on 5 Gold Ore, 2 Silver Ore, 8 Stone",
+         "Sky ritual: 20 Cloud Stone + 10 Gold Bar - [%v] at the Sky Altar, to the east",
+         "Sky ritual: 20 Cloud Stone + 10 Gold Bar - [%v] at the altar in the Low Sky"},
+    }
+    place_only := [MAX_PROGRESSION_TIERS]string{
+        "Find Rune Scroll A deep beneath the Surface", "Find Rune Scroll B in the Deep Cave", "Find Rune Scroll C in Gnipahellir",
+    }
+    E := gs.bindings[.Interact]
+    for tier in 0 ..< MAX_PROGRESSION_TIERS {
+        for k in 0 ..< tier do gs.progression.sky_structure_complete[k] = true
+        // From a dimension (no gate in the table): the place alone.
+        gs.level_index = LEVEL_DIMENSION
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), place_only[tier])
+        gs.level_index = LEVEL_SURFACE
+        // On its own level: its chest, then its chest open.
+        if tier >= 1 do go(gs, LEVEL_SURFACE, 0)
+        if tier == 2 do go(gs, LEVEL_CAVE2, 1)
+        testing.expect_value(t, gs.level_index, rune_scroll_levels[tier])
+        tile, _ := rune_scroll_chest_tile(tier_rune_scrolls[tier])
+        chest, ok := objective_find(gs, tile)
+        testing.expectf(t, ok, "tier %d's chest stands", tier)
+        stand(gs, int(chest.x) - 10, int(chest.y) + 1)
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), want[tier][0])
+        stand(gs, int(chest.x) - 1, int(chest.y) + 1)
+        testing.expect(t, rune_scroll_chest_record(gs, chest, tile) != nil)
+        gs.ui.show_barrel, gs.ui.barrel_tile = true, chest
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), want[tier][1])
+        gs.ui.show_barrel = false
+        // Back to the surface.
+        if tier == 2 do go(gs, LEVEL_CAVE3, 0)
+        if tier >= 1 do go(gs, LEVEL_CAVE2, 0)
+        testing.expect_value(t, gs.level_index, LEVEL_SURFACE)
+
+        // The ritual: no altar in the sky, then one, in the sky and off it.
+        gs.progression.rune_scroll_found[tier] = true
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf(want[tier][2], E))
+        up(gs)
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), want[tier][3])
+        pt := player_tile(&gs.player)
+        set_tile(&gs.world, int(pt.x) + 12, int(pt.y), .Sky_Altar)
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf(want[tier][4], E))
+        go(gs, LEVEL_SKY, 0)
+        testing.expect_value(t, objective_test_line(t, gs, buf[:], link), fmt.tprintf(want[tier][5], E))
+        // The next tier starts with an empty sky.
+        up(gs)
+        set_tile(&gs.world, int(pt.x) + 12, int(pt.y), .Air)
+        go(gs, LEVEL_SKY, 0)
+    }
+}
+
 // Stand the player in `tile` at 1 HP and let the hazard pass kill them.
 die_in_tile :: proc(gs: ^Game_State, tile: Tile_Type) {
     gs.player.hp = 1
