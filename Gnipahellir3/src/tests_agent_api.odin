@@ -3050,14 +3050,15 @@ agent_brief_says_how_to_aim_within_a_tile :: proc(t: ^testing.T) {
 }
 
 // The brief tells the fight goal, its failures, the fight_back reflex and the
-// work goals' unsafe, cornered, and that death fails the goals.
+// work goals' unsafe, cornered and refused, a go blocked on a structure, and
+// that death fails the goals.
 @(test)
 agent_brief_tells_the_fight :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
     brief := agent_write_brief(link, gs)
-    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "else the pickaxe, 1 damage to the sword's 2", "the sword in reach (else the pickaxe, a weak blow)", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), blocked or full", "when the hero dies every goal but an act fails with died"}) {
+    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "else the pickaxe, 1 damage to the sword's 2", "the sword in reach (else the pickaxe, a weak blow)", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), refused, blocked or full", "when the hero dies every goal but an act fails with died", "refused: a place the game turns away, in the game's own words", "a mine a reflex keeps the pick off, the reflex named", "it names a structure the tile stands on"}) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
 }

@@ -470,6 +470,9 @@ Hero_Brain :: struct {
     flee_pauses: int,  // and how often
     leap_dir:    i8,   // over a gap this way, held until the feet are down
     potion_t:    f32,  // seconds until the potion reflex may fire again
+    refused:     bool,  // a reflex took the last tick's dig off its tile
+    refused_by:  Hero_Reflex,
+    refused_at:  [2]i32,  // that tile
     path:        Hero_Path,
     nav:         Hero_Nav,
     cursor:      [2]f32,  // the pointer a work goal works windows with, in UI pixels
@@ -1210,6 +1213,7 @@ HERO_GO_REPLAN_S     :: f32(1.5)  // no headway this long: plan again
 HERO_GO_STUCK_S      :: f32(5)    // and this long: blocked
 HERO_NAV_JUMP_COST   :: f32(2)    // steps a jump is worth, over its walk
 HERO_NAV_DIG_COST    :: f32(3)    // per tile dug
+HERO_NAV_DUG_BACK    :: 4         // a step's floor is checked against the digs of this many steps back along the path
 HERO_NAV_BRIDGE_COST :: f32(4)    // per block set down
 HERO_NAV_HP_COST     :: f32(20)   // per hp a fall takes
 HERO_LOW_HP_FRAC     :: f32(0.3)  // the reflex line: a potion under it, no fall that ends below it
@@ -1301,14 +1305,27 @@ hero_fall_ok :: proc(gs: ^Game_State, hurts: int) -> bool {
     return left > 0 && f32(left) >= HERO_LOW_HP_FRAC * f32(gs.player.hp_max)
 }
 
-// The bag slot whose blocks bridge: the first that sets down a solid tile.
+// The blocks a bridge sets down: plain ground that stays where it is set.
+// Never a log, a plank, an ore, clay, sand (it falls) or a door (playtest
+// 127: a go bridged with Wood_Log from a bag of 90 Stone_Block).
+HERO_BRIDGE_BLOCKS :: [?]Item{.Stone_Block, .Dirt, .Grass_Turf, .Mossy_Stone}
+
+// The bag slot whose blocks bridge: of the plain blocks, the one the bag
+// holds most of.
 hero_block_slot :: proc(gs: ^Game_State) -> int {
-    for s, i in gs.player.inventory.slots {
-        if s.count <= 0 do continue
-        t := item_table[s.item].place_tile
-        if t != .Air && !is_structure_tile[t] && .Solid in terrain_table[t].flags do return i
+    slot, _ := hero_bridge_blocks(gs)
+    return slot
+}
+
+// The plain block with the most to spare past what the queued crafts still
+// need of it (Stone_Block bridges, and builds the Smelter too), its slot and
+// how many of it a bridge may set down.  -1, 0: none to spare.
+hero_bridge_blocks :: proc(gs: ^Game_State) -> (slot, spare: int) {
+    slot = -1
+    for it in HERO_BRIDGE_BLOCKS {
+        if n := inventory_count(&gs.player.inventory, it) - hero_craft_reserve(gs, it); n > spare do slot, spare = hero_item_slot(gs, it), n
     }
-    return -1
+    return
 }
 
 hero_item_slot :: proc(gs: ^Game_State, it: Item) -> int {
@@ -1346,8 +1363,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     s := hero_nav_index(o, from)
     if s < 0 do return false
     has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
-    blocks := 0
-    if b := hero_block_slot(gs); b >= 0 do blocks = gs.player.inventory.slots[b].count
+    _, blocks := hero_bridge_blocks(gs)
 
     size, work := 0, 0
     n.g[s], n.seen[s], n.bridges[s] = 0, true, 0
@@ -1369,11 +1385,11 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         nb := n.bridges[i]
         for d in ([2]i32{-1, 1}) {
             f := [2]i32{x + d, y}
-            if hero_stand(w, f) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
-            if up := ([2]i32{x + d, y - 1}); hero_stand(w, up) && hero_open(w, x, y - 2) {
+            if hero_stand(w, f) && !hero_nav_dug(n, o, s, i, f + {0, 1}) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
+            if up := ([2]i32{x + d, y - 1}); hero_stand(w, up) && hero_open(w, x, y - 2) && !hero_nav_dug(n, o, s, i, up + {0, 1}) {
                 hero_nav_relax(n, &size, o, i, up, 1.5, .Walk, nb, to)
             }
-            if up := ([2]i32{x + d, y - 2}); hero_stand(w, up) && hero_open(w, x, y - 2) && hero_open(w, x, y - 3) {
+            if up := ([2]i32{x + d, y - 2}); hero_stand(w, up) && hero_open(w, x, y - 2) && hero_open(w, x, y - 3) && !hero_nav_dug(n, o, s, i, up + {0, 1}) {
                 hero_nav_relax(n, &size, o, i, up, 2 + HERO_NAV_JUMP_COST, .Jump, nb, to)
             }
             if hero_open(w, f.x, f.y) && hero_open(w, f.x, f.y - 1) && !is_solid(w, int(f.x), int(f.y + 1)) {
@@ -1388,17 +1404,18 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
                     hero_nav_relax(n, &size, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
                 }
                 under := get_tile(w, int(f.x), int(f.y + 1))
-                if int(nb) < blocks && (under == .Air || under == .Void) {
+                if int(nb) < blocks && (under == .Air || under == .Void) && w.item_counts[grid_idx(int(f.x), int(f.y + 1))] == 0 {  // never over a pile: the block would bury it
                     hero_nav_relax(n, &size, o, i, f, 1 + HERO_NAV_BRIDGE_COST, .Bridge, nb + 1, to)
                 }
             }
             for dt in ([3][2]i32{{x + d, y}, {x + d, y - 1}, {x + d, y + 1}}) {
                 tiles, k := hero_dig_tiles(a, dt)
                 floor := dt + {0, 1}
-                if !is_solid(w, int(floor.x), int(floor.y)) do continue
+                if !is_solid(w, int(floor.x), int(floor.y)) || hero_nav_dug(n, o, s, i, floor) do continue
                 dug, ok := 0, true
                 for t in tiles[:k] {
                     switch {
+                    case t == to + {0, 1}: ok = false  // the goal's own floor (playtest 127: dug out, then blocked)
                     case hero_open(w, t.x, t.y):
                     case is_solid(w, int(t.x), int(t.y)) && hero_diggable(gs, t, has_pick): dug += 1
                     case: ok = false
@@ -1426,6 +1443,24 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     }
     out.n = min(length, HERO_PATH_MAX)
     return reached && length <= HERO_PATH_MAX
+}
+
+// Whether a dig of the last HERO_NAV_DUG_BACK steps on the way to node i clears tile t:
+// a floor the path itself takes away is no floor (playtest 127: a stair up
+// cut the floor of its own turn back, and every plan again drifted west).
+@(private="file")
+hero_nav_dug :: proc(n: ^Hero_Nav, o: [2]i32, s, i: int, t: [2]i32) -> bool {
+    j := i
+    for _ in 0 ..< HERO_NAV_DUG_BACK {
+        if j == s do return false
+        p := int(n.parent[j])
+        if n.move[j] == .Dig {
+            tiles, k := hero_dig_tiles(o + {i32(p % HERO_NAV_W), i32(p / HERO_NAV_W)}, o + {i32(j % HERO_NAV_W), i32(j / HERO_NAV_W)})
+            for d in tiles[:k] do if d == t do return true
+        }
+        j = p
+    }
+    return false
 }
 
 @(private="file")
@@ -1532,6 +1567,11 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     if g.stuck_t >= HERO_GO_STUCK_S {
         g.status = .Failed
         agent_text_set(&g.reason, "blocked")
+        // A structure stood on is walked through from the side (playtest 128:
+        // home marked on the bench): say so.
+        if on := get_tile(w, int(g.to.x), int(g.to.y + 1)); is_structure_tile[on] {
+            agent_text_set(&g.reason, fmt.tprintf("blocked: [%d,%d] stands on a %v, which the body walks through from the side", g.to.x, g.to.y, on))
+        }
         return false
     }
     stale := path.goal != g.id || path.at >= path.n
@@ -1594,8 +1634,8 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
                 return false
             }
             slot := hero_block_slot(gs)
-            if slot < 0 {
-                path.n = 0  // the bag ran out: plan again
+            if slot < 0 || w.item_counts[grid_idx(int(under.x), int(under.y))] > 0 {
+                path.n = 0  // the bag ran out, or a pile came to lie there: plan again
                 return false
             }
             c.verb, c.verb_arg = .Select, i32(slot)
@@ -1654,6 +1694,7 @@ hero_reflexes := [Hero_Reflex]struct {
 hero_reflexes_run :: proc(gs: ^Game_State, q: ^Agent_Goals) {
     b := &gs.hero
     b.potion_t = max(b.potion_t - gs.delta_time, 0)
+    b.refused = false
     for r, k in hero_reflexes do if k not_in q.reflexes_off do r.run(gs, b)
 }
 
@@ -1717,15 +1758,27 @@ hero_digging :: proc(gs: ^Game_State) -> bool {
     return c.has_mine && !is_melee_weapon(held) && !is_fire_wand(held) && !is_command_wand(held)
 }
 
-// The floor under the body, when the fall through it would kill or burn.
+// The floor under the body, when the fall through it would kill or burn.  A
+// body still on another column's floor does not fall (playtest 127: at x
+// 45.201 the body's edge reads into column 46, and the ore there, the hero
+// standing on 45, was refused as its floor).
 @(private="file")
 hero_reflex_floor :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     if !hero_digging(gs) do return
     p := &gs.player
     t := gs.agent.cmd.mine
-    if t.y != hero_feet_row(p) + 1 || t.x < i32(p.pos.x) || t.x > i32(p.pos.x + PLAYER_W - 0.001) do return
+    x0, x1 := i32(p.pos.x), i32(p.pos.x + PLAYER_W - 0.001)
+    if t.y != hero_feet_row(p) + 1 || t.x < x0 || t.x > x1 do return
+    for x in x0 ..= x1 do if x != t.x && is_solid(&gs.world, int(x), int(t.y)) do return
     _, hurts, burns := hero_dig_fall(&gs.world, t)
-    if hurts >= p.hp || burns do gs.agent.cmd.has_mine = false
+    if hurts >= p.hp || burns do hero_reflex_refuse(gs, b, .Floor_Dig)
+}
+
+// A reflex takes the pick off the tile, and says so: a work goal names it.
+@(private="file")
+hero_reflex_refuse :: proc(gs: ^Game_State, b: ^Hero_Brain, k: Hero_Reflex) {
+    gs.agent.cmd.has_mine = false
+    b.refused, b.refused_by, b.refused_at = true, k, gs.agent.cmd.mine
 }
 
 // The fall a body standing on tile t takes once t is dug out: the tiles it
@@ -1758,7 +1811,7 @@ hero_dig_safe :: proc(w: ^World_Grid, t: [2]i32, fy, x0, x1: i32) -> (drop: int,
 
 @(private="file")
 hero_reflex_rim :: proc(gs: ^Game_State, b: ^Hero_Brain) {
-    if hero_digging(gs) && hero_rim(&gs.world, gs.agent.cmd.mine) do gs.agent.cmd.has_mine = false
+    if hero_digging(gs) && hero_rim(&gs.world, gs.agent.cmd.mine) do hero_reflex_refuse(gs, b, .Rim_Dig)
 }
 
 // A blow from an enemy is answered for HERO_FIGHT_BACK_S: a swing or a shot

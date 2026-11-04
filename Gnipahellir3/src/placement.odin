@@ -1,5 +1,7 @@
 package game
 
+import "core:fmt"
+
 // ─── Item Placement ───────────────────────────────────────────────────────────
 //
 //  Right-click places the selected inventory item as a tile.  Input pushes
@@ -90,6 +92,35 @@ place_refusal :: proc(gs: ^Game_State, place_tile: Tile_Type, x, y: int) -> stri
     return ""
 }
 
+// Why the game refuses a place, in the words it shows: the cell's own
+// refusal (cell true), else the foundation a templated structure wants, else
+// the machine's own gate.  "" when none says.  The click's note and the
+// hero's place goal read the same words (card 159).  Only the Sky Altar has a
+// template and each gate is one machine's, so the first reason is the only.
+place_refusal_full :: proc(gs: ^Game_State, item: Item, x, y: int) -> (why: string, cell: bool) {
+    place_tile := item_table[item].place_tile
+    if why := place_refusal(gs, place_tile, x, y); why != "" do return why, true
+    if tpl := structure_template_for(gs, item); tpl != nil {
+        if ok, want := structure_template_satisfied(&gs.world, tpl, x, y); !ok {
+            return fmt.tprintf("The %s needs its %s foundation - build the plan (press B)", tpl.name, terrain_table[want].name), false
+        }
+    }
+    #partial switch place_tile {
+    case .Auto_Miner:
+        if gs.level_index != LEVEL_DIMENSION do return "The Auto-Miner only wakes inside a spawned dimension", false
+        if gs.dimension.miner.active do return "One miner per expedition - reclaim the working one first", false
+    case .Silo:
+        if gs.level_index == LEVEL_DIMENSION do return "The silo needs lasting ground - this world will collapse", false
+        if !silo_slot_free(gs) do return "Every silo is spoken for - reclaim one first", false
+    case .Barrel, .Rune_Coffer:
+        if gs.level_index == LEVEL_DIMENSION do return "The chest needs lasting ground - this world will collapse", false
+        if !barrel_slot_free(gs) do return "Every container is spoken for - reclaim one first", false
+    case .Gem_Replicator:
+        if gs.level_index == LEVEL_SKY || y < REPLICATOR_DEPTH_Y do return "Gems take root only under pressure - carry it deeper", false
+    }
+    return "", false
+}
+
 // A held right-click sweeps tiles, so the same refusal shows once, not per tile.
 place_note :: proc(gs: ^Game_State, why: string) {
     ns := &gs.notify
@@ -169,45 +200,10 @@ handle_place_request :: proc(gs: ^Game_State, e: Event) {
 
     if !placement_ok(gs, slot.item, x, y) {
         gs.agent.place_refused = true
-        if why := place_refusal(gs, place_tile, x, y); why != "" {
-            place_note(gs, why)
-            return
-        }
-        // Explain the common templated-structure miss (the red ghost shows the rest).
-        if tpl := structure_template_for(gs, slot.item); tpl != nil {
-            if ok, want := structure_template_satisfied(&gs.world, tpl, x, y); !ok {
-                notify(gs, "The %s needs its %s foundation - build the plan (press B)",
-                    tpl.name, terrain_table[want].name)
-            }
-        }
-        // Explain the miner's two gates.
-        if place_tile == .Auto_Miner {
-            if gs.level_index != LEVEL_DIMENSION {
-                notify(gs, "The Auto-Miner only wakes inside a spawned dimension")
-            } else if gs.dimension.miner.active {
-                notify(gs, "One miner per expedition - reclaim the working one first")
-            }
-        }
-        // Explain the silo's two gates.
-        if place_tile == .Silo {
-            if gs.level_index == LEVEL_DIMENSION {
-                notify(gs, "The silo needs lasting ground - this world will collapse")
-            } else if !silo_slot_free(gs) {
-                notify(gs, "Every silo is spoken for - reclaim one first")
-            }
-        }
-        // Explain the barrel's (and the coffer's) two gates.
-        if place_tile == .Barrel || place_tile == .Rune_Coffer {
-            if gs.level_index == LEVEL_DIMENSION {
-                notify(gs, "The chest needs lasting ground - this world will collapse")
-            } else if !barrel_slot_free(gs) {
-                notify(gs, "Every container is spoken for - reclaim one first")
-            }
-        }
-        // Explain the replicator's depth gate.
-        if place_tile == .Gem_Replicator &&
-           (gs.level_index == LEVEL_SKY || y < REPLICATOR_DEPTH_Y) {
-            notify(gs, "Gems take root only under pressure - carry it deeper")
+        // Explain it (for a templated structure the red ghost shows the rest).
+        switch why, cell := place_refusal_full(gs, slot.item, x, y); {
+        case cell:      place_note(gs, why)
+        case why != "": notify(gs, "%s", why)
         }
         return
     }

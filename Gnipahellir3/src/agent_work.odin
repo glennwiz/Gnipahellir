@@ -16,7 +16,7 @@ package game
 // while the window is open.
 //
 // A goal that fails says why first: no_recipe, no_station, no_item,
-// out_of_reach, unreachable, blocked or full, then what.
+// out_of_reach, unreachable, refused, blocked or full, then what.
 
 import "core:encoding/json"
 import "core:fmt"
@@ -157,6 +157,24 @@ hero_work_parse :: proc(kind: Agent_Goal_Kind, o: json.Object) -> (w: Hero_Work,
         if !w.has_at && w.item == .None do return w, "withdraw needs at:[x,y] or item"
     }
     if need_item && w.item == .None do return w, fmt.tprintf("%s needs item", name)
+    return
+}
+
+// What the queued and running craft goals need of item it, by their recipes
+// and counts (a running one's whole count: it over-holds while it works, never
+// under): a bridge keeps that much back (card 159).
+hero_craft_reserve :: proc(gs: ^Game_State, it: Item) -> (need: int) {
+    q := gs.agent.goals
+    if q == nil do return
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    for &g in q.slots[:q.n] do if g.kind == .Craft && (g.status == .Queued || g.status == .Running) {
+        value, _ := json.parse_string(string(g.line[:g.len]), parse_integers = true, allocator = context.temp_allocator)
+        o, _ := value.(json.Object)
+        w, _ := hero_work_parse(g.kind, o)
+        r := agent_find_recipe(gs, fmt.tprint(w.item))
+        if r < 0 do continue
+        for ing in recipe_table[r].ingredients do if ing.item == it do need += ing.count * max(w.count, 1)
+    }
     return
 }
 
@@ -510,6 +528,11 @@ hero_work_mine :: proc(gs: ^Game_State, g: ^Agent_Goal) -> Hero_Mined {
         hero_work_walk(gs, g, s)
         return .Unreachable if g.status == .Failed else .Working
     }
+    if b := &gs.hero; b.refused && b.refused_at == t {
+        // A reflex took the pick off it last tick, and will again.
+        hero_work_fail(g, fmt.tprintf("refused: the %s reflex keeps the pick off [%d,%d]", hero_reflexes[b.refused_by].name, t.x, t.y))
+        return .Failed
+    }
     w.t += gs.delta_time
     if w.t > HERO_MINE_GIVE_UP_S {
         hero_work_fail(g, fmt.tprintf("blocked: the %v at [%d,%d] gave nothing", w.start_tile, t.x, t.y))
@@ -607,7 +630,7 @@ hero_place_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         if get_tile(&gs.world, int(w.target.x), int(w.target.y)) == tile do return true
         w.tries += 1
         if w.tries > HERO_OPEN_TRIES {
-            return hero_work_fail(g, fmt.tprintf("out_of_reach: the game refused the %v at [%d,%d]", w.item, w.target.x, w.target.y))
+            return hero_work_fail(g, fmt.tprintf("refused: the game refused the %v at [%d,%d]", w.item, w.target.x, w.target.y))
         }
         return false
     }
@@ -625,8 +648,9 @@ hero_place_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         in_reach := chebyshev(at, player_tile(p)) <= PLAYER_REACH &&
             !(.Solid in terrain_table[tile].flags && tile_overlaps_player(gs, int(at.x), int(at.y)))
         if in_reach {
-            why := place_refusal(gs, tile, int(at.x), int(at.y))
-            return hero_work_fail(g, fmt.tprintf("out_of_reach: %s", why if why != "" else "it will not go there"))
+            // In reach as the game measures it: the game's own words say why.
+            why, _ := place_refusal_full(gs, w.item, int(at.x), int(at.y))
+            return hero_work_fail(g, fmt.tprintf("refused: %s", why if why != "" else "it will not go there"))
         }
         s := g.to
         if !w.walking {
