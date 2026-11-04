@@ -321,7 +321,7 @@ agent_a_goal_log_replays_to_the_same_player :: proc(t: ^testing.T) {
     exec_test_frames(link, gs, 60)
     agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":15}`)  // the old act: a clear and a goal
     exec_test_frames(link, gs, 30)
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":10},{"jump":true,"frames":10}]}`)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":10},{"do":"act","jump":true,"frames":10}]}`)
     exec_test_frames(link, gs, 40)
     link.recording = false
     os.close(f)
@@ -331,7 +331,7 @@ agent_a_goal_log_replays_to_the_same_player :: proc(t: ^testing.T) {
     testing.expect(t, read_err == nil)
     defer delete(data)
 
-    Op :: struct { f: u64, goal: string, kind: Agent_Goal_Kind, via: Agent_Goal_Via, id, step, cancel: int, clear: bool }
+    Op :: struct { f: u64, goal: string, kind: Agent_Goal_Kind, via: Agent_Goal_Via, id, cancel: int, clear: bool }
     ops := make([dynamic]Op)
     defer {
         for op in ops do delete(op.goal)
@@ -353,7 +353,6 @@ agent_a_goal_log_replays_to_the_same_player :: proc(t: ^testing.T) {
                 op.kind, _ = agent_goal_find_kind(rec["kind"].(json.String))
                 for v in Agent_Goal_Via do if fmt.tprint(v) == rec["via"].(json.String) do op.via = v
                 op.id, _   = agent_int(rec, "id")
-                op.step, _ = agent_int(rec, "step")
             case "cancel" in rec:
                 op.cancel, _ = agent_int(rec, "cancel")
             case "clear" in rec:
@@ -364,7 +363,7 @@ agent_a_goal_log_replays_to_the_same_player :: proc(t: ^testing.T) {
             append(&ops, op)
         }
     }
-    testing.expect_value(t, len(ops), 4 + 1 + 1 + 1 + 2)  // the plan cleared nothing: the act was done
+    testing.expect_value(t, len(ops), 4 + 1 + 1 + 1 + 2)  // the last goals cleared nothing: the act was done
 
     gs2, link2 := exec_test_world(782)
     defer free(gs2)
@@ -378,7 +377,7 @@ agent_a_goal_log_replays_to_the_same_player :: proc(t: ^testing.T) {
         case op.cancel > 0:
             for &g in link2.goals.slots[:link2.goals.n] do if g.id == op.cancel do agent_goal_cancel(link2, gs2, &g, "cancelled")
         case:
-            testing.expect_value(t, agent_goal_add(link2, gs2, op.kind, op.via, op.goal, op.step), op.id)
+            testing.expect_value(t, agent_goal_add(link2, gs2, op.kind, op.via, op.goal), op.id)
         }
     }
     for gs2.frame < end do exec_test_frames(link2, gs2, 1)

@@ -134,7 +134,7 @@ agent_game_waits_until_it_is_told_to_act :: proc(t: ^testing.T) {
     testing.expect(t, link.out_len > 0, "the act answers when it has run out")
     testing.expect(t, !agent_drive(link, gs))
 
-    agent_handle_line(link, gs, `{"cmd":"realtime","on":true}`)
+    link.realtime = true
     testing.expect(t, agent_drive(link, gs), "realtime keeps ticking")
 }
 
@@ -503,16 +503,16 @@ agent_refused_warp_says_so_and_plays_nothing :: proc(t: ^testing.T) {
 }
 
 @(test)
-agent_plan_judges_a_warp_when_its_step_starts :: proc(t: ^testing.T) {
+agent_a_queued_warp_is_judged_when_its_goal_starts :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
 
-    // Refused now, but a plan's world has not happened yet: the step decides.
+    // Refused now, but a queued goal's world has not happened yet: the start decides.
     gs.player.equipment[Equip_Slot(1)] = .Jade_Ring
     gs.level_index = LEVEL_SURFACE
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"warp":true}]}`)
-    testing.expect(t, strings.contains(agent_test_reply(link), `"steps":1`), agent_test_reply(link))
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","warp":true}]}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"ok":true`), agent_test_reply(link))
     for _ in 0 ..< AGENT_IDLE_EVERY * 3 do if agent_test_input(link, gs) do agent_after_tick(link, gs)
     agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
     testing.expect(t, strings.contains(agent_test_reply(link), "warp refused"), agent_test_reply(link))
@@ -750,27 +750,26 @@ agent_idles_slowly_then_holds :: proc(t: ^testing.T) {
     for _ in 0 ..< AGENT_IDLE_EVERY do if agent_test_input(link, gs) do agent_after_tick(link, gs)
     testing.expect_value(t, link.idle_ticks, 1)
 
-    agent_handle_line(link, gs, `{"cmd":"idle","on":false}`)
+    link.idle_off = true
     for _ in 0 ..< AGENT_IDLE_EVERY * 2 do testing.expect(t, !agent_drive(link, gs))
 }
 
 @(test)
-agent_plan_plays_at_full_speed_and_an_act_overrides_it :: proc(t: ^testing.T) {
+agent_goals_play_at_full_speed_and_an_act_overrides_them :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
 
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left","frames":3},{"move":"right","frames":2}]}`)
-    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"ticks":5`))
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":3},{"do":"act","move":"right","frames":2}]}`)
     link.out_len = 0
 
     for _ in 0 ..< 4 {
-        testing.expect(t, agent_test_input(link, gs), "a plan's goals tick every frame")
+        testing.expect(t, agent_test_input(link, gs), "goals tick every frame")
         agent_after_tick(link, gs)
     }
     h := agent_goals_head(&link.goals)
-    testing.expect(t, h != nil && h.via == .Plan && h.step == 1 && h.frames_left == 1)
-    testing.expect_value(t, link.out_len, 0)  // nobody is waiting on a plan step
+    testing.expect(t, h != nil && h.via == .Goal && h.id == 2 && h.frames_left == 1)
+    testing.expect_value(t, link.out_len, 0)  // nobody is waiting on a goal
     testing.expect(t, link.reply_due == false)
     testing.expect(t, agent_listening(link))
 
@@ -778,8 +777,6 @@ agent_plan_plays_at_full_speed_and_an_act_overrides_it :: proc(t: ^testing.T) {
     h = agent_goals_head(&link.goals)
     testing.expect(t, h != nil && h.via == .Act && h.status == .Queued)
     testing.expect_value(t, agent_test_pending(link), 1)
-    state := agent_test_state(link, gs, `{"cmd":"state","w":1,"h":1}`)
-    testing.expect_value(t, state["plan_left"].(json.Float), 0)
 }
 
 // The goals that have yet to finish.
@@ -794,7 +791,7 @@ agent_override_keeps_its_own_input :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":50}]}`)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":50}]}`)
     if agent_test_input(link, gs) do agent_after_tick(link, gs)
     agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":30}`)
     agent_test_input(link, gs)
@@ -802,52 +799,62 @@ agent_override_keeps_its_own_input :: proc(t: ^testing.T) {
     testing.expect(t, gs.agent.first)
 }
 
-// A plan is a promise about a world that has not happened yet, so what depends
-// on that world is judged when the step starts.
+// A queued goal is a promise about a world that has not happened yet, so what
+// depends on that world is judged when the goal starts; the next goal still plays.
 @(test)
-agent_plan_judges_state_verbs_when_the_step_starts :: proc(t: ^testing.T) {
+agent_goals_judge_state_verbs_when_they_start :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"frames":1},{"feed":0},{"frames":5}]}`)
-    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"steps":3`))
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","frames":1},{"do":"act","feed":0},{"do":"act","frames":5}]}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"ok":true`))
 
     for _ in 0 ..< 3 do if agent_test_input(link, gs) do agent_after_tick(link, gs)
-    testing.expect(t, !agent_goals_busy(&link.goals))
-    testing.expect(t, link.goals.plan_stopped.len > 0)
+    h := agent_goals_head(&link.goals)
+    testing.expect(t, h != nil && h.id == 3, "the goal after the failed one plays")
     agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
-    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `"plan_stopped":"step 1: no smelter`))
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), `{"id":2,"do":"act","status":"failed","reason":"no smelter`), string(link.out[:link.out_len]))
 }
 
 @(test)
-agent_wait_has_no_first_frame :: proc(t: ^testing.T) {
+agent_goals_add_is_all_or_nothing :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
-    agent_handle_line(link, gs, `{"cmd":"wait","frames":3}`)
-    testing.expect(t, agent_goals_busy(&link.goals))
-    agent_test_input(link, gs)
-    testing.expect(t, !gs.agent.first)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left"}]}`)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left"},{"do":"act","frames":0}]}`)
+    testing.expect(t, strings.contains(string(link.out[:link.out_len]), "goal 1"), string(link.out[:link.out_len]))
+    testing.expect_value(t, agent_test_pending(link), 1)  // the good goal stands
 }
 
+// The plan, wait, idle and realtime commands are retired (card 154): each
+// answers so, and changes nothing; the game keeps running in real time.
 @(test)
-agent_plan_is_all_or_nothing :: proc(t: ^testing.T) {
+agent_retired_commands_say_so_and_change_nothing :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"}]}`)
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"left"},{"frames":0}]}`)
-    testing.expect(t, strings.contains(string(link.out[:link.out_len]), "step 1"))
-    testing.expect_value(t, agent_test_pending(link), 1)  // the good plan stands
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"cmd":"wait","frames":5}]}`)
-    testing.expect(t, strings.contains(string(link.out[:link.out_len]), "only be an act"))
-    testing.expect_value(t, agent_test_pending(link), 1)
+    link.realtime, link.idle_off = true, false
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","frames":50}]}`)
+    for line in ([]string{
+        `{"cmd":"plan","acts":[{"move":"left","frames":3}]}`, `{"cmd":"wait","frames":3}`,
+        `{"cmd":"idle","on":false}`, `{"cmd":"realtime","on":false}`,
+    }) {
+        agent_handle_line(link, gs, line)
+        reply := agent_test_reply(link)
+        testing.expectf(t, strings.contains(reply, `"ok":false`) && strings.contains(reply, "is retired, use goals"), "%s -> %s", line, reply)
+        testing.expectf(t, agent_test_pending(link) == 1 && agent_goals_head(&link.goals).id == 1, "%s: the queue stands", line)
+        testing.expectf(t, link.realtime && !link.idle_off, "%s: the game still runs in real time", line)
+    }
+    agent_handle_line(link, gs, `{"cmd":"fly"}`)
+    unknown := agent_test_reply(link)
+    testing.expectf(t, strings.contains(unknown, "use state, act, goals") && !strings.contains(unknown, "plan") && !strings.contains(unknown, "realtime"), "an unknown cmd lists only the live ones: %s", unknown)
 }
 
-// What a replay does with a recording must be what the plan did: this plays the
+// What a replay does with a recording must be what the acts did: this plays the
 // real rows back, act by act, as the old replay did.
 @(test)
-agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
+agent_recorded_acts_replay_from_their_rows :: proc(t: ^testing.T) {
     start :: proc(gs: ^Game_State, link: ^Agent_Link) {
         game_state_init(gs, 778)
         gs.ui.show_title = false
@@ -880,8 +887,8 @@ agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
     agent_handle_line(link, gs, `{"cmd":"act","move":"right","frames":10}`)
     run(link, gs, 10)
     run(link, gs, 20)  // an idle wait
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"move":"right","frames":40},{"move":"left","frames":50}]}`)
-    run(link, gs, 47)
+    agent_handle_line(link, gs, `{"cmd":"act","move":"right","frames":40}`)
+    run(link, gs, 40)
     agent_handle_line(link, gs, `{"cmd":"act","move":"left","frames":10}`)
     run(link, gs, 10)
     link.recording = false
@@ -890,7 +897,6 @@ agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
     data, read_err := os.read_entire_file(path, context.allocator)
     testing.expect(t, read_err == nil)
     defer delete(data)
-    testing.expect(t, strings.contains(string(data), `"played":7`))
     testing.expect(t, strings.contains(string(data), `"idle":20`))
 
     gs2 := new(Game_State)
@@ -916,16 +922,11 @@ agent_recorded_plan_replays_from_its_rows :: proc(t: ^testing.T) {
             rec := value.(json.Object)
             if "goal" in rec || "clear" in rec || "cancel" in rec || "done" in rec || "failed" in rec || "window" in rec do continue  // the goal replay's rows
             if n, ok := agent_int(rec, "idle"); ok {
-                append(&replay, Replay_Row{fmt.aprintf(`{{"cmd":"wait","frames":%d}}`, n, allocator = heap), n})
+                append(&replay, Replay_Row{fmt.aprintf(`{{"cmd":"act","frames":%d}}`, n, allocator = heap), n})
                 continue
             }
             act := rec["act"].(json.Object)
             frames, _ := agent_int(act, "frames")
-            if played, ok := agent_int(rec, "played"); ok {
-                frames = played
-                act["frames"] = json.Integer(played)
-            }
-            act["cmd"] = "act"  // plan steps are recorded without one
             append(&replay, Replay_Row{fmt.aprintf("%s", agent_canonical(act), allocator = heap), frames})
         }
     }
@@ -1234,7 +1235,7 @@ agent_feed_count_loads_only_that_many :: proc(t: ^testing.T) {
     agent_test_refused(t, link, gs, `{"cmd":"act","feed":0,"count":0}`)
     agent_test_refused(t, link, gs, `{"cmd":"act","feed":0,"count":"all"}`)
     agent_test_refused(t, link, gs, `{"cmd":"act","feed":0,"count":100000000000}`)
-    agent_test_refused(t, link, gs, `{"cmd":"plan","acts":[{"count":3}]}`)
+    agent_test_refused(t, link, gs, `{"cmd":"goals","add":[{"do":"act","count":3}]}`)
 }
 
 @(test)
@@ -1617,10 +1618,10 @@ the_brief_is_written_from_the_game_as_it_stands :: proc(t: ^testing.T) {
 
     brief := agent_write_brief(link, gs)
     for want in ([]string{"127.0.0.1:40123", "world seed: 90210", "level 2", "screen: play", "the panel's goal: find the gold",
-                          "game's objective line: ", `"cmd":"act"`, `"cmd":"plan"`, `"cmd":"objective"`, "HOW THE GAME WAITS", "FIRST STEPS", `"move":"right"`, "TALK", "Read state's heard", `"cmd":"say"`, `"cmd":"listen"`, "Final Seal", "\"127.0.0.1\", 40123"}) {
+                          "game's objective line: ", `"cmd":"act"`, "An act drops what is queued and answers with state", `"cmd":"goals"`, `"cmd":"objective"`, "HOW THE GAME WAITS", "FIRST STEPS", `"move":"right"`, "TALK", "Read state's heard", `"cmd":"say"`, `"cmd":"listen"`, "Final Seal", "\"127.0.0.1\", 40123"}) {
         testing.expect(t, strings.contains(brief, want), want)
     }
-    testing.expect(t, strings.contains(brief, fmt.tprintf("up to %d ticks", AGENT_IDLE_MAX)))
+    for retired in ([]string{`"cmd":"plan"`, `"cmd":"wait"`, `"cmd":"idle"`, `"cmd":"realtime"`}) do testing.expect(t, !strings.contains(brief, retired), retired)
     testing.expect(t, strings.contains(brief, "another agent is connected"), "the link has a client")
     tail := strings.trim_right_space(AGENT_LESSONS)
     testing.expect(t, strings.has_suffix(strings.trim_right_space(brief), tail[len(tail) - 40:]), "the lessons fit, all of them")
@@ -2880,11 +2881,11 @@ agent_a_point_off_the_map_is_refused :: proc(t: ^testing.T) {
 }
 
 @(test)
-agent_a_plan_keeps_whole_numbers_and_fractions_apart :: proc(t: ^testing.T) {
+agent_goals_keep_whole_numbers_and_fractions_apart :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
     defer free(link)
-    agent_handle_line(link, gs, `{"cmd":"plan","acts":[{"mine":[20,70]},{"mine":[10.0,20.5]}]}`)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","mine":[20,70]},{"do":"act","mine":[10.0,20.5]}]}`)
     want := [][2]f32{{205, 705}, {100, 205}}
     for w in want {
         testing.expect(t, agent_test_input(link, gs))
@@ -3026,18 +3027,6 @@ a_socket_client_hears_its_goal_end_unasked :: proc(t: ^testing.T) {
 }
 
 @(test)
-agent_idle_off_holds_even_a_real_time_game :: proc(t: ^testing.T) {
-    gs, link := agent_test_world()
-    defer free(gs)
-    defer free(link)
-    link.realtime = true
-    link.idle_off = false
-    testing.expect(t, agent_drive(link, gs))
-    agent_handle_line(link, gs, `{"cmd":"idle","on":false}`)
-    testing.expect(t, !link.realtime && !agent_drive(link, gs), "the old tools' first line still holds the game")
-}
-
-@(test)
 agent_a_goal_too_long_to_record_is_refused :: proc(t: ^testing.T) {
     gs, link := agent_test_world()
     defer free(gs)
@@ -3046,7 +3035,6 @@ agent_a_goal_too_long_to_record_is_refused :: proc(t: ^testing.T) {
     for line in ([]string{
         fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","pad":"%s"}}]}}`, pad),
         fmt.tprintf(`{{"cmd":"act","pad":"%s"}}`, pad),
-        fmt.tprintf(`{{"cmd":"plan","acts":[{{"pad":"%s"}}]}}`, pad),
     }) {
         agent_test_refused(t, link, gs, line)
         testing.expect(t, strings.contains(agent_test_reply(link), "too long to record"), agent_test_reply(link))
@@ -3068,47 +3056,21 @@ agent_events_start_from_the_game_as_it_stands :: proc(t: ^testing.T) {
     testing.expect_value(t, string(link.push[:link.push_len]), "")
 }
 
-// Events waiting go out ahead of the reply that follows them, and a client that
-// goes mid-plan leaves how much of the step it played.
+// Events waiting go out ahead of the reply that follows them.
 @(test)
-a_socket_client_hears_events_before_the_reply_and_its_plan_step_is_cut :: proc(t: ^testing.T) {
+a_socket_client_hears_events_before_the_reply :: proc(t: ^testing.T) {
     gs, link, at := agent_test_listening(t)
     defer free(gs)
     defer free(link)
     defer agent_close(link, gs)
     buf := new([AGENT_REPLY_MAX]u8)
     defer free(buf)
-    path := "agent_cut_test.jsonl"
-    defer os.remove(path)
-    f, err := os.open(path, {.Write, .Create, .Trunc}, os.Permissions_Default_File)
-    testing.expect(t, err == nil)
-    link.acts_file = f
-    link.recording = true
 
     client, _ := net.dial_tcp(at)
     agent_test_ask(gs, link, client, `{"cmd":"goals","add":[{"do":"act","frames":50}]}` + "\n", 1, buf[:])
     out := agent_test_ask(gs, link, client, `{"cmd":"goals","clear":true}` + "\n", 2, buf[:])
     testing.expect_value(t, out, `{"event":"goal_failed","f":0,"id":1,"reason":"cancelled"}` + "\n" + `{"re":"goals","ok":true}` + "\n")
-
-    agent_test_ask(gs, link, client, `{"cmd":"plan","acts":[{"move":"right","frames":100}]}` + "\n", 1, buf[:])
-    for _ in 0 ..< 5 {
-        testing.expect(t, agent_pump(link, gs))
-        game_update(gs)
-        agent_after_tick(link, gs)
-    }
     net.close(client)
-    for _ in 0 ..< 2000 {
-        agent_pump(link, gs)
-        if !link.connected do break
-    }
-    testing.expect(t, !link.connected)
-    link.recording = false
-    os.close(f)
-    data, read_err := os.read_entire_file(path, context.allocator)
-    testing.expect(t, read_err == nil)
-    defer delete(data)
-    for row in strings.split_lines(string(data)) do if strings.contains(row, `"played"`) do testing.expect(t, strings.contains(row, `"played":5,"act":{`) && strings.contains(row, `"move":"right"`), row)
-    testing.expect(t, strings.contains(string(data), `"played":5,`), "the cut step is recorded")
 }
 
 // ─── Watchers and a reconnect, in place of the old bridge (card 141) ─────────
