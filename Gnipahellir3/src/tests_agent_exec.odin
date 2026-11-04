@@ -2194,6 +2194,9 @@ work_test_on_target :: proc(gs: ^Game_State, grabbed: bool, carried: Item) -> (g
     if !gs.agent.first do return false, false
     #partial switch c.verb {
     case .Pick_Recipe: return true, craft_card_at_cursor(gs) == int(c.verb_arg)
+    case .Roster:
+        slot, btn, ok := golem_roster_button_at_cursor(gs)
+        return true, ok && slot == int(c.verb_arg & 0xff) && btn == Roster_Button(c.verb_arg >> 8)
     case .Craft:       return true, craft_button_hovered(gs)
     case .Store:
         // On the barrel slot the stack went to.
@@ -4319,5 +4322,200 @@ hero_low_on_health_leaves_a_dig_even_armed :: proc(t: ^testing.T) {
             testing.expect_value(t, gs.hero.current, Hero_Behaviour.Work_Goal)
             testing.expect_value(t, link.goals.slots[0].status, Agent_Goal_Status.Running)
         }
+    }
+}
+
+// ─── Crew goals (card 148) ───
+
+// A golem in slot, standing dx tiles from the hero on the arena's floor.
+@(private="file")
+crew_test_golem :: proc(gs: ^Game_State, slot: int, dx: int, G: int, status := Golem_Status.Deployed, mode := Golem_Mode.Gather) -> ^Golem {
+    x := int(gs.player.pos.x) + dx
+    g := &gs.golems.data[slot]
+    g^ = {status = status, hp = 0 if status == .Broken else GOLEM_HP, mode = mode, facing = 1, level = gs.level_index,
+        pos = {f32(x) + (1 - GOLEM_W) * 0.5, f32(G) - GOLEM_H}, grounded = true, project_cell = -1}
+    return g
+}
+
+// The hero on the arena with a command wand in the bag, not in hand.
+@(private="file")
+crew_test_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link, x0, G: int) {
+    gs, link = exec_test_world()
+    exec_test_frames(link, gs, 10)
+    x0, G = hero_test_arena(gs)
+    go_test_give(gs, .Command_Wand, 1)
+    gs.player.inventory.selected = -1
+    return
+}
+
+// Card 148: crew_mode works the roster as a person does (the wand taken in
+// hand, the window opened, looked at, the golem's button clicked where a mouse
+// would click it, the window shut) and sets that one golem's mode.
+@(test)
+hero_crew_mode_sets_one_golems_mode :: proc(t: ^testing.T) {
+    gs, link, _, G := crew_test_world()
+    defer free(gs)
+    defer free(link)
+    crew_test_golem(gs, 0, 3, G)
+    crew_test_golem(gs, 2, -3, G)
+    watch: Work_Watch
+    id := work_test_run(t, link, gs, `{"do":"crew_mode","golem":2,"mode":"Fight"}`, 600, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, gs.golems.data[2].mode, Golem_Mode.Fight)
+    testing.expect_value(t, gs.golems.data[0].mode, Golem_Mode.Gather)
+    testing.expect(t, is_command_wand(held_item(&gs.player)), "the wand in hand")
+    testing.expect_value(t, watch.gestures, 1)
+    testing.expect(t, watch.open_frames > 0 && !gs.ui.show_golem_roster, "the roster opened, and is shut")
+}
+
+// Card 148: the roster has no reach, but a cracked golem's PICK UP does.
+// Each crew goal against a working golem far off, one in reach, a cracked one
+// far off, and one far off that cracks mid-goal (a fight shuts the roster as
+// it does): whether the hero walked, how the goal ended, and the order the
+// golem got.  Only the cracked golem's PICK UP walks; an order to a golem far
+// off is given from where the hero stands, as a person gives it, and a call or
+// mode order to one cracked under it fails dimmed where the hero stands.
+@(test)
+hero_crew_walks_only_to_a_cracked_golems_pickup :: proc(t: ^testing.T) {
+    Golem_At :: enum { Far, Near, Cracked, Cracks }
+    Case :: struct{line: string, at: Golem_At, walks: bool, why: string}
+    for c in ([?]Case{
+        {`{"do":"crew_call","golem":0}`,                  .Far,     false, ""},
+        {`{"do":"crew_call","golem":0}`,                  .Near,    false, ""},
+        {`{"do":"crew_call","golem":0}`,                  .Cracked, false, "blocked: golem 0 is cracked"},
+        {`{"do":"crew_call","golem":0}`,                  .Cracks,  false, "dimmed"},
+        {`{"do":"crew_mode","golem":0,"mode":"Build"}`,   .Far,     false, ""},
+        {`{"do":"crew_mode","golem":0,"mode":"Build"}`,   .Near,    false, ""},
+        {`{"do":"crew_mode","golem":0,"mode":"Build"}`,   .Cracked, false, "blocked: golem 0 is cracked"},
+        {`{"do":"crew_mode","golem":0,"mode":"Build"}`,   .Cracks,  false, "dimmed"},
+        {`{"do":"crew_pickup","golem":0}`,                .Far,     false, ""},
+        {`{"do":"crew_pickup","golem":0}`,                .Near,    false, ""},
+        {`{"do":"crew_pickup","golem":0}`,                .Cracked, true,  ""},
+    }) {
+        gs, link, _, G := crew_test_world()
+        defer free(gs)
+        defer free(link)
+        dxs := [Golem_At]int{.Far = 16, .Near = 2, .Cracked = PLAYER_REACH + 4, .Cracks = 16}
+        dx := dxs[c.at]
+        g := crew_test_golem(gs, 0, dx, G, .Broken if c.at == .Cracked else .Deployed)
+        testing.expectf(t, (chebyshev(golem_tile(g), player_tile(&gs.player)) <= PLAYER_REACH) == (c.at == .Near), "%v: reach as set", c)
+        x := gs.player.pos.x
+        id: int
+        if c.at == .Cracks {
+            // The roster up and looked at, then shut by a fight as the golem cracks.
+            agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, c.line))
+            id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+            for k := 0; k < 600 && !gs.ui.show_golem_roster; k += 1 do exec_test_frames(link, gs, 1)
+            testing.expectf(t, gs.ui.show_golem_roster, "%v: the roster opened", c)
+            exec_test_frames(link, gs, 3)
+            gs.ui.show_golem_roster, g.status, g.hp = false, .Broken, 0
+            for k := 0; k < 1200 && (link.goals.slots[0].status == .Queued || link.goals.slots[0].status == .Running); k += 1 do exec_test_frames(link, gs, 1)
+        } else {
+            id = work_test_run(t, link, gs, c.line, 1200)
+        }
+        walked := abs(gs.player.pos.x - x) >= 1
+        testing.expectf(t, walked == c.walks, "%v: walked %v (%.2f to %.2f)", c, walked, x, gs.player.pos.x)
+        if c.why != "" {
+            status, reason := go_test_status(link, gs, id)
+            testing.expectf(t, status == "failed" && strings.contains(reason, c.why), "%v: want failed %s, got %s %s", c, c.why, status, reason)
+            testing.expectf(t, gs.golem_calls[0] == .None && g.status == .Broken && g.mode == .Gather, "%v: no order given", c)
+            continue
+        }
+        work_test_expect_done(t, link, gs, id)
+        switch {
+        case strings.contains(c.line, "call"):
+            testing.expectf(t, gs.golem_calls[0] == .Come || gs.golem_calls[0] == .Waiting, "%v: called: %v", c, gs.golem_calls[0])
+        case strings.contains(c.line, "mode"):
+            testing.expectf(t, g.mode == .Build && gs.golem_calls[0] == .None, "%v: in Build, not called: %v %v", c, g.mode, gs.golem_calls[0])
+        case c.at == .Far:
+            // Picked up from afar: it walks back and goes into the wand there.
+            testing.expectf(t, gs.golem_calls[0] == .Come_Pickup || g.status == .Carried, "%v: told to come and be picked up: %v %v", c, gs.golem_calls[0], g.status)
+        case:
+            testing.expectf(t, g.status == .Carried, "%v: in the wand: %v", c, g.status)
+        }
+    }
+}
+
+// Card 148: CALL brings the golem; PICK UP takes a cracked golem back into the
+// wand (to repair at a Clay Hearth), the hero walking into reach of it first:
+// over the API a cracked golem no longer holds the basic wand's one slot.
+@(test)
+hero_crew_call_and_pickup :: proc(t: ^testing.T) {
+    {
+        gs, link, _, G := crew_test_world()
+        defer free(gs)
+        defer free(link)
+        crew_test_golem(gs, 0, 5, G)
+        id := work_test_run(t, link, gs, `{"do":"crew_call","golem":0}`, 600)
+        work_test_expect_done(t, link, gs, id)
+        testing.expect(t, gs.golem_calls[0] != .None, "the golem was called")
+    }
+    gs, link, x0, G := crew_test_world()
+    defer free(gs)
+    defer free(link)
+    crew_test_golem(gs, 0, PLAYER_REACH + 4, G, .Broken)
+    testing.expect(t, !golem_roster_button_enabled(gs, 0, .Pickup), "out of reach, PICK UP is dimmed")
+    id := work_test_run(t, link, gs, `{"do":"crew_pickup","golem":0}`, 1200)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, gs.golems.data[0].status, Golem_Status.Carried)
+    testing.expect(t, gs.player.pos.x > f32(x0) + 2, "it walked into reach")
+    testing.expectf(t, gs.player.pos.x < f32(x0 + PLAYER_REACH + 4 - BENCH_RANGE - 1), "PICK UP's reach, not a bench's: stopped at %.1f", gs.player.pos.x - f32(x0))
+}
+
+// Card 148: each crew goal says why it cannot run, as the roster would refuse.
+@(test)
+hero_crew_goals_say_why_not :: proc(t: ^testing.T) {
+    Case :: struct{line: string, status: Golem_Status, wand, away: bool, why: string}
+    for c in ([?]Case{
+        {`{"do":"crew_call","golem":0}`, .Deployed, false, false, "no_item: no command wand"},
+        {`{"do":"crew_call","golem":1}`, .Deployed, true, false, "no_item: no golem in slot 1"},
+        {`{"do":"crew_call","golem":0}`, .Carried, true, false, "blocked: golem 0 rides in the wand"},
+        {`{"do":"crew_call","golem":0}`, .Deployed, true, true, "out_of_reach: golem 0 is on level"},
+        {`{"do":"crew_mode","golem":0,"mode":"Build"}`, .Broken, true, false, "blocked: golem 0 is cracked"},
+        {`{"do":"crew_mode","golem":0,"mode":"Gather"}`, .Deployed, true, false, "blocked: golem 0 is in Gather already"},
+    }) {
+        gs, link, _, G := crew_test_world()
+        defer free(gs)
+        defer free(link)
+        if !c.wand do gs.player.inventory.slots[hero_item_slot(gs, .Command_Wand)] = {}
+        g := crew_test_golem(gs, 0, 3, G, c.status)
+        if c.away do g.level = (gs.level_index + 1) % NUM_LEVELS
+        id := work_test_run(t, link, gs, c.line, 60)
+        work_test_expect_failed(t, link, gs, id, c.why)
+    }
+    {
+        // Cracked while the roster is up: CALL is dimmed, so no click, and the
+        // goal says why rather than claim it called.
+        gs, link, _, G := crew_test_world()
+        defer free(gs)
+        defer free(link)
+        g := crew_test_golem(gs, 0, 3, G)
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"crew_call","golem":0}]}`)
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for k := 0; k < 120 && !gs.ui.show_golem_roster; k += 1 do exec_test_frames(link, gs, 1)
+        g.status, g.hp = .Broken, 0
+        for k := 0; k < 300 && agent_goals_busy(&link.goals); k += 1 do exec_test_frames(link, gs, 1)
+        work_test_expect_failed(t, link, gs, id, "blocked: golem 0's CALL is dimmed")
+        testing.expect_value(t, gs.golem_calls[0], Golem_Call.None)
+    }
+    {
+        // The roster's press itself: a dimmed button pushes nothing, as a
+        // mouse click on it does nothing.
+        gs, link, _, G := crew_test_world()
+        defer free(gs)
+        defer free(link)
+        crew_test_golem(gs, 0, 3, G, .Broken)
+        n := gs.events.size
+        golem_roster_press(gs, 0, .Call)
+        testing.expect_value(t, gs.events.size, n)
+        golem_roster_press(gs, 0, .Pickup)  // in reach, the one live button
+        testing.expect_value(t, gs.events.size, n + 1)
+    }
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    for line in ([]string{`{"do":"crew_call"}`, `{"do":"crew_pickup","golem":99}`, `{"do":"crew_mode","golem":0,"mode":"Dance"}`}) {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+        testing.expect(t, strings.contains(string(link.out[:link.out_len]), "error"), line)
     }
 }

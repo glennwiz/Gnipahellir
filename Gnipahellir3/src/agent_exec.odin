@@ -26,7 +26,7 @@ AGENT_GOALS_MAX  :: 32
 AGENT_GOAL_LINE  :: 512  // one goal as recorded; a longer one is refused
 
 Agent_Goal_Status :: enum u8 { Empty, Queued, Running, Done, Failed }
-Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect, Fight }
+Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect, Fight, Crew_Mode, Crew_Call, Crew_Pickup }
 // How a goal came: the old act answers with state when it is done.
 Agent_Goal_Via    :: enum u8 { Goal, Act }
 
@@ -161,6 +161,27 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
         check  = hero_fight_check,
         start  = hero_fight_start,
         tick   = hero_fight_goal_tick,
+    },
+    .Crew_Mode = {
+        name   = "crew_mode",
+        params = "golem: its slot in state's crew, mode: Gather, Build or Fight; selects the command wand, opens the roster and clicks the golem's mode",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
+    },
+    .Crew_Call = {
+        name   = "crew_call",
+        params = "golem: its slot in state's crew; the roster's CALL: it walks to the hero and waits for new orders",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
+    },
+    .Crew_Pickup = {
+        name   = "crew_pickup",
+        params = "golem: its slot in state's crew; the roster's PICK UP: back into the wand, from reach at once, else it walks over first. A cracked golem cannot walk: the hero goes into reach of it",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
     },
 }
 
