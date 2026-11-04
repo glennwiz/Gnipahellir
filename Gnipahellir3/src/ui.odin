@@ -1866,6 +1866,7 @@ draw_ui :: proc(gs: ^Game_State) {
 		draw_item_icon(gs.ui.drag_item, mx - 12, my - 12, 24)
 		rl.DrawRectangleLines(mx - 12, my - 12, 24, 24, NORSE_GOLD_HOT)
 	}
+	if gs.agent.driving && gs.agent.cmd.has_cursor do draw_agent_cursor(gs.input.mouse_screen)
 	if gs.ui.show_rune_scroll do draw_rune_scroll(gs)
 	if gs.ui.show_book do draw_book(gs)
 	if gs.game_won && !gs.ui.show_book do draw_win_screen(gs)
@@ -1893,6 +1894,16 @@ AGENT_CHAT_W :: i32(640)  // fits AGENT_TEXT_MAX characters of the 11 px font
 AGENT_CHAT_X :: (i32(UI_W) - AGENT_CHAT_W) / 2
 AGENT_CHAT_Y :: i32(HOTBAR_Y) - 50  // the field, just over the held item's name
 AGENT_CHAT_SAY :: rl.Color{150, 200, 235, 255}
+
+// The pointer the agent works a window with, so a watcher sees each move:
+// an arrow with its tip on the point.
+draw_agent_cursor :: proc(at: [2]f32) {
+	a := rl.Vector2{at.x, at.y}
+	b := rl.Vector2{at.x, at.y + 18}
+	c := rl.Vector2{at.x + 12, at.y + 13}
+	rl.DrawTriangle(a, b, c, rl.WHITE)
+	rl.DrawTriangleLines(a, b, c, rl.BLACK)
+}
 
 // The talk over the item bar: the agent's last line, then the watcher's own,
 // or the field while it is open.

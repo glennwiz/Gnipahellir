@@ -330,13 +330,74 @@ not switched off (`{"cmd":"reflexes","potion":false,...}`, `Hero_Reflex`,
   through it would kill or land in a burn;
 - rim_dig: no dig of a tile beside water or lava. A weapon's swing is no dig.
 
+## Working: mine, gather, craft, place, store (card 139)
+
+Eight more goal kinds, each a row of `agent_goal_kinds`, all in
+`agent_work.odin`. The add check reads the fields (`hero_work_parse`), the
+start finds what the goal works on in the world as it is then, and the tick
+walks with `hero_go_tick` (a failed walk is `unreachable: <why>`) and works
+with the input a player gives.
+
+| Kind | Fields | What it does |
+|---|---|---|
+| mine | `tile`, or `item` (+ `near`) | the nearest tile that gives the item round `near` (else the feet), no rim, a tool in the bag that mines it; walks into reach, takes the tool up, holds the button on it until the tile changes |
+| gather | `item`, `count` (1) | piles of it first (a pile lies on the ground: stood in, it is picked up), then the tiles that give it, nearest each time, until the bag holds count; a cut trunk falls and may give more |
+| craft | `item`, `count` (1) | the revealed recipe; walks to its station, opens it (TAB's window for a hand recipe), clicks the card, then CRAFT count times |
+| place | `item`, `at` or `near:"home"` | walks into reach and sets it down; near home walks to the home goal's tile and takes the free tile nearest it that takes the item |
+| store | `item`, `count` (all), `at` (else nearest barrel) | drags the bag's stacks of it into the barrel |
+| withdraw | `at`: barrel (+ `item`, `count`), silo, smelter; no `at`: the nearest barrel holding `item` | barrel stacks to the bag; a silo's click empties it (no window); a smelter's ore back |
+| feed | `item` (ore or wood), `count` (all), `at` (else nearest smelter) | drags it onto the furnace's ore or fuel slot |
+| collect | `at` (else nearest smelter) | drags the cast bars from the tray to the bag |
+
+Tools: the longest mine wand the mana fires (it mines from where the hero
+stands, in its range), else the pickaxe (its swing round the body), else bare
+hands, and those only on wood. Reach is measured from the feet tile.
+
+A tile under the ground (stone and ore lie under the turf) is reached as a
+player reaches it: with a pickaxe the stand tile may be one still to dig, and
+the walk there digs its way as go does (a tunnel, a step cut up, a stair down,
+never a shaft); each tile to dig weighs `HERO_WORK_DIG_COST` tiles of walk. A
+tile that gave the item but that no walk reaches is passed over for the next,
+`HERO_WORK_SKIP` at most, in a gather and in a mine by item; a mine of a named
+tile fails.
+
+No work dig takes the hero's own floor over a drop that hurts or burns
+(`hero_dig_safe`, 138's fall rule: free to `SAFE_FALL_TILES`, water breaks the
+fall). The stand search refuses a stand on top of the tile, and a hero already
+standing on it steps aside first. A lone ore sticking into a cave is mined from
+the side or, with no side in reach, a named tile fails `unsafe` and a mine by
+item or a gather passes it over.
+
+Windows are worked as a person works them (Glenn 2026-11-03): the click on the
+machine opens it, `HERO_WINDOW_LOOK_S` of looking, then for each step the
+cursor (`gs.hero.cursor`, in UI pixels) glides at `HERO_CURSOR_SPEED` to the
+card, the button or the stack, waits `HERO_CLICK_PAUSE_S`, grabs, glides with
+the stack riding it to where it goes, waits, lets go; then another look and the
+window is shut. A drag moves a whole stack, as a mouse does; a store, feed or
+withdraw stops once count have moved, or when a drag moved nothing (`full`).
+A collect, or an ore withdraw from a smelter, is one drag; what a full bag
+leaves stays in the furnace and the goal is done.
+The goal hands the cursor and the carried stack to `agent_input` in
+`gs.agent.cmd` (`has_cursor`, `cursor`, `carry`), which points
+`inp.mouse_screen` there and shows the stack as `ui.drag_item`; the UI draws
+the arrow. What a click or a let-go does is the event the same mouse gesture
+pushes (`Craft_Request`, `Barrel_Store`, `Smelter_Feed`, ...), so the counts
+are a human drag's. The hero does not move while the window is open. A threat
+that pauses the goal shuts the window to fight or flee; back on the goal, the
+hero walks to the machine again and reopens it.
+
+A failure says why first: `no_recipe`, `no_station`, `no_item`,
+`out_of_reach`, `unreachable`, `blocked` (a tile in reach gave nothing for
+`HERO_MINE_GIVE_UP_S`, as when the rim reflex holds the dig) or `full`.
+
 ## Not built (yet)
 
 - heal, take_cover, pick_up_loot: the table takes them as rows. Loose blocks are
   sensed but nothing scores them yet; a block that lands in a body crumbles
   and does not hurt.
-- The hero fights with what it holds; it does not pick a weapon from the bag.
 - An act goal cannot ask for a drop the fall would charge for: the ledge row
   fails it. A go plans such drops itself, priced, above the reflex line.
 - The planner sees falling blocks as solid: a tunnel through dirt or sand
   refills behind the hero.
+- Work goals search the planner's window round the hero (`HERO_WORK_SEARCH_*`)
+  and give up on the first target the walk cannot reach.

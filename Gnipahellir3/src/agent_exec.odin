@@ -26,7 +26,7 @@ AGENT_GOALS_MAX  :: 32
 AGENT_GOAL_LINE  :: 512  // one goal as recorded; a longer one is refused
 
 Agent_Goal_Status :: enum u8 { Empty, Queued, Running, Done, Failed }
-Agent_Goal_Kind   :: enum u8 { Act, Go, Home }
+Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect }
 // How a goal came: the old act and wait answer with state when it is done, and a
 // plan's goals stop together.
 Agent_Goal_Via    :: enum u8 { Goal, Act, Wait, Plan }
@@ -48,6 +48,7 @@ Agent_Goal :: struct {
     stuck_t:     f32,     // seconds since it came nearer
     replanned:   bool,    // stuck long enough to plan again, once
     left:        int,     // tiles the step being dug still has
+    work:        Hero_Work,  // a work goal's plan and progress (agent_work.odin)
     len:         int,
     line:        [AGENT_GOAL_LINE]u8,  // the goal as strict JSON
 }
@@ -98,6 +99,62 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
         check  = agent_goal_home_check,
         start  = agent_goal_home_start,
         tick   = hero_go_tick,
+    },
+    .Mine = {
+        name   = "mine",
+        params = `tile: [x,y], or item: an ore name and near: [x,y] (else the hero's feet), the nearest tile that gives it; walks into reach and mines it with the best tool`,
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_mine_goal_tick,
+    },
+    .Gather = {
+        name   = "gather",
+        params = "item, count (1): picks up piles of it and mines the tiles that give it until the bag holds count",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_gather_tick,
+    },
+    .Craft = {
+        name   = "craft",
+        params = "item, count (1): walks to the station the recipe needs, opens it and clicks the recipe and CRAFT count times",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
+    },
+    .Place = {
+        name   = "place",
+        params = `item, and at: [x,y] or near: "home" (a free tile round the home goal's tile); walks into reach and sets it down`,
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_place_tick,
+    },
+    .Store = {
+        name   = "store",
+        params = "item, count (all), at: [x,y] (else the nearest barrel): drags the bag's stacks of it into the barrel, whole stacks as a mouse does",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
+    },
+    .Withdraw = {
+        name   = "withdraw",
+        params = "at: [x,y] a barrel (item, count (all), whole stacks as a mouse drags them, so it may take more), silo or smelter (its ore back); no at: the nearest barrel holding item",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
+    },
+    .Feed = {
+        name   = "feed",
+        params = "item (ore or wood), count (all), at: [x,y] (else the nearest smelter): drags it into the furnace",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
+    },
+    .Collect = {
+        name   = "collect",
+        params = "at: [x,y] (else the nearest smelter): drags the cast bars from the tray into the bag",
+        check  = hero_work_check,
+        start  = hero_work_start,
+        tick   = hero_window_tick,
     },
 }
 
@@ -206,7 +263,7 @@ agent_cmd_keeps_windows :: proc(c: Agent_Command) -> bool {
     #partial switch c.verb {
     case .Feed, .Collect, .Withdraw, .Withdraw_Fuel, .Store, .Take: return true
     }
-    return c.has_use
+    return c.has_use || c.has_cursor
 }
 
 @(private="file")
@@ -369,6 +426,7 @@ Hero_Brain :: struct {
     potion_t:    f32,  // seconds until the potion reflex may fire again
     path:        Hero_Path,
     nav:         Hero_Nav,
+    cursor:      [2]f32,  // the pointer a work goal works windows with, in UI pixels
 }
 
 Hero_Behaviour_Row :: struct {
@@ -1219,7 +1277,9 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     col, x := hero_step(gs, &b.senses, c.move)
     #partial switch st.move {
     case .Jump:
-        if col.wall && is_solid(w, int(x), int(b.senses.feet_y) - 1) do c.jump = true
+        // The landing's own ground is at head height ahead: a wall, or a
+        // ledge over an open foot of the shaft dug to get here.
+        if is_solid(w, int(x), int(b.senses.feet_y) - 1) do c.jump = true
     case .Gap:
         if !col.wall && col.drop > 0 do c.jump = true
     }
@@ -1320,18 +1380,36 @@ hero_reflex_floor :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     p := &gs.player
     t := gs.agent.cmd.mine
     if t.y != hero_feet_row(p) + 1 || t.x < i32(p.pos.x) || t.x > i32(p.pos.x + PLAYER_W - 0.001) do return
-    w := &gs.world
+    _, hurts, burns := hero_dig_fall(&gs.world, t)
+    if hurts >= p.hp || burns do gs.agent.cmd.has_mine = false
+}
+
+// The fall a body standing on tile t takes once t is dug out: the tiles it
+// drops, the hp the fall rule takes for them (water breaks the fall), and
+// whether it lands in a burn.
+hero_dig_fall :: proc(w: ^World_Grid, t: [2]i32) -> (drop, hurts: int, burns: bool) {
     land := int(t.y) + 1
     for in_bounds(int(t.x), land) && !is_solid(w, int(t.x), land) {
         f := terrain_table[get_tile(w, int(t.x), land)].flags
         if .Swimmable in f || .Damaging in f do break
         land += 1
     }
-    drop := land - int(t.y)
+    drop = land - int(t.y)
     landing := terrain_table[get_tile(w, int(t.x), land)].flags
-    hurts := 0
     if .Swimmable not_in landing && f32(drop) > SAFE_FALL_TILES do hurts = int((f32(drop) - SAFE_FALL_TILES) / FALL_TILES_PER_HP) + 1
-    if hurts >= p.hp || .Damaging in landing do gs.agent.cmd.has_mine = false
+    burns = .Damaging in landing
+    return
+}
+
+// The check every work dig passes first: whether digging t out leaves a hero
+// whose feet are on row fy, its body over columns x0..x1, standing, or drops
+// it only as far as falls for free (SAFE_FALL_TILES, into no burn).  A body
+// still on another column's floor does not fall.  Gives the drop.
+hero_dig_safe :: proc(w: ^World_Grid, t: [2]i32, fy, x0, x1: i32) -> (drop: int, safe: bool) {
+    if t.y != fy + 1 do return 0, true
+    for x in x0 ..= x1 do if x != t.x && is_solid(w, int(x), int(t.y)) do return 0, true
+    d, hurts, burns := hero_dig_fall(w, t)
+    return d, hurts == 0 && !burns
 }
 
 @(private="file")

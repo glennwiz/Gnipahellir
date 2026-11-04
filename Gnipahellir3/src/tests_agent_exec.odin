@@ -1427,6 +1427,21 @@ go_test_give :: proc(gs: ^Game_State, it: Item, n: int) {
     assert(testing_ok)
 }
 
+// Up onto a ledge that overhangs open ground, as out of a shaft dug down:
+// the wall is at head height only, and the jump still goes.
+@(test)
+hero_go_jumps_onto_an_overhanging_ledge :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 - 1, G - 2, .Stone)
+    exec_test_frames(link, gs, 5)
+    id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 - 1, G - 3), 600)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s", status, reason)
+}
+
 @(test)
 hero_go_across_flat_ground :: proc(t: ^testing.T) {
     gs, link := exec_test_world()
@@ -2127,4 +2142,1272 @@ hero_fights_with_the_weapon_in_hand :: proc(t: ^testing.T) {
         testing.expect_value(t, gs.player.inventory.selected, 1)
     }
     testing.expect(t, fought > 0)
+}
+
+// ─── work: mine, gather, craft, place, store, withdraw, feed, collect ───
+
+// What a work goal did on the way: frames that began with a window open, and
+// how many of those had a move, a stack seen riding the cursor, frames the
+// cursor moved, and the clicks, grabs and let-gos, with those the cursor was
+// not where a mouse's would be for the same gesture.
+Work_Watch :: struct {
+    open_frames:  int,
+    moved_open:   int,
+    carried:      Item,
+    cursor_moved: int,
+    gestures:     int,
+    off_target:   int,
+    rushed:       int,  // gestures with the cursor still for less than the click pause
+    hasty:        int,  // a first gesture, or a shut, sooner than the look after the open or the last gesture
+}
+
+// Whether the cursor is where a mouse doing this tick's gesture would be: on
+// the recipe card, on CRAFT, on the bag slot grabbed, over the window a stack
+// is let go on.  The hit tests are the ones update_input uses.
+@(private="file")
+work_test_on_target :: proc(gs: ^Game_State, grabbed: bool, carried: Item) -> (gesture, on: bool) {
+    c := gs.agent.cmd
+    win, in_win := window_at_cursor(gs)
+    if grabbed {
+        // On a stack of what rides the cursor, in the bag or the barrel; in
+        // the furnace's window for its slots.
+        it := gs.ui.drag_item
+        if !in_win do return true, false
+        #partial switch win {
+        case .Inventory:
+            s := slot_at_cursor(gs)
+            return true, s >= 0 && gs.player.inventory.slots[s].item == it
+        case .Barrel:
+            b := barrel_at(gs, gs.level_index, gs.ui.barrel_tile)
+            bs := barrel_slot_at_cursor(gs)
+            return true, b != nil && bs >= 0 && b.slots[bs].item == it
+        case .Smelter:
+            return true, true
+        }
+        return true, false
+    }
+    if !gs.agent.first do return false, false
+    #partial switch c.verb {
+    case .Pick_Recipe: return true, craft_card_at_cursor(gs) == int(c.verb_arg)
+    case .Craft:       return true, craft_button_hovered(gs)
+    case .Store:
+        // On the barrel slot the stack went to.
+        b := barrel_at(gs, gs.level_index, gs.ui.barrel_tile)
+        bs := barrel_slot_at_cursor(gs)
+        return true, in_win && win == .Barrel && b != nil && bs >= 0 && b.slots[bs].item == carried
+    case .Feed:
+        // On the fuel slot for fuel, the ore slot for ore.
+        x, y := smelter_input_rect(gs)
+        if smelter_is_fuel(carried) do x, y = smelter_fuel_rect(gs)
+        m := gs.input.mouse_screen
+        inside := m.x >= f32(x) && m.x < f32(x + SLOT_PX) && m.y >= f32(y) && m.y < f32(y + SLOT_PX)
+        return true, in_win && win == .Smelter && inside
+    case .Take, .Withdraw, .Collect:
+        // On the bag slot the stack joined.
+        s := slot_at_cursor(gs)
+        return true, in_win && win == .Inventory && s >= 0 && gs.player.inventory.slots[s].item == carried
+    }
+    return false, false
+}
+
+@(private="file")
+work_test_run :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State, line: string, max_frames: int, watch: ^Work_Watch = nil, loc := #caller_location) -> (id: int) {
+    own: Work_Watch
+    watch := watch if watch != nil else &own
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+    reply := exec_test_reply(link)
+    ids, ok := reply["ids"].(json.Array)
+    assert(ok, string(link.out[:link.out_len]))
+    id = int(ids[0].(json.Float))
+    last := gs.hero.cursor
+    carrying := false
+    held := Item.None
+    still := 0
+    pause_s := HERO_CLICK_PAUSE_S
+    pause := int(pause_s / AGENT_STEP) - 2
+    look_s := HERO_WINDOW_LOOK_S
+    look := int(look_s / AGENT_STEP) - 2
+    since := 0  // frames since the window opened or the last gesture
+    gestured := false
+    for f := 0; f < max_frames && agent_goals_busy(&link.goals); f += 1 {
+        open := agent_window_open(gs)
+        exec_test_frames(link, gs, 1)
+        for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+        if open {
+            watch.open_frames += 1
+            if gs.input.move_left || gs.input.move_right || gs.input.jump do watch.moved_open += 1
+        }
+        if gs.ui.drag_item != .None do watch.carried = gs.ui.drag_item
+        now_open := agent_window_open(gs)
+        if !open && now_open do since, gestured = 0, false
+        if gesture, on := work_test_on_target(gs, gs.ui.drag_item != .None && !carrying, held); gesture {
+            watch.gestures += 1
+            if !on do watch.off_target += 1
+            if still < pause do watch.rushed += 1
+            if !gestured && since < look do watch.hasty += 1
+            since, gestured = 0, true
+        }
+        if open && !now_open && gestured && since < look do watch.hasty += 1
+        since += 1
+        if gs.hero.cursor != last {
+            watch.cursor_moved += 1
+            still = 0
+        } else {
+            still += 1
+        }
+        last = gs.hero.cursor
+        carrying = gs.ui.drag_item != .None
+        held = gs.ui.drag_item
+    }
+    // Whatever the goal: no step with a window open, no click where a mouse's
+    // would not be.
+    testing.expectf(t, watch.moved_open == 0, "%d moves with a window open", watch.moved_open, loc = loc)
+    testing.expectf(t, watch.off_target == 0, "%d gestures off target", watch.off_target, loc = loc)
+    testing.expectf(t, watch.rushed == 0, "%d gestures without the click pause", watch.rushed, loc = loc)
+    testing.expectf(t, watch.hasty == 0, "%d windows worked or shut without the look", watch.hasty, loc = loc)
+    return
+}
+
+@(private="file")
+work_test_expect_done :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State, id: int, loc := #caller_location) {
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s", status, reason, loc = loc)
+}
+
+@(private="file")
+work_test_expect_failed :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State, id: int, why: string, loc := #caller_location) {
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && strings.has_prefix(reason, why), "want failed %s, got %s %s", why, status, reason, loc = loc)
+}
+
+@(test)
+hero_gathers_5_wood_logs :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for y in G - 7 ..< G do set_tile(&gs.world, x0 + 8, y, .Wood)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"gather","item":"Wood_Log","count":5}`, 60 * 60)
+    work_test_expect_done(t, link, gs, id)
+    // At least five: a cut trunk falls, and what lands on the hero is its too.
+    testing.expectf(t, inventory_count(&gs.player.inventory, .Wood_Log) >= 5, "logs: %d", inventory_count(&gs.player.inventory, .Wood_Log))
+}
+
+// A pile on the ground is walked over before a tile is mined for it; a pile
+// of something else, or one in a pocket no body fits, is let be.
+@(test)
+hero_gather_takes_a_pile_first :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 + 3, G - 1, .Iron_Ore)
+    spawn_ground_item(&gs.world, {i32(x0 - 6), i32(G - 1)}, .Iron_Ore, 2)
+    spawn_ground_item(&gs.world, {i32(x0 + 2), i32(G - 1)}, .Dirt, 3)
+    set_tile(&gs.world, x0 - 3, G + 1, .Air)  // a pocket one tile high
+    spawn_ground_item(&gs.world, {i32(x0 - 3), i32(G + 1)}, .Iron_Ore, 1)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"gather","item":"Iron_Ore","count":2}`, 20 * 60)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Iron_Ore)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Dirt), 0)
+    id = work_test_run(t, link, gs, `{"do":"gather","item":"Iron_Ore","count":3}`, 20 * 60)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Air)
+}
+
+// Bench by hand, set down, then the Smelter, which needs the bench: the hero
+// walks back to it.  Each window is worked at a person's pace, with no move
+// while it is open.
+@(test)
+hero_crafts_a_bench_then_a_smelter_at_it :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Plank, 4)
+    go_test_give(gs, .Stone_Block, 8)
+    go_test_give(gs, .Iron_Ore, 2)
+    exec_test_frames(link, gs, 5)
+    watch: Work_Watch
+    id := work_test_run(t, link, gs, `{"do":"craft","item":"Crafting_Bench"}`, 600, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Crafting_Bench), 1)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Plank), 0)
+    // The look, the card's pause, the button's pause, the look again.
+    pace := 2 * HERO_WINDOW_LOOK_S + 2 * HERO_CLICK_PAUSE_S
+    least := int(pace / AGENT_STEP)
+    testing.expectf(t, watch.open_frames >= least, "open %d frames, the pace wants %d", watch.open_frames, least)
+    testing.expect_value(t, watch.moved_open, 0)
+    testing.expect(t, watch.cursor_moved > 1, "the cursor glides")
+    testing.expect_value(t, watch.gestures, 2)  // the card, then CRAFT
+    testing.expect_value(t, watch.off_target, 0)
+    testing.expect(t, !agent_window_open(gs), "shut after")
+
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Crafting_Bench","at":[%d,%d]}}`, x0 + 9, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 9, G - 1), Tile_Type.Crafting_Bench)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+
+    watch = {}
+    id = work_test_run(t, link, gs, `{"do":"craft","item":"Smelter"}`, 900, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Smelter), 1)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
+    testing.expectf(t, watch.open_frames >= least, "open %d frames", watch.open_frames)
+    testing.expect_value(t, watch.moved_open, 0)
+    testing.expect_value(t, hero_feet(&gs.player), [2]i32{i32(x0 + 6), i32(G - 1)})  // the nearest ground in reach of the bench
+}
+
+// Set down by home, fed ore and wood, and the cast bars collected: every
+// count is where it went.
+@(test)
+hero_places_a_smelter_feeds_it_and_collects :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Smelter, 1)
+    go_test_give(gs, .Iron_Ore, 6)
+    go_test_give(gs, .Wood_Log, 3)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"home","at":[%d,%d]}}`, x0 + 12, G))  // the ground: home is the tile on it
+    id := work_test_run(t, link, gs, `{"do":"place","item":"Smelter","near":"home"}`, 900)
+    work_test_expect_done(t, link, gs, id)
+    m: [2]i32
+    found := false
+    for y in G - 6 ..< G do for x in x0 - 4 ..= x0 + 20 do if get_tile(&gs.world, x, y) == .Smelter do m, found = {i32(x), i32(y)}, true
+    testing.expect(t, found, "a smelter stands by home")
+    testing.expect(t, abs(int(m.x) - (x0 + 12)) <= int(HERO_PLACE_NEAR), "near home")
+
+    watch: Work_Watch
+    id = work_test_run(t, link, gs, `{"do":"feed","item":"Iron_Ore"}`, 600, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, watch.carried, Item.Iron_Ore)
+    testing.expect_value(t, watch.moved_open, 0)
+    testing.expect_value(t, watch.gestures, 2)  // the grab and the let-go
+    testing.expect_value(t, watch.off_target, 0)
+    // With no fire the ore waits: it comes back out, and goes in again.
+    watch = {}
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"withdraw","at":[%d,%d]}}`, m.x, m.y), 600, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, watch.gestures, 2)
+    testing.expect_value(t, watch.off_target, 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 6)
+    testing.expect_value(t, gs.world.sim_data[grid_idx(int(m.x), int(m.y))].in_count, 0)
+    id = work_test_run(t, link, gs, `{"do":"feed","item":"Iron_Ore"}`, 600)
+    work_test_expect_done(t, link, gs, id)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"feed","item":"Wood_Log","count":2,"at":[%d,%d]}}`, m.x, m.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    rule, _ := smelt_rule_for(.Iron_Ore)
+    sd := gs.world.sim_data[grid_idx(int(m.x), int(m.y))]
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 0)
+    testing.expect_value(t, int(sd.in_count) + int(sd.store_count) * rule.ore_per_bar, 6)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 1)
+    testing.expect_value(t, int(sd.fuel_count) + int(sd.store_count) * FUEL_PER_BAR, 2)
+
+    smelt := SMELT_TIME
+    exec_test_frames(link, gs, int(smelt / AGENT_STEP) + 30)
+    bars := int(gs.world.sim_data[grid_idx(int(m.x), int(m.y))].store_count)
+    testing.expect(t, bars >= 1, "a bar is cast")
+    watch = {}
+    id = work_test_run(t, link, gs, `{"do":"collect"}`, 600, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, watch.gestures, 2)
+    testing.expect_value(t, watch.off_target, 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, rule.bar), bars)
+    testing.expect_value(t, gs.world.sim_data[grid_idx(int(m.x), int(m.y))].store_count, 0)
+}
+
+@(private="file")
+work_test_total :: proc(gs: ^Game_State, b: ^Barrel_State, it: Item) -> int {
+    n := inventory_count(&gs.player.inventory, it)
+    for s in b.slots do if s.item == it do n += s.count
+    return n
+}
+
+// Stored and withdrawn with nothing made or lost, and the store leaves the bag
+// and the barrel as a human's drags of the same stacks do.
+@(test)
+hero_stores_and_withdraws_from_a_barrel :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Iron_Ore, 7)  // the first slot: a stack coming back goes to an empty one
+    go_test_give(gs, .Barrel, 1)
+    go_test_give(gs, .Stone_Block, 120)
+    exec_test_frames(link, gs, 5)
+    tile := [2]i32{i32(x0 + 3), i32(G - 1)}
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Barrel","at":[%d,%d]}}`, tile.x, tile.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    b := barrel_at(gs, gs.level_index, tile)
+    testing.expect(t, b != nil, "a barrel record")
+    if b == nil do return
+
+    twin := new(Game_State)
+    defer free(twin)
+    twin^ = gs^
+    tb := barrel_at(twin, twin.level_index, tile)
+    for s, i in twin.player.inventory.slots do if s.item == .Stone_Block do barrel_store(twin, tb, i)
+
+    watch: Work_Watch
+    id = work_test_run(t, link, gs, `{"do":"store","item":"Stone_Block"}`, 900, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, watch.carried, Item.Stone_Block)
+    testing.expect_value(t, watch.moved_open, 0)
+    testing.expect_value(t, watch.gestures, 4)  // two stacks, each a grab and a let-go
+    testing.expect_value(t, watch.off_target, 0)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 0)
+    testing.expect_value(t, work_test_total(gs, b, .Stone_Block), 120)
+    testing.expect_value(t, b.slots, tb.slots)
+    testing.expect_value(t, gs.player.inventory.slots, twin.player.inventory.slots)
+
+    watch = {}
+    id = work_test_run(t, link, gs, `{"do":"withdraw","item":"Stone_Block","count":50}`, 900, &watch)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, watch.gestures, 2)
+    testing.expect_value(t, watch.off_target, 0)
+    testing.expect(t, inventory_count(&gs.player.inventory, .Stone_Block) >= 50, "withdrawn")
+    testing.expect(t, inventory_count(&gs.player.inventory, .Stone_Block) < 120, "whole stacks, only as many as count needs")
+    testing.expect_value(t, work_test_total(gs, b, .Stone_Block), 120)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 7)
+}
+
+// Each failure says why first.
+@(test)
+hero_work_goals_fail_with_reasons :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"craft","item":"Smelter"}`, 60)
+    work_test_expect_failed(t, link, gs, id, "no_recipe")
+
+    go_test_give(gs, .Stone_Block, 8)
+    go_test_give(gs, .Iron_Ore, 2)  // reveals the smelter
+    go_test_give(gs, .Pickaxe, 1)
+    go_test_give(gs, .Barrel, 1)
+    exec_test_frames(link, gs, 2)
+    id = work_test_run(t, link, gs, `{"do":"craft","item":"Smelter"}`, 60)
+    work_test_expect_failed(t, link, gs, id, "no_station")
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"store","item":"Iron_Ore","at":[%d,%d]}}`, x0 + 3, G - 1), 60)
+    work_test_expect_failed(t, link, gs, id, "no_station")
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Barrel","at":[%d,%d]}}`, x0 + 3, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"store","item":"Gold_Ore","at":[%d,%d]}}`, x0 + 3, G - 1), 60)
+    work_test_expect_failed(t, link, gs, id, "no_item")
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Stone_Block","at":[%d,%d]}}`, x0 + 2, G), 60)
+    work_test_expect_failed(t, link, gs, id, "out_of_reach")
+    // A block on top of a stone column nine high: its top is safe ground in
+    // reach, but no walk gets up there.
+    for y in G - 9 ..< G do set_tile(&gs.world, x0 + 8, y, .Stone)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 8, G - 9), 900)
+    work_test_expect_failed(t, link, gs, id, "unreachable: ")
+    for y in G - 9 ..< G do set_tile(&gs.world, x0 + 8, y, .Air)
+    // A block hung in the air: the only ground in reach is its own top, and
+    // digging it from there drops the hero eight tiles.
+    set_tile(&gs.world, x0 + 3, G - 9, .Stone)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 3, G - 9), 900)
+    work_test_expect_failed(t, link, gs, id, "unsafe: [")
+    // Under a barrel, which no pick digs: no ground reaches it, not even dug out.
+    set_tile(&gs.world, x0 + 3, G - 10, .Barrel)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 3, G - 9), 60)
+    work_test_expect_failed(t, link, gs, id, "unreachable: no ground")
+    id = work_test_run(t, link, gs, `{"do":"gather","item":"Gold_Ore"}`, 60)
+    work_test_expect_failed(t, link, gs, id, "no_item")
+}
+
+// The mine wand while the mana fires it, from where the hero stands; the pick
+// without mana, and bare hands only on wood.
+@(test)
+hero_work_picks_its_tool :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory.selected = -1
+    stone := [2]i32{i32(x0 + 3), i32(G - 1)}
+    set_tile(&gs.world, int(stone.x), int(stone.y), .Stone)
+    _, _, _, ok := hero_work_tool(gs, stone)
+    testing.expect(t, !ok, "nothing mines stone bare-handed")
+    set_tile(&gs.world, x0 + 5, G - 1, .Wood)
+    slot, reach, _, wood_ok := hero_work_tool(gs, {i32(x0 + 5), i32(G - 1)})
+    testing.expect(t, wood_ok && slot == -1 && reach == .Pick, "bare hands on wood")
+    set_tile(&gs.world, x0 + 5, G - 1, .Air)
+    go_test_give(gs, .Pickaxe, 1)
+    go_test_give(gs, .Mine_Wand, 1)
+    go_test_give(gs, .Mine_Wand_Silver, 1)
+    gs.player.mana = 0
+    slot, reach, _, _ = hero_work_tool(gs, stone)
+    testing.expect_value(t, gs.player.inventory.slots[slot].item, Item.Pickaxe)
+    gs.player.mana = gs.player.mana_max
+    rng: i32
+    slot, reach, rng, _ = hero_work_tool(gs, stone)
+    testing.expect_value(t, gs.player.inventory.slots[slot].item, Item.Mine_Wand_Silver)  // the longest
+    testing.expect_value(t, reach, Hero_Work_Reach.Wand)
+    testing.expect_value(t, rng, wand_mine_range[Item.Mine_Wand_Silver])
+
+    exec_test_frames(link, gs, 5)
+    feet := hero_feet(&gs.player)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, stone.x, stone.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, int(stone.x), int(stone.y)), Tile_Type.Air)
+    testing.expect_value(t, held_item(&gs.player), Item.Mine_Wand_Silver)
+    testing.expect_value(t, hero_feet(&gs.player), feet)
+}
+
+// A mine by item finds the nearest tile that gives it, round near, and never
+// one beside water.
+@(test)
+hero_mine_by_item_takes_the_nearest :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 + 4, G - 1, .Iron_Ore)
+    set_tile(&gs.world, x0 + 11, G - 1, .Iron_Ore)
+    set_tile(&gs.world, x0 + 20, G - 1, .Iron_Ore)
+    set_tile(&gs.world, x0 + 13, G, .Iron_Ore)  // nearer near, but beside water
+    set_tile(&gs.world, x0 + 13, G + 1, .Water)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","item":"Iron_Ore","near":[%d,%d]}}`, x0 + 13, G - 1), 900)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 11, G - 1), Tile_Type.Air)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 4, G - 1), Tile_Type.Iron_Ore)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 20, G - 1), Tile_Type.Iron_Ore)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 13, G), Tile_Type.Iron_Ore)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 1)
+}
+
+// What a work goal asks for is checked when it is added.
+@(test)
+hero_work_goals_are_checked_when_added :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    bad := [?][2]string{
+        {`{"do":"mine"}`, "mine needs tile"},
+        {`{"do":"gather","item":"Moonbeam"}`, "gather: item must name"},
+        {`{"do":"gather"}`, "gather needs item"},
+        {`{"do":"craft","item":"Smelter","count":0}`, "craft: count must be"},
+        {`{"do":"place","item":"Barrel","at":[1,1],"near":"home"}`, "place needs at"},
+        {`{"do":"place","item":"Barrel","near":"hearth"}`, `place: near takes "home"`},
+        {`{"do":"store","item":"Barrel","at":[-1,1]}`, "store: at takes"},
+        {`{"do":"withdraw"}`, "withdraw needs at"},
+        {`{"do":"mine","item":"Iron_Ore","near":"here"}`, "mine: near takes"},
+    }
+    for c in bad {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, c[0]))
+        r := exec_test_reply(link)
+        why, _ := r["error"].(json.String)
+        testing.expectf(t, strings.contains(why, c[1]), "%s: %s", c[0], why)
+    }
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"collect"},{"do":"withdraw","item":"Iron_Ore"},{"do":"mine","tile":[3,3]}]}`)
+    testing.expect_value(t, exec_test_reply(link)["ok"].(json.Boolean), true)
+}
+
+// The failures a goal meets as it starts, before a step is taken.
+@(test)
+hero_work_goals_fail_at_the_start :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    set_tile(&gs.world, x0 + 6, G - 1, .Iron_Ore)  // there, but no pickaxe mines it
+    exec_test_frames(link, gs, 5)
+    tile :: proc(x, y: int) -> string { return fmt.tprintf("[%d,%d]", x, y) }
+    fails := [?][2]string{
+        {fmt.tprintf(`{{"do":"mine","tile":%s}}`, tile(x0 + 3, G - 3)), "no_item: nothing to mine"},
+        {fmt.tprintf(`{{"do":"mine","tile":%s}}`, tile(x0 + 2, G)), "no_item: no pickaxe"},
+        {`{"do":"mine","item":"Gold_Ore"}`, "no_item: no tile"},
+        {`{"do":"mine","item":"Iron_Ore"}`, "no_item: no tile"},
+        {`{"do":"gather","item":"Stone_Block"}`, "no_item"},
+        {`{"do":"craft","item":"Crafting_Bench"}`, "no_item: Crafting_Bench needs"},
+        {fmt.tprintf(`{{"do":"place","item":"Pickaxe","at":%s}}`, tile(x0 + 3, G - 1)), "no_item: Pickaxe does not set down"},
+        {fmt.tprintf(`{{"do":"place","item":"Barrel","at":%s}}`, tile(x0 + 3, G - 1)), "no_item: no Barrel"},
+        {`{"do":"collect"}`, "no_station: no smelter"},
+        {`{"do":"withdraw","item":"Iron_Ore"}`, "no_station: no barrel holding"},
+        {fmt.tprintf(`{{"do":"withdraw","at":%s}}`, tile(x0 + 3, G - 1)), "no_station: no barrel, silo or smelter"},
+    }
+    for f in fails {
+        id := work_test_run(t, link, gs, f[0], 120)
+        work_test_expect_failed(t, link, gs, id, f[1])
+    }
+
+    go_test_give(gs, .Barrel, 1)
+    go_test_give(gs, .Smelter, 1)
+    go_test_give(gs, .Stone_Block, 3)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Barrel","at":[%d,%d]}}`, x0 + 3, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Smelter","at":[%d,%d]}}`, x0 - 3, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    barrel := tile(x0 + 3, G - 1)
+    smelter := tile(x0 - 3, G - 1)
+    fails2 := [?][2]string{
+        {`{"do":"feed","item":"Stone_Block"}`, "no_item: the furnace takes ore and wood"},
+        {`{"do":"collect"}`, "no_item: the tray is empty"},
+        {fmt.tprintf(`{{"do":"withdraw","at":%s}}`, smelter), "no_item: the furnace holds no ore"},
+        {fmt.tprintf(`{{"do":"withdraw","at":%s}}`, barrel), "no_item: a withdraw from a barrel names the item"},
+        {fmt.tprintf(`{{"do":"withdraw","item":"Gold_Ore","at":%s}}`, barrel), "no_item: the barrel holds no Gold_Ore"},
+        {`{"do":"withdraw","item":"Gold_Ore"}`, "no_station: no barrel holding"},  // a barrel, but empty
+    }
+    for f in fails2 {
+        id = work_test_run(t, link, gs, f[0], 120)
+        work_test_expect_failed(t, link, gs, id, f[1])
+    }
+}
+
+// No home marked: near home is the surface spawn; off the surface, none.
+@(test)
+hero_places_near_the_spawn_with_no_home_marked :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    _, _ = hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)  // in hand: the barrel is taken up first
+    go_test_give(gs, .Barrel, 2)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"place","item":"Barrel","near":"home"}`, 600)
+    work_test_expect_done(t, link, gs, id)
+    // The free tile nearest the feet, not the body's own, and no step after
+    // home is reached.
+    home := hero_spawn_feet()
+    near := false
+    for b in gs.sim.barrels do if b.active && b.tile == home + {-1, 0} do near = true
+    testing.expect(t, near, "a barrel beside the spawn")
+    testing.expect_value(t, hero_feet(&gs.player), home)
+    gs.level_index = LEVEL_SURFACE + 1
+    id = work_test_run(t, link, gs, `{"do":"place","item":"Barrel","near":"home"}`, 10)
+    gs.level_index = LEVEL_SURFACE
+    work_test_expect_failed(t, link, gs, id, "unreachable: no home")
+}
+
+// The trunk above falls into the cut: one log is one mine.
+@(test)
+hero_mines_one_log_from_a_falling_trunk :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for y in G - 3 ..< G do set_tile(&gs.world, x0 + 3, y, .Wood)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 3, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 1)
+}
+
+// A tile the reflexes will not let it dig gives nothing: the goal gives up.
+@(test)
+hero_mine_gives_up_on_a_tile_that_gives_nothing :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 + 3, G - 1, .Stone)
+    set_tile(&gs.world, x0 + 4, G - 1, .Water)
+    set_tile(&gs.world, x0 + 5, G - 1, .Stone)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 3, G - 1), 900)
+    work_test_expect_failed(t, link, gs, id, "blocked")
+    testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Stone)
+}
+
+// A full bag takes no pile in: the gather says so.
+@(test)
+hero_gather_stops_when_the_bag_is_full :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 5)
+    for &s in gs.player.inventory.slots do s = {item = .Dirt, count = MAX_STACK}
+    spawn_ground_item(&gs.world, {i32(x0 + 4), i32(G - 1)}, .Iron_Ore, 2)
+    id := work_test_run(t, link, gs, `{"do":"gather","item":"Iron_Ore"}`, 600)
+    work_test_expect_failed(t, link, gs, id, "full")
+}
+
+// A silo has no window: the click empties it into the bag.
+@(test)
+hero_withdraws_from_a_silo :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Silo, 1)
+    exec_test_frames(link, gs, 5)
+    at := [2]i32{i32(x0 + 6), i32(G - 1)}
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Silo","at":[%d,%d]}}`, at.x, at.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    s := silo_at(gs, gs.level_index, at)
+    testing.expect(t, s != nil, "a silo record")
+    if s == nil do return
+    silo_add(s, .Iron_Ore, 150)
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"withdraw","at":[%d,%d]}}`, at.x, at.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 150)
+}
+
+// A window shut under a store (a fight the goal paused for sweeps it) is
+// opened again, and the store finishes with every count kept.
+@(test)
+hero_work_reopens_a_window_shut_under_it :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Barrel, 1)
+    go_test_give(gs, .Stone_Block, 150)
+    exec_test_frames(link, gs, 5)
+    tile := [2]i32{i32(x0 + 3), i32(G - 1)}
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Barrel","at":[%d,%d]}}`, tile.x, tile.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"store","item":"Stone_Block"}]}`)
+    id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    shut, blind, loose := 0, 0, 0
+    carrying := false
+    for f := 0; f < 1200 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        if gs.agent.first && gs.agent.cmd.verb == .Store && !gs.ui.show_barrel do blind += 1
+        // A grab begins with the cursor on the bag slot, after a reopen too.
+        if gs.ui.drag_item != .None && !carrying {
+            s := slot_at_cursor(gs)
+            if s < 0 || gs.player.inventory.slots[s].item != gs.ui.drag_item do loose += 1
+        }
+        carrying = gs.ui.drag_item != .None
+        b := barrel_at(gs, gs.level_index, tile)
+        // Mid-drag after the first stack went in, the stack over the barrel,
+        // the windows are swept shut, once.
+        win, in_win := window_at_cursor(gs)
+        if shut == 0 && b != nil && b.slots[0].count > 0 && gs.ui.show_barrel && carrying && in_win && win == .Barrel {
+            gs.ui.show_barrel, gs.ui.show_inventory = false, false
+            shut += 1
+        }
+    }
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, shut, 1)
+    testing.expect_value(t, blind, 0)  // every let-go with the window up
+    testing.expect_value(t, loose, 0)
+    b := barrel_at(gs, gs.level_index, tile)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 0)
+    testing.expect_value(t, work_test_total(gs, b, .Stone_Block), 150)
+}
+
+// The reach each tool has from a stand tile: the pick round the body two up
+// and one down, never into it; wands and placing by chebyshev, never the
+// body; a window by chebyshev, the body too.
+@(test)
+hero_work_reach_by_tool :: proc(t: ^testing.T) {
+    s := [2]i32{50, 50}
+    cases := [?]struct{ reach: Hero_Work_Reach, rng: i32, t: [2]i32, want: bool }{
+        {.Pick, PICK_RANGE, {51, 48}, true},
+        {.Pick, PICK_RANGE, {51, 47}, false},
+        {.Pick, PICK_RANGE, {50, 51}, true},
+        {.Pick, PICK_RANGE, {50, 49}, false},
+        {.Wand, 4, {54, 46}, true},
+        {.Wand, 4, {55, 50}, false},
+        {.Wand, 4, {50, 49}, false},
+        {.Place, 8, {50, 50}, false},
+        {.Bench, 3, {53, 47}, true},
+        {.Bench, 3, {54, 50}, false},
+        {.Bench, 3, {50, 49}, true},
+    }
+    for c in cases {
+        testing.expectf(t, hero_work_reaches(c.reach, c.rng, s, c.t) == c.want, "%v %d to %v: want %v", c.reach, c.rng, c.t, c.want)
+    }
+}
+
+// A tile two over the head is mined from the floor below it.
+@(test)
+hero_mines_a_tile_over_its_head :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    ore := [2]i32{i32(x0 + 4), i32(G - 3)}
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Iron_Ore)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, int(ore.x), int(ore.y)), Tile_Type.Air)
+    testing.expect_value(t, hero_feet(&gs.player).y, i32(G - 1))
+}
+
+// Of the stand tiles that reach, the nearest: the ore in a tall wall is mined
+// from this side, not from over it.
+@(test)
+hero_mine_stands_on_the_near_side :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for y in G - 8 ..< G do set_tile(&gs.world, x0 + 6, y, .Stone)
+    ore := [2]i32{i32(x0 + 6), i32(G - 3)}
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Iron_Ore)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, int(ore.x), int(ore.y)), Tile_Type.Air)
+    testing.expect_value(t, hero_feet(&gs.player), [2]i32{i32(x0 + 5), i32(G - 1)})
+}
+
+// A craft by hand needs no station and no air round it: under water too.
+@(test)
+hero_crafts_by_hand_under_water :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    feet := hero_feet(&gs.player)
+    for x in feet.x - HERO_WORK_SEARCH_X ..= feet.x + HERO_WORK_SEARCH_X {
+        for y in feet.y - HERO_WORK_SEARCH_Y ..= feet.y + HERO_WORK_SEARCH_Y {
+            if in_bounds(int(x), int(y)) && get_tile(&gs.world, int(x), int(y)) == .Air do set_tile(&gs.world, int(x), int(y), .Water)
+        }
+    }
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Plank, 4)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"craft","item":"Crafting_Bench"}`, 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Crafting_Bench), 1)
+}
+
+// With the bag full the mined drop lies where the tile was: mined all the same.
+@(test)
+hero_mines_with_a_full_bag :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 + 3, G - 1, .Stone)
+    go_test_give(gs, .Pickaxe, 1)
+    go_test_give(gs, .Iron_Ore, (MAX_INVENTORY - 1) * MAX_STACK)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 3, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Air)
+}
+
+// A pile taken by something else on the way is let go: the next is sought.
+@(test)
+hero_gather_lets_a_pile_gone_go :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    set_tile(&gs.world, x0 + 3, G - 1, .Iron_Ore)
+    pile := [2]i32{i32(x0 - 8), i32(G - 1)}
+    spawn_ground_item(&gs.world, pile, .Iron_Ore, 1)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"gather","item":"Iron_Ore","count":1}]}`)
+    reply := exec_test_reply(link)
+    id := int(reply["ids"].(json.Array)[0].(json.Float))
+    exec_test_frames(link, gs, 10)
+    testing.expect(t, hero_feet(&gs.player).x < i32(x0), "off toward the pile")
+    idx := grid_idx(int(pile.x), int(pile.y))
+    gs.world.items[idx], gs.world.item_counts[idx] = .None, 0
+    gone_at := hero_feet(&gs.player).x
+    least := gone_at
+    for f := 0; f < 20 * 60 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        least = min(least, hero_feet(&gs.player).x)
+    }
+    testing.expectf(t, least >= gone_at - 1, "went on toward the gone pile: from %d to %d", gone_at, least)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, x0 + 3, G - 1), Tile_Type.Air)
+}
+
+// A place clicked that does not take, whatever the cause, fails after a few
+// looks rather than waiting on it.
+@(test)
+hero_place_that_does_not_take_fails :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Stone_Block, 5)
+    exec_test_frames(link, gs, 5)
+    at := [2]int{x0 + 3, G - 1}
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"place","item":"Stone_Block","at":[%d,%d]}}]}}`, at.x, at.y))
+    reply := exec_test_reply(link)
+    id := int(reply["ids"].(json.Array)[0].(json.Float))
+    for f := 0; f < 600 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        set_tile(&gs.world, at.x, at.y, .Air)  // taken back as soon as set
+    }
+    work_test_expect_failed(t, link, gs, id, "out_of_reach")
+}
+
+// Home walled in tight: no tile round it takes the item, and the goal says so.
+@(test)
+hero_place_near_home_with_no_room_fails :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    _, _ = hero_test_arena(gs)
+    go_test_give(gs, .Barrel, 1)
+    exec_test_frames(link, gs, 5)
+    feet := hero_feet(&gs.player)
+    testing.expect_value(t, feet, hero_spawn_feet())
+    for dy in -HERO_PLACE_NEAR - 1 ..= HERO_PLACE_NEAR + 1 {
+        for dx in -HERO_PLACE_NEAR - 1 ..= HERO_PLACE_NEAR + 1 {
+            if dx == 0 && (dy == 0 || dy == -1) do continue
+            set_tile(&gs.world, int(feet.x + dx), int(feet.y + dy), .Stone)
+        }
+    }
+    id := work_test_run(t, link, gs, `{"do":"place","item":"Barrel","near":"home"}`, 600)
+    work_test_expect_failed(t, link, gs, id, "out_of_reach: no tile round home")
+}
+
+// The stand chosen is the nearest of those that reach, whichever side.
+@(test)
+hero_work_stand_is_the_nearest :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    ore := [2]i32{i32(x0 + 6), i32(G)}
+    s, ok, _ := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+    testing.expect(t, ok, "a stand")
+    testing.expect_value(t, s, [2]i32{i32(x0 + 5), i32(G - 1)})
+    gs.player.pos.x = f32(x0 + 12)
+    s, ok, _ = hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+    testing.expect_value(t, s, [2]i32{i32(x0 + 7), i32(G - 1)})
+}
+
+// A goal added and run until it ends, with no watch: for the full cases, where
+// a drop has no slot to land on and a mouse lets go anywhere.
+@(private="file")
+work_test_bare :: proc(link: ^Agent_Link, gs: ^Game_State, line: string, max_frames: int) -> (id: int) {
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+    id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    for f := 0; f < max_frames && agent_goals_busy(&link.goals); f += 1 do exec_test_frames(link, gs, 1)
+    return
+}
+
+// A full barrel, a full bag: a drag that moves nothing ends the goal, full.
+@(test)
+hero_store_and_withdraw_stop_when_full :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Barrel, 1)
+    go_test_give(gs, .Stone_Block, 10)
+    exec_test_frames(link, gs, 5)
+    tile := [2]i32{i32(x0 + 3), i32(G - 1)}
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Barrel","at":[%d,%d]}}`, tile.x, tile.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    b := barrel_at(gs, gs.level_index, tile)
+    if b == nil do return
+    for &s in b.slots do s = {item = .Iron_Ore, count = MAX_STACK}
+    id = work_test_bare(link, gs, `{"do":"store","item":"Stone_Block"}`, 900)
+    work_test_expect_failed(t, link, gs, id, "full: the barrel takes no Stone_Block")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Stone_Block), 10)
+
+    b.slots[0] = {item = .Stone_Block, count = 5}
+    go_test_give(gs, .Stone_Block, MAX_STACK - 10)
+    for s in gs.player.inventory.slots do if s.count == 0 do go_test_give(gs, .Iron_Ore, MAX_STACK)
+    id = work_test_bare(link, gs, `{"do":"withdraw","item":"Stone_Block"}`, 900)
+    work_test_expect_failed(t, link, gs, id, "full: the bag takes no more")
+    testing.expect_value(t, b.slots[0].count, 5)
+}
+
+// One drag empties the tray or the furnace into the bag; a full bag leaves
+// it there and the goal ends.
+@(test)
+hero_collect_with_a_full_bag_ends :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Smelter, 1)
+    exec_test_frames(link, gs, 5)
+    m := [2]i32{i32(x0 + 3), i32(G - 1)}
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Smelter","at":[%d,%d]}}`, m.x, m.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    sd := &gs.world.sim_data[grid_idx(int(m.x), int(m.y))]
+    sd.store_item, sd.store_count = .Iron_Bar, 3
+    sd.in_item, sd.in_count = .Iron_Ore, 2
+    go_test_give(gs, .Stone_Block, MAX_INVENTORY * MAX_STACK)
+    id = work_test_bare(link, gs, `{"do":"collect"}`, 900)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, sd.store_count, 3)
+    id = work_test_bare(link, gs, fmt.tprintf(`{{"do":"withdraw","at":[%d,%d]}}`, m.x, m.y), 900)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, sd.in_count, 2)
+}
+
+// Count two with the means for one: one made, then the reason.
+@(test)
+hero_craft_stops_when_the_means_run_out :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    _, _ = hero_test_arena(gs)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Plank, 6)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"craft","item":"Crafting_Bench","count":2}`, 900)
+    work_test_expect_failed(t, link, gs, id, "no_item: not enough for another Crafting_Bench, 1 made")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Crafting_Bench), 1)
+}
+
+// A place far off with no ground in reach of it: unreachable, and why.
+@(test)
+hero_place_with_no_ground_near_fails :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Stone_Block, 5)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Stone_Block","at":[%d,%d]}}`, x0 + 15, G - 9), 300)
+    work_test_expect_failed(t, link, gs, id, "unreachable: no ground near")
+}
+
+// A machine on a pillar with no ground in reach of it: unreachable, and why.
+@(test)
+hero_window_goal_with_no_ground_near_fails :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for y in G - 12 ..< G do set_tile(&gs.world, x0 + 10, y, .Stone)  // its top four up: out of reach too
+    set_tile(&gs.world, x0 + 10, G - 8, .Smelter)
+    go_test_give(gs, .Iron_Ore, 2)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"feed","item":"Iron_Ore","at":[%d,%d]}}`, x0 + 10, G - 8), 300)
+    work_test_expect_failed(t, link, gs, id, "unreachable: no ground in reach")
+}
+
+// The machine gone as the hero clicks it: one click, a few looks, then why.
+@(test)
+hero_window_that_does_not_open_fails :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Barrel, 1)
+    go_test_give(gs, .Stone_Block, 10)
+    exec_test_frames(link, gs, 5)
+    tile := [2]i32{i32(x0 + 3), i32(G - 1)}
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Barrel","at":[%d,%d]}}`, tile.x, tile.y), 600)
+    work_test_expect_done(t, link, gs, id)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"store","item":"Stone_Block"}]}`)
+    id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    exec_test_frames(link, gs, 1)
+    set_tile(&gs.world, int(tile.x), int(tile.y), .Stone)
+    uses := 0
+    for f := 0; f < 600 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        if gs.agent.first && gs.agent.cmd.has_use do uses += 1
+    }
+    work_test_expect_failed(t, link, gs, id, "out_of_reach: the window")
+    testing.expect_value(t, uses, 1)
+}
+
+// A window open on another machine is not this goal's: the hero goes to its
+// own, opens it, and works that one.
+@(test)
+hero_works_its_own_machine_not_the_open_one :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Barrel, 2)
+    go_test_give(gs, .Smelter, 2)
+    go_test_give(gs, .Stone_Block, 10)
+    go_test_give(gs, .Iron_Ore, 4)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Crafting_Bench, 1)
+    go_test_give(gs, .Plank, 4)
+    exec_test_frames(link, gs, 5)
+    // Both of each in reach of where the hero stands: no walk sweeps the
+    // other window shut first.
+    a, b := [2]i32{i32(x0 + 2), i32(G - 1)}, [2]i32{i32(x0 + 3), i32(G - 1)}
+    sa, sb := [2]i32{i32(x0 - 2), i32(G - 1)}, [2]i32{i32(x0 - 3), i32(G - 1)}
+    for at, i in ([4][2]i32{a, b, sa, sb}) {
+        it := "Barrel" if i < 2 else "Smelter"
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"%s","at":[%d,%d]}}`, it, at.x, at.y), 600)
+        work_test_expect_done(t, link, gs, id)
+    }
+    stand :: proc(gs: ^Game_State, x0, G: int) {
+        gs.player.pos, gs.player.vel = {f32(x0) + 0.1, f32(G) - PLAYER_H}, {}
+    }
+    // The stack joins the barrel's own stack, past an empty first slot.
+    barrel_at(gs, gs.level_index, b).slots[3] = {item = .Stone_Block, count = 5}
+    stand(gs, x0, G)
+    gs.ui.show_barrel, gs.ui.barrel_tile, gs.ui.show_inventory = true, a, true
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"store","item":"Stone_Block","at":[%d,%d]}}`, b.x, b.y), 900)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, work_test_total(gs, barrel_at(gs, gs.level_index, b), .Stone_Block), 15)
+
+    stand(gs, x0, G)
+    gs.ui.show_smelter, gs.ui.smelter_tile, gs.ui.show_inventory = true, sa, true
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"feed","item":"Iron_Ore","at":[%d,%d]}}`, sb.x, sb.y), 900)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, int(gs.world.sim_data[grid_idx(int(sb.x), int(sb.y))].in_count), 4)
+
+    // The hand window open, and a bench recipe asked for: the bench's own.
+    id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Crafting_Bench","at":[%d,%d]}}`, x0 + 1, G - 1), 600)
+    work_test_expect_done(t, link, gs, id)
+    stand(gs, x0, G)
+    gs.ui.show_crafting, gs.ui.active_station, gs.ui.show_inventory = true, .None, true
+    go_test_give(gs, .Stone_Block, 8)
+    go_test_give(gs, .Iron_Ore, 2)
+    id = work_test_run(t, link, gs, `{"do":"craft","item":"Smelter"}`, 900)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Smelter), 1)
+}
+
+// Natural ground: a turf of grass over the stone.  Stone and ore lie under
+// it, out of the pick's reach from the grass: the hero digs its way down.
+@(private="file")
+work_test_turf :: proc(gs: ^Game_State, x0, G: int) {
+    for x in x0 - 18 ..= x0 + 22 do set_tile(&gs.world, x, G, .Grass)
+}
+
+@(test)
+hero_gathers_stone_under_the_turf :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    work_test_turf(gs, x0, G)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    hp := gs.player.hp
+    id := work_test_run(t, link, gs, `{"do":"gather","item":"Stone_Block","count":3}`, 60 * 60)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect(t, inventory_count(&gs.player.inventory, .Stone_Block) >= 3, "three stone")
+    testing.expect_value(t, gs.player.hp, hp)
+}
+
+// Three under the turf: a stair down to it, no drop that hurts.
+@(test)
+hero_mines_an_ore_deep_under_the_turf :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    work_test_turf(gs, x0, G)
+    set_tile(&gs.world, x0 + 6, G + 3, .Iron_Ore)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    hp := gs.player.hp
+    id := work_test_run(t, link, gs, `{"do":"mine","item":"Iron_Ore"}`, 60 * 60)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect(t, get_tile(&gs.world, x0 + 6, G + 3) != .Iron_Ore, "mined")
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Iron_Ore), 1)
+    testing.expect_value(t, gs.player.hp, hp)
+}
+
+// Two ores no walk reaches before one that can be: walled in by barrels,
+// which no pick digs (no ground in reach of it, dug or not), and atop a
+// barrel pillar nothing climbs (the walk fails).  Each is passed over, by a
+// mine by item and by a gather.  With none left that can be reached the goal
+// says so; a tile asked for by name is not passed over.
+@(private="file")
+work_test_unreachable_ores :: proc(gs: ^Game_State, x0, G: int) {
+    walled := [2]int{x0 - 3, G - 1}
+    for x in walled.x - 1 ..= walled.x + 1 do for y in walled.y - 1 ..= walled.y + 2 do set_tile(&gs.world, x, y, .Barrel)
+    set_tile(&gs.world, walled.x, walled.y, .Iron_Ore)
+    for y in G - 6 ..< G do set_tile(&gs.world, x0 + 4, y, .Barrel)
+    set_tile(&gs.world, x0 + 4, G - 7, .Iron_Ore)
+}
+
+@(test)
+hero_mine_passes_over_an_ore_it_cannot_reach :: proc(t: ^testing.T) {
+    for kind in ([2]string{"mine", "gather"}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        work_test_unreachable_ores(gs, x0, G)
+        set_tile(&gs.world, x0 + 12, G - 1, .Iron_Ore)
+        go_test_give(gs, .Pickaxe, 1)
+        exec_test_frames(link, gs, 5)
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"%s","item":"Iron_Ore"}}`, kind), 60 * 60)
+        work_test_expect_done(t, link, gs, id)
+        testing.expect_value(t, get_tile(&gs.world, x0 + 12, G - 1), Tile_Type.Air)
+        testing.expect_value(t, get_tile(&gs.world, x0 - 3, G - 1), Tile_Type.Iron_Ore)
+        testing.expect_value(t, get_tile(&gs.world, x0 + 4, G - 7), Tile_Type.Iron_Ore)
+        if kind == "gather" do continue
+        // No other ore in the level, past the arena either.
+        for x in 0 ..< GRID_W do for y in 0 ..< GRID_H {
+            here := [2]int{x, y}
+            if here == {x0 - 3, G - 1} || here == {x0 + 4, G - 7} do continue
+            if get_tile(&gs.world, x, y) == .Iron_Ore do set_tile(&gs.world, x, y, .Stone)
+        }
+        id = work_test_run(t, link, gs, `{"do":"mine","item":"Iron_Ore"}`, 60 * 60)
+        work_test_expect_failed(t, link, gs, id, "unreachable: no Iron_Ore in")
+        id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 4, G - 7), 60 * 60)
+        work_test_expect_failed(t, link, gs, id, "unsafe")  // its top, over the pillar of barrels
+        id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 - 3, G - 1), 60 * 60)
+        work_test_expect_failed(t, link, gs, id, "unreachable")
+    }
+}
+
+// Seed 781's lone ore over a cave: a dig never takes the hero's own floor
+// over a drop that hurts.  Stood on the ore, the hero steps to the side to
+// mine it; with no side in reach the tile fails unsafe and the item passes
+// it over.  No hp lost.
+@(private="file")
+work_test_ore_over_a_cave :: proc(gs: ^Game_State, x0, G: int, sides: bool) -> [2]i32 {
+    for x in x0 + 3 ..= x0 + 9 {
+        for y in G + 1 ..= G + 12 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x, G + 13, .Stone)
+    }
+    if !sides do for x in ([2]int{x0 + 5, x0 + 7}) do set_tile(&gs.world, x, G, .Air)
+    set_tile(&gs.world, x0 + 6, G, .Iron_Ore)
+    return {i32(x0 + 6), i32(G)}
+}
+
+@(test)
+hero_mine_never_takes_its_own_floor_over_a_drop :: proc(t: ^testing.T) {
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        ore := work_test_ore_over_a_cave(gs, x0, G, sides = true)
+        _, hurts, _ := hero_dig_fall(&gs.world, ore)
+        testing.expect(t, hurts > 0, "the cave's drop hurts")
+        gs.player.pos = {f32(ore.x) + 0.1, f32(G) - PLAYER_H}  // on the ore
+        go_test_give(gs, .Pickaxe, 1)
+        exec_test_frames(link, gs, 5)
+        hp := gs.player.hp
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 60 * 60)
+        work_test_expect_done(t, link, gs, id)
+        testing.expect_value(t, get_tile(&gs.world, int(ore.x), int(ore.y)), Tile_Type.Void)
+        testing.expect_value(t, gs.player.hp, hp)
+        testing.expect(t, hero_feet_row(&gs.player) < i32(G), "on the ground above, not down the cave")
+    }
+    {
+        // Only its own floor is held back: a block beside its head, hung over
+        // the drop, is mined.
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        work_test_ore_over_a_cave(gs, x0, G, sides = false)
+        set_tile(&gs.world, x0 + 5, G - 2, .Stone)
+        gs.player.pos = {f32(x0 + 4) + 0.1, f32(G) - PLAYER_H}
+        go_test_give(gs, .Pickaxe, 1)
+        exec_test_frames(link, gs, 5)
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 5, G - 2), 60 * 60)
+        work_test_expect_done(t, link, gs, id)
+    }
+    for kind in ([3]string{"tile", "mine", "gather"}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        ore := work_test_ore_over_a_cave(gs, x0, G, sides = false)
+        go_test_give(gs, .Pickaxe, 1)
+        exec_test_frames(link, gs, 5)
+        hp := gs.player.hp
+        if kind == "tile" {
+            id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 60 * 60)
+            work_test_expect_failed(t, link, gs, id, "unsafe")
+            // A drop short enough to fall for free, into lava: unsafe all the same.
+            // Hung in mid air, and as a pool on the ground two below.
+            set_tile(&gs.world, int(ore.x), int(ore.y) + 3, .Lava)
+            id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 60 * 60)
+            work_test_expect_failed(t, link, gs, id, "unsafe")
+            for x in ore.x - 2 ..= ore.x + 2 {
+                set_tile(&gs.world, int(x), int(ore.y) + 1, .Air)
+                set_tile(&gs.world, int(x), int(ore.y) + 2, .Stone if abs(x - ore.x) == 2 else .Lava)
+                set_tile(&gs.world, int(x), int(ore.y) + 3, .Stone)
+            }
+            id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, ore.x, ore.y), 60 * 60)
+            work_test_expect_failed(t, link, gs, id, "unsafe")
+        } else {
+            // The cave's ore the nearest, one on firm ground past it.
+            for x in 0 ..< GRID_W do for y in 0 ..< GRID_H {
+                if (x != int(ore.x) || y != int(ore.y)) && get_tile(&gs.world, x, y) == .Iron_Ore do set_tile(&gs.world, x, y, .Stone)
+            }
+            set_tile(&gs.world, x0 - 12, G - 1, .Iron_Ore)
+            line := `{"do":"mine","item":"Iron_Ore"}` if kind == "mine" else `{"do":"gather","item":"Iron_Ore","count":1}`
+            id := work_test_run(t, link, gs, line, 60 * 60)
+            work_test_expect_done(t, link, gs, id)
+            testing.expect_value(t, get_tile(&gs.world, x0 - 12, G - 1), Tile_Type.Air)
+        }
+        testing.expect_value(t, get_tile(&gs.world, int(ore.x), int(ore.y)), Tile_Type.Iron_Ore)
+        testing.expect_value(t, gs.player.hp, hp)
+    }
+}
+
+// Of the stands that reach a buried ore, one on open ground beats one to dig
+// that is as near: each tile to dig weighs HERO_WORK_DIG_COST of walk.  With
+// no pickaxe, nothing is dug: buried wood has no ground in reach.
+@(test)
+hero_work_stand_digs_only_with_a_pick_and_when_worth_it :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    ore := [2]i32{i32(x0 + 5), i32(G + 1)}
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Iron_Ore)
+    set_tile(&gs.world, x0 + 4, G, .Air)  // a pocket beside it, two high, open from above
+    set_tile(&gs.world, x0 + 4, G + 1, .Air)
+    go_test_give(gs, .Pickaxe, 1)
+    s, ok, _ := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+    testing.expect(t, ok, "a stand")
+    testing.expect_value(t, s, [2]i32{i32(x0 + 4), i32(G + 1)})
+
+    gs2, link2 := exec_test_world()
+    defer free(gs2)
+    defer free(link2)
+    x1, G1 := hero_test_arena(gs2)
+    work_test_turf(gs2, x1, G1)
+    set_tile(&gs2.world, x1 + 5, G1 + 1, .Wood)
+    exec_test_frames(link2, gs2, 5)
+    id := work_test_run(t, link2, gs2, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x1 + 5, G1 + 1), 600)
+    work_test_expect_failed(t, link2, gs2, id, "unreachable: no ground in reach")
+}
+
+// A hand craft opens the bag and the crafting window as TAB lays them out.
+@(test)
+hero_hand_craft_opens_the_windows_as_tab_does :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    _, _ = hero_test_arena(gs)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Plank, 4)
+    exec_test_frames(link, gs, 5)
+    gs.ui.win_pos[.Inventory], gs.ui.win_pos[.Crafting] = {5, 5}, {5, 5}  // left where nothing lays them
+    twin := new(Game_State)
+    defer free(twin)
+    twin^ = gs^
+    place_craft_pair(twin)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"craft","item":"Crafting_Bench"}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    seen := false
+    for f := 0; f < 600 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        if gs.ui.show_crafting && !seen {
+            seen = true
+            testing.expect_value(t, gs.ui.win_pos[.Inventory], twin.ui.win_pos[.Inventory])
+            testing.expect_value(t, gs.ui.win_pos[.Crafting], twin.ui.win_pos[.Crafting])
+        }
+    }
+    testing.expect(t, seen, "the crafting window opened")
+    work_test_expect_done(t, link, gs, id)
 }

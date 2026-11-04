@@ -587,7 +587,9 @@ Input_State :: struct {
 
 // ─── Agent drive (agent_api.odin) ─────────────────────────────────────────────
 
-Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe, Monument, Crew }
+// Open_Craft and Pick_Recipe are the executor's own: TAB's crafting window, and
+// a click on a recipe card.  No act parses to them.
+Agent_Verb :: enum u8 { None, Select, Craft, Equip, Feed, Collect, Store, Take, Withdraw, Withdraw_Fuel, Tithe, Monument, Crew, Open_Craft, Pick_Recipe }
 
 // One act: held input for its frames, one-shots on the first.  Tiles are only
 // meaningful under their has_ flag.
@@ -615,6 +617,9 @@ Agent_Command :: struct {
     verb:      Agent_Verb,
     verb_arg:  i32,
     feed_count: i32,  // 0: the whole stack
+    has_cursor: bool,    // the executor works a window with a cursor a watcher sees
+    cursor:     [2]f32,  // where it points, in UI pixels
+    carry:      Item,    // the stack it drags, drawn under the cursor
 }
 
 AGENT_TEXT_MAX :: 96
