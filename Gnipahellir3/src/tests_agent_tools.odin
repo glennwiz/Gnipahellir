@@ -7,6 +7,7 @@ package game
 import "core:fmt"
 import "core:net"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:testing"
 
@@ -769,4 +770,33 @@ replay_carries_reflexes_and_home :: proc(t: ^testing.T) {
     got, _ := os.read_entire_file(got_path, context.allocator)
     defer delete(got)
     testing.expect(t, strings.contains(string(got), `"done":1`) && strings.contains(string(got), `"home":null`))
+}
+
+// ─── --hero-soak (card 156) ─────────────────────────────────────────────────
+
+// The soak's deaths per kit, pinned at what cards 155 and 156 reached: the soak
+// is deterministic, so a loss fails here, and a gain moves its number down in
+// the same commit, in plain sight.  One test per kit, so they run side by side.
+@(private="file")
+tools_test_soak_pin :: proc(t: ^testing.T, kit: Tool_Soak_Kit, want: int) {
+    deaths, runs := tool_soak_kit(kit)
+    testing.expect_value(t, runs, 80)
+    testing.expectf(t, deaths == want, "%s: %d of %d died, pinned at %d", tool_soak_kits[kit].name, deaths, runs, want)
+}
+
+@(test) hero_soak_unarmed_deaths_are_pinned :: proc(t: ^testing.T) { tools_test_soak_pin(t, .Unarmed, 2) }
+@(test) hero_soak_pickaxe_deaths_are_pinned :: proc(t: ^testing.T) { tools_test_soak_pin(t, .Pickaxe, 0) }
+@(test) hero_soak_sword_deaths_are_pinned   :: proc(t: ^testing.T) { tools_test_soak_pin(t, .Sword, 11) }
+@(test) hero_soak_wand_deaths_are_pinned    :: proc(t: ^testing.T) { tools_test_soak_pin(t, .Wand, 7) }
+@(test) hero_soak_both_deaths_are_pinned    :: proc(t: ^testing.T) { tools_test_soak_pin(t, .Both, 7) }
+
+@(test)
+hero_soak_is_an_option_that_takes_nothing :: proc(t: ^testing.T) {
+    out := strings.builder_make(context.temp_allocator)
+    _, exit, code := tool_args({"--hero-soak", "x"}, &out)
+    testing.expect(t, exit && code == 2, "it takes nothing")
+    testing.expect(t, strings.contains(TOOL_USAGE, "--hero-soak"))
+    // Each kit carries what its name says: two kits that die alike stay apart.
+    want := [Tool_Soak_Kit][]Item{.Unarmed = {}, .Pickaxe = {.Pickaxe}, .Sword = {.Sword}, .Wand = {.Fire_Wand}, .Both = {.Sword, .Fire_Wand}}
+    for kit in Tool_Soak_Kit do testing.expectf(t, slice.equal(tool_soak_kits[kit].items, want[kit]), "%s: %v", tool_soak_kits[kit].name, tool_soak_kits[kit].items)
 }

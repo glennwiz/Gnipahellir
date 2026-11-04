@@ -40,6 +40,7 @@ TOOL_USAGE :: `usage:
                                          seconds to Scroll B and to 10 Gold Bars
   gnipa --builder-trace <run folder|action.log> [--min-frames N] [--tiles N]
                                          what each Builder did, per life and level
+  gnipa --hero-soak                      the hero's live chase: deaths per kit, of 80 runs each
 `
 
 Tool_Mode :: enum u8 { Play, Agent_Run, Replay }
@@ -103,6 +104,10 @@ tool_args :: proc(args: []string, out: ^strings.Builder) -> (run: Tool_Run, exit
         }
         if path == "" do return usage(out, "--builder-trace takes one run folder or action.log")
         return {}, true, 0 if tool_builder_trace(out, path, min_frames, tiles) else 1
+    case "--hero-soak":
+        if len(args) != 1 do return usage(out, "--hero-soak takes nothing")
+        tool_hero_soak(out)
+        return {}, true, 0
     case "--replay":
         if len(args) != 2 do return usage(out, "--replay takes one run folder")
         return {mode = .Replay, folder = args[1]}, false, 0
@@ -1401,4 +1406,80 @@ tool_builder_trace :: proc(b: ^strings.Builder, path: string, min_frames := TOOL
     for k, i in names do fmt.sbprintf(b, "%s%s=%d", " " if i > 0 else "", k, totals[k])
     strings.write_byte(b, '\n')
     return true
+}
+
+// ─── --hero-soak ────────────────────────────────────────────────────────────
+
+// The hero's live chase (cards 149, 140, 155, 156): on natural home terrain, a
+// hunting Vargr 6 or 10 tiles off on either side, the hero at a fifth or half
+// of its hp walking at it for TOOL_SOAK_FRAMES with one act goal.  Ten seeds,
+// so 80 runs per kit.  Each run is a fresh Game_State, whose save, stats and
+// log paths stay empty, so a death removes no save and nothing is written.
+TOOL_SOAK_FRAMES :: 400
+TOOL_SOAK_SEEDS  :: [?]u32{781, 1, 2, 3, 5, 7, 11, 13, 42, 99}
+
+Tool_Soak_Kit :: enum u8 { Unarmed, Pickaxe, Sword, Wand, Both }
+
+@(rodata)
+tool_soak_kits := [Tool_Soak_Kit]struct { name: string, items: []Item }{
+    .Unarmed = {"unarmed", {}},
+    .Pickaxe = {"pickaxe", {.Pickaxe}},
+    .Sword   = {"sword",   {.Sword}},
+    .Wand    = {"wand",    {.Fire_Wand}},
+    .Both    = {"both",    {.Sword, .Fire_Wand}},
+}
+
+// One run: whether the hero died.
+tool_soak_run :: proc(seed: u32, off, side: f32, div: int, items: []Item) -> (dead: bool) {
+    gs := new(Game_State)
+    defer free(gs)
+    link := new(Agent_Link)
+    defer free(link)
+    game_state_init(gs, seed)
+    gs.ui.show_title = false
+    gs.player.pos = SURFACE_HOME_POS
+    link.connected, link.realtime = true, true
+    frames :: proc(link: ^Agent_Link, gs: ^Game_State, n: int) {
+        for _ in 0 ..< n do if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    frames(link, gs, 10)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    for it in items do inventory_insert(&gs.player.inventory, it, 1)
+    gs.player.hp = max(1, gs.player.hp_max / div)
+    vx := int(gs.player.pos.x) + int(side * off)
+    G := 0
+    for G < GRID_H - 1 && !is_solid(&gs.world, vx, G) do G += 1
+    id, ok := enemy_alloc(&gs.enemies)
+    if !ok do return false
+    e := &gs.enemies.data[id]
+    e^ = Enemy{kind = .Vargr, hp = VARGR_HP, hp_max = VARGR_HP, pos = {f32(vx) + 0.1, f32(G) - BUILDER_H}, facing = -1}
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":300}]}` if side < 0 else `{"cmd":"goals","add":[{"do":"act","move":"right","frames":300}]}`)
+    for _ in 0 ..< TOOL_SOAK_FRAMES {
+        frames(link, gs, 1)
+        if gs.player.dead do return true
+    }
+    return false
+}
+
+// Deaths of one kit over every seed, side, distance and hp.
+tool_soak_kit :: proc(kit: Tool_Soak_Kit) -> (deaths, runs: int) {
+    for seed in TOOL_SOAK_SEEDS do for off in ([2]f32{6, 10}) do for side in ([2]f32{-1, 1}) do for div in ([2]int{5, 2}) {
+        runs += 1
+        if tool_soak_run(seed, off, side, div, tool_soak_kits[kit].items) do deaths += 1
+    }
+    return
+}
+
+tool_hero_soak :: proc(b: ^strings.Builder) {
+    strings.write_string(b, "SOAK")
+    for kit in Tool_Soak_Kit {
+        d, n := tool_soak_kit(kit)
+        fmt.sbprintf(b, " %s %d/%d", tool_soak_kits[kit].name, d, n)
+    }
+    strings.write_byte(b, '\n')
 }
