@@ -509,6 +509,7 @@ Falling_Block :: struct {
     golem_placed:     bool,  // ownership follows settling navigation masonry
     golem_owner:      i16,   // -1 once its placement grace has already expired
     grace_expires_at: f32,
+    monument:         bool,  // a golem-built monument cell: its mark lands with it
     active:           bool,
 }
 
