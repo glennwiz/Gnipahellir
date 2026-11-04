@@ -1618,7 +1618,7 @@ the_brief_is_written_from_the_game_as_it_stands :: proc(t: ^testing.T) {
 
     brief := agent_write_brief(link, gs)
     for want in ([]string{"127.0.0.1:40123", "world seed: 90210", "level 2", "screen: play", "the panel's goal: find the gold",
-                          "game's objective line: ", `"cmd":"act"`, "An act drops what is queued and answers with state", `"cmd":"goals"`, `"cmd":"objective"`, "HOW THE GAME WAITS", "FIRST STEPS", `"move":"right"`, "TALK", "Read state's heard", `"cmd":"say"`, `"cmd":"listen"`, "Final Seal", "\"127.0.0.1\", 40123"}) {
+                          "game's objective line: ", `"cmd":"act"`, "it drops what is queued and answers with state", `"cmd":"goals"`, `"cmd":"objective"`, "HOW THE GAME WAITS", "FIRST STEPS", `"move":"right"`, "TALK", "Read state's heard", `"cmd":"say"`, `"cmd":"listen"`, "Final Seal", "\"127.0.0.1\", 40123"}) {
         testing.expect(t, strings.contains(brief, want), want)
     }
     for retired in ([]string{`"cmd":"plan"`, `"cmd":"wait"`, `"cmd":"idle"`, `"cmd":"realtime"`}) do testing.expect(t, !strings.contains(brief, retired), retired)
@@ -1630,6 +1630,37 @@ the_brief_is_written_from_the_game_as_it_stands :: proc(t: ^testing.T) {
     testing.expect(t, !strings.contains(brief, "%!"), "no format string went wrong")
     link.connected = false
     testing.expect(t, strings.contains(agent_write_brief(link, gs), "none, the socket is free"))
+}
+
+// Card 142: the brief is for goal play.  It names every goal kind in the table
+// with its params (built from the table, so a new kind cannot be left out), says
+// real time is fixed, carries the binary's options, and tells the truth about
+// bare hands from the mining rule.
+@(test)
+the_brief_names_every_goal_kind_and_the_binary_options :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    brief := agent_write_brief(link, gs)
+    for row in agent_goal_kinds do testing.expectf(t, strings.contains(brief, fmt.tprintf("    %s: %s\n", row.name, row.params)), "the brief names the %s goal", row.name)
+    testing.expect(t, strings.contains(brief, "Real time is fixed: no command pauses or slows it"))
+    testing.expect(t, strings.contains(brief, TOOL_USAGE), "the gnipa options, as --help gives them")
+    testing.expect(t, strings.contains(brief, fmt.tprintf("Bare hands mine only %s, at %d times", terrain_table[BARE_HAND_TILE].name, BARE_HAND_MULT)))
+    testing.expect(t, !strings.contains(brief, "Bare hands mine, slowly"))
+    for want in ([]string{
+        "You only send goals: the game turns each into the keys and mouse a player would use",
+        "an act holds its keys for 1..", "The act fields, for an act goal:", `{"cmd":"act",...}  one act goal`,
+        `A trip: {"cmd":"goals","add":[{"do":"go"`, "THE GAME BINARY", "One binary does everything",
+        "earlier runs, most of them by a scripted bot", "## How to play it\n- Hold one connection for the whole run",
+    }) {
+        testing.expect(t, strings.contains(brief, want), want)
+    }
+    // The shipped lessons start at the brief's header, at How to play it: the
+    // repo head before it and the notes after the first section stay out.
+    testing.expect(t, strings.contains(brief, "\nLESSONS FROM EARLIER RUNS\nThese come from earlier runs, most of them by a scripted bot before goals.\n\n## How to play it\n"), "the lessons start at How to play it")
+    for head in ([]string{"Read this before an agent run", "## While you think"}) do testing.expect(t, !strings.contains(brief, head), head)
+    when GAME_DEBUG do testing.expect(t, strings.contains(brief, "Every run folder holds acts.jsonl, action.log and fight.log.\n"))
+    else do testing.expect(t, strings.contains(brief, "Every run folder holds acts.jsonl and fight.log.\n"), "a release build writes no action.log")
 }
 
 @(test)

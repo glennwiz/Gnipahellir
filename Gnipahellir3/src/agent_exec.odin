@@ -1076,9 +1076,7 @@ hero_rim :: proc(w: ^World_Grid, t: [2]i32) -> bool {
 // A tile the hero may dig: the pick works it, and it is no rim.
 hero_diggable :: proc(gs: ^Game_State, t: [2]i32, has_pick: bool) -> bool {
     if !in_bounds(int(t.x), int(t.y)) do return false
-    tile := get_tile(&gs.world, int(t.x), int(t.y))
-    if .Mineable not_in terrain_table[tile].flags || is_structure_tile[tile] do return false
-    return (has_pick || tile == .Wood) && !hero_rim(&gs.world, t)
+    return pick_workable(gs, t, has_pick) && !hero_rim(&gs.world, t)
 }
 
 // The tiles a dig step clears, by its rise: a tunnel, a step cut up (and the

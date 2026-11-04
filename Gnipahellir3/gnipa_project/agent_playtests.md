@@ -11,17 +11,22 @@ what broke, and hands back a report. Glenn reads the reports; feel is still his 
   and the run folder must outlive it. Merge master into `agent-api` first if it is behind.
 - One run at a time on the box, on port 7777 only: `odin build src -out:build/gnipa && timeout <cap> build/gnipa --agent-run --port 7777 --seed <seed>`.
   Playtest cards are chained so they never overlap. If 7777 is taken, wait and say so.
-- Drive the game only through the API (`GET /v1/meta` is the brief, `tools/agent_bot/`
-  is the bot). No synthetic keys or mouse, no debug menus, no save editing.
+- Drive the game only through the API: a GET on the port is the brief. Send goals over
+  the socket from your own short client, one connection for the whole run; the game
+  runs in real time and never waits. There is no bot code: the goal kinds in the brief
+  are the whole toolset. No synthetic keys or mouse, no debug menus, no save editing.
+- Afterwards, `build/gnipa --summary <run>` first; `--replay`, `--pacing` and
+  `--builder-trace` are the other reports (`build/gnipa --help`).
 - Never delete anything under `build/agent_runs/`. Never clear an `action.log`.
 - Stop the game by pid when done, never `pkill -f`.
 
 ## What you may change
 
-- `tools/agent_bot/` on `agent-api`: fix the bot when the bot is wrong. Commit there.
-- Nothing in `src/`. A game bug or an API gap is a finding, not a fix.
-- If the bot needs something a mouse player can see but the API does not give
-  (a size, a timer, a state), that is an API gap: report it, don't hard-code it in the bot.
+- Nothing in the repo. A game bug, an API gap or a goal gap is a finding, not a fix.
+- If you need something a mouse player can see but the API does not give (a size, a
+  timer, a state), that is an API gap: report it, don't guess it.
+- A goal kind a player's plan needs and the queue lacks, or a goal that fails where a
+  player would succeed, is a goal finding.
 
 ## The report (evidence on the card, then submit)
 
@@ -31,13 +36,13 @@ RUN: run folder, seed, wall time, frames played
 FINDINGS: one line each, tagged
   [game] a bug in the game
   [api]  the API hides or blocks something a player has
-  [bot]  the bot was wrong (fixed in commit <sha>, or not)
+  [goal] a goal kind is missing, or a goal failed where a player would succeed
   [feel] works, but Glenn should look (tuning, fun, clarity)
   each with the action.log frame(s) or line(s) that show it
 ASK: anything only Glenn can decide
 ```
 
-Keep it short. The coordinator turns [game] and [api] findings into cards.
+Keep it short. The coordinator turns [game], [api] and [goal] findings into cards.
 
 ## Review
 

@@ -21,6 +21,7 @@ PICK_RANGE :: i32(1)
 PICK_HITS :: 3
 PICK_SWING_TIME :: f32(0.28)
 BARE_HAND_MULT :: 3 // no pickaxe: you can still knock down trees, 3× the hits
+BARE_HAND_TILE :: Tile_Type.Wood // the one tile fists take
 
 WAND_MANA_COST :: f32(5) // pool 100, regen 5/s: ~20-shot burst, then throttled
 WAND_COOLDOWN :: f32(0.25)
@@ -185,10 +186,9 @@ pick_continue :: proc(
 // Whether this swing can work that tile at all: mineable terrain, not a
 // structure (those want the deliberate Shift+hold reclaim), and — bare-handed —
 // only trees.
-@(private = "file")
 pick_workable :: proc(gs: ^Game_State, tile: [2]i32, has_pick: bool) -> bool {
 	t := get_tile(&gs.world, int(tile.x), int(tile.y))
-	return .Mineable in terrain_table[t].flags && !is_structure_tile[t] && (has_pick || t == .Wood)
+	return .Mineable in terrain_table[t].flags && !is_structure_tile[t] && (has_pick || t == BARE_HAND_TILE)
 }
 
 // Called from update_player while the mine button is held.
