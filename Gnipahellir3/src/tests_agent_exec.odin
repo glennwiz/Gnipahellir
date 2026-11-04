@@ -3693,13 +3693,20 @@ hero_flee_takes_no_fall_that_costs_more_than_the_threat :: proc(t: ^testing.T) {
 // lava (that case starts at the ledge with the way already found shut, as
 // lava keeps the hero off it).  With the Vargr held off by the wall, out of
 // reach of the ledge, the hero spends no hp on a fall, and the way is marked
-// shut until the hero is clear
-// of it.  (The Vargr is held where
-// it stands: a raider would dig through the wall.)
+// shut until the hero is clear of it.  A wall the pick cannot work, or no
+// pick, leaves the fall as the way out.  (The Vargr is held where it stands:
+// a raider would dig through the wall.)
 @(test)
 hero_flee_takes_the_fall_when_the_way_past_is_shut :: proc(t: ^testing.T) {
-    Case :: struct{vx: f32, lethal, lava, fall: bool}
-    for c in ([?]Case{{-3.8, false, false, true}, {-2.0, false, false, false}, {-3.8, true, false, false}, {-3.8, false, true, false}}) {
+    Case :: struct{vx: f32, lethal, lava, fall: bool, wall: Tile_Type, pick: bool}
+    for c in ([?]Case{
+        {-3.8, false, false, true,  .Rune_Stone, true},
+        {-2.0, false, false, false, .Rune_Stone, true},
+        {-3.8, true,  false, false, .Rune_Stone, true},
+        {-3.8, false, true,  false, .Rune_Stone, true},
+        {-3.8, false, false, true,  .Smelter,    true},   // a machine: the pick leaves it be
+        {-3.8, false, false, true,  .Stone,      false},  // nothing to dig with
+    }) {
         gs, link := exec_test_world()
         defer free(gs)
         defer free(link)
@@ -3710,12 +3717,13 @@ hero_flee_takes_the_fall_when_the_way_past_is_shut :: proc(t: ^testing.T) {
             set_tile(&gs.world, x, G + 17, .Stone)
             if c.lava do set_tile(&gs.world, x, G + 16, .Lava)
         }
-        for y in G - 10 ..< G do set_tile(&gs.world, x0 - 2, y, .Stone)  // the wall at its back
+        for y in G - 10 ..< G do set_tile(&gs.world, x0 - 2, y, c.wall)  // the wall at its back
+        if c.wall == .Smelter do for y in G - 10 ..< G - 1 do set_tile(&gs.world, x0 - 2, y, .Rune_Stone)  // a machine at the feet under rock
         _, hurts, _ := hero_dig_fall(&gs.world, {i32(x0 - 6), i32(G - 1)})
         testing.expect(t, hurts > WAVE_DAMAGE * HERO_PASS_BLOWS, "the fall costs more than a blow")
         gs.player.pos = {f32(x0 - 3) + 0.1, f32(G) - PLAYER_H}
         if c.lava do gs.player.pos.x, gs.hero.break_shut = f32(x0 - 4) + 0.1, true
-        go_test_give(gs, .Pickaxe, 1)
+        if c.pick do go_test_give(gs, .Pickaxe, 1)
         v := hero_test_vargr(gs, f32(x0) + c.vx, G, {})
         gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
         gs.player.hp_max, gs.player.hp = 20, 20
@@ -3761,6 +3769,158 @@ hero_flee_into_a_wall_does_not_turn_back_at_a_threat_off_it :: proc(t: ^testing.
     }
     testing.expect(t, fled, "the hero fled")
     testing.expectf(t, min_x > f32(x0) - 0.5, "it never turned back toward the Vargr: got to %.2f", min_x - f32(x0))
+}
+
+// Card 155.  An unarmed hero's goal waits while a hunter comes at it, and
+// resumes when the hunter is gone.  It does not wait for a hero with a sword,
+// for an enemy that is not coming, or for one coming from past
+// HERO_THREAT_FAR (a goal starts under that one).
+@(test)
+hero_goal_waits_while_a_hunter_it_cannot_fight_comes :: proc(t: ^testing.T) {
+    Case :: struct{armed: bool, vx: f32, vel: [2]f32, line: string, waits: bool}
+    for c in ([?]Case{
+        {false, 10, {-1, 0}, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":600}]}`, true},
+        {true,  10, {-1, 0}, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":600}]}`, false},
+        {false, 7,  {},      `{"cmd":"goals","add":[{"do":"act","move":"left","frames":600}]}`,  false},
+        {false, 15, {-1, 0}, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":600}]}`,  false},
+    }) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        if c.armed do go_test_give(gs, .Sword, 1)
+        v := hero_test_vargr(gs, f32(x0) + c.vx, G, c.vel)
+        for _ in 0 ..< 30 do hero_test_tick(link, gs)  // noticed before the goal comes
+        agent_handle_line(link, gs, c.line)
+        for _ in 0 ..< 30 do hero_test_tick(link, gs)
+        waiting := gs.hero.scores[.Work_Goal] == 0
+        testing.expectf(t, waiting == c.waits, "%v: waiting %v (%v)", c, waiting, gs.hero.current)
+        if c.waits do testing.expect(t, gs.hero.current != .Work_Goal && gs.hero.paused_goal != 0, "the goal is paused")
+        if !c.waits do continue
+        despawn_enemy(gs, v)
+        for _ in 0 ..< 30 do hero_test_tick(link, gs)
+        testing.expect_value(t, gs.hero.current, Hero_Behaviour.Work_Goal)
+    }
+}
+
+// Card 155.  Fleeing into a dead end, a drop at its back and a wall ahead too
+// high to jump, a hero with a pick digs through the wall and gets away, the
+// pick taken in hand first; with no pick it is held there, and a hero with a
+// wand to fight with keeps the wand in hand.  A wall the pick cannot take,
+// stone it cannot cut or a structure, is never swung at.
+@(test)
+hero_cornered_with_a_pick_digs_out :: proc(t: ^testing.T) {
+    Case :: struct{pick, wand, out: bool, wall, foot: Tile_Type}  // foot: the wall's lowest tile
+    for c in ([?]Case{
+        {true, false, true, .Stone, .Stone}, {false, false, false, .Stone, .Stone}, {true, true, false, .Stone, .Stone},
+        {true, false, false, .Rune_Stone, .Rune_Stone}, {true, false, false, .Rune_Stone, .Smelter},
+    }) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 12 ..= x0 - 1 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+        for y in G - 4 ..< G - 1 do set_tile(&gs.world, x0 + 1, y, c.wall)
+        set_tile(&gs.world, x0 + 1, G - 1, c.foot)
+        go_test_give(gs, .Stone_Block, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, .Stone_Block)  // the pick not in hand
+        if c.pick do go_test_give(gs, .Pickaxe, 1)
+        if c.wand do go_test_give(gs, .Fire_Wand, 1)
+        hero_test_vargr(gs, f32(x0) - 3, G, {})
+        out, fell, picked, swung := false, false, false, false
+        for _ in 0 ..< 60 * 8 {
+            hero_test_tick(link, gs)
+            out    ||= gs.player.pos.x > f32(x0) + 2
+            fell   ||= hero_feet_row(&gs.player) >= i32(G)
+            picked ||= held_item(&gs.player) == .Pickaxe
+            swung  ||= gs.agent.cmd.has_mine && gs.agent.cmd.mine.x == i32(x0 + 1)
+        }
+        testing.expectf(t, out == c.out, "%v: got out %v", c, out)
+        testing.expectf(t, !fell, "%v: never over the edge", c)
+        if c.wand do testing.expectf(t, !picked, "%v: the wand stays in hand", c)
+        if c.wall == .Rune_Stone do testing.expectf(t, !swung, "%v: the pick never swung at a wall it cannot take", c)
+    }
+}
+
+// Card 155.  Cornered at a drop by a Builder: the fall that costs more than
+// one blow is refused while the flight has cost nothing, and taken once the
+// blows already taken in this flight cost more than it.
+@(test)
+hero_flee_takes_the_fall_once_the_blows_cost_more :: proc(t: ^testing.T) {
+    for mauled in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 12 ..= x0 - 5 do for y in G ..< G + 9 do set_tile(&gs.world, x, y, .Air)
+        _, hurts, _ := hero_dig_fall(&gs.world, {i32(x0 - 6), i32(G - 1)})
+        testing.expect(t, hurts > ATTACK_DAMAGE * HERO_PASS_BLOWS && 2 * hurts < gs.player.hp, "the fall costs more than a blow, and leaves the hero standing after the blows")
+        gs.player.pos = {f32(x0 - 1) + 0.1, f32(G) - PLAYER_H}
+        b := fight_test_body(gs, .Builder, x0 + 3, G)
+        gs.enemies.data[b].hp, gs.enemies.data[b].hp_max = 1000, 1000
+        fell, hit := false, false
+        for _ in 0 ..< 300 {
+            hero_test_tick(link, gs)
+            if mauled && !hit && hero_threat(&gs.hero) != nil do gs.player.hp, hit = gs.player.hp - hurts, true  // as if mauled that much as it turned to run
+            fell ||= hero_feet_row(&gs.player) >= i32(G)
+            if fell do break
+        }
+        testing.expectf(t, fell == mauled, "mauled %v: fell %v", mauled, fell)
+    }
+}
+
+// Card 155.  Fleeing to a gap the jump arc clears, the hero jumps it as a
+// player does and lands on the far side, and from there flees on foot again
+// (a costly drop beyond is not walked off).  A chasm wider than a jump, or a
+// block at head height over the take-off, the gap or the landing, turns it.
+@(test)
+hero_flee_jumps_a_gap :: proc(t: ^testing.T) {
+    Case :: struct{wide, roof: int, over: bool}  // roof: column over which a block sits at head height, 0 none
+    for c in ([?]Case{{2, 0, true}, {6, 0, false}, {2, 3, false}, {2, 5, false}, {2, 6, false}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        for x in x0 + 4 ..< x0 + 4 + c.wide do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+        for x in x0 + 13 ..< x0 + 18 do for y in G ..< G + 9 do set_tile(&gs.world, x, y, .Air)  // beyond, a drop the hero would not take
+        if c.roof != 0 do set_tile(&gs.world, x0 + c.roof, G - 3, .Stone)
+        hero_test_vargr(gs, f32(x0) - 3, G, {})
+        gs.player.hp = 2
+        over, fell := false, false
+        for _ in 0 ..< 60 * 4 {
+            hero_test_tick(link, gs)
+            over ||= gs.player.pos.x > f32(x0 + 4 + c.wide) && hero_feet_row(&gs.player) == i32(G - 1) && gs.player.grounded
+            fell ||= hero_feet_row(&gs.player) >= i32(G)
+        }
+        testing.expectf(t, over == c.over, "%v: over %v", c, over)
+        testing.expectf(t, !fell, "%v: never down a drop", c)
+    }
+}
+
+// Card 155.  A remembered safe spot that lies past the threat is never run to:
+// the hero flees away from it.
+@(test)
+hero_flee_never_runs_back_past_the_threat_to_a_safe_spot :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    hero_test_vargr(gs, f32(x0) - 4, G, {})
+    gs.hero.senses.safe[0], gs.hero.senses.n_safe, gs.hero.senses.safe_next = {i32(x0 - 16), i32(G - 1)}, 1, 1
+    min_x := gs.player.pos.x
+    fled := false
+    for _ in 0 ..< 90 {
+        hero_test_tick(link, gs)
+        fled ||= gs.hero.current == .Flee
+        min_x = min(min_x, gs.player.pos.x)
+    }
+    testing.expect(t, fled, "the hero fled")
+    testing.expectf(t, min_x > f32(x0) - 0.5, "it never ran back toward the Vargr: got to %.2f", min_x - f32(x0))
 }
 
 // A goal walking at a drop with a Vargr on it from behind: the 0.4 s look at
