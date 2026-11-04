@@ -1647,6 +1647,12 @@ the_brief_names_every_goal_kind_and_the_binary_options :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(brief, TOOL_USAGE), "the gnipa options, as --help gives them")
     testing.expect(t, strings.contains(brief, fmt.tprintf("Bare hands mine only %s, at %d times", terrain_table[BARE_HAND_TILE].name, BARE_HAND_MULT)))
     testing.expect(t, !strings.contains(brief, "Bare hands mine, slowly"))
+    // Every behaviour that can pause a goal is named as a pause reason.
+    _, _, reasons := strings.partition(brief, "goal_resumed (id, reason: ")
+    reasons, _, _ = strings.partition(reasons, ")")
+    for row, k in hero_behaviours do if k != .Work_Goal && k != .Idle && row.name != "" {
+        testing.expectf(t, strings.contains(reasons, row.name), "the brief names %s as a pause reason: %q", row.name, reasons)
+    }
     for want in ([]string{
         "You only send goals: the game turns each into the keys and mouse a player would use",
         "an act holds its keys for 1..", "The act fields, for an act goal:", `{"cmd":"act",...}  one act goal`,
@@ -3051,7 +3057,7 @@ agent_brief_tells_the_fight :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     brief := agent_write_brief(link, gs)
-    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "unreachable, unsafe, blocked or full"}) {
+    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), blocked or full"}) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
 }

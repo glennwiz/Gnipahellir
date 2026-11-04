@@ -74,6 +74,7 @@ Hero_Work :: struct {
     by_item:    bool, // a mine by item: an unreachable tile gives way to the next
     skip:       [HERO_WORK_SKIP][2]i32,  // tiles that gave the item but could not be reached
     n_skip:     int,
+    cornered:   bool, // a tile passed over was cornered: the goal fails so if none is left
     golem:      int,         // a crew goal's golem slot
     mode:       Golem_Mode,  // and crew_mode's mode
 }
@@ -88,7 +89,7 @@ Hero_Click :: struct {
     limit:    i32,   // a feed's count, 0 the whole stack
 }
 
-Hero_Mined :: enum u8 { Working, Mined, Failed, Unreachable, Unsafe }
+Hero_Mined :: enum u8 { Working, Mined, Failed, Unreachable, Unsafe, Cornered }
 
 // ─── Reading the goal ───
 
@@ -395,9 +396,10 @@ hero_work_reaches :: proc(reach: Hero_Work_Reach, rng: i32, s, t: [2]i32) -> boo
 // (a buried ore): each tile to dig counts HERO_WORK_DIG_COST tiles of walk.
 // A stand on t itself is refused when digging t would drop the hero further
 // than a free fall (hero_dig_safe); unsafe then gives that drop.
-hero_work_stand :: proc(gs: ^Game_State, t: [2]i32, reach: Hero_Work_Reach, rng: i32) -> (s: [2]i32, ok: bool, unsafe: int) {
+hero_work_stand :: proc(gs: ^Game_State, t: [2]i32, reach: Hero_Work_Reach, rng: i32) -> (s: [2]i32, ok: bool, unsafe: int, cornered: bool) {
     feet := hero_feet(&gs.player)
     dig := reach == .Pick && hero_item_slot(gs, .Pickaxe) >= 0
+    wary := hero_wary(gs)
     r := rng
     best := max(i32)
     for y in t.y - r ..= t.y + r + 1 {
@@ -412,6 +414,10 @@ hero_work_stand :: proc(gs: ^Game_State, t: [2]i32, reach: Hero_Work_Reach, rng:
             }
             if drop, safe := hero_dig_safe(&gs.world, t, c.y, c.x, c.x); !safe {
                 unsafe = drop
+                continue
+            }
+            if wary && !hero_way_out_cheap(&gs.world, c) {
+                cornered = true  // no work where a hunter corners it
                 continue
             }
             if d := abs(x - feet.x) + abs(y - feet.y) + HERO_WORK_DIG_COST * i32(dug); d < best do best, s, ok = d, c, true
@@ -485,9 +491,13 @@ hero_work_mine :: proc(gs: ^Game_State, g: ^Agent_Goal) -> Hero_Mined {
     if !p.grounded || !hero_work_reaches(reach, rng, hero_feet(p), t) || !safe {
         s := g.to
         if !w.walking {
-            found: bool
+            found, cornered: bool
             unsafe: int
-            s, found, unsafe = hero_work_stand(gs, t, reach, rng)
+            s, found, unsafe, cornered = hero_work_stand(gs, t, reach, rng)
+            if !found && cornered {
+                hero_work_fail(g, fmt.tprintf("cornered: every stand in reach of [%d,%d] has no cheap way out, and the hero is wary", t.x, t.y))
+                return .Cornered
+            }
             if !found && unsafe > 0 {
                 hero_work_fail(g, fmt.tprintf("unsafe: [%d,%d] is the only floor in reach of it, over a %d-tile drop", t.x, t.y, unsafe))
                 return .Unsafe
@@ -523,13 +533,14 @@ hero_mine_goal_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         if w.n_skip > 0 {
             // The last one could not be reached: the next nearest.
             t, ok := hero_work_nearest(gs, w.near if w.has_near else hero_feet(&gs.player), w, hero_work_gives)
+            if !ok && w.cornered do return hero_work_fail(g, fmt.tprintf("cornered: every %v in reach has no stand with a cheap way out, and the hero is wary", w.item))
             if !ok do return hero_work_fail(g, fmt.tprintf("unreachable: no %v in %d tiles that can be reached, %d tried", w.item, HERO_WORK_SEARCH_X, w.n_skip))
             w.at = t
         }
         hero_work_target(gs, g, w.at, false)
     }
     r := hero_work_mine(gs, g)
-    if (r == .Unreachable || r == .Unsafe) && w.by_item do hero_work_skip(g)
+    if (r == .Unreachable || r == .Unsafe || r == .Cornered) && w.by_item do hero_work_skip(g, r == .Cornered)
     return r == .Mined
 }
 
@@ -537,9 +548,10 @@ hero_mine_goal_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
 // HERO_WORK_SKIP of them: the goal looks again.  Past that it fails, as it
 // stands.
 @(private="file")
-hero_work_skip :: proc(g: ^Agent_Goal) {
+hero_work_skip :: proc(g: ^Agent_Goal, cornered: bool) {
     w := &g.work
     if w.n_skip >= HERO_WORK_SKIP do return
+    w.cornered ||= cornered
     w.skip[w.n_skip] = w.target
     w.n_skip += 1
     w.has_target = false
@@ -558,14 +570,16 @@ hero_gather_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
             hero_work_target(gs, g, t, true)
         } else if t, ok := hero_work_nearest(gs, feet, w, hero_work_gives); ok {
             hero_work_target(gs, g, t, false)
+        } else if w.cornered {
+            return hero_work_fail(g, fmt.tprintf("cornered: every %v in reach has no stand with a cheap way out, and the hero is wary", w.item))
         } else {
             return hero_work_fail(g, fmt.tprintf("no_item: no more %v in %d tiles", w.item, HERO_WORK_SEARCH_X))
         }
     }
     if !w.pile {
-        #partial switch hero_work_mine(gs, g) {
+        #partial switch r := hero_work_mine(gs, g); r {
         case .Mined:       w.has_target = false
-        case .Unreachable, .Unsafe: hero_work_skip(g)
+        case .Unreachable, .Unsafe, .Cornered: hero_work_skip(g, r == .Cornered)
         }
         return false
     }
@@ -616,8 +630,9 @@ hero_place_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         }
         s := g.to
         if !w.walking {
-            found: bool
-            s, found, _ = hero_work_stand(gs, at, .Place, HERO_PLACE_STAND)
+            found, cornered: bool
+            s, found, _, cornered = hero_work_stand(gs, at, .Place, HERO_PLACE_STAND)
+            if !found && cornered do return hero_work_fail(g, fmt.tprintf("cornered: every stand near [%d,%d] has no cheap way out, and the hero is wary", at.x, at.y))
             if !found do return hero_work_fail(g, fmt.tprintf("unreachable: no ground near [%d,%d]", at.x, at.y))
         }
         hero_work_walk(gs, g, s)
@@ -673,8 +688,9 @@ hero_window_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         if !hand && (!p.grounded || chebyshev(m, player_tile(p)) > reach) {
             s := g.to
             if !w.walking {
-                found: bool
-                s, found, _ = hero_work_stand(gs, m, .Bench, reach)
+                found, cornered: bool
+                s, found, _, cornered = hero_work_stand(gs, m, .Bench, reach)
+                if !found && cornered do return hero_work_fail(g, fmt.tprintf("cornered: every stand in reach of [%d,%d] has no cheap way out, and the hero is wary", m.x, m.y))
                 if !found do return hero_work_fail(g, fmt.tprintf("unreachable: no ground in reach of [%d,%d]", m.x, m.y))
             }
             hero_work_walk(gs, g, s)
