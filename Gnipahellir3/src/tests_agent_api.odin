@@ -232,6 +232,32 @@ agent_dismiss_walks_past_each_screen_in_turn :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(agent_test_reply(link), `"screen":"play"`))
 }
 
+// Card 165: state carries the game's objective line.
+@(test)
+agent_state_carries_the_objective :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    buf: [128]u8
+    want := current_objective(gs, buf[:127])
+    testing.expect(t, len(want) > 0, "a fresh run has an objective")
+    agent_handle_line(link, gs, `{"cmd":"state"}`)
+    testing.expectf(t, strings.contains(agent_test_reply(link), fmt.tprintf(`"objective":%s,`, agent_quote(want))), "state: %s", agent_test_reply(link))
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "state's objective is the game's objective line"), "the brief tells it")
+
+    // One of the card's longest lines goes through whole, in state and in the
+    // brief: tier B's ritual, no altar in the sky yet.
+    gs.progression.sky_altar_pos = {10, SURFACE_Y - 1}
+    set_tile(&gs.world, 10, SURFACE_Y - 1, .Sky_Altar)
+    gs.progression.sky_structure_complete[0] = true
+    gs.progression.rune_scroll_found = {true, true, false}
+    long := fmt.tprintf("Sky ritual: 12 Cloud Stone + 6 Silver Bar - build a Silver-Gold Altar in the Low Sky, [%v] at it", gs.bindings[.Interact])
+    testing.expect(t, len(long) > 90, "the line is one of the long ones")
+    agent_handle_line(link, gs, `{"cmd":"state"}`)
+    testing.expectf(t, strings.contains(agent_test_reply(link), fmt.tprintf(`"objective":"%s",`, long)), "state: %s", agent_test_reply(link))
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), fmt.tprintf("the game's objective line: %s\n", long)), "the brief carries it whole")
+}
+
 @(test)
 agent_death_screen_gives_no_orders :: proc(t: ^testing.T) {
     gs, link := agent_test_world()

@@ -607,6 +607,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "\nCOMMANDS\n")
     fmt.sbprintf(w, "{{\"cmd\":\"state\",\"x\":0,\"y\":0,\"w\":%d,\"h\":%d}}  all optional: the default view is %dx%d round you, and the whole level is yours to read\n",
         GRID_W, GRID_H, AGENT_VIEW_W, AGENT_VIEW_H)
+    fmt.sbprintf(w, "  state's objective is the game's objective line: the next step of the loop, with a compass hint (above, below, east, west), never a tile\n")
     fmt.sbprintf(w, "{{\"cmd\":\"goals\",\"add\":[{{\"do\":\"go\",\"to\":[90,60]}},{{\"do\":\"act\",\"move\":\"right\",\"frames\":30}},...]}}  queues goals, played in order while the game runs; answers their ids\n")
     fmt.sbprintf(w, "  You only send goals: the game turns each into the keys and mouse a player would use, so a goal can do nothing a player cannot.\n")
     fmt.sbprintf(w, "  The queue holds %d; a full one answers ok:false. {{\"cmd\":\"goals\",\"cancel\":id}} or \"clear\":true drops goals, which then end failed\n", AGENT_GOALS_MAX)
@@ -1773,6 +1774,8 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
         p.pos.x, p.pos.y, p.vel.x, p.vel.y, p.hp, p.hp_max, p.mana, p.grounded, p.facing, p.dead)
 
     fmt.sbprintf(&b, `"place_reach":%d,"fall_warning":%.2f,`, PLAYER_REACH, fall_warning(p))
+    objective: [128]u8
+    fmt.sbprintf(&b, `"objective":%s,`, agent_quote(current_objective(gs, objective[:127])))
     agent_write_death(&b, gs)
     agent_write_wave(&b, gs)
     if gs.agent.place_refused do strings.write_string(&b, `"refused":"place",`)
