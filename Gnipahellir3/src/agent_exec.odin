@@ -48,6 +48,7 @@ Agent_Goal :: struct {
     replanned:   bool,    // stuck long enough to plan again, once
     left:        int,     // tiles the step being dug still has
     no_dig:      bool,    // its walks never dig (a fight's)
+    no_blocks:   bool,    // its walks set no block down (a fight at a flyer's)
     work:        Hero_Work,  // a work goal's plan and progress (agent_work.odin)
     fight:       Hero_Fight,  // a fight goal's target (agent_fight.odin)
     len:         int,
@@ -1433,16 +1434,25 @@ hero_nav_h :: proc(a, b: [2]i32) -> f32 {
 
 // A path from feet tile from toward to, into out: to itself when the search
 // reaches it, else the tile nearest it the search found.  An empty path: no
-// tile nearer than from.
-hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := true) -> (reached: bool) {
-    return hero_plan_once(gs, from, to, out, dig, hurt_ok = false) || hero_plan_once(gs, from, to, out, dig, hurt_ok = true)
+// tile nearer than from.  Only a path that reaches sets blocks down: the
+// nearest tile is planned without them, so no block is spent on a way that
+// may end short (card 181: playtest 135's goes bridged 11 to 37 blocks, then
+// failed no_route).
+hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := true, blocks := true) -> (reached: bool) {
+    if hero_plan_once(gs, from, to, out, dig, false, blocks) || hero_plan_once(gs, from, to, out, dig, true, blocks) do return true
+    if blocks do hero_plan_once(gs, from, to, out, dig, true, false)
+    return false
 }
 
 @(private="file")
-hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool) -> (reached: bool) {
+hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool, blocks_ok := true) -> (reached: bool) {
     n := &gs.hero.nav
     w := &gs.world
-    o := [2]i32{clamp(from.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(from.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
+    // The window round from, or round the middle of the way when to fits in
+    // it too, so a leg the window spans is searched whole.
+    c := from
+    if abs(to.x - from.x) < HERO_NAV_W - 1 && abs(to.y - from.y) < HERO_NAV_H - 1 do c = (from + to) / 2
+    o := [2]i32{clamp(c.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(c.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
     n.seen   = {}
     n.closed = {}
     out.n, out.at = 0, 0
@@ -1450,6 +1460,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     if s < 0 do return false
     has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
     _, blocks := hero_bridge_blocks(gs)
+    if !blocks_ok do blocks = 0
     n.n_danger = hero_dangers(&gs.hero.senses, &n.danger)
 
     size, work := 0, 0
@@ -1788,7 +1799,7 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     }
     if stale {
         if !p.grounded && !wet do return false  // plan from the ground, or the water
-        hero_plan(gs, feet, g.to, path, dig = !g.no_dig)
+        hero_plan(gs, feet, g.to, path, dig = !g.no_dig, blocks = !g.no_blocks)
         path.goal = g.id
         if path.n == 0 {
             g.status = .Failed

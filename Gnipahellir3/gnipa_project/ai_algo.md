@@ -326,7 +326,8 @@ HERO_WARY_S       = 8 s
 `{"do":"go","to":[x,y]}` and `{"do":"home"}` (the tile `{"cmd":"home","at":[x,y]}`
 marked on this level, else the surface spawn) are goal kinds whose tick is
 `hero_go_tick`. The path comes from `hero_plan`, an A* over feet tiles in a
-`HERO_NAV_W` x `HERO_NAV_H` window round the hero, at most `HERO_NAV_BUDGET`
+`HERO_NAV_W` x `HERO_NAV_H` window round the hero (round the middle of the
+leg when the goal tile fits in it too, card 181), at most `HERO_NAV_BUDGET`
 nodes, its scratch (`Hero_Nav`) sized once in `gs.hero`. A tile is stood in
 when it and the one above are open (not solid, not burning, not water) and
 the one below is solid. Moves and their price:
@@ -350,7 +351,12 @@ holds the plan to 4, since a shorter look back plans onto cuts 3 and 4 steps
 back (card 159, playtest 127: a stair up cut the floor of
 its own turn back, every plan again the same, and the craft walked west 1500
 frames). The search ends at the goal tile, or keeps the tile nearest it; an
-empty path is `no_route`. A path longer than `HERO_PATH_MAX` keeps its start and is
+empty path is `no_route`. Only a path that reaches sets a block down: the
+nearest tile is planned again with none (card 181: playtest 135's goes bridged
+11 to 37 blocks toward a goal past the window, then failed no_route), so a far
+goal walks what it can, a rainbow's deck included, and fails short with the
+bag whole. A fight at a flyer or a swimmer (`gravity` 0) sets no block at all
+(`no_blocks`): a stand by it moves on as it does. A path longer than `HERO_PATH_MAX` keeps its start and is
 planned again from its end. The executor writes only `gs.agent.cmd`: it walks
 toward each step's tile, jumps at a two-high wall or a gap's edge, selects the
 pick (with none, puts a sword or wand away and cuts wood by hand) and mines a

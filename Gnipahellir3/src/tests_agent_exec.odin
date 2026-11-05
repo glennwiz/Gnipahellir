@@ -7861,3 +7861,247 @@ hero_senses_keep_the_dens_in_view :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.hero.senses.n_dens, HERO_DENS_MAX)
     for d in gs.hero.senses.dens[:gs.hero.senses.n_dens] do testing.expectf(t, d.x != i32(x0 + AGENT_VIEW_W), "the den out of view kept, slot %d", far)
 }
+
+// ─── Card 181: playtest 135's bridge and sky snags (run 20261104-135313,
+// one life on seed 4109, replayed on its code 2323705 and each goal's world
+// saved at its frame, then run on this code) ───
+
+// A map of the run's terrain set down where it lay, everything round and
+// under it cleared, so a gap is open sky.  '#' Cloud, 'C' Cloud_Ore,
+// 'R' Rainbow_Bridge, 'S' Stone, 'D' Dirt, 'N' Nest, '~' Water.
+@(private="file")
+run_test_map :: proc(gs: ^Game_State, rows: []string, x0, y0: int) {
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    for x in x0 - 10 ..= x0 + len(rows[0]) + 10 do for y in y0 - 14 ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+    for row, j in rows {
+        for ch, i in row {
+            t := Tile_Type.Air
+            switch ch {
+            case '#': t = .Cloud
+            case 'C': t = .Cloud_Ore
+            case 'R': t = .Rainbow_Bridge
+            case 'S': t = .Stone
+            case 'D': t = .Dirt
+            case 'N': t = .Nest
+            case '~': t = .Water
+            }
+            set_tile(&gs.world, x0 + i, y0 + j, t)
+        }
+    }
+    gs.player.inventory = {}
+    gs.player.vel = {}
+}
+
+// Goals 31 and 202 (f19039, f26157): go to (31,63), the rainbow's foot,
+// 60 columns off across open sky.  No plan reached it (the window ends
+// short); the tile nearest it lay over a gap, so the go bridged 11 and 10
+// blocks toward it, and failed no_route.  A way that does not reach sets no
+// block down: here a target sealed in stone (no pickaxe), across a pit.
+@(test)
+hero_go_lays_no_block_for_a_way_that_ends_short :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 11 do for y in G ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+    for y in G - 3 ..< G do for x in ([2]int{x0 + 13, x0 + 15}) do set_tile(&gs.world, x, y, .Stone)
+    set_tile(&gs.world, x0 + 14, G - 3, .Stone)
+    gs.player.inventory = {}
+    go_test_give(gs, .Stone_Block, 10)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 14, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 1200 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && reason == "no_route", "%s %s in %d frames", status, reason, frames)
+    testing.expectf(t, inventory_count(&gs.player.inventory, .Stone_Block) == 10, "%d blocks left of 10", inventory_count(&gs.player.inventory, .Stone_Block))
+}
+
+// Goal 262 (f34773): go 48 columns along, over a gap near the start.  The
+// window round the hero did not hold the target, so no plan reached it; the
+// window now sits round the middle of a leg it spans, and the go bridges
+// the gap and arrives.
+@(test)
+hero_go_plans_a_leg_the_window_spans_whole :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 23 ..= x0 + 55 do for y in G - 10 ..< GRID_H do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+    for x in x0 + 10 ..= x0 + 16 do for y in G ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+    gs.player.inventory = {}
+    go_test_give(gs, .Stone_Block, 20)
+    exec_test_frames(link, gs, 5)
+    to := [2]i32{i32(x0 + 48), i32(G - 1)}
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, to.x, to.y))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 2400 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
+}
+
+// Goal 503 (f67556): go from the rainbow's east foot to (18,69), 156
+// columns off.  The plan never reaches a goal past the window; the hero
+// walks to the tile nearest it, plans again from there, and so on to the
+// end (the replay now walks the whole rainbow, no block spent).  Along
+// flat ground, and down a stair 60 rows deep: the window stays round the
+// hero while the goal lies outside it.
+@(test)
+hero_go_walks_on_toward_a_goal_past_the_window :: proc(t: ^testing.T) {
+    for way in ([2]string{"along", "down"}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        hero_test_arena(gs)
+        for x in 16 ..= 180 do for y in 8 ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+        to: [2]i32
+        if way == "along" {
+            for x in 20 ..= 175 do set_tile(&gs.world, x, 54, .Stone)
+            gs.player.pos = {88.1, 54 - PLAYER_H}
+            to = {170, 53}
+        } else {
+            for k in 0 ..= 60 do set_tile(&gs.world, 30 + k, 25 + k, .Stone)
+            gs.player.pos = {30.1, 25 - PLAYER_H}
+            to = {90, 84}
+        }
+        gs.player.inventory = {}
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, to.x, to.y))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        frames := 0
+        for ; frames < 3600 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "%s: %s %s in %d frames", way, status, reason, frames)
+    }
+}
+
+// Goal 203 (f26821): go to (44,63), over the 11 gap left of the island the
+// hero stood on, failed no_route at once with 58 blocks.  The gap's near
+// edge lay under the upper island (a cloud at (53,62) over the stand), so
+// no bridge could start there, and the way round, up the island's far end,
+// is two rows a jump does not climb.  Card 163's pillar is that way.
+RUN_TEST_OVERHANG :: [?]string{
+    "...........................",  // 56
+    "...........................",
+    "...........................",
+    "...............NNN.........",
+    "..........#############....",  // 60
+    "...........###########.....",
+    ".............#.............",
+    "...........................",
+    "###...........############.",  // 64
+    "##.............##########..",
+    ".................##..##....",
+}
+
+@(test)
+hero_go_out_from_under_the_overhang_and_over_the_gap :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    rows := RUN_TEST_OVERHANG
+    run_test_map(gs, rows[:], 40, 56)
+    gs.player.pos = {54.467, 62.199}
+    go_test_give(gs, .Stone_Block, 58)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"go","to":[44,63]}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 2400 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
+}
+
+// Goal 303 (f40540): go to (131,47) over a sky pond five wide, under the
+// rainbow, failed no_route; card 174's swim crosses it.
+RUN_TEST_SKY_POND :: [?]string{
+    "......RRR................",  // 38
+    ".........RRR.............",
+    "#####.......RR...........",  // 40
+    "####..........RR.........",
+    "##..............RR.......",
+    "..................RR.....",
+    "....................RR...",
+    "......................RR.",
+    "........................R",
+    ".........................",
+    "....D##D#~~~~~####.......",  // 48
+    "....D.#D#~~~~~###........",
+    ".......D.######..........",  // 50
+    ".......D.................",
+    "SSSDDDDD#####CCC###......",
+}
+
+@(test)
+hero_go_crosses_the_sky_pond :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    rows := RUN_TEST_SKY_POND
+    run_test_map(gs, rows[:], 114, 38)
+    gs.player.pos = {121.0, 46.199}
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"go","to":[131,47]}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 1200 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
+}
+
+// Goal 645 (f86587, AL 8611-8654): a fight at a Rock_Harpy bridged 15 Stone
+// off the deck toward a stand by it.  A flyer never stands, so a fight at
+// one sets no block down: here the only stand under it is a lone tile out
+// over the gap, and the fight ends without a block spent.
+@(test)
+hero_fight_sets_no_block_after_a_flyer :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 22 do for y in G ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, x0 + 13, G, .Stone)  // the lone stand, seven blocks out
+    gs.player.inventory = {}
+    go_test_give(gs, .Sword, 1)
+    go_test_give(gs, .Stone_Block, 20)
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    gs.enemies.data[id] = Enemy{kind = .Rock_Harpy, hp = ROCK_HARPY_HP, hp_max = ROCK_HARPY_HP, pos = {f32(x0) + 13.1, f32(G) - 3}}
+    hero_test_tick(link, gs)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"fight","slot":%d}}]}}`, id))
+    gid := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 1800 && agent_goals_busy(&link.goals); frames += 1 do hero_test_tick(link, gs)
+    status, reason := go_test_status(link, gs, gid)
+    testing.expectf(t, status == "failed", "%s %s in %d frames", status, reason, frames)
+    testing.expectf(t, inventory_count(&gs.player.inventory, .Stone_Block) == 20, "%d blocks left of 20", inventory_count(&gs.player.inventory, .Stone_Block))
+}
+
+// Review of card 181: the rule is a flyer's.  A Builder on the same lone
+// tile stands, so the fight bridges out to it and fells it.
+@(test)
+hero_fight_bridges_to_a_target_that_stands :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 22 do for y in G ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, x0 + 13, G, .Stone)  // the lone stand, seven blocks out
+    gs.player.inventory = {}
+    go_test_give(gs, .Sword, 1)
+    go_test_give(gs, .Stone_Block, 20)
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    gs.enemies.data[id] = Enemy{kind = .Builder, hp = BUILDER_HP, hp_max = BUILDER_HP, pos = {f32(x0) + 13.1, f32(G) - BUILDER_H}, facing = -1}
+    hero_test_tick(link, gs)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"fight","slot":%d}}]}}`, id))
+    gid := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    frames := 0
+    for ; frames < 1800 && agent_goals_busy(&link.goals); frames += 1 do hero_test_tick(link, gs)
+    status, reason := go_test_status(link, gs, gid)
+    testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
+    testing.expectf(t, inventory_count(&gs.player.inventory, .Stone_Block) < 20, "no block set down")
+}
