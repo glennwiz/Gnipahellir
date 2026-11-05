@@ -13981,10 +13981,24 @@ a_test_rolls_the_same_loot_every_run :: proc(t: ^testing.T) {
 
 @(test)
 the_agent_harness_plays_the_typed_seed :: proc(t: ^testing.T) {
-    // GNIPA_SEED is how a GNIPA_AGENT_PORT run is given its seed.
-    os.set_env("GNIPA_SEED", "12345")
-    defer os.unset_env("GNIPA_SEED")
-    testing.expect_value(t, new_game_world_seed(), u32(12345))
+    // GNIPA_SEED is how a GNIPA_AGENT_PORT run is given its seed.  The test hands
+    // the env's text in: setting the env would reach every test thread (card 182).
+    Typed :: struct { text: string, seed: u32, ok: bool }
+    for c in ([]Typed{{"12345", 12345, true}, {"0", 0, true}, {"4294967295", 4294967295, true}, {"", 0, false}, {"no number", 0, false}, {"12x", 0, false}}) {
+        seed, ok := seed_from_env_text(c.text)
+        testing.expectf(t, ok == c.ok && (!ok || seed == c.seed), "%q: %d %v", c.text, seed, ok)
+    }
+    // The read itself, with the env unset in a test, is pinned in the source:
+    // the harness's variable by name, its text through that parse, the seed taken.
+    testing.expect_value(t, SEED_ENV, "GNIPA_SEED")
+    src, err := os.read_entire_file_from_path(#directory + "/game_state.odin", context.temp_allocator)
+    testing.expect(t, err == nil, "game_state.odin is read")
+    at := strings.index(string(src), "new_game_world_seed :: proc() -> u32 {")
+    body := string(src)[at:][:strings.index(string(src)[at:], "\n}")] if at >= 0 else ""
+    testing.expect(t, strings.contains(body, "\n    if seed, ok := seed_from_env_text(os.get_env(SEED_ENV, context.temp_allocator)); ok do return seed\n"), "new_game_world_seed takes the seed GNIPA_SEED names")
+    // And under a set GNIPA_SEED (as the card's evidence runs this test), the env's seed.
+    if want, ok := seed_from_env_text(os.get_env(SEED_ENV, context.temp_allocator)); ok do testing.expect_value(t, new_game_world_seed(), want)
+    else do testing.expect_value(t, new_game_world_seed(), TEST_WORLD_SEED)
 }
 
 @(test)
@@ -18158,8 +18172,11 @@ test_scratch_path :: proc(name: string) -> string {
 // the pid is allowed only on the line that takes it with an exclusive create
 // (.Excl), so runs sharing the folder take turns at it, and in the os.remove
 // that gives it back.  A name bound to a fixed literal is followed through its
-// proc too (card 180): handed to such a call, joined with + "/", or filling a
-// "%s/" path, it is a fixed folder even with no file kind.
+// proc too (card 180): on a line that calls one of those, or a game proc that
+// writes where it is told, or that joins a path with + "/" or "%s/", it is a
+// fixed folder even with no file kind; a name bound from it in any way (an
+// alias, a format, a concatenate) is followed too (card 182).  And no test
+// changes what every test thread shares: the env or the working folder.
 @(test)
 no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
     defer free_all(context.temp_allocator)
@@ -18171,9 +18188,17 @@ no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
         data, read_err := os.read_entire_file_from_path(fi.fullpath, context.temp_allocator)
         testing.expect(t, read_err == nil, fi.name)
         checked += 1
-        for found in fixed_name_findings(fi.name, string(data)) do testing.expect(t, false, found)
+        for found in test_source_findings(fi.name, string(data)) do testing.expect(t, false, found)
     }
     testing.expectf(t, checked >= 8, "only %d test sources found beside this one", checked)
+}
+
+// Everything both guards find in one test source, in the temp allocator.
+test_source_findings :: proc(file, data: string) -> []string {
+    out := make([dynamic]string, context.temp_allocator)
+    append(&out, ..fixed_name_findings(file, data))
+    append(&out, ..shared_state_findings(file, data))
+    return out[:]
 }
 
 // What the guard finds in one test source: a line for each fixed name it
@@ -18181,6 +18206,7 @@ no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
 fixed_name_findings :: proc(file, data: string) -> []string {
     KINDS :: [?]string{".jsonl", ".log", ".sav", ".txt", ".json", ".csv", ".dat", ".tmp", ".bak", ".unread"}
     MAKERS :: [?]string{"make_directory(", "make_directory_all(", "remove_all(", "os.open(", "write_entire_file(", "os.remove("}
+    WRITERS :: [?]string{"agent_sandbox_make(", "save_game_to(", "save_stats_to(", "save_pixel_art_to(", "tool_make_save(", "tool_run_load(", "agent_run_reset(", "tools_test_say("}  // game procs that write where they are told
     GAME_PATHS :: [?]string{"SAVE_FILE", "STATS_FILE", "SETTINGS_FILE", "ACTION_LOG_PATH", "PIXEL_ART_FILE", "AGENT_RUNS_DIR", "TOOL_RUNS_DIR", "TOOL_START_SAVE", "AGENT_ACTS_FILE", "AGENT_FIGHT_FILE"}
     NEVER_WRITTEN :: [?]string{
         "tools_test_no_such_folder/x.sav",    // --make-save into a missing folder: refused
@@ -18192,44 +18218,38 @@ fixed_name_findings :: proc(file, data: string) -> []string {
     {
         lines := strings.split_lines(data, context.temp_allocator)
         taken := make([dynamic]string, context.temp_allocator)  // names this file takes by exclusive create
-        for line in lines do if strings.contains(line, ".Excl") {
-            q := strings.index_byte(line, '"')
-            e := strings.index_byte(line[q + 1:], '"') if q >= 0 else -1
-            if e >= 0 do append(&taken, line[q + 1:][:e])
+        for line in lines {
+            _, bare, lits := line_scan(line)
+            if strings.contains(bare, ".Excl") && len(lits) > 0 do append(&taken, lits[0].text)
         }
         fixed := make(map[string]string, allocator = context.temp_allocator)  // names this proc binds to a fixed literal
         for line, n in lines {
             if strings.contains(line, ":: proc(") do clear(&fixed)
             if strings.contains(line, "test_scratch_path(") || strings.contains(line, "tools_test_run(") do continue
-            code := line[:strings.index(line, "//")] if strings.contains(line, "//") else line
-            derived: [dynamic]string  // a name made from a fixed one is fixed too
-            derived.allocator = context.temp_allocator
+            code, bare, lits := line_scan(line)
+            calls := false  // a line that makes or joins a path
+            for l in lits do calls ||= strings.has_prefix(l.text, "%s/")
+            for m in MAKERS do calls ||= strings.contains(bare, m)
+            for w in WRITERS do calls ||= strings.contains(bare, w)
+            names, rhs := bind_split(code)
+            derived := ""  // a name bound from a fixed one is fixed too
             for name, lit in fixed {
-                formatted := strings.contains(code, fmt.tprintf(", %s)", name)) || strings.contains(code, fmt.tprintf(", %s,", name))
-                used := strings.contains(code, fmt.tprintf("%s + \"/", name)) || (formatted && strings.contains(code, "\"%s/"))
-                for m in MAKERS do for end in ([]string{")", ",", " +"}) do used ||= strings.contains(code, fmt.tprintf("%s%s%s", m, name, end))
+                if !has_word(bare, name) do continue
                 allowed := false
                 for w in NEVER_WRITTEN do allowed ||= lit == w
-                if used && !allowed do append(&out, fmt.tprintf("%s:%d makes a path from %s, bound to the fixed name %q: put it through test_scratch_path", file, n + 1, name, lit))
-                if formatted || strings.contains(code, fmt.tprintf("%s +", name)) do append(&derived, lit)
+                if (calls || strings.contains(code, fmt.tprintf("%s + \"/", name))) && !allowed {
+                    append(&out, fmt.tprintf("%s:%d makes a path from %s, bound to the fixed name %q: put it through test_scratch_path", file, n + 1, name, lit))
+                }
+                if has_word(rhs, name) do derived = lit
             }
-            fixed_bind(code, &fixed, derived[0] if len(derived) > 0 else "")
-            if !strings.contains(code, "%s/") && !strings.contains(code, "expect") && !strings.contains(code, "GAME_PATHS ::") {
-                for g in GAME_PATHS {
-                    at := strings.index(code, g)
-                    whole := at >= 0 && (at == 0 || !is_ident_byte(code[at - 1])) && (at + len(g) == len(code) || !is_ident_byte(code[at + len(g)]))
-                    if whole do append(&out, fmt.tprintf("%s:%d uses the game's own path %s in the folder the tests run in: join it to a scratch folder", file, n + 1, g))
+            fixed_bind(names, rhs, &fixed, derived)
+            if !strings.contains(code, "%s/") && !strings.contains(bare, "expect") {
+                for g in GAME_PATHS do if has_word(bare, g) {
+                    append(&out, fmt.tprintf("%s:%d uses the game's own path %s in the folder the tests run in: join it to a scratch folder", file, n + 1, g))
                 }
             }
-            // Each "..." on the line, up to a // outside one.
-            for i := 0; i < len(line); i += 1 {
-                if line[i] == '/' && i + 1 < len(line) && line[i + 1] == '/' do break
-                if line[i] != '"' do continue
-                j := i + 1
-                for j < len(line) && line[j] != '"' do j += 1 + int(line[j] == '\\')
-                if j >= len(line) do break
-                lit, before := line[i + 1:j], line[:i]
-                i = j
+            for l in lits {
+                lit, before := l.text, l.before
                 if lit == "" || strings.contains_any(lit, " %\\") do continue
                 handed := false
                 for m in MAKERS do handed ||= strings.has_suffix(before, m)
@@ -18239,7 +18259,7 @@ fixed_name_findings :: proc(file, data: string) -> []string {
                 if !named do continue
                 allowed := false
                 for w in NEVER_WRITTEN do allowed ||= lit == w
-                for w in taken do allowed ||= lit == w && (strings.contains(line, ".Excl") || strings.has_suffix(before, "os.remove("))  // the take, and its release
+                for w in taken do allowed ||= lit == w && (strings.contains(bare, ".Excl") || strings.has_suffix(before, "os.remove("))  // the take, and its release
                 if !allowed do append(&out, fmt.tprintf("%s:%d writes %q under a fixed name: put it through test_scratch_path", file, n + 1, lit))
             }
         }
@@ -18247,10 +18267,56 @@ fixed_name_findings :: proc(file, data: string) -> []string {
     return out[:]
 }
 
+// Card 182 pass 3: has_word and is_ident_byte on both sides of each edge: a
+// name at either end of the text, a part name before a whole one, and each
+// byte range's first and last member beside the bytes just outside it.
+@(test)
+has_word_reads_whole_names :: proc(t: ^testing.T) {
+    Word :: struct { s: string, found: bool }
+    for c in ([]Word{{"dir", true}, {"x dir", true}, {"dir x", true}, {"dirs dir", true}, {"", false}, {"di", false}, {"adir", false}, {"dira", false}, {"_dir_", false}, {"(dir)", true}}) {
+        testing.expectf(t, has_word(c.s, "dir") == c.found, "%q", c.s)
+    }
+    for b in "_azAZ09" do testing.expectf(t, is_ident_byte(u8(b)), "%c names", b)
+    for b in "`{@[/: .(\t" do testing.expectf(t, !is_ident_byte(u8(b)), "%c does not", b)
+}
+
+// Card 182: line_scan, the one reader under both guards, on each kind of
+// thing a line holds: a comment, a "..." string with an escape and a // in it,
+// a raw string with a backslash, a rune (quote and escaped quote), a string
+// left open.
+@(test)
+line_scan_reads_strings_runes_and_comments :: proc(t: ^testing.T) {
+    defer free_all(context.temp_allocator)
+    Case :: struct { line, code, bare, lits, before: string }
+    cases := [?]Case{
+        {"a := 1 // b", "a := 1 ", "a := 1 ", "", ""},
+        {"x := \"a//b\" // c", "x := \"a//b\" ", "x := \"\" ", "a//b", "x := "},
+        {"x := `C:\\` + y", "x := `C:\\` + y", "x := `` + y", "C:\\", "x := "},
+        {"if c == '\"' do f(\"z\")", "if c == '\"' do f(\"z\")", "if c == '' do f(\"\")", "z", "if c == '' do f("},
+        {"c := '\\''; f(\"z\")", "c := '\\''; f(\"z\")", "c := ''; f(\"\")", "z", "c := ''; f("},
+        {"s := \"say \\\"hi\\\"\" + t", "s := \"say \\\"hi\\\"\" + t", "s := \"\" + t", "say \\\"hi\\\"", "s := "},
+        {"x := \"open", "x := \"open", "x := \"\"", "", ""},
+        {"x := a/b", "x := a/b", "x := a/b", "", ""},    // one slash is no comment
+        {"x := a/", "x := a/", "x := a/", "", ""},        // nor one at the end
+        {"f(\"a\", \"b\")", "f(\"a\", \"b\")", "f(\"\", \"\")", "a|b", "f("},  // each string read once
+    }
+    for c, i in cases {
+        code, bare, lits := line_scan(c.line)
+        testing.expectf(t, code == c.code, "case %d code: %q", i, code)
+        testing.expectf(t, bare == c.bare, "case %d bare: %q", i, bare)
+        texts := make([dynamic]string, context.temp_allocator)
+        for l in lits do append(&texts, l.text)
+        testing.expectf(t, strings.join(texts[:], "|", context.temp_allocator) == c.lits, "case %d lits: %v", i, texts)
+        if len(lits) > 0 do testing.expectf(t, lits[0].before == c.before, "case %d before: %q", i, lits[0].before)
+    }
+}
+
 // Card 180: the guard's rules, each on a source that breaks only it.  A name
 // bound to a fixed literal is followed through its proc into a call that makes
 // a path, a "%s/" join, a + "/" join, or a name made from it; a scratch name,
-// one no test writes, or the same name in another proc is let be.
+// one no test writes, or the same name in another proc is let be.  Card 182
+// adds the game's own writers, typed binds, aliases and concatenates, and the
+// env and working-folder calls no test may make.
 @(test)
 the_fixed_name_guard_follows_a_name_through_its_proc :: proc(t: ^testing.T) {
     defer free_all(context.temp_allocator)
@@ -18266,11 +18332,119 @@ the_fixed_name_guard_follows_a_name_through_its_proc :: proc(t: ^testing.T) {
         {"a :: proc() {\n\tname := \"fixed\"\n}\nb :: proc(name: string) {\n\tos.make_directory(name)\n}", 0},
         {"d :: proc() {\n\tname := \"look about\"\n\tos.make_directory(name)\n}", 0},  // not a path: it has a space
         {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tp := fmt.aprintf(\"%s/%d.sav\", dir, 3)\n}", 1},
+        // Card 182: a game proc that writes where it is told, a typed bind, an alias, a concatenate.
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tagent_sandbox_make(dir, 1)\n}", 1},
+        {"d :: proc() {\n\tname := \"fixed_run\"\n\tsave_game_to(gs, name)\n}", 1},
+        {"d :: proc() {\n\tdir: string = \"fixed_dir\"\n\tos.make_directory(dir)\n}", 1},
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tsub := dir\n\tos.make_directory(sub)\n}", 1},
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\ta, b := dir, dir\n\tos.make_directory(b)\n}", 1},  // every name an alias binds
+        // Card 182 pass 3: each side of each binding condition.
+        {"d :: proc() {\n\tdir = \"fixed_dir\"\n\tos.make_directory(dir)\n}", 1},            // a plain =
+        {"d :: proc() {\n\t= \"fixed_dir\"\n\tos.make_directory(x)\n}", 0},                  // a line that starts with = binds nothing
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tsub, dir := other(), 2\n\tos.make_directory(sub)\n}", 0},  // named only on the left
+        {"d :: proc() {\n\ta, b := \"fixed_a\"\n\tos.make_directory(b)\n}", 0},              // names and values that do not pair
+        {"d :: proc() {\n\ta, b := other, \"fixed_b\"\n\tos.make_directory(b)\n}", 1},   // each name its own value
+        {"d :: proc() {\n\ta, b := \"fixed_a\", other\n\tos.make_directory(b)\n}", 0},
+        {"d :: proc() {\n\tdir := \"\"\n\tos.make_directory(dir)\n}", 0},                   // an empty literal
+        {"d :: proc() {\n\tdir := \"a\"\n\tos.make_directory(dir)\n}", 1},                  // a one-letter one
+        {"d :: proc() {\n\tdir := other + \"x\"\n\tos.make_directory(dir)\n}", 0},          // ends in a string, is not one
+        {"d :: proc() {\n\tdir := \"x\" + other\n\tos.make_directory(dir)\n}", 0},          // begins with one, is not one
+        {"d :: proc() {\n\tdir := \"a%d\"\n\tos.make_directory(dir)\n}", 0},                // a format
+        {"d :: proc() {\n\tdir := \"a\\\\b\"\n\tos.make_directory(dir)\n}", 0},         // an escape
+        {"d :: proc() {\n\tdir := \"a\" + \"b\"\n\tos.make_directory(dir)\n}", 0},        // two strings joined
+        {"d :: proc() {\n\tdir := \"a\"+\"b\"\n\tos.make_directory(dir)\n}", 0},          // and with no spaces
+        {"d :: proc() {\n\tdir := other\n\tos.make_directory(dir)\n}", 0},                 // no string at all
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tp := strings.concatenate({dir, \"/x\"})\n\tos.remove(p)\n}", 1},
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tn := len(dir)\n\tlog.info(n)\n}", 0},  // named, never a path
+        {"d :: proc() {\n\ttop :: \"fixed_top\"\n\ttools_check(top + \"/runs\")\n}", 1},  // a joined path into any proc
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\ttesting.expect(t, \"\" == dir)\n\ttesting.expect(t, os.remove(other) == nil)\n}", 0},  // a comparison binds nothing
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tlog.info(1)  // os.make_directory(dir)\n}", 0},  // in a comment
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tos.remove(other); log.info(\"dir\")\n}", 0},  // only in a string
+        // The literal and game-path rules (cards 177, 180), each alone.
+        {"\tfolder := tools_test_run(\"fixed.sav\")", 0},
+        {"\tos.make_directory(\"fixed_dir\")", 1},
+        {"\tlog.info(\"a.sav\")", 1},
+        {"\tlog.info(\"a b.sav\")", 0},
+        {"\tos.remove(\"x.sav\")", 0},
+        {"\tx := \".tmp\"", 1},
+        {"\tok := strings.has_suffix(p, \".tmp\")", 0},
+        {"\tf, _ := os.open(\".tmp\", {.Write, .Create, .Excl}, 0o600)\n\tos.remove(\".tmp\")", 0},
+        {"\tf, _ := os.open(\".tmp\", {.Write, .Create, .Excl}, 0o600)\n\tos.write_entire_file(\".tmp\", nil)", 1},
+        {"\tos.remove(SAVE_FILE)", 1},
+        {"\tp := fmt.tprintf(\"%s/%s\", dir, SAVE_FILE)", 0},
+        {"\ttesting.expect_value(t, gs.save_path, SAVE_FILE)", 0},
+        {"\tx := MY_SAVE_FILE_2", 0},
+        {"\tx := SAVE_FILE_2", 0},  // a name that only begins with it
+        {"\tx := MY_SAVE_FILE; os.remove(SAVE_FILE)", 1},  // a whole one after a part one
+        {"\tos.make_directory(\"\")", 0},
+        {"\tos.remove(\"%s.sav\")", 0},
+        {"\tos.remove(\"a\\\\b.sav\")", 0},
+        {"\tx :: \".tmp\"", 1},
+        {"\tf, _ := os.open(name, {.Write, .Create, .Excl}, 0o600)", 0},
+        {"\tlog.info(\"SAVE_FILE\")", 0},
     }
     for c, i in cases {
         found := fixed_name_findings("fixture", c.src)
         testing.expectf(t, len(found) == c.found, "case %d: %d found, want %d: %v", i, len(found), c.found, found)
     }
+    // Card 182: the env and the working folder are every test thread's.
+    shared := [?]Case{
+        {"\tos.set_env(\"GNIPA_SEED\", \"1\")", 1},
+        {"\tdefer os.unset_env(\"GNIPA_SEED\")", 1},
+        {"\tos.set_working_directory(dir)", 1},
+        {"\tos.change_directory(dir)", 1},
+        {"\ttext := \"never os.set_env(here)\"", 0},
+        {"\ttext := `os.set_env(x)`", 0},  // nor in a raw string
+        {"\tx := 1  // os.set_env( in a comment", 0},
+        {"\tv := os.get_env(\"GNIPA_SEED\", context.temp_allocator)", 0},
+    }
+    for c, i in shared {
+        found := shared_state_findings("fixture", c.src)
+        testing.expectf(t, len(found) == c.found, "shared case %d: %d found, want %d: %v", i, len(found), c.found, found)
+    }
+    // Card 182 pass 4: every table entry, one fixture each.  The lists are
+    // the test's own: a loop over the guard's tables would lose an entry's
+    // fixture with the entry.
+    each := proc(t: ^testing.T, src: string, want: int, find: proc(file, data: string) -> []string) {
+        found := find("fixture", src)
+        testing.expectf(t, len(found) == want, "%q: %d found, want %d: %v", src, len(found), want, found)
+    }
+    cat :: proc(parts: ..string) -> string { return strings.concatenate(parts, context.temp_allocator) }
+    for w in ([]string{"agent_sandbox_make(", "save_game_to(", "save_stats_to(", "save_pixel_art_to(", "tool_make_save(", "tool_run_load(", "agent_run_reset(", "tools_test_say("}) {
+        each(t, cat("d :: proc() {\n\tdir := \"fixed_dir\"\n\t", w, "dir)\n}"), 1, fixed_name_findings)
+    }
+    for m in ([]string{"make_directory(", "make_directory_all(", "remove_all(", "os.open(", "write_entire_file(", "os.remove("}) {
+        each(t, cat("d :: proc() {\n\tdir := \"fixed_dir\"\n\t", m, "dir)\n}"), 1, fixed_name_findings)
+        each(t, cat("\t", m, "\"fixed\")"), 1, fixed_name_findings)  // a name with no kind, handed straight in
+    }
+    each(t, "d :: proc() {\n\tdir := \"fixed_dir\"\n\tf(dir)\n}", 0, fixed_name_findings)
+    each(t, "\tf(\"fixed\")", 0, fixed_name_findings)
+    for k in ([]string{".jsonl", ".log", ".sav", ".txt", ".json", ".csv", ".dat", ".tmp", ".bak", ".unread"}) {
+        each(t, cat("\tlog.info(\"a", k, "\")"), 1, fixed_name_findings)
+    }
+    each(t, "\tlog.info(\"a.png\")", 0, fixed_name_findings)
+    for g in ([]string{"SAVE_FILE", "STATS_FILE", "SETTINGS_FILE", "ACTION_LOG_PATH", "PIXEL_ART_FILE", "AGENT_RUNS_DIR", "TOOL_RUNS_DIR", "TOOL_START_SAVE", "AGENT_ACTS_FILE", "AGENT_FIGHT_FILE"}) {
+        each(t, cat("\tf(", g, ")"), 1, fixed_name_findings)
+    }
+    each(t, "\tf(OTHER_FILE)", 0, fixed_name_findings)
+    each(t, "d :: proc() {\n\tdir := \"fixed::dir\"\n\tos.make_directory(dir)\n}", 1, fixed_name_findings)  // := is read before the :: in its value
+    for op in ([]string{":=", "::", "="}) do each(t, cat("d :: proc() {\n\tdir ", op, " \"fixed_dir\"\n\tf(dir + \"/x\")\n}"), 1, fixed_name_findings)
+    shared_calls := []string{"os.set_env(", "os.unset_env(", "os.set_working_directory(", "os.change_directory("}
+    for call in shared_calls do each(t, cat("\t", call, "x)"), 1, shared_state_findings)
+    each(t, "\tos.get_env(x)", 0, shared_state_findings)
+    said := shared_state_findings("fixture", "\tos.set_env(x)")
+    testing.expect(t, len(said) == 1 && said[0] == "fixture:1 calls os.set_env, which reaches every test thread: hand the value in instead", "the shared finding names the call")
+    // The live test reads every source through test_source_findings, which
+    // holds both guards; and it does, as its body says.
+    for call in shared_calls do each(t, cat("\t", call, "x)"), 1, test_source_findings)
+    each(t, "\tos.make_directory(\"fixed_dir\")", 1, test_source_findings)
+    each(t, "\tos.make_directory(\"fixed_dir\")\n\tos.set_env(x)", 2, test_source_findings)
+    src, err := os.read_entire_file_from_path(#directory + "/tests.odin", context.temp_allocator)
+    testing.expect(t, err == nil, "tests.odin is read")
+    at := strings.index(string(src), "no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {")
+    body := string(src)[at:][:strings.index(string(src)[at:], "\n}")] if at >= 0 else ""
+    testing.expect(t, strings.contains(body, "\n        for found in test_source_findings(fi.name, string(data)) do testing.expect(t, false, found)\n"), "the live test reads each source through both guards")
+    each(t, "\tf(x)", 0, test_source_findings)
 }
 
 // Card 177: the risen hero holding its post does not claw.  The player well
@@ -18312,34 +18486,105 @@ a_risen_hero_guarding_its_post_does_not_claw :: proc(t: ^testing.T) {
     }
 }
 
-// Records each name a line binds to one plain string literal ("name := \"x\"",
-// "a, b :: \"x\", \"y\""), or, given from, the one name a line makes out of
-// the fixed name from.
+// A line's binding: the names it binds, a type after ':' dropped, and what it
+// binds them to; none when the line binds no plain names.
 @(private="file")
-fixed_bind :: proc(code: string, fixed: ^map[string]string, from := "") {
+bind_split :: proc(code: string) -> (names: []string, rhs: string) {
     c := strings.trim_space(code)
     for op in ([]string{":=", "::", "="}) {
         at := strings.index(c, op)
         if at <= 0 do continue
-        names := strings.split(c[:at], ",", context.temp_allocator)
-        if from != "" {
-            name := strings.trim_space(names[0])
-            ident := len(names) == 1 && name != ""
-            for i in 0 ..< len(name) do ident &&= is_ident_byte(name[i])
-            if ident do fixed[name] = from
-            return
+        names = strings.split(c[:at], ",", context.temp_allocator)
+        for &name in names {
+            name, _, _ = strings.partition(name, ":")  // "dir: string = ..."
+            name = strings.trim_space(name)
+            for i in 0 ..< len(name) do if !is_ident_byte(name[i]) do return nil, ""
         }
-        values := strings.split(c[at + len(op):], ",", context.temp_allocator)
-        if len(names) != len(values) do return
-        for raw, k in names {
-            name, v := strings.trim_space(raw), strings.trim_space(values[k])
-            plain := len(v) > 2 && v[0] == '"' && v[len(v) - 1] == '"' && !strings.contains_any(v[1:len(v) - 1], " %\\\"")
-            ident := name != ""
-            for i in 0 ..< len(name) do ident &&= is_ident_byte(name[i])
-            if ident && plain do fixed[name] = v[1:len(v) - 1]
-        }
+        return names, c[at + len(op):]
+    }
+    return nil, ""
+}
+
+// Records the names a binding ties to plain string literals ("name := \"x\"",
+// "a, b :: \"x\", \"y\""), or, given from, every name it binds from the fixed
+// name from.
+@(private="file")
+fixed_bind :: proc(names: []string, rhs: string, fixed: ^map[string]string, from := "") {
+    if from != "" {
+        for name in names do fixed[name] = from
         return
     }
+    values := strings.split(rhs, ",", context.temp_allocator)
+    if len(names) != len(values) do return
+    for name, k in names {
+        v := strings.trim_space(values[k])
+        plain := len(v) > 2 && v[0] == '"' && !strings.contains_any(v[1:len(v) - 1], " %\\\"")  // one "...": a second one needs a quote inside
+        if plain do fixed[name] = v[1:len(v) - 1]
+    }
+}
+
+// Whether s holds word as a whole name.
+@(private="file")
+has_word :: proc(s, word: string) -> bool {
+    for from := 0; from < len(s); {
+        at := strings.index(s[from:], word)
+        if at < 0 do return false
+        at += from
+        end := at + len(word)
+        if (at == 0 || !is_ident_byte(s[at - 1])) && (end == len(s) || !is_ident_byte(s[end])) do return true
+        from = at + 1
+    }
+    return false
+}
+
+// What a test source does to the state every test thread shares: the env and
+// the working folder.  Odin runs tests on threads of one process, so a test
+// that sets either reaches the tests running beside it (card 182).
+shared_state_findings :: proc(file, data: string) -> []string {
+    SHARED :: [?]string{"os.set_env(", "os.unset_env(", "os.set_working_directory(", "os.change_directory("}
+    out := make([dynamic]string, context.temp_allocator)
+    for line, n in strings.split_lines(data, context.temp_allocator) {
+        _, bare, _ := line_scan(line)
+        for call in SHARED do if strings.contains(bare, call) {
+            append(&out, fmt.tprintf("%s:%d calls %s, which reaches every test thread: hand the value in instead", file, n + 1, call[:len(call) - 1]))
+        }
+    }
+    return out[:]
+}
+
+// A string literal on a line, with the line's code before it, strings emptied.
+Line_Lit :: struct {
+    text, before: string,
+}
+
+// One line of Odin as the guards read it (card 182).  code is the line up to a
+// // that is outside any string or rune; bare is that code with every string
+// and rune literal emptied to its two quotes, so nothing quoted reads as code;
+// lits are the "..." and `...` strings in order.  An escape counts in a "..."
+// string and in a rune, not in a raw string; a string left open ends the code.
+line_scan :: proc(line: string) -> (code, bare: string, lits: []Line_Lit) {
+    b := strings.builder_make(context.temp_allocator)
+    found := make([dynamic]Line_Lit, context.temp_allocator)
+    end := len(line)
+    for i := 0; i < len(line); i += 1 {
+        c := line[i]
+        if c == '/' && i + 1 < len(line) && line[i + 1] == '/' {
+            end = i
+            break
+        }
+        if c != '"' && c != '`' && c != '\'' {
+            strings.write_byte(&b, c)
+            continue
+        }
+        j := i + 1
+        for j < len(line) && line[j] != c do j += 1 + int(c != '`' && line[j] == '\\')
+        strings.write_byte(&b, c)
+        strings.write_byte(&b, c)
+        if j >= len(line) do break  // left open
+        if c != '\'' do append(&found, Line_Lit{line[i + 1:j], strings.clone(strings.to_string(b)[:len(strings.to_string(b)) - 2], context.temp_allocator)})
+        i = j
+    }
+    return line[:end], strings.to_string(b), found[:]
 }
 
 // A byte that can be part of an Odin name.
