@@ -5239,7 +5239,7 @@ a_wall_at_his_back_never_pogos_a_descent :: proc(t: ^testing.T) {
     e.nav.path.tiles[0] = {147, 101}
     e.nav.path.len      = 1
 
-    enemy_follow_path(e, &e.nav, &gs.world)
+    enemy_follow_path(e, &e.nav, &gs.world, 1.0 / 60.0)
     testing.expect_value(t, e.vel.x, f32(0))
     testing.expect_value(t, e.vel.y, f32(0))
 }
@@ -18591,4 +18591,114 @@ line_scan :: proc(line: string) -> (code, bare: string, lits: []Line_Lit) {
 @(private="file")
 is_ident_byte :: proc(c: u8) -> bool {
     return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// Card 189: a Builder's pillar, straight up toward a target eight rows over
+// its head in open air.  The body never steers sideways on the way up, so
+// it never turns.
+@(test)
+a_builder_pillar_holds_its_facing :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.ui.show_title = false
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    x := 60
+    for xx in x - 6 ..= x + 6 do for y in SURFACE_Y - 20 ..< SURFACE_Y do set_tile(&gs.world, xx, y, .Air)
+    for xx in x - 6 ..= x + 6 do set_tile(&gs.world, xx, SURFACE_Y, .Stone)
+    gs.player.pos = {f32(GRID_W - 10), f32(SURFACE_Y) - PLAYER_H}
+    T := [2]i32{i32(x), i32(SURFACE_Y - 9)}
+    e := pond_builder(gs, x, SURFACE_Y, T, POCKET_MAX)
+    e.pos.x += 0.07  // a hair off the middle
+    e.facing = 1
+    id := 0
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] && &gs.enemies.data[i] == e do id = i
+    e.builder.escaping, e.builder.escape_from = true, builder_tile(e).y
+    gs.enemy_status[id].pillar_aim = T
+    builder_pause(&e.builder, 1e9, .Fetch_Mineral)  // the climb, then nothing
+    from := builder_tile(e).y
+    flips, sides, frames := 0, 0, 0
+    last := f32(0)
+    for ; frames < 60 * 20 && e.builder.escaping; frames += 1 {
+        gs.delta_time = 1.0 / 60.0
+        gs.player.hp = 1000
+        game_update(gs)
+        if e.facing != 1 do flips += 1
+        if e.vel.x != 0 {
+            if last != 0 && (e.vel.x > 0) != (last > 0) do sides += 1
+            last = e.vel.x
+        }
+    }
+    testing.expectf(t, !e.builder.escaping && from - builder_tile(e).y >= 7, "rose %d rows in %d frames", from - builder_tile(e).y, frames)
+    testing.expectf(t, flips == 0, "%d frames facing west in %d", flips, frames)
+    testing.expectf(t, sides == 0, "%d walk side changes in %d frames", sides, frames)
+}
+
+// Card 189: over a waypoint below, the path follower squares up inside a
+// deadzone narrower than a tick's walk (it must, or the body stays clipped on
+// the lip).  A full stride overshot it, and the stride back flipped the body
+// every tick while it fell; it settles now, turning never.
+@(test)
+a_builder_squares_over_a_drop_without_flipping :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    x := 60
+    for xx in x - 3 ..= x + 3 do for y in SURFACE_Y - 6 ..< SURFACE_Y + 6 do set_tile(&gs.world, xx, y, .Air)
+    id, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[id]
+    e.kind, e.hp, e.hp_max = .Builder, 6, 6
+    dt := f32(1.0 / 60.0)
+    for off in ([]f32{0.035, 0.05, 0.1, 0.4, -0.035, -0.4}) {
+        e.pos = {f32(x) + 0.5 - BUILDER_W * 0.5 + off, f32(SURFACE_Y) - 4}
+        e.vel, e.grounded = {}, false
+        e.facing = -1 if off > 0 else 1
+        e.nav.path = {tiles = {0 = {i32(x), i32(SURFACE_Y + 2)}}, len = 1}
+        flips := 0
+        for _ in 0 ..< 30 {
+            face := e.facing
+            enemy_follow_path(e, &e.nav, &gs.world, dt)
+            e.pos.x += e.vel.x * dt
+            if e.facing != face do flips += 1
+        }
+        cx := e.pos.x + BUILDER_W * 0.5
+        testing.expectf(t, flips == 0, "off %v: %d flips", off, flips)
+        testing.expectf(t, abs(cx - (f32(x) + 0.5)) <= 0.03 + 1e-4 && e.vel.x == 0, "off %v: settles at %v, vel %v", off, cx, e.vel.x)
+    }
+}
+
+// Card 189 along the game's own path: a hunting Builder walks to a shaft one
+// wide and drops down it at the player, moved by game_update.  Over the
+// waypoint below, the full stride overshot the 0.03 deadzone and the stride
+// back flipped it every tick (17 ticks facing west from a start 0.3 east); from each
+// start it goes east and down, never turning.
+@(test)
+a_hunting_builder_drops_down_a_shaft_without_flipping :: proc(t: ^testing.T) {
+    for start in ([]f32{0, 0.3, 0.6}) {
+        gs := test_state()
+        defer free(gs)
+        gs.ui.show_title = false
+        for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+        gs.roamer_timer = -1e9
+        x, G := 60, SURFACE_Y
+        for xx in x - 6 ..= x + 8 do for y in G - 8 ..< G + 10 do set_tile(&gs.world, xx, y, .Stone if y >= G else .Air)
+        for y in G ..< G + 5 do set_tile(&gs.world, x + 4, y, .Air)  // the shaft, five down
+        gs.player.pos = {f32(x + 4) + (1 - PLAYER_W) * 0.5, f32(G + 5) - PLAYER_H}
+        e := pond_builder(gs, x, G, {}, 0)
+        e.pos.x += start
+        e.builder.goal = .Hunt
+        e.builder.plan_target = {-99, -99}
+        e.facing = 1
+        flips, frames := 0, 0
+        deepest := builder_tile(e).y
+        for ; frames < 60 * 6; frames += 1 {
+            gs.delta_time = 1.0 / 60.0
+            gs.player.hp = 1000
+            game_update(gs)
+            if e.facing != 1 do flips += 1
+            deepest = max(deepest, builder_tile(e).y)
+        }
+        testing.expectf(t, deepest >= i32(G + 2), "start %v: down the shaft to row %d at best", start, deepest)
+        testing.expectf(t, flips == 0, "start %v: %d frames facing west in %d", start, flips, frames)
+    }
 }
