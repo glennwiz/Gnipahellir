@@ -491,7 +491,7 @@ replay_says_where_a_run_parts_from_its_recording :: proc(t: ^testing.T) {
     testing.expect(t, ok && n == 2)
     moved, _ := strings.replace(want, `"x":1.000,"y":2.000,"hp":10,"mana":3.00,"lvl":0,"enemies":0}`+"\n", `"x":1.020,"y":2.000,"hp":10,"mana":3.00,"lvl":0,"enemies":0}`+"\n", 1, context.temp_allocator)
     n, ok, note = tool_replay_compare(want, moved)
-    testing.expect(t, !ok && n == 0 && strings.contains(note, "DIVERGED after 0 acts"), note)
+    testing.expect(t, !ok && n == 0 && strings.contains(note, "DIVERGED after 0 landings, at an act on frame 10"), note)
     nudged, _ := strings.replace(want, `"x":1.000`, `"x":1.005`, 1, context.temp_allocator)
     _, ok, _ = tool_replay_compare(want, nudged)
     testing.expect(t, ok, "within a hundredth of a tile is the same place")
@@ -508,6 +508,105 @@ replay_says_where_a_run_parts_from_its_recording :: proc(t: ^testing.T) {
     testing.expect(t, ok, "mana within a tenth is the same")
     _, ok, note = tool_replay_compare(want, want[:strings.index_byte(want, '\n') + 1])
     testing.expect(t, !ok && strings.contains(note, "1 of 2"), note)
+
+    // A goal's end: its frame, outcome and reason, and where it left the hero.
+    ends := `{"f":60,"done":1,"x":1.000,"y":2.000,"hp":10}` + "\n" + `{"f":90,"failed":2,"reason":"no path","x":1.000,"y":2.000,"hp":10}` + "\n"
+    n, ok, _ = tool_replay_compare(ends, ends)
+    testing.expect(t, ok && n == 2)
+    for changed in ([][2]string{{`{"f":60,`, `{"f":61,`}, {`"done":1`, `"failed":1,"reason":"no path"`}, {`"no path"`, `"cancelled"`}, {`"failed":2`, `"failed":3`}, {`"hp":10}` + "\n" + `{"f":90`, `"hp":9}` + "\n" + `{"f":90`}, {`"done":1,"x":1.000,"y":2.000`, `"done":1,"x":1.000,"y":2.050`}, {`"done":1`, `"failed":1,"reason":""`}}) {
+        other, _ := strings.replace(ends, changed[0], changed[1], 1, context.temp_allocator)
+        _, ok, _ = tool_replay_compare(ends, other)
+        testing.expect(t, !ok, changed[1])
+    }
+    // A goal end written before landings were is checked by frame and outcome.
+    old := `{"f":60,"done":1}` + "\n"
+    _, ok, _ = tool_replay_compare(old, ends[:strings.index_byte(ends, '\n') + 1])
+    testing.expect(t, ok, "an old row matches any landing")
+    _, ok, _ = tool_replay_compare(old, `{"f":62,"done":1,"x":1.000,"y":2.000,"hp":10}` + "\n")
+    testing.expect(t, !ok, "an old row still holds its frame")
+}
+
+// A goals-only run writes no act rows: the replay checks each goal's end, and
+// a recording doctored at one goal is reported at that goal.
+@(test)
+a_goals_only_replay_checks_each_goal_where_it_landed :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_goals")
+    defer tools_test_done(run)
+    rec := fmt.aprintf("%s/rec.jsonl", run)
+    defer delete(rec)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    tools_test_record(link, rec)
+    link.connected, link.realtime = true, true
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":40},{"do":"act","move":"left","jump":true,"frames":30},{"do":"act","frames":10},{"do":"act","move":"right","frames":20}]}`)
+    for _ in 0 ..< 1000 {
+        if !agent_goals_busy(&link.goals) do break
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    os.close(link.acts_file)
+    data, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(data)
+    rows := string(data)
+    testing.expect_value(t, strings.count(rows, `,"act":`), 0)  // nothing for the old check to go by
+    testing.expect_value(t, strings.count(rows, `"x":`), 4)
+    last := fmt.tprintf(`"done":4,"x":%.3f,"y":%.3f,"hp":%d}`, gs.player.pos.x, gs.player.pos.y, gs.player.hp)
+    testing.expect(t, strings.contains(rows, last), last)  // the last goal ends where the run did
+
+    rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run))
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged, "every goal lands where it did")
+    testing.expect_value(t, rep.checked, 4)
+
+    // The third goal's landing moved: the replay parts there, after two.
+    at := strings.index(rows, `"done":3,"x":`)
+    testing.expect(t, at > 0)
+    moved := fmt.tprintf("%s9%s", rows[:at + len(`"done":3,"x":`)], rows[at + len(`"done":3,"x":`):])
+    rep3, gs3, link3 := tools_test_replay(moved, fmt.tprintf("%s/got3.jsonl", run))
+    defer free(gs3)
+    defer free(link3)
+    testing.expect(t, rep3.done && rep3.diverged, "a moved landing is a divergence")
+    testing.expect_value(t, rep3.checked, 2)
+    _, ok, note := tool_replay_compare(moved, rows)
+    testing.expect(t, !ok && strings.contains(note, "DIVERGED at goal 3, frame "), note)
+}
+
+// A clear ends the goals it cuts with the reason it was recorded with; a clear
+// row from before reasons were kept ends them "cancelled".
+@(test)
+a_clear_replays_with_its_reason :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_clear")
+    defer tools_test_done(run)
+    goal := `{"f":3,"goal":{"do":"act","move":"right","frames":100},"kind":"act","id":1,"via":"Goal","step":0}` + "\n"
+    for c in ([][2]string{{`{"f":10,"clear":true,"reason":"replaced by an act"}`, `"failed":1,"reason":"replaced by an act"`}, {`{"f":10,"clear":true}`, `"failed":1,"reason":"cancelled"`}}) {
+        got := fmt.tprintf("%s/got.jsonl", run)
+        rep, gs, link := tools_test_replay(fmt.tprintf("%s%s\n", goal, c[0]), got)
+        defer free(gs)
+        defer free(link)
+        testing.expect(t, rep.done)
+        data, _ := os.read_entire_file(got, context.temp_allocator)
+        testing.expect(t, strings.contains(string(data), c[1]), c[1])
+    }
+}
+
+// A replay with nothing to check says so, and does not say it landed.
+@(test)
+a_replay_that_checks_nothing_warns :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_nothing")
+    defer tools_test_done(run)
+    rep, gs, link := tools_test_replay(`{"f":3,"objective":{"goal":"look about"}}` + "\n", fmt.tprintf("%s/got.jsonl", run))
+    defer free(gs)
+    defer free(link)
+    testing.expect(t, rep.done && !rep.diverged)
+    testing.expect_value(t, rep.checked, 0)
+    said := tool_replay_verdict(rep.checked, !rep.diverged, "")
+    testing.expect(t, strings.has_prefix(said, "WARNING: 0 landings checked") && !strings.contains(said, "where it landed"), said)
+    testing.expect_value(t, tool_replay_verdict(3, true, ""), "3 landings replayed, each where it landed before")
+    testing.expect_value(t, tool_replay_verdict(1, false, "DIVERGED at goal 1"), "DIVERGED at goal 1")
 }
 
 @(test)
@@ -651,7 +750,7 @@ a_run_records_each_goals_end_and_each_window :: proc(t: ^testing.T) {
     os.close(link.acts_file)
     data, _ := os.read_entire_file(path, context.temp_allocator)
     rows := string(data)
-    for want in ([]string{`{"f":3,"done":1}`, `{"f":5,"failed":2,"reason":"cancelled"}`, `{"f":7,"window":true}`, `{"f":9,"window":false}`}) {
+    for want in ([]string{`{"f":3,"done":1,"x":`, `{"f":5,"failed":2,"reason":"cancelled","x":`, `{"f":7,"window":true}`, `{"f":9,"window":false}`}) {
         testing.expect(t, strings.contains(rows, want), want)
     }
     testing.expect_value(t, strings.count(rows, `"window"`), 2)
