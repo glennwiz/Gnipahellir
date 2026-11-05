@@ -607,7 +607,8 @@ roamers_ride_out_a_real_surface_soak :: proc(t: ^testing.T) {
 // is covered by being in the table.
 @(test)
 a_live_roamer_survives_a_save_round_trip :: proc(t: ^testing.T) {
-    path :: "gnipahellir_roamer_scratch.dat"
+    path := test_scratch_path("gnipahellir_roamer_scratch.dat")
+    defer delete(path)
     defer os.remove(path)
     gs := turret_test_state()
     defer free(gs)

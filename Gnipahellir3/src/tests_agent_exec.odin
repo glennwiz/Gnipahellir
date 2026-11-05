@@ -303,7 +303,8 @@ agent_every_reply_says_what_it_answers :: proc(t: ^testing.T) {
 // seed, end the same.
 @(test)
 agent_a_goal_log_replays_to_the_same_player :: proc(t: ^testing.T) {
-    path := "agent_goal_replay_test.jsonl"
+    path := test_scratch_path("agent_goal_replay_test.jsonl")
+    defer delete(path)
     defer os.remove(path)
 
     gs, link := exec_test_world(782)

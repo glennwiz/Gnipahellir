@@ -31,7 +31,8 @@ golden_bytes :: proc(t: ^testing.T, buf: ^bytes.Buffer) -> []u8 {
 // an enum value inserted ahead of one, lands here even with every size equal.
 @(test)
 a_real_v28_save_loads_the_run_that_wrote_it :: proc(t: ^testing.T) {
-	path :: "gnipahellir_save_golden_test.dat"
+	path := test_scratch_path("gnipahellir_save_golden_test.dat")
+	defer delete(path)
 	defer os.remove(path)
 	buf: bytes.Buffer
 	defer bytes.buffer_destroy(&buf)
@@ -375,7 +376,8 @@ saved_layout_never_moves_inside_a_version :: proc(t: ^testing.T) {
 // kind across a save.
 @(test)
 roamers_keep_their_kind_across_a_save :: proc(t: ^testing.T) {
-	path :: "gnipahellir_roamer_kind_scratch.dat"
+	path := test_scratch_path("gnipahellir_roamer_kind_scratch.dat")
+	defer delete(path)
 	defer os.remove(path)
 	testing.expect_value(t, int(Enemy_Kind.Rain_Wisp), 8)
 	testing.expect_value(t, int(Enemy_Kind.Rock_Harpy), 9)
@@ -490,7 +492,8 @@ a_v27_save_loads_with_its_monument_marked :: proc(t: ^testing.T) {
 
 @(test)
 a_v23_save_loads_with_its_monument_marked :: proc(t: ^testing.T) {
-	path :: "gnipahellir_save_v23_monument_test.dat"
+	path := test_scratch_path("gnipahellir_save_v23_monument_test.dat")
+	defer delete(path)
 	defer os.remove(path)
 	old := new(Save_Data_v23)
 	defer free(old)
@@ -508,7 +511,8 @@ a_v23_save_loads_with_its_monument_marked :: proc(t: ^testing.T) {
 // player laid in a gold cell stays the player's.
 @(test)
 a_v30_save_keeps_its_monument_marks :: proc(t: ^testing.T) {
-	path :: "gnipahellir_save_v30_monument_test.dat"
+	path := test_scratch_path("gnipahellir_save_v30_monument_test.dat")
+	defer delete(path)
 	defer os.remove(path)
 	gs := turret_test_state()
 	defer free(gs)
