@@ -1318,7 +1318,7 @@ golem_zone_has_work :: proc(gs: ^Game_State, id: int) -> bool {
 	return ok
 }
 
-golem_follow_path :: proc(g: ^Golem, w: ^World_Grid) {
+golem_follow_path :: proc(g: ^Golem, w: ^World_Grid, dt: f32) {
 	if g.path.cursor >= g.path.len {g.vel.x = 0; return}
 	T := g.path.tiles[g.path.cursor]
 	dx := f32(T.x)+0.5 - (g.pos.x+GOLEM_W*0.5)
@@ -1328,10 +1328,9 @@ golem_follow_path :: proc(g: ^Golem, w: ^World_Grid) {
 		g.replan_timer = 0
 		return
 	}
-	if abs(dx) > 0.08 {
-		g.facing = 1 if dx >= 0 else -1
-		g.vel.x = f32(g.facing)*GOLEM_SPEED
-	} else {g.vel.x = 0}
+	dir: int  // never past the waypoint's middle, at any dt (card 191)
+	g.vel.x, dir = steer_vel(dx, 0.08, GOLEM_SPEED, dt)
+	if dir != 0 do g.facing = i8(dir)
 	if g.grounded {
 		wall := is_solid(w, int(g.pos.x+f32(g.facing)*(GOLEM_W+0.1)), int(g.pos.y+GOLEM_H-0.3))
 		if dy < -0.35 || wall do g.vel.y = GOLEM_JUMP
@@ -1995,7 +1994,7 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 					target := g.target
 					if !golem_set_target(gs, g, target) do g.has_target = false
 				}
-				golem_follow_path(g, &gs.world)
+				golem_follow_path(g, &gs.world, gs.delta_time)
 			}
 		}
 	}

@@ -8456,17 +8456,22 @@ hero_fight_bridges_to_a_target_that_stands :: proc(t: ^testing.T) {
 // right every tick.  The block set down, the step's walk toward the column's
 // middle had no slack: each tick's stride overshot it and the next came back.
 // Off the middle at the start, up six blocks: the body turns at most once to
-// square up, its key changes side at most once, and each jump is square.
+// square up, its key changes side at most once, and each jump is square, at
+// base speed and in the fastest Speed gear (card 191 pass 2: a stride wider
+// than the slack's two sides stepped past the middle and back).
 @(test)
 hero_pillar_up_holds_its_facing :: proc(t: ^testing.T) {
+    for gear in ([]bool{false, true}) do for start in ([]f32{0.3, 0.47}) {
     gs, link := exec_test_world()
     defer free(gs)
     defer free(link)
     x0, G := hero_test_arena(gs)
     gs.player.inventory = {}
+    if gear do hero_test_speed_gear(t, gs)
     go_test_give(gs, .Stone_Block, 20)
-    gs.player.pos.x = f32(x0) + 0.3  // 0.2 east of the middle: out of the slack
+    gs.player.pos.x = f32(x0) + start  // east of the middle, out of the slack
     exec_test_frames(link, gs, 5)
+    square := max(HERO_STEER_SLACK, player_walk_speed(gs) * AGENT_STEP * 0.5)  // the nearest a key can bring it
     agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0, G - 7))
     id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
     flips, sides, frames := 0, 0, 0
@@ -8475,7 +8480,7 @@ hero_pillar_up_holds_its_facing :: proc(t: ^testing.T) {
     for ; frames < 1800 && agent_goals_busy(&link.goals); frames += 1 {
         grounded, cx := gs.player.grounded, gs.player.pos.x + PLAYER_W * 0.5
         exec_test_frames(link, gs, 1)
-        if grounded && gs.player.vel.y < 0 && abs(cx - (f32(x0) + 0.5)) > HERO_PILLAR_SLACK do off_jumps += 1
+        if grounded && gs.player.vel.y < 0 && abs(cx - (f32(x0) + 0.5)) > square do off_jumps += 1
         if gs.player.facing != face do flips += 1
         face = gs.player.facing
         if m := gs.agent.cmd.move; m != 0 {
@@ -8484,9 +8489,109 @@ hero_pillar_up_holds_its_facing :: proc(t: ^testing.T) {
         }
     }
     status, reason := go_test_status(link, gs, id)
-    testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
-    testing.expect_value(t, 20 - inventory_count(&gs.player.inventory, .Stone_Block), 6)
-    testing.expectf(t, flips <= 1, "%d facing flips in %d frames", flips, frames)
-    testing.expectf(t, sides <= 1, "%d move side changes in %d frames", sides, frames)
-    testing.expectf(t, off_jumps == 0, "%d jumps off the column's middle", off_jumps)
+    testing.expectf(t, status == "done", "gear %v start %v: %s %s in %d frames", gear, start, status, reason, frames)
+    testing.expectf(t, 20 - inventory_count(&gs.player.inventory, .Stone_Block) == 6, "gear %v start %v: six blocks up", gear, start)
+    testing.expectf(t, flips <= 1, "gear %v start %v: %d facing flips in %d frames", gear, start, flips, frames)
+    testing.expectf(t, sides <= 1, "gear %v start %v: %d move side changes in %d frames", gear, start, sides, frames)
+    testing.expectf(t, off_jumps == 0, "gear %v start %v: %d jumps off the column's middle", gear, start, off_jumps)
+    }
+}
+
+// The fastest Speed gear on the hero: Runic_Boots and Aether_Charm, the
+// stride a tick wider than the slack's two sides.
+hero_test_speed_gear :: proc(t: ^testing.T, gs: ^Game_State) {
+    for item in ([]Item{.Runic_Boots, .Aether_Charm}) {
+        inventory_insert(&gs.player.inventory, item, 1)
+        for sl, i in gs.player.inventory.slots do if sl.item == item do player_equip(gs, i)
+    }
+    testing.expectf(t, player_walk_speed(gs) * AGENT_STEP > 2 * HERO_STEER_SLACK, "a stride of %v", player_walk_speed(gs) * AGENT_STEP)
+}
+
+// Card 191 (playtest 188): the same flip in a jump and a fall.  Every go step
+// walked at its tile's middle with no slack, and in the air, where a step
+// cannot end, each tick's stride overshot the middle and the next came back.
+// Over a gap two wide, then down a shaft one wide: the body walks east the
+// whole way, so it never turns, and its key never changes side.
+@(test)
+hero_jumps_a_gap_and_falls_a_shaft_holding_its_facing :: proc(t: ^testing.T) {
+    for gear in ([]bool{false, true}) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 4 ..= x0 + 5 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)  // the gap
+    for y in G ..< G + 4 do set_tile(&gs.world, x0 + 10, y, .Air)                           // the shaft
+    gs.player.inventory = {}
+    if gear do hero_test_speed_gear(t, gs)
+    gs.player.facing = 1
+    exec_test_frames(link, gs, 5)
+    moves: bit_set[Hero_Move]
+    flips, sides, frames := 0, 0, 0
+    face, last := gs.player.facing, i8(0)
+    for to in ([2][2]int{{x0 + 8, G - 1}, {x0 + 10, G + 3}}) {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, to.x, to.y))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for n := 0; n < 600 && agent_goals_busy(&link.goals); n += 1 {
+            exec_test_frames(link, gs, 1)
+            frames += 1
+            if path := &gs.hero.path; path.at < path.n do moves += {path.steps[path.at].move}
+            if gs.player.facing != face do flips += 1
+            face = gs.player.facing
+            if m := gs.agent.cmd.move; m != 0 {
+                if last != 0 && m != last do sides += 1
+                last = m
+            }
+        }
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "gear %v to %v: %s %s", gear, to, status, reason)
+    }
+    testing.expectf(t, .Gap in moves && .Drop in moves, "gear %v: the way had a gap jump and a drop: %v", gear, moves)
+    testing.expectf(t, flips == 0, "gear %v: %d facing flips in %d frames", gear, flips, frames)
+    testing.expectf(t, sides == 0, "gear %v: %d move side changes in %d frames", gear, sides, frames)
+    }
+}
+
+// The brain's fight walks at its threat (hero_walk_to).  A Fire Sprite
+// hovering straight overhead, in sight and out of the sword's reach (the
+// harness moves no enemy, so it stays there), near either side of the
+// body's middle, at base speed, in the fastest Speed gear and in flight: the walk's point
+// is the threat's middle, the body all but on it already.  With no slack the
+// walk overshot it each tick and came back; the hero stands still now.
+@(test)
+hero_fight_walk_stands_over_a_threat_it_cannot_reach :: proc(t: ^testing.T) {
+    for gear in ([]string{"none", "speed", "flight", "debug fly"}) do for off in ([]f32{0, 0.05, -0.05, 0.12, -0.17}) {
+        when !GAME_DEBUG do if gear == "debug fly" do continue
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        if gear == "speed" do hero_test_speed_gear(t, gs)
+        if gear == "flight" do gs.flight_t = 100  // the blessing's FLY_SPEED stride, wider than the slack's two sides
+        when GAME_DEBUG do if gear == "debug fly" do gs.debug.fly = true
+        go_test_give(gs, .Sword, 1)
+        v := hero_test_vargr(gs, f32(x0 + 2) + (1 - BUILDER_W) * 0.5 + off, G - 4, {})  // four rows over the head
+        gs.enemies.data[v].kind = .Fire_Sprite
+        gs.enemies.data[v].hp, gs.enemies.data[v].hp_max = 1000, 1000
+        gs.player.pos = {f32(x0 + 2) + (1 - PLAYER_W) * 0.5, f32(G) - PLAYER_H}
+        // Counted from the fight's first tick: before it, the idle hero steps
+        // off from a threat it has not yet noticed (a choice, not a steer).
+        flips, sides, fights := 0, 0, 0
+        face, last := gs.player.facing, i8(0)
+        for _ in 0 ..< 120 {
+            hero_test_tick(link, gs)
+            if gs.hero.current != .Fight do continue
+            fights += 1
+            if fights > 1 && gs.player.facing != face do flips += 1
+            face = gs.player.facing
+            if m := gs.agent.cmd.move; m != 0 {
+                if last != 0 && m != last do sides += 1
+                last = m
+            }
+        }
+        // Out of the slack west, the one walk there turns the body once.
+        testing.expectf(t, fights > 60, "gear %s off %v: the brain fights %d ticks of 120", gear, off, fights)
+        testing.expectf(t, flips <= 1 && sides == 0, "gear %s off %v: %d facing flips, %d side changes", gear, off, flips, sides)
+    }
 }

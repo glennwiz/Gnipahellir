@@ -73,6 +73,31 @@ body_blocked :: proc(w: ^World_Grid, pos, size: [2]f32, is_player: bool) -> bool
     return false
 }
 
+// Steering toward a point dx away on x, for every body that walks, swims or
+// flies at one (card 191): the side to go, or 0 inside the slack.  A body that
+// goes at a point with no slack, or one narrower than half its tick's step,
+// overshoots it each tick and turns back the next, its facing flipping many
+// times a second.  A facing set from it never turns on a correction smaller
+// than the slack.
+steer_dir :: proc(dx, slack: f32) -> int {
+    if abs(dx) <= slack do return 0
+    return 1 if dx > 0 else -1
+}
+
+// The same as a walk speed: full speed toward the point, the last tick's step
+// cut to what is left of the way, so it settles at any dt and any slack.
+steer_vel :: proc(dx, slack, speed, dt: f32) -> (vel: f32, dir: int) {
+    dir = steer_dir(dx, slack)
+    return f32(dir) * min(speed, abs(dx) / dt), dir
+}
+
+// The same for a body whose key moves it a whole stride a tick, with no
+// speed between (the hero): a side only when the stride leaves it nearer the
+// point than it is, so it never steps past and back, however fast it walks.
+steer_key :: proc(dx, slack, stride: f32) -> int {
+    return steer_dir(dx, max(slack, stride * 0.5))
+}
+
 // Integrates gravity (0 = none, e.g. debug fly mode) and moves the body,
 // resolving against solid tiles.  `grounded` is written only when the body
 // moves vertically: true on landing, false while airborne.  `is_player` lets

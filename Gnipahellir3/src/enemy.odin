@@ -1094,14 +1094,11 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid, dt: f32) {
     below    := dy > 0.6
     deadzone := f32(0.03) if below else f32(0.15)
     // Never past the middle: the below deadzone is narrower than a tick's
-    // walk, so a full step overshoots it and the step back flips the facing
-    // every tick (card 189).  The last step is cut to what is left.
-    if abs(dx) > deadzone {
-        e.facing = 1 if dx >= 0 else -1
-        e.vel.x  = f32(e.facing) * min(enemy_speed(e.kind), abs(dx) / dt)
-    } else {
-        e.vel.x = 0
-    }
+    // walk, and a full step overshot it, flipping the facing every tick
+    // (cards 189, 191).
+    dir: int
+    e.vel.x, dir = steer_vel(dx, deadzone, enemy_speed(e.kind), dt)
+    if dir != 0 do e.facing = dir
 
     // Jump when the waypoint is above, or when walking into a wall.  The
     // wall jump needs real walking (vel.x != 0): standing centered over a

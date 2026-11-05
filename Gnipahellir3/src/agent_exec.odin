@@ -968,7 +968,7 @@ hero_walk :: proc(gs: ^Game_State, b: ^Hero_Brain, dir: i8, drop_ok := false) {
 
 @(private="file")
 hero_walk_to :: proc(gs: ^Game_State, b: ^Hero_Brain, x: f32) {
-    hero_walk(gs, b, 1 if x > gs.player.pos.x + PLAYER_W * 0.5 else -1)
+    hero_walk(gs, b, hero_steer(gs, x))
 }
 
 // Away from th: to the remembered safe spot farthest from it, if one lies
@@ -1957,15 +1957,9 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         // Square on the step's tile, a jump: the body inside the column the
         // plan read the rows of (a tick's walk is narrower than the slack).
         // The block set down in it once the feet have risen out of it, then
-        // down onto it, unsteered.  Steered only while out of the slack: a
-        // step toward the middle from inside it overshoots, and the next one
-        // back flips the body's facing every tick (card 189).
-        squared := abs(f32(st.from.x) + 0.5 - (p.pos.x + PLAYER_W * 0.5)) <= HERO_PILLAR_SLACK
+        // down onto it, unsteered (card 189).
         if !is_solid(w, int(st.from.x), int(st.from.y)) {
-            if p.grounded && !squared {
-                hero_go_toward(gs, st.from)
-                return false
-            }
+            if p.grounded && hero_go_toward(gs, st.from) != 0 do return false
             if p.grounded {
                 c.jump = true
                 gs.agent.first = true
@@ -2011,15 +2005,23 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     return false
 }
 
-// How far off its column's middle a pillaring body may stand: the room the
-// column leaves either side of it, the two sides wider than a tick's walk.
-HERO_PILLAR_SLACK :: (1 - PLAYER_W) * 0.5
+// How far off a point the hero walks or steps at it stops (card 191): the
+// room a column leaves either side of the body, so a body inside it stands
+// wholly in the column.  A stride wider than the slack's two sides (Speed
+// gear) brakes instead: no key when it would carry the body past the point.
+HERO_STEER_SLACK :: (1 - PLAYER_W) * 0.5
 
-// The key toward tile t's middle.  A step ends as the feet reach its tile, so
-// this never has to stop.
+// The key toward x this tick, none once there.
 @(private="file")
-hero_go_toward :: proc(gs: ^Game_State, t: [2]i32) {
-    gs.agent.cmd.move = 1 if f32(t.x) + 0.5 > gs.player.pos.x + PLAYER_W * 0.5 else -1
+hero_steer :: proc(gs: ^Game_State, x: f32) -> i8 {
+    return i8(steer_key(x - (gs.player.pos.x + PLAYER_W * 0.5), HERO_STEER_SLACK, player_walk_speed(gs) * gs.delta_time))
+}
+
+// The key toward tile t's middle, none once there, and which it is.
+@(private="file")
+hero_go_toward :: proc(gs: ^Game_State, t: [2]i32) -> i8 {
+    gs.agent.cmd.move = hero_steer(gs, f32(t.x) + 0.5)
+    return gs.agent.cmd.move
 }
 
 // ─── Reflexes ───
