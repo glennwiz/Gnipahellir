@@ -43,7 +43,8 @@ Agent_Goal :: struct {
     reason:      Agent_Text,  // why it failed
     to:          [2]i32,  // a go's feet tile
     best:        i32,     // the nearest it has come, in tiles
-    stuck_t:     f32,     // seconds since it came nearer
+    stuck_t:     f32,     // seconds since it came nearer, or its plan's end did
+    steps_best:  int,     // the fewest steps its plan has had left
     replanned:   bool,    // stuck long enough to plan again, once
     left:        int,     // tiles the step being dug still has
     no_dig:      bool,    // its walks never dig (a fight's)
@@ -1655,6 +1656,11 @@ hero_spawn_feet :: proc() -> [2]i32 {
 hero_go_start :: proc(gs: ^Game_State, g: ^Agent_Goal, to: [2]i32) -> bool {
     w := &gs.world
     to := to
+    // A chest or a bench is clicked, not stood in or on: a go at one goes
+    // beside it, as a player walks up to it (card 175).
+    if is_structure_tile[get_tile(w, int(to.x), int(to.y))] {
+        if s, ok := hero_beside(gs, to); ok do to = s
+    }
     if is_solid(w, int(to.x), int(to.y)) && in_bounds(int(to.x), int(to.y - 1)) do to.y -= 1
     if !hero_open(w, to.x, to.y) && !is_solid(w, int(to.x), int(to.y)) {
         agent_text_set(&g.reason, "hazard")
@@ -1664,6 +1670,19 @@ hero_go_start :: proc(gs: ^Game_State, g: ^Agent_Goal, to: [2]i32) -> bool {
     g.best    = max(i32)
     g.stuck_t = 0
     return true
+}
+
+// The stand beside tile t nearest the hero: a column either side, a row up,
+// level or down.
+@(private="file")
+hero_beside :: proc(gs: ^Game_State, t: [2]i32) -> (s: [2]i32, ok: bool) {
+    feet := hero_feet(&gs.player)
+    best := max(i32)
+    for dx in ([2]i32{-1, 1}) do for dy in i32(-1) ..= 1 {
+        c := t + {dx, dy}
+        if d := abs(c.x - feet.x) + abs(c.y - feet.y); d < best && hero_stand(&gs.world, c) do best, s, ok = d, c, true
+    }
+    return
 }
 
 // One tick of a go: follow the path, plan when there is none or it has gone
@@ -1682,8 +1701,13 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         return false
     }
 
-    if d := abs(feet.x - g.to.x) + abs(feet.y - g.to.y); d < g.best {
-        g.best, g.stuck_t, g.replanned = d, 0, false
+    // Headway: nearer the tile, or nearer the plan's end.  A route that goes
+    // round, away from the tile for longer than HERO_GO_STUCK_S, still walks
+    // its steps (card 175: up a shaft west of a surface tile, failed blocked).
+    if g.best == max(i32) do g.steps_best = max(int)  // a fresh walk
+    steps_left := path.n - path.at if path.goal == g.id && path.at < path.n else max(int)
+    if d := abs(feet.x - g.to.x) + abs(feet.y - g.to.y); d < g.best || steps_left < g.steps_best {
+        g.best, g.steps_best, g.stuck_t, g.replanned = min(d, g.best), min(steps_left, g.steps_best), 0, false
     } else {
         g.stuck_t += gs.delta_time
     }
@@ -1706,6 +1730,7 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         if feet == st.to {
             path.at += 1
             stale = path.at >= path.n
+            if stale do g.steps_best = max(int)  // a leg walked to its end: the next plan's steps count afresh
         } else {
             // Off the box between the step's ends: knocked off it.  Inside it
             // is on the way, as at an edge that still holds the body up.

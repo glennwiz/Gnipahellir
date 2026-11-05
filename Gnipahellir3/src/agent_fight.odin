@@ -25,13 +25,14 @@ Hero_Fight :: struct {
     target:     int,         // the enemy slot fought
     target_kind: Enemy_Kind, // what was in it, so a slot given up and filled again ends the fight
     retreating: bool,
-    wait_t:     f32,         // how long, in all, no ground a blow lands from was found
+    wait_t:     f32,         // how long, in all, no ground a blow lands from was found, or none landed at the stand
     skip:       [HERO_FIGHT_SKIP][2]i32,  // stands no walk got to
     n_skip:     int,
 }
 
 HERO_FIGHT_WAIT_S :: f32(5)  // a target no blow can reach is waited on this long in all, then given up
 HERO_FIGHT_SKIP   :: 8       // stands no walk gets to, passed over before the fight is given up
+HERO_STAND_SLACK  :: f32(0.15)  // how near the stand's middle the body's middle stands to strike; over a frame's walk
 
 @(private="file")
 hero_fight_parse :: proc(o: json.Object) -> (f: Hero_Fight, problem: string) {
@@ -144,7 +145,23 @@ hero_fight_goal_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         }
         g.to, g.best, g.stuck_t, g.replanned, g.left = s, max(i32), 0, false, 0
     }
-    if hero_go_tick(gs, g) do return false  // there: the next tick strikes
+    if hero_go_tick(gs, g) {
+        // There, with no blow: a walk ends as the body's middle crosses into
+        // the stand, at its edge, but the blow was judged from the stand's
+        // middle.  Step to it (card 175: a pit's lip hid the target from the
+        // edge and the hero froze).  Centred and still none: wait on it a
+        // while, as for a target no stand reaches, never for good.
+        cx, mid := p.pos.x + PLAYER_W * 0.5, f32(g.to.x) + 0.5
+        if abs(mid - cx) > HERO_STAND_SLACK {
+            gs.agent.cmd.move = 1 if mid > cx else -1
+            return false
+        }
+        f.wait_t += gs.delta_time
+        if f.wait_t < HERO_FIGHT_WAIT_S do return false
+        g.status = .Failed
+        agent_text_set(&g.reason, fmt.tprintf("unreachable: no blow at the %v lands from any stand", e.kind))
+        return false
+    }
     if g.status != .Failed do return false
     if f.n_skip < HERO_FIGHT_SKIP {
         // No walk there: another stand, from here.

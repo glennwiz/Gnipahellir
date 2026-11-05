@@ -3189,8 +3189,9 @@ hero_mine_names_the_reflex_that_refuses_it :: proc(t: ^testing.T) {
 
 // Card 159 (playtest 128: home marked on the bench failed only "blocked").
 // A structure is walked through from the side, so the top of one on the
-// floor is not stood on by walking up to it: the go fails blocked, naming
-// the structure.  On a pillar, jumped onto from beside it, it is reached.
+// floor is not stood on by walking up to it: a go there fails blocked, naming
+// the structure.  Home on the bench itself goes beside it (card 175), on the
+// floor or on a pillar.
 @(test)
 hero_home_on_a_structure_says_so :: proc(t: ^testing.T) {
     for raised in ([2]bool{false, true}) {
@@ -3205,12 +3206,12 @@ hero_home_on_a_structure_says_so :: proc(t: ^testing.T) {
         agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"home","at":[%d,%d]}}`, bench.x, bench.y))
         id := work_test_run(t, link, gs, `{"do":"home"}`, 60 * 8)
         status, reason := go_test_status(link, gs, id)
-        if raised {
-            testing.expectf(t, status == "done", "on the pillar: %s %s", status, reason)
-        } else {
-            want := fmt.tprintf("blocked: [%d,%d] stands on a Crafting_Bench, which the body walks through from the side", bench.x, bench.y - 1)
-            testing.expectf(t, status == "failed" && reason == want, "on the floor: %s %s", status, reason)
-        }
+        testing.expectf(t, status == "done", "raised %v: %s %s", raised, status, reason)
+        if raised do continue
+        id, _ = go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, bench.x, bench.y - 1), 60 * 8)
+        status, reason = go_test_status(link, gs, id)
+        want := fmt.tprintf("blocked: [%d,%d] stands on a Crafting_Bench, which the body walks through from the side", bench.x, bench.y - 1)
+        testing.expectf(t, status == "failed" && reason == want, "on top of it: %s %s", status, reason)
     }
 }
 
@@ -7155,4 +7156,224 @@ hero_swim_step_over_a_burn_leaves :: proc(t: ^testing.T) {
         hero_test_tick(link, gs)
         testing.expectf(t, gs.agent.cmd.move == -1, "row %d: move %d, on with the swim by the lava", row, gs.agent.cmd.move)
     }
+}
+
+// Playtest 133's item 9 (run 114152, card 175): a walk ends as the body's
+// middle crosses into the stand, at its edge, while the stand's blow is judged
+// from its middle.  From the edge the pit's lip hides the beetle, so no shot,
+// yet the stand still holds and the walk says there: the hero froze.  Set at
+// the edge, it steps to the middle and shoots, from either side.
+@(test)
+hero_fight_at_the_edge_of_its_stand_steps_in_and_shoots :: proc(t: ^testing.T) {
+    Edge_Case :: struct {
+        stand, pit, beetle: int,  // columns off x0; the pit is 4 wide
+        mid:                f32,  // the body's middle, off the stand's west side
+    }
+    for c in ([2]Edge_Case{{2, 3, 5, 0.05}, {9, 5, 6, 0.95}}) {  // west edge steps east, east edge steps west
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        go_test_give(gs, .Fire_Wand, 1)
+        gs.player.mana = gs.player.mana_max
+        for x in x0 + c.pit ..= x0 + c.pit + 3 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Air)
+        e := fight_test_body(gs, .Ember_Beetle, x0 + c.beetle, G + 3)
+        gs.enemies.data[e].hp, gs.enemies.data[e].hp_max = 1000, 1000
+        s := [2]i32{i32(x0 + c.stand), i32(G - 1)}
+        edge := [2]f32{f32(s.x) + c.mid - PLAYER_W * 0.5, f32(G) - PLAYER_H}  // the body's middle just inside the stand
+        ec := gs.enemies.data[e].pos + enemy_body_size(.Ember_Beetle) * 0.5
+        sw, wa := hero_blow_from(gs, s, hero_fight_centre(s), e)
+        testing.expectf(t, wa && !sw, "stand %d: a shot lands from the stand's middle", c.stand)
+        testing.expectf(t, !sight_line_clear(&gs.world, edge + [2]f32{PLAYER_W, PLAYER_H} * 0.5, ec, skip_ends = true), "stand %d: the lip hides it from the edge", c.stand)
+
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Ember_Beetle"}]}`)
+        hero_test_tick(link, gs)
+        g: ^Agent_Goal
+        for &q in link.goals.slots[:link.goals.n] do if q.status == .Running do g = &q
+        if !testing.expectf(t, g != nil && g.kind == .Fight, "stand %d: the fight runs", c.stand) do return
+        g.to, g.best, g.stuck_t = s, max(i32), 0
+        gs.player.pos, gs.player.vel = edge, {}
+        shots := 0
+        for _ in 0 ..< 60 {
+            hero_test_tick(link, gs)
+            if gs.input.mine && is_fire_wand(held_item(&gs.player)) do shots += 1
+        }
+        testing.expectf(t, shots > 0, "stand %d: no shot in 60 frames at %v, goal %v %v to %v", c.stand, gs.player.pos, g.kind, g.status, g.to)
+    }
+}
+
+// Playtest 133's item 12 (run 114152 goal 24, card 175): the route to a
+// surface tile went west, away from it, up a shaft for over HERO_GO_STUCK_S,
+// and the go failed blocked mid-walk.  Here the only way past a wall is a
+// tunnel that runs west and down first: the steps walked are headway.  So
+// too after a leg of a long go is walked to its end (a plan cut short by its
+// window): the next plan's steps count afresh.
+@(test)
+hero_go_round_a_long_detour_is_not_blocked :: proc(t: ^testing.T) {
+    for after_a_leg in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}  // no dig, no bridge: the tunnel is the only way
+        for y in G - 14 ..< G do set_tile(&gs.world, x0 + 2, y, .Stone)
+        for i in 0 ..< 16 {
+            k := ((i + 1) * 10 + 15) / 16  // down to the tunnel's floor, westward
+            for y in G ..< G + k do set_tile(&gs.world, x0 - 1 - i, y, .Air)
+        }
+        for x in x0 - 16 ..= x0 + 4 do for y in G + 7 ..= G + 9 do set_tile(&gs.world, x, y, .Air)  // room to step up out of
+        for j in 0 ..< 9 do for y in G ..= G + 8 - j do set_tile(&gs.world, x0 + 5 + j, y, .Air)  // up, eastward
+        exec_test_frames(link, gs, 5)
+        to := [2]i32{i32(x0 + 14), i32(G - 1)}
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, to.x, to.y))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        exec_test_frames(link, gs, 1)
+        if after_a_leg {
+            // A leg walked to the tile the hero stands on, its last step this
+            // tick, with no nearer tile than here and one step left at best.
+            g: ^Agent_Goal
+            for &q in link.goals.slots[:link.goals.n] do if q.status == .Running do g = &q
+            if !testing.expect(t, g != nil, "the go runs") do return
+            f := hero_feet(&gs.player)
+            path := &gs.hero.path
+            path.goal, path.n, path.at = g.id, 1, 0
+            path.steps[0] = {from = f + {1, 0}, to = f, move = .Walk}
+            g.best, g.steps_best, g.stuck_t = abs(f.x - to.x) + abs(f.y - to.y), 1, 0
+        }
+        frames := 1
+        for ; frames < 1800 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "after a leg %v: %s %s in %d frames at %v", after_a_leg, status, reason, frames, gs.player.pos)
+        testing.expectf(t, frames > int(HERO_GO_STUCK_S * 60), "after a leg %v: the detour took %d frames: not long enough to test", after_a_leg, frames)
+    }
+}
+
+// Playtest 136's item 21 (run 144927 goal 16, card 175): the brain flipped
+// flee and goal every few ticks.  The craft sent TAB once, the window opened,
+// a flee tick swept it shut, and the goal counted its tries out waiting for a
+// window it never asked for again: "out_of_reach: the window at [0,0] did not
+// open".  Shut under it before the look, it asks again.
+@(test)
+hero_craft_window_shut_by_a_flight_opens_again :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    hero_test_arena(gs)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Plank, 4)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"craft","item":"Crafting_Bench"}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    for f := 0; f < 60 && !gs.ui.show_crafting; f += 1 do exec_test_frames(link, gs, 1)
+    if !testing.expect(t, gs.ui.show_crafting, "TAB opened the window") do return
+    // A flee tick: the windows swept shut, the goal paused and resumed.
+    gs.ui.show_crafting, gs.ui.show_inventory = false, false
+    gs.hero.current = .Flee
+    for f := 0; f < 600 && agent_goals_busy(&link.goals); f += 1 do exec_test_frames(link, gs, 1)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Crafting_Bench), 1)
+}
+
+// Card 175 (c164b's addendum): a go aimed at a chest or a bench tile went on
+// top of it and failed, "stands on a ... walks through" in the open, no_route
+// in a tunnel two high.  It goes beside it, as a player walks up to click it,
+// on the hero's side; with no floor beside it, into the hole a row down, or
+// up onto a block a row up.
+@(test)
+hero_go_at_a_chest_or_bench_goes_beside_it :: proc(t: ^testing.T) {
+    for scene in 0 ..< 5 {  // open, tunnel, a hole beside it, the hero east of it, a block beside it
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}  // no dig: the tunnel's roof stays
+        floor := G
+        kind := Tile_Type.Crafting_Bench
+        if scene == 1 {
+            floor, kind = G + 4, .Rune_Scroll_Chest_A
+            for x in x0 - 1 ..= x0 + 9 do for y in G + 2 ..< floor do set_tile(&gs.world, x, y, .Air)
+            gs.player.pos = {f32(x0) + 0.1, f32(floor) - PLAYER_H}
+        }
+        at := [2]i32{i32(x0 + 5), i32(floor - 1)}
+        want := at - {1, 0}
+        switch scene {
+        case 2:
+            set_tile(&gs.world, x0 + 4, G, .Air)
+            want = at + {-1, 1}
+        case 3:
+            gs.player.pos = {f32(x0 + 10) + 0.1, f32(G) - PLAYER_H}
+            want = at + {1, 0}
+        case 4:
+            set_tile(&gs.world, x0 + 4, G - 1, .Stone)
+            want = at + {-1, -1}
+        }
+        set_tile(&gs.world, int(at.x), int(at.y), kind)
+        exec_test_frames(link, gs, 5)
+        id, frames := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, at.x, at.y), 600)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "scene %d: %s %s in %d frames", scene, status, reason, frames)
+        testing.expectf(t, hero_feet(&gs.player) == want, "scene %d: feet %v, want %v", scene, hero_feet(&gs.player), want)
+        testing.expect_value(t, get_tile(&gs.world, int(at.x), int(at.y)), kind)
+    }
+}
+
+// A window that never opens still fails, after HERO_OPEN_TRIES ticks, with
+// no pause between: asking again is for a goal back from a pause (card 175).
+@(test)
+hero_craft_window_that_never_opens_fails :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    hero_test_arena(gs)
+    reveal_recipe(&gs.progression, .Crafting_Bench)
+    go_test_give(gs, .Plank, 4)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"craft","item":"Crafting_Bench"}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    for f := 0; f < 120 && agent_goals_busy(&link.goals); f += 1 {
+        exec_test_frames(link, gs, 1)
+        gs.ui.show_crafting, gs.ui.show_inventory = false, false  // whatever TAB did, gone
+    }
+    work_test_expect_failed(t, link, gs, id, "out_of_reach: the window at [0,0] did not open")
+}
+
+// Centred on its stand and still no blow (the target a hair past the wand's
+// range from the body, inside it from the stand's middle): the fight waits
+// HERO_FIGHT_WAIT_S on it, then fails, never stands there for good (card 175).
+@(test)
+hero_fight_centred_on_a_stand_with_no_blow_gives_up :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    go_test_give(gs, .Fire_Wand, 1)
+    gs.player.mana = gs.player.mana_max
+    s := [2]i32{i32(x0 + 2), i32(G - 1)}
+    mid := hero_fight_centre(s)
+    e := fight_test_body(gs, .Ember_Beetle, x0 + 10, G)
+    size := enemy_body_size(.Ember_Beetle)
+    dy := (f32(G) - size.y * 0.5) - mid.y
+    gs.enemies.data[e].pos.x = mid.x + math.sqrt((HERO_WAND_RANGE - 0.05) * (HERO_WAND_RANGE - 0.05) - dy * dy) - size.x * 0.5
+    gs.enemies.data[e].hp, gs.enemies.data[e].hp_max = 1000, 1000
+    off := HERO_STAND_SLACK * 0.8  // inside the slack, away from the target
+    body := [2]f32{mid.x - off - PLAYER_W * 0.5, f32(G) - PLAYER_H}
+    _, wa := hero_blow_from(gs, s, mid, e)
+    testing.expect(t, wa, "a shot from the stand's middle")
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"fight","kind":"Ember_Beetle"}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    hero_test_tick(link, gs)
+    g: ^Agent_Goal
+    for &q in link.goals.slots[:link.goals.n] do if q.status == .Running do g = &q
+    if !testing.expect(t, g != nil && g.kind == .Fight, "the fight runs") do return
+    g.to, g.best, g.stuck_t = s, max(i32), 0
+    gs.player.pos, gs.player.vel = body, {}
+    _, wa = hero_blow_from(gs, player_tile(&gs.player), gs.player.pos + [2]f32{PLAYER_W, PLAYER_H} * 0.5, e)
+    testing.expect(t, !wa, "no shot from the body")
+    frames := 0
+    for ; frames < int(HERO_FIGHT_WAIT_S * 60) + 120 && agent_goals_busy(&link.goals); frames += 1 do hero_test_tick(link, gs)
+    work_test_expect_failed(t, link, gs, id, "unreachable: no blow at the Ember_Beetle lands from any stand")
 }
