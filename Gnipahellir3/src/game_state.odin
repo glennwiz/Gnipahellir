@@ -1021,11 +1021,18 @@ DEFAULT_WORLD_SEED :: u32(0)
 // The world seed for a fresh run: the GNIPA_SEED env var if it holds a number
 // (reproducible / shareable), otherwise wall-clock time (a new world each game).
 new_game_world_seed :: proc() -> u32 {
-    if s := os.get_env("GNIPA_SEED", context.temp_allocator); s != "" {
-        if n, ok := strconv.parse_u64(s); ok do return u32(n)
-    }
+    if seed, ok := seed_from_env_text(os.get_env(SEED_ENV, context.temp_allocator)); ok do return seed
     when ODIN_TEST do return TEST_WORLD_SEED  // a test's world never comes from the clock (card 180)
     return u32(time.now()._nsec)
+}
+
+SEED_ENV :: "GNIPA_SEED"  // the env var a harness types a run's seed in
+
+// The seed GNIPA_SEED's text names, if it names one.  Pure, so a test hands the
+// text in rather than set the env every test thread shares (card 182).
+seed_from_env_text :: proc(text: string) -> (seed: u32, ok: bool) {
+    n, parsed := strconv.parse_u64(text)
+    return u32(n), parsed
 }
 
 // What a test build seeds in place of the clock, so a test's outcome never
