@@ -9,6 +9,13 @@ import "core:fmt"
 
 PLAYER_REACH :: 8  // tiles, chebyshev from player center; placement only (mining uses PICK_RANGE/wands)
 
+// A cell a block can go into: empty.  Leaves, mist, a flower and the like are
+// open to walk through but not to build in.  The agent's planner asks this too.
+place_cell_open :: proc(w: ^World_Grid, x, y: int) -> bool {
+    t := get_tile(w, x, y)
+    return t == .Air || t == .Void
+}
+
 // Would placing `item` at tile (x,y) succeed?  Pure — no notify, no mutation —
 // so the placement handler and the cursor ghost preview agree exactly.
 placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
@@ -18,8 +25,7 @@ placement_ok :: proc(gs: ^Game_State, item: Item, x, y: int) -> bool {
 
     if place_tile == .Door do return door_placement_ok(gs, x, y)  // 1×2, own rules
 
-    t := get_tile(&gs.world, x, y)                 // target must be open
-    if t != .Air && t != .Void do return false
+    if !place_cell_open(&gs.world, x, y) do return false  // target must be open
 
     // The Auto-Miner wakes only inside a spawned dimension, one per expedition.
     if place_tile == .Auto_Miner &&
@@ -81,7 +87,7 @@ place_refusal :: proc(gs: ^Game_State, place_tile: Tile_Type, x, y: int) -> stri
     pcx := int(gs.player.pos.x + PLAYER_W*0.5)
     pcy := int(gs.player.pos.y + PLAYER_H*0.5)
     if abs(x - pcx) > PLAYER_REACH || abs(y - pcy) > PLAYER_REACH do return "Out of reach"
-    if t := get_tile(&gs.world, x, y); t != .Air && t != .Void do return "Something is already there"
+    if !place_cell_open(&gs.world, x, y) do return "Something is already there"
     if rule := turret_table[place_tile]; !turret_pattern_ok(&gs.world, x, y, rule) do return rule.refusal
     if needs_ground(place_tile) && !is_solid(&gs.world, x, y + 1) do return "It needs solid ground under it"
     if !is_solid(&gs.world, x-1, y) && !is_solid(&gs.world, x+1, y) &&

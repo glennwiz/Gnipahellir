@@ -406,6 +406,10 @@ HERO_FIGHT_RETREAT_FRAC :: f32(0.3) // a fight goal backs off under this share o
 HERO_SAFE_CLEAR       :: f32(8)     // safe ground has no threat nearer than this
 HERO_SAFE_SPACING     :: i32(2)     // tiles between remembered safe spots
 HERO_LOOSE_ROWS       :: 4          // rows above the head searched for loose blocks
+HERO_DENS_MAX         :: 4          // Builder dens in view the senses keep
+HERO_DANGER_R         :: i32(6)     // tiles round a known den's middle or a hunting threat: ground a path and a work target keep off (card 163)
+HERO_NAV_DANGER_COST  :: f32(6)     // per step a plan takes inside it
+HERO_WORK_DANGER_COST :: i32(40)    // tiles of walk a work target inside it is worth
 
 Hero_Behaviour :: enum u8 { None, Work_Goal, Fight, Flee, Avoid_Ledge, Idle, Retreat }
 
@@ -444,7 +448,11 @@ Hero_Senses :: struct {
     safe:      [HERO_SAFE_MAX][2]i32,  // ring of the last safe tiles stood on
     n_safe:    int,
     safe_next: int,
+    dens:      [HERO_DENS_MAX][2]i32,  // the middle of each Builder den in view
+    n_dens:    int,
 }
+
+Hero_Dangers :: [HERO_DENS_MAX + HERO_THREATS_MAX][2]i32
 
 Hero_Note_Kind :: enum u8 { Paused, Resumed, Idle }
 
@@ -683,6 +691,17 @@ hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
         copy(s.threats[at + 1:last + 1], s.threats[at:last])
         s.threats[at] = th
         s.n_threats = last + 1
+    }
+
+    // Dens: each built den in view, as a player sees one on screen.
+    s.n_dens = 0
+    for i in 0 ..< MAX_ENEMIES {
+        e := &gs.enemies.data[i]
+        if !gs.enemies.active[i] || !e.builder.den_built || s.n_dens == HERO_DENS_MAX do continue  // a Builder's, or Garm's lair
+        m := e.builder.anchor + {0, -2}  // den_structure_slot: rows -5..1 over the anchor, columns -4..4
+        if abs(f32(m.x) + 0.5 - hc.x) > f32(AGENT_VIEW_W) * 0.5 || abs(f32(m.y) + 0.5 - hc.y) > f32(AGENT_VIEW_H) * 0.5 do continue
+        s.dens[s.n_dens] = m
+        s.n_dens += 1
     }
 
     // The danger map.
@@ -1275,7 +1294,7 @@ HERO_NAV_SWIM_COST   :: f32(2)    // per tile swum: water halves the stride (WAT
 HERO_LOW_HP_FRAC     :: f32(0.3)  // the reflex line: a potion under it, no fall that ends below it
 HERO_POTION_COOLDOWN_S :: f32(1)  // between potions
 
-Hero_Move :: enum u8 { Walk, Jump, Drop, Gap, Dig, Bridge, Swim }
+Hero_Move :: enum u8 { Walk, Jump, Drop, Gap, Dig, Bridge, Swim, Pillar }
 
 Hero_Step :: struct {
     from, to: [2]i32,  // feet tiles
@@ -1297,6 +1316,8 @@ Hero_Nav :: struct {
     seen:    [HERO_NAV_NODES]bool,
     closed:  [HERO_NAV_NODES]bool,
     open:    [HERO_NAV_OPEN]A_Open,
+    danger:  Hero_Dangers,  // this plan's, from the senses
+    n_danger: int,
 }
 
 hero_feet :: proc(p: ^Player) -> [2]i32 {
@@ -1429,6 +1450,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     if s < 0 do return false
     has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
     _, blocks := hero_bridge_blocks(gs)
+    n.n_danger = hero_dangers(&gs.hero.senses, &n.danger)
 
     size, work := 0, 0
     n.g[s], n.seen[s], n.bridges[s] = 0, true, 0
@@ -1473,8 +1495,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
                 if l, k, ok := hero_gap_landing(w, a, d); ok {
                     hero_nav_relax(n, &size, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
                 }
-                under := get_tile(w, int(f.x), int(f.y + 1))
-                if int(nb) < blocks && (under == .Air || under == .Void) && w.item_counts[grid_idx(int(f.x), int(f.y + 1))] == 0 {  // never over a pile: the block would bury it
+                if int(nb) < blocks && place_cell_open(w, int(f.x), int(f.y + 1)) && w.item_counts[grid_idx(int(f.x), int(f.y + 1))] == 0 {  // never over a pile: the block would bury it
                     hero_nav_relax(n, &size, o, i, f, 1 + HERO_NAV_BRIDGE_COST, .Bridge, nb + 1, to)
                 }
             }
@@ -1493,6 +1514,13 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
                 }
                 if ok && dug > 0 do hero_nav_relax(n, &size, o, i, dt, 1 + HERO_NAV_DIG_COST * f32(dug), .Dig, nb, to)
             }
+        }
+        // Up a pillar, as a player climbs with blocks in the bag: a jump, and
+        // a block set down in the feet's tile once they clear it.  The jump
+        // needs the two rows over the feet; a third, solid, only stops the head
+        // (card 163).
+        if int(nb) < blocks && place_cell_open(w, int(x), int(y)) && hero_open(w, x, y - 1) && hero_open(w, x, y - 2) && w.item_counts[grid_idx(int(x), int(y))] == 0 {  // never over a pile, as the bridge
+            hero_nav_relax(n, &size, o, i, a - {0, 1}, 1 + HERO_NAV_BRIDGE_COST, .Pillar, nb + 1, to)
         }
     }
 
@@ -1589,7 +1617,7 @@ hero_nav_dug :: proc(n: ^Hero_Nav, o: [2]i32, s, i: int, t: [2]i32) -> bool {
 hero_nav_relax :: proc(n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, b: [2]i32, cost: f32, m: Hero_Move, nb: u8, to: [2]i32) {
     j := hero_nav_index(o, b)
     if j < 0 do return
-    g := n.g[i] + cost
+    g := n.g[i] + cost + (HERO_NAV_DANGER_COST if hero_in_danger(n.danger[:n.n_danger], b) else 0)
     if n.seen[j] && g >= n.g[j] do return
     n.g[j], n.parent[j], n.move[j], n.bridges[j], n.seen[j] = g, i16(i), m, nb, true
     work := 0
@@ -1683,6 +1711,26 @@ hero_beside :: proc(gs: ^Game_State, t: [2]i32) -> (s: [2]i32, ok: bool) {
         if d := abs(c.x - feet.x) + abs(c.y - feet.y); d < best && hero_stand(&gs.world, c) do best, s, ok = d, c, true
     }
     return
+}
+
+// What a plan and a work target keep off (card 163: a gather dug into a den
+// for its wood, goes walked into dens): the dens in view and the threats
+// hunting the hero.
+hero_dangers :: proc(s: ^Hero_Senses, out: ^Hero_Dangers) -> (n: int) {
+    for d in s.dens[:s.n_dens] {
+        out[n] = d
+        n += 1
+    }
+    for th in s.threats[:s.n_threats] do if th.hunting {
+        out[n] = {i32(th.at.x), i32(th.at.y)}
+        n += 1
+    }
+    return
+}
+
+hero_in_danger :: proc(d: [][2]i32, t: [2]i32) -> bool {
+    for c in d do if chebyshev(c, t) <= HERO_DANGER_R do return true
+    return false
 }
 
 // One tick of a go: follow the path, plan when there is none or it has gone
@@ -1790,6 +1838,34 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
             c.has_place = true
             c.place     = under
             c.aim       = {f32(under.x) + 0.5, f32(under.y) + 0.5}
+            gs.agent.first = true
+            return false
+        }
+    case .Pillar:
+        // Square on the step's tile, a jump: the body inside the column the
+        // plan read the rows of (a tick's walk is narrower than the slack).
+        // The block set down in it once the feet have risen out of it, then
+        // down onto it.
+        if !is_solid(w, int(st.from.x), int(st.from.y)) {
+            if p.grounded && abs(f32(st.from.x) + 0.5 - (p.pos.x + PLAYER_W * 0.5)) > (1 - PLAYER_W) * 0.5 {
+                hero_go_toward(gs, st.from)
+                return false
+            }
+            if p.grounded {
+                c.jump = true
+                gs.agent.first = true
+                return false
+            }
+            if p.pos.y + PLAYER_H > f32(st.from.y) do return false  // still in it
+            slot := hero_block_slot(gs)
+            if slot < 0 {
+                path.n = 0  // the bag ran out: plan again
+                return false
+            }
+            c.verb, c.verb_arg = .Select, i32(slot)
+            c.has_place = true
+            c.place     = st.from
+            c.aim       = {f32(st.from.x) + 0.5, f32(st.from.y) + 0.5}
             gs.agent.first = true
             return false
         }

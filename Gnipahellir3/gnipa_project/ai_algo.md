@@ -221,6 +221,12 @@ never touches world state.
   passes `SKY_FALL_Y` before it lands is none, as the fall through the clouds
   lands on the surface unhurt, card 164), a burn (a `.Damaging` tile at
   the step or the landing), and a loose block (a faller) hanging over the head.
+- **Dens and dangers** (card 163): each built den in view (`den_built`: a
+  Builder's, or Garm's lair) is sensed at its middle, up to `HERO_DENS_MAX`.
+  `hero_dangers` lists them with every hunting threat; the planner prices a
+  step within `HERO_DANGER_R` (chebyshev) of one `HERO_NAV_DANGER_COST` more,
+  and the work goals a target there `HERO_WORK_DANGER_COST` more, so a gather
+  takes a tree before a den's wooden wall and a go walks round a den.
 - **Safe ground**: a ring of the last `HERO_SAFE_MAX` tiles the hero stood on,
   grounded, not burning, no damaging enemy nearer than `HERO_SAFE_CLEAR`,
   spaced `HERO_SAFE_SPACING` apart.
@@ -332,6 +338,7 @@ the one below is solid. Moves and their price:
 | drop | off an edge to wherever it lands | 1 + 0.3/tile + `HERO_NAV_HP_COST` per hp; never onto a burn or water, never one that kills or leaves hp under `HERO_LOW_HP_FRAC` |
 | gap | a running jump over open columns, landing up to `HERO_GAP_MAX` over | columns + `HERO_NAV_JUMP_COST` |
 | bridge | a plain block from the bag (`HERO_BRIDGE_BLOCKS`: of stone, dirt, turf and mossy stone the one with the most to spare past what the queued and running craft goals need of it, `hero_craft_reserve`, never a log, plank, ore or sand; card 159) set under the next column, never into a cell holding a pile | 1 + `HERO_NAV_BRIDGE_COST`; at most that spare, counted over every stack |
+| pillar | a jump straight up with a block from the bag set under the feet at the top (card 163), where the two rows over the head are open, the feet's cell is empty as placement wants it (`place_cell_open`: Leaves or mist are open, not empty; the bridge asks the same) and holds no pile; the step centres the body on its column first, jumps, and sets the block once the feet are clear of the tile | 1 + `HERO_NAV_BRIDGE_COST`, one block of the same spare as the bridge |
 | swim | in water (`hero_swim_cell`: the feet in water, the head in water or air, no burn), to any side, up or down; into it from land (at the feet, or falling in: the water breaks the fall); out onto ground level with it, or by strokes onto a stand one row up, with head room (card 174: a stroke lifts the feet at most about 0.9 tile over the water's top, so a bank a tile higher keeps the hero in). Lava is never a move | `HERO_NAV_SWIM_COST` per stride, out onto level ground too (water halves the stride); in 1, a fall in too (no hp); a stroke out onto the bank `HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST`, so a pond a gap jump clears is jumped |
 | dig | with the pick, or by hand through wood: a tunnel (2 tiles), a step cut up (3), a stair down, one down and one across (3); never a shaft, never the floor under the feet, never a tile beside water or lava, never the goal tile's own floor | 1 + `HERO_NAV_DIG_COST` per tile dug |
 
