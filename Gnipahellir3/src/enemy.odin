@@ -1061,7 +1061,7 @@ astar_dig_pass :: proc(gs: ^Game_State, from, to: [2]i32, stop_within: i32, brid
 
 // ─── Path Following ───────────────────────────────────────────────────────────
 
-enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
+enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid, dt: f32) {
     if nav.path.cursor >= nav.path.len {
         e.vel.x = 0
         return
@@ -1093,9 +1093,12 @@ enemy_follow_path :: proc(e: ^Enemy, nav: ^Enemy_Nav, w: ^World_Grid) {
     // adjacent ledge by a hair and never fall.
     below    := dy > 0.6
     deadzone := f32(0.03) if below else f32(0.15)
+    // Never past the middle: the below deadzone is narrower than a tick's
+    // walk, so a full step overshoots it and the step back flips the facing
+    // every tick (card 189).  The last step is cut to what is left.
     if abs(dx) > deadzone {
         e.facing = 1 if dx >= 0 else -1
-        e.vel.x  = f32(e.facing) * enemy_speed(e.kind)
+        e.vel.x  = f32(e.facing) * min(enemy_speed(e.kind), abs(dx) / dt)
     } else {
         e.vel.x = 0
     }
@@ -2054,7 +2057,7 @@ builder_travel :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32, T: [2]i32, 
     prev_cursor := nav.path.cursor
     acted := builder_exec_action(e, id, nav, gs)
     if !acted {
-        enemy_follow_path(e, nav, &gs.world)
+        enemy_follow_path(e, nav, &gs.world, dt)
     }
     if acted || nav.path.cursor != prev_cursor {
         b.stuck_timer = 0

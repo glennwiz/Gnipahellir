@@ -1957,9 +1957,12 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         // Square on the step's tile, a jump: the body inside the column the
         // plan read the rows of (a tick's walk is narrower than the slack).
         // The block set down in it once the feet have risen out of it, then
-        // down onto it.
+        // down onto it, unsteered.  Steered only while out of the slack: a
+        // step toward the middle from inside it overshoots, and the next one
+        // back flips the body's facing every tick (card 189).
+        squared := abs(f32(st.from.x) + 0.5 - (p.pos.x + PLAYER_W * 0.5)) <= HERO_PILLAR_SLACK
         if !is_solid(w, int(st.from.x), int(st.from.y)) {
-            if p.grounded && abs(f32(st.from.x) + 0.5 - (p.pos.x + PLAYER_W * 0.5)) > (1 - PLAYER_W) * 0.5 {
+            if p.grounded && !squared {
                 hero_go_toward(gs, st.from)
                 return false
             }
@@ -1981,6 +1984,7 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
             gs.agent.first = true
             return false
         }
+        return false  // the block is down: land on it, the next step squares up
     case .Swim:
         // Toward the step's tile, a stroke each tick it lies above the feet.
         b.swimming = true
@@ -2006,6 +2010,10 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     if c.jump do gs.agent.first = true
     return false
 }
+
+// How far off its column's middle a pillaring body may stand: the room the
+// column leaves either side of it, the two sides wider than a tick's walk.
+HERO_PILLAR_SLACK :: (1 - PLAYER_W) * 0.5
 
 // The key toward tile t's middle.  A step ends as the feet reach its tile, so
 // this never has to stop.

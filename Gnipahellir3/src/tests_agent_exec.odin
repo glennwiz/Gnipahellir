@@ -8451,3 +8451,42 @@ hero_fight_bridges_to_a_target_that_stands :: proc(t: ^testing.T) {
     testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
     testing.expectf(t, inventory_count(&gs.player.inventory, .Stone_Block) < 20, "no block set down")
 }
+
+// Card 189 (playtest 188): pillaring straight up, the hero flipped left and
+// right every tick.  The block set down, the step's walk toward the column's
+// middle had no slack: each tick's stride overshot it and the next came back.
+// Off the middle at the start, up six blocks: the body turns at most once to
+// square up, its key changes side at most once, and each jump is square.
+@(test)
+hero_pillar_up_holds_its_facing :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    go_test_give(gs, .Stone_Block, 20)
+    gs.player.pos.x = f32(x0) + 0.3  // 0.2 east of the middle: out of the slack
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0, G - 7))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    flips, sides, frames := 0, 0, 0
+    face, last := gs.player.facing, i8(0)
+    off_jumps := 0  // jumps taken from out of the column's slack
+    for ; frames < 1800 && agent_goals_busy(&link.goals); frames += 1 {
+        grounded, cx := gs.player.grounded, gs.player.pos.x + PLAYER_W * 0.5
+        exec_test_frames(link, gs, 1)
+        if grounded && gs.player.vel.y < 0 && abs(cx - (f32(x0) + 0.5)) > HERO_PILLAR_SLACK do off_jumps += 1
+        if gs.player.facing != face do flips += 1
+        face = gs.player.facing
+        if m := gs.agent.cmd.move; m != 0 {
+            if last != 0 && m != last do sides += 1
+            last = m
+        }
+    }
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
+    testing.expect_value(t, 20 - inventory_count(&gs.player.inventory, .Stone_Block), 6)
+    testing.expectf(t, flips <= 1, "%d facing flips in %d frames", flips, frames)
+    testing.expectf(t, sides <= 1, "%d move side changes in %d frames", sides, frames)
+    testing.expectf(t, off_jumps == 0, "%d jumps off the column's middle", off_jumps)
+}
