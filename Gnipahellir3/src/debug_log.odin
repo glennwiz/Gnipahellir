@@ -68,12 +68,22 @@ flush_action_log :: proc(gs: ^Game_State) {
 }
 
 // The kinds whose builder.goal is theirs: the builder and raider brains, a
-// wave's fire sprite, the risen hero.  Every other kind leaves it at its zero
-// value, which would read as Build_Den (playtest 135: Rain_Wisp goal=Build_Den),
-// so its pos line says goal=- instead.
+// wave's fire sprite, the risen hero, and Garm while he raises his lair
+// (builder_build_den, then Cooldown; card 186: once it stands nothing writes
+// it).  Every other kind leaves it at its zero value, which would read as
+// Build_Den (playtest 135: Rain_Wisp goal=Build_Den), so its pos line says
+// goal=- instead.
 @(rodata)
 log_has_goal := #partial [Enemy_Kind]bool{
-    .Builder = true, .Raider = true, .Vargr = true, .Fire_Sprite = true, .Undead = true,
+    .Builder = true, .Raider = true, .Vargr = true, .Fire_Sprite = true, .Undead = true, .Garm = true,
+}
+
+// The kinds whose builder.target_tile is theirs while has_target says so.
+// Garm's den step and the risen hero never set it (a draugr keeps its
+// builder life's), so their lines have no target (card 186: target=(0,0)).
+@(rodata)
+log_has_target := #partial [Enemy_Kind]bool{
+    .Builder = true, .Raider = true, .Vargr = true, .Fire_Sprite = true,
 }
 
 // Where every live body IS, written on update.odin's 5 s flush beat.  Bespoke
@@ -88,8 +98,12 @@ log_breadcrumbs :: proc(gs: ^Game_State) {
         p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index)
     for &e, i in gs.enemies.data {
         if !gs.enemies.active[i] do continue
-        if !log_has_goal[e.kind] {
+        if !log_has_goal[e.kind] || e.kind == .Garm && e.builder.den_built {
             log_action(gs, "pos Enemy#%d %v (%.1f,%.1f) hp=%d goal=-", i, e.kind, e.pos.x, e.pos.y, e.hp)
+            continue
+        }
+        if !log_has_target[e.kind] || !e.builder.has_target {
+            log_action(gs, "pos Enemy#%d %v (%.1f,%.1f) hp=%d goal=%v", i, e.kind, e.pos.x, e.pos.y, e.hp, e.builder.goal)
             continue
         }
         log_action(gs, "pos Enemy#%d %v (%.1f,%.1f) hp=%d goal=%v target=(%d,%d)",

@@ -92,23 +92,35 @@ a_falling_block_is_logged_from_its_fall_to_its_landing :: proc(t: ^testing.T) {
 
 // Playtest 135 (AL 3670): pos lines gave a Rain_Wisp goal=Build_Den, the
 // zero value of a goal only the builder brains keep.  Those kinds (the
-// builder and raider brains, a wave's fire sprite, the risen hero) keep goal
-// and target; every other kind says goal=-.
+// builder and raider brains, a wave's fire sprite, the risen hero, Garm while
+// he raises his lair) give their goal; every other kind, and Garm hunting
+// with his lair built, says goal=- (card 186).  A target is given only by a
+// kind that keeps one, while it has one: Garm's and the risen hero's are
+// never set, and gave target=(0,0).
 @(test)
 a_pos_line_gives_only_a_goal_the_enemy_has :: proc(t: ^testing.T) {
     when GAME_DEBUG {
-        brains := bit_set[Enemy_Kind]{.Builder, .Raider, .Vargr, .Fire_Sprite, .Undead}
-        for k in Enemy_Kind {
+        goals   := bit_set[Enemy_Kind]{.Builder, .Raider, .Vargr, .Fire_Sprite, .Undead, .Garm}
+        targets := bit_set[Enemy_Kind]{.Builder, .Raider, .Vargr, .Fire_Sprite}
+        for k in Enemy_Kind do for state in ([3]string{"fresh", "target", "den built"}) {
             gs := new(Game_State)
             defer free(gs)
             game_state_init(gs, 781)
             id, ok := enemy_alloc(&gs.enemies)
             assert(ok)
-            gs.enemies.data[id] = Enemy{kind = k, hp = 3, hp_max = 3, pos = {50, 20}}
+            e := &gs.enemies.data[id]
+            e^ = Enemy{kind = k, hp = 3, hp_max = 3, pos = {50, 20}}
+            switch state {
+            case "target":    e.builder.target_tile, e.builder.has_target = {7, 9}, true
+            case "den built": e.builder.den_built = true
+            }
             log_breadcrumbs(gs)
             line := log_pos_line(gs, id)
-            if k in brains do testing.expectf(t, strings.contains(line, "goal=Build_Den target=("), "%v: %q", k, line)
-            else do testing.expectf(t, strings.has_suffix(line, "goal=-"), "%v: %q", k, line)
+            want := "goal=-"
+            if k in goals && !(k == .Garm && state == "den built") {
+                want = "goal=Build_Den target=(7,9)" if k in targets && state == "target" else "goal=Build_Den"
+            }
+            testing.expectf(t, strings.has_suffix(line, want), "%v %s: %q, want %q", k, state, line, want)
         }
     }
 }
