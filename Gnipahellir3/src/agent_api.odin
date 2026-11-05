@@ -85,7 +85,8 @@ package game
 // left the player.  The same goals on the same frames from the same GNIPA_SEED
 // play out the same: the frame clock starts at the first connect, the step is
 // fixed, and a New Game while driving derives its seeds from the last one.
-// Each goal's end is a row too ("done" or "failed" with the id), and so is each
+// Each goal's end is a row too ("done" or "failed" with the id and where it left
+// the hero, which a replay checks), and so is each
 // window opening or closing ("window"), for `gnipa --summary`.  `gnipa --replay`
 // feeds the goal rows back on their frames and stops at a disconnect.
 //
@@ -793,10 +794,12 @@ agent_after_tick :: proc(link: ^Agent_Link, gs: ^Game_State) {
 agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     g.told = true
     if g.status == .Done && g.via != .Goal do agent_record_act(link, gs, g)
+    // Where the goal left the hero, so a replay checks each goal's landing.
+    land := fmt.tprintf(`"x":%.3f,"y":%.3f,"hp":%d`, gs.player.pos.x, gs.player.pos.y, gs.player.hp)
     if g.status == .Done {
-        agent_record_op(link, gs, fmt.tprintf(`"done":%d`, g.id))
+        agent_record_op(link, gs, fmt.tprintf(`"done":%d,%s`, g.id, land))
     } else {
-        agent_record_op(link, gs, fmt.tprintf(`"failed":%d,"reason":%s`, g.id, agent_quote(string(g.reason.buf[:g.reason.len]))))
+        agent_record_op(link, gs, fmt.tprintf(`"failed":%d,"reason":%s,%s`, g.id, agent_quote(string(g.reason.buf[:g.reason.len])), land))
     }
     agent_fight_flush(link)
     flush_action_log(gs)  // what a reply reports is already on disk
@@ -884,7 +887,7 @@ agent_goal_cancel :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal, wh
 // Cancels every goal still to finish.
 agent_goals_clear :: proc(link: ^Agent_Link, gs: ^Game_State, why: string) {
     if !agent_goals_busy(&link.goals) do return
-    agent_record_op(link, gs, `"clear":true`)
+    agent_record_op(link, gs, fmt.tprintf(`"clear":true,"reason":%s`, agent_quote(why)))  // a replay ends the goals with the same reason
     for &g in link.goals.slots[:link.goals.n] {
         if g.status == .Queued || g.status == .Running do agent_goal_cancel(link, gs, &g, why)
     }

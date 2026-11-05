@@ -40,7 +40,8 @@ TOOL_USAGE :: `usage:
                                          an agent run in a new folder under build/agent_runs/;
                                          --load starts it from a save, as Continue does
   gnipa --replay <run folder>            play a run's goals back in the window, from its
-                                         seed, or from its start.sav for a --load run
+                                         seed, or from its start.sav for a --load run, and
+                                         check each goal ends where it did
   gnipa --summary <run folder>           one page on a run, aimed at finding game bugs
   gnipa --pacing <run folder>... [--csv out.csv]
                                          seconds to Scroll B and to 10 Gold Bars; a --load
@@ -434,6 +435,7 @@ Tool_Replay :: struct {
     cut:      bool,    // a disconnect ended what can be replayed
     done:     bool,
     diverged: bool,
+    checked:  int,     // landings the replay compared with the run's
 }
 
 // What a replay boots from, read from the run's folder: its seed and goal rows,
@@ -570,7 +572,8 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
         if !known do return
         agent_goal_add(link, gs, kind, via, agent_canonical(rec["goal"]))
     case "clear" in rec:
-        agent_goals_clear(link, gs, "cancelled")
+        why, given := rec["reason"].(json.String)
+        agent_goals_clear(link, gs, why if given else "cancelled")  // a row from before clears kept their reason
     case "cancel" in rec:
         id, _ := agent_int(rec, "cancel")
         for &g in link.goals.slots[:link.goals.n] {
@@ -599,7 +602,7 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
     }
 }
 
-// Checks the replay's own finished acts against the run's, and says how it went.
+// Checks the replay's own landings against the run's, and says how it went.
 @(private="file")
 tool_replay_finish :: proc(rep: ^Tool_Replay, link: ^Agent_Link) {
     rep.done = true
@@ -611,40 +614,66 @@ tool_replay_finish :: proc(rep: ^Tool_Replay, link: ^Agent_Link) {
     got, _ := os.read_entire_file(rep.got, context.temp_allocator)
     n, ok, note := tool_replay_compare(rep.rows[:min(rep.at, len(rep.rows))], string(got))
     rep.diverged = !ok
-    if ok do fmt.printfln("%d acts replayed, each where it landed before", n)
-    else do fmt.println(note)
+    rep.checked  = n
+    fmt.println(tool_replay_verdict(n, ok, note))
     if rep.cut && rep.at < len(rep.rows) do fmt.println("stopped at a disconnect: the keyboard had the game after it, so the rest cannot be replayed")
     fmt.println("close the game window when done watching")
 }
 
-// The finished-act rows of a recording and of its replay, in order: where each
-// left the player.  False, with the first difference, when they part.
+// What a replay says of itself.  One that checked nothing has not shown the run
+// repeats, so it warns rather than passing.
+tool_replay_verdict :: proc(n: int, ok: bool, note: string) -> string {
+    if !ok do return note
+    if n == 0 do return "WARNING: 0 landings checked: the run has no goal ends or acts to compare, so this replay shows nothing"
+    return fmt.tprintf("%d landings replayed, each where it landed before", n)
+}
+
+// The landing rows of a recording and of its replay, in order: each goal's end
+// (done or failed, with its reason) and each finished act, with where it left
+// the player.  False, with the first difference, when they part.  A goal end
+// recorded before its landing was written is checked by frame and outcome.
 tool_replay_compare :: proc(want, got: string) -> (matched: int, ok: bool, note: string) {
-    Landing :: struct { f: int, x, y: f64, hp, lvl: int, mana: f64 }
+    Landing :: struct { f, goal: int, failed, placed: bool, reason: string, x, y: f64, hp, lvl: int, mana: f64 }
     landings :: proc(rows: string) -> [dynamic]Landing {
         out := make([dynamic]Landing, context.temp_allocator)
         for line in strings.split_lines(rows, context.temp_allocator) {
             value, err := json.parse_string(line, parse_integers = true, allocator = context.temp_allocator)
             rec, is_obj := value.(json.Object)
-            if err != .None || !is_obj || "act" not_in rec do continue
+            if err != .None || !is_obj do continue
             l: Landing
+            switch {
+            case "act" in rec:
+                l.lvl, _  = agent_int(rec, "lvl")
+                l.mana    = tool_json_f64(rec["mana"])
+            case "done" in rec:
+                l.goal, _ = agent_int(rec, "done")
+            case "failed" in rec:
+                l.goal, _ = agent_int(rec, "failed")
+                l.failed  = true
+                l.reason, _ = rec["reason"].(json.String)
+            case:
+                continue
+            }
             l.f, _    = agent_int(rec, "f")
+            l.placed  = "x" in rec
             l.hp, _   = agent_int(rec, "hp")
-            l.lvl, _  = agent_int(rec, "lvl")
             l.x       = tool_json_f64(rec["x"])
             l.y       = tool_json_f64(rec["y"])
-            l.mana    = tool_json_f64(rec["mana"])
             append(&out, l)
         }
         return out
     }
     w, g := landings(want), landings(got)
     for a, i in w {
-        if i >= len(g) do return i, false, fmt.tprintf("the replay played %d of %d acts", i, len(w))
+        if i >= len(g) do return i, false, fmt.tprintf("the replay reached %d of %d landings", i, len(w))
         b := g[i]
-        if a.f != b.f || abs(a.x - b.x) > 0.01 || abs(a.y - b.y) > 0.01 || a.hp != b.hp || a.lvl != b.lvl || abs(a.mana - b.mana) > 0.1 {
-            return i, false, fmt.tprintf("DIVERGED after %d acts: recorded %v, replayed %v", i, a, b)
+        same := a.f == b.f && a.goal == b.goal && a.failed == b.failed && a.reason == b.reason && a.lvl == b.lvl && abs(a.mana - b.mana) <= 0.1
+        if a.placed do same = same && abs(a.x - b.x) <= 0.01 && abs(a.y - b.y) <= 0.01 && a.hp == b.hp
+        if same do continue
+        if a.goal != 0 {
+            return i, false, fmt.tprintf("DIVERGED at goal %d, frame %d: recorded %v, replayed %v", a.goal, a.f, a, b)
         }
+        return i, false, fmt.tprintf("DIVERGED after %d landings, at an act on frame %d: recorded %v, replayed %v", i, a.f, a, b)
     }
     return len(w), true, ""
 }
