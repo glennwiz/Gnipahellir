@@ -218,6 +218,103 @@ agent_cannot_craft_what_the_player_could_not :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(agent_test_reply(link), `"ok":false`), "a hidden recipe is not offered")
 }
 
+// Card 160, playtest 127: state's recipes is the crafting book: each recipe
+// the window shows by the same unlock rule, craftable now or not, with its
+// count, station and needs; a hidden one is not there.
+@(test)
+agent_state_lists_the_recipe_book :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.progression.recipe_unlocked = {}
+    reveal_recipe(&gs.progression, .Smelter)
+    reveal_recipe(&gs.progression, .Plank)
+    agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    value, err := json.parse_string(agent_test_reply(link), parse_integers = true, allocator = context.temp_allocator)
+    testing.expect_value(t, err, json.Error.None)
+    root, _ := value.(json.Object)
+    book, is_list := root["recipes"].(json.Array)
+    testing.expect(t, is_list, "state has recipes")
+    names := make([dynamic]string, context.temp_allocator)
+    for r in book {
+        o, _ := r.(json.Object)
+        name, _ := o["item"].(json.String)
+        append(&names, name)
+        if name != "Smelter" do continue
+        station, _ := o["station"].(json.String)
+        testing.expect_value(t, station, "Crafting_Bench")
+        testing.expect_value(t, o["count"].(json.Integer), 1)
+        needs, _ := o["needs"].(json.Array)
+        testing.expect_value(t, len(needs), 2)
+        n0, _ := needs[0].(json.Object)
+        n1, _ := needs[1].(json.Object)
+        testing.expect(t, n0["item"].(json.String) == "Stone_Block" && n0["count"].(json.Integer) == 8, "8 stone")
+        testing.expect(t, n1["item"].(json.String) == "Iron_Ore" && n1["count"].(json.Integer) == 2, "2 iron ore")
+    }
+    testing.expectf(t, len(names) == 2 && names[0] == "Plank" && names[1] == "Smelter", "the revealed two, in book order: %v", names[:])
+    plank, _ := book[0].(json.Object)
+    testing.expect_value(t, plank["station"].(json.String), "hand")
+    testing.expect_value(t, plank["count"].(json.Integer), 4)  // the recipe's own count, not 1 for all
+    craftable, _ := root["craftable"].(json.Array)
+    testing.expect_value(t, len(craftable), 0)  // the bag is empty: the book still lists them
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "state's recipes is the crafting book"), "the brief names it")
+}
+
+// Card 160, playtest 133: state carries the saga page a player reads in the
+// book (the record across runs), and on the death screen its line with the
+// place; the brief names both.
+@(test)
+agent_state_carries_the_saga_and_the_death_line :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.stats.runs_played, gs.stats.runs_won, gs.stats.total_kills, gs.stats.deepest_cave = 5, 1, 37, 2
+    agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    reply := agent_test_reply(link)
+    testing.expect(t, strings.contains(reply, `"Heroes fallen before you: 4","Foes slain by all of them: 37","Deepest reached: `), reply[:min(len(reply), 200)])
+    testing.expect(t, !strings.contains(reply, `"death_line"`), "alive: no death line")
+    gs.player.dead = true
+    gs.death_by = "Lava"
+    gs.level_index = LEVEL_CAVE2
+    agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    reply = agent_test_reply(link)
+    want := fmt.tprintf(`"death_line":"Killed by Lava - %s"`, level_names[LEVEL_CAVE2])
+    testing.expectf(t, strings.contains(reply, want), "want %s", want)
+    brief := agent_write_brief(link, gs)
+    testing.expect(t, strings.contains(brief, "state's saga is the book's saga page") && strings.contains(brief, "death_line is the death screen's line"), "the brief names them")
+}
+
+// Card 160, playtest 134: a block in mid-fall is out of the grid, so state
+// lists it under falling, inside the view only; the brief names it.
+@(test)
+agent_state_lists_falling_blocks :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gravity_spawn(gs, 40, 20, .Wood)
+    gs.gravity.blocks[0].y = 20.5
+    agent_handle_line(link, gs, `{"cmd":"state","x":35,"y":15,"w":10,"h":10}`)
+    reply := agent_test_reply(link)
+    testing.expect(t, strings.contains(reply, `"falling":[{"tile":"Wood","x":40,"y":20.50}]`), reply[:min(len(reply), 120)])
+    // Each edge of the view, the block just inside it and just past it (the
+    // block's row is 20, its y 20.5).
+    Edge :: struct { x, y, w, h: int, listed: bool }
+    for e in ([]Edge{
+        {40, 15, 10, 10, true}, {41, 15, 10, 10, false},  // left edge
+        {31, 15, 10, 10, true}, {30, 15, 10, 10, false},  // right edge
+        {35, 20, 10, 10, true}, {35, 21, 10, 10, false},  // top edge
+        {35, 11, 10, 10, true}, {35, 10, 10, 10, false},  // bottom edge
+    }) {
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"state","x":%d,"y":%d,"w":%d,"h":%d}}`, e.x, e.y, e.w, e.h))
+        listed := strings.contains(agent_test_reply(link), `"falling":[{"tile":"Wood","x":40`)
+        testing.expectf(t, listed == e.listed, "%v: listed %v", e, listed)
+    }
+    gs.gravity.blocks[0].active = false
+    agent_handle_line(link, gs, `{"cmd":"state","x":35,"y":15,"w":10,"h":10}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `"falling":[]`), "landed: not listed")
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "state's falling lists the blocks in mid-fall"), "the brief names it")
+}
+
 @(test)
 agent_dismiss_walks_past_each_screen_in_turn :: proc(t: ^testing.T) {
     gs, link := agent_test_world()

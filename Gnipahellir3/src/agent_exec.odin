@@ -26,7 +26,7 @@ AGENT_GOALS_MAX  :: 32
 AGENT_GOAL_LINE  :: 512  // one goal as recorded; a longer one is refused
 
 Agent_Goal_Status :: enum u8 { Empty, Queued, Running, Done, Failed }
-Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect, Fight, Crew_Mode, Crew_Call, Crew_Pickup }
+Agent_Goal_Kind   :: enum u8 { Act, Go, Home, Mine, Gather, Craft, Place, Store, Withdraw, Feed, Collect, Fight, Crew_Mode, Crew_Call, Crew_Pickup, Stay }
 // How a goal came: the old act answers with state when it is done.
 Agent_Goal_Via    :: enum u8 { Goal, Act }
 
@@ -49,6 +49,7 @@ Agent_Goal :: struct {
     left:        int,     // tiles the step being dug still has
     no_dig:      bool,    // its walks never dig (a fight's)
     no_blocks:   bool,    // its walks set no block down (a fight at a flyer's)
+    until:       u64,     // a stay's last frame, once it has reached its tile; max before, or held till cancelled
     work:        Hero_Work,  // a work goal's plan and progress (agent_work.odin)
     fight:       Hero_Fight,  // a fight goal's target (agent_fight.odin)
     len:         int,
@@ -89,7 +90,7 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
     },
     .Go = {
         name   = "go",
-        params = "to: [x,y], the tile to stand in (a solid one: the tile on it); walks, jumps, drops, digs with the pick and bridges with blocks from the bag",
+        params = "to: [x,y], the tile to stand in (a solid one: the tile on it; a chest, bench or other structure: the stand beside it); walks, jumps, drops, digs with the pick and bridges with blocks from the bag",
         check  = agent_goal_go_check,
         start  = agent_goal_go_start,
         tick   = hero_go_tick,
@@ -184,6 +185,13 @@ agent_goal_kinds := [Agent_Goal_Kind]Agent_Goal_Kind_Row{
         check  = hero_work_check,
         start  = hero_work_start,
         tick   = hero_window_tick,
+    },
+    .Stay = {
+        name   = "stay",
+        params = "at: [x,y], the tile to hold (else where it stands), for: seconds once there (else until cancelled): goes there and holds it through a wave, fighting only from it, never fleeing out of it or digging out; knocked off, it walks back",
+        check  = agent_goal_stay_check,
+        start  = agent_goal_stay_start,
+        tick   = hero_stay_tick,
     },
 }
 
@@ -324,10 +332,32 @@ agent_goal_act_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     }
     gs.agent.cmd   = c
     gs.agent.first = g.first
+    if g.first do hero_act_use_note(gs, c)
     g.first        = false
     if g.frames_left == 1 do hero_act_reach_note(gs)
     g.frames_left -= 1
     return g.frames_left == 0
+}
+
+// An act's use or reclaim the game passes over in silence says why, as a
+// toast (card 160, playtest 132: a reclaim past PICK_RANGE and a use 3.6 tiles
+// off answered with nothing; a use with a bucket on water did nothing either).
+@(private="file")
+hero_act_use_note :: proc(gs: ^Game_State, c: Agent_Command) {
+    if !c.has_use && !c.has_reclaim do return
+    t := c.use if c.has_use else c.reclaim
+    tt := get_tile(&gs.world, int(t.x), int(t.y))
+    held := held_item(&gs.player)
+    verb  := "use" if c.has_use else "reclaim"
+    reach := i32(BENCH_RANGE) if c.has_use else PICK_RANGE
+    switch {
+    case c.has_use && (held == .Iron_Bucket || bucket_fluid_for(held) != .Air) && !is_structure_tile[tt]:
+        notify(gs, "A bucket fills and pours with place: (%d,%d)", t.x, t.y)
+    case !is_structure_tile[tt]:  // the rune scroll chests are structures
+        notify(gs, "Nothing to %s at (%d,%d)", verb, t.x, t.y)
+    case chebyshev(t, player_tile(&gs.player)) > reach:
+        notify(gs, "Out of reach: (%d,%d)", t.x, t.y)
+    }
 }
 
 // An act's pick at a tile it could work but its swing does not reach (card
@@ -384,6 +414,7 @@ HERO_MIN_HOLD_S       :: f32(0.5)   // a behaviour runs this long before a rival
 HERO_SWITCH_MARGIN    :: f32(10)    // and the rival must beat it by this much
 HERO_URGENT_SCORE     :: f32(95)    // a score this high takes over at once
 HERO_GOAL_SCORE       :: f32(50)
+HERO_STAY_FIGHT_SCORE :: HERO_GOAL_SCORE + 2 * HERO_SWITCH_MARGIN  // a stay's blow at what it reaches beats standing
 HERO_IDLE_SCORE       :: f32(10)
 HERO_UNARMED_FLEE     :: f32(40)    // added to flee with nothing to fight with: an unhurt hero still runs
 HERO_LEDGE_SCORE      :: f32(100)
@@ -567,7 +598,8 @@ hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b.dug = hero_digging(gs)
 
     if b.paused_goal != 0 && (g == nil || g.id != b.paused_goal) do b.paused_goal = 0  // it ended while paused
-    if g != nil && b.paused_goal == g.id {
+    if hero_staying(g) && gs.frame >= g.until do g.status = .Done  // its time is up, mid-fight or not
+    if g != nil && b.paused_goal == g.id && g.kind != .Stay {  // a stay is held by its fights: that is its work
         b.paused_t += gs.delta_time
         if b.paused_t > HERO_PAUSE_MAX_S {
             g.status = .Failed
@@ -1095,7 +1127,7 @@ hero_way_out :: proc(w: ^World_Grid, a: [2]i32, d: i32) -> int {
 // scores whenever a hunter is near, takes over until the hunter is gone.
 @(private="file")
 hero_goal_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
-    return HERO_GOAL_SCORE if g != nil && !hero_hunted(gs, b) else 0
+    return HERO_GOAL_SCORE if g != nil && (hero_staying(g) || !hero_hunted(gs, b)) else 0
 }
 
 // Unarmed, or digging under HERO_LOW_HP_FRAC even armed (a dig pins the hero
@@ -1115,7 +1147,17 @@ hero_goal_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
 hero_fight_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     th := hero_threat(b)
     if th == nil || !hero_armed(gs, th) || !hero_may_fight(gs) || hero_fighting_goal(g) do return 0
-    return hero_press(th) * (30 + 60 * hero_hp_frac(gs))
+    s := hero_press(th) * (30 + 60 * hero_hp_frac(gs))
+    if hero_staying(g) {
+        // Held to its tile, with no running away: it strikes what its blow
+        // reaches from there, however hurt, and nothing else (knocked off,
+        // it walks back past a threat out of reach, however whole).
+        p := &gs.player
+        sword, wand := hero_blow_from(gs, player_tile(p), p.pos + [2]f32{PLAYER_W, PLAYER_H} * 0.5, th.slot)
+        if !sword && !wand do return 0
+        s = max(s, HERO_STAY_FIGHT_SCORE)
+    }
+    return s
 }
 
 @(private="file")
@@ -1123,16 +1165,17 @@ hero_fight_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
     th := hero_threat(b)
     if hero_strike(gs, b, th.slot) {
         // The wand keeps its distance: too near, the hero backs off shooting.
-        if is_fire_wand(held_item(&gs.player)) && th.dist < HERO_KITE_TILES do hero_get_clear(gs, b, th)
+        if is_fire_wand(held_item(&gs.player)) && th.dist < HERO_KITE_TILES && !hero_staying(g) do hero_get_clear(gs, b, th)
         return
     }
+    if hero_staying(g) do return  // a stay fights from its tile: it waits for the threat to come into reach
     hero_walk_to(gs, b, gs.player.pos.x + PLAYER_W * 0.5 + th.dx)  // into reach, or range
 }
 
 @(private="file")
 hero_flee_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
     th := hero_threat(b)
-    if th == nil || hero_fighting_goal(g) do return 0
+    if th == nil || hero_fighting_goal(g) || hero_staying(g) do return 0  // a stay never flees its tile
     s := 30 + 60 * (1 - hero_hp_frac(gs))
     if !hero_armed(gs, th) do s += HERO_UNARMED_FLEE
     // Once running, the hero keeps running until the threat is out of
@@ -1668,6 +1711,51 @@ agent_goal_go_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
 @(private="file")
 agent_goal_home_check :: proc(gs: ^Game_State, o: json.Object) -> string {
     return ""
+}
+
+@(private="file")
+agent_goal_stay_check :: proc(gs: ^Game_State, o: json.Object) -> string {
+    if _, _, present, ok := agent_tile(o, "at"); present && !ok do return fmt.tprintf("stay's at:[x,y] must be inside the %dx%d level", GRID_W, GRID_H)
+    if "for" in o {
+        if n, ok := agent_int(o, "for"); !ok || n < 0 do return "stay's for: whole seconds, 0 or more"
+    }
+    return ""
+}
+
+@(private="file")
+agent_goal_stay_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    value, _ := json.parse_string(string(g.line[:g.len]), parse_integers = true, allocator = context.temp_allocator)
+    o, _ := value.(json.Object)
+    at, _, _, ok := agent_tile(o, "at")
+    if !ok do at = hero_feet(&gs.player)
+    secs, _ := agent_int(o, "for")
+    g.frames = int(math.round(f32(secs) / AGENT_STEP))  // 4 / (1/60) is 239.99 in f32
+    g.until  = max(u64)  // not there yet, or held till cancelled
+    return hero_go_start(gs, g, at)
+}
+
+// A stay (card 160, playtest 127: no way to keep the hero in its shelter
+// through a wave): to the tile as a go walks, then stand on it.  Its time runs
+// from the first arrival, fights from the tile included; knocked off, it
+// walks back as a fresh go.  The brain fights only from the tile and never
+// flees or digs out while it runs (hero_staying).
+@(private="file")
+hero_stay_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
+    if hero_feet(&gs.player) != g.to {
+        if g.best == 0 do g.best = max(i32)  // knocked off: a fresh walk back (hero_go_tick counts its steps afresh)
+        hero_go_tick(gs, g)
+        return false
+    }
+    g.best = 0
+    if g.until == max(u64) && g.frames > 0 do g.until = gs.frame + u64(g.frames)  // its time runs from the first arrival
+    return false  // done by the clock, in hero_think
+}
+
+// The goal is a stay: the hero holds its tile.
+@(private="file")
+hero_staying :: proc(g: ^Agent_Goal) -> bool {
+    return g != nil && g.kind == .Stay  // hero_think is handed the running goal only
 }
 
 // Home: the tile the agent marked on this level, else the spawn on the surface.

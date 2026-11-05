@@ -609,6 +609,8 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "{{\"cmd\":\"state\",\"x\":0,\"y\":0,\"w\":%d,\"h\":%d}}  all optional: the default view is %dx%d round you, and the whole level is yours to read\n",
         GRID_W, GRID_H, AGENT_VIEW_W, AGENT_VIEW_H)
     fmt.sbprintf(w, "  state's objective is the game's objective line: the next step of the loop, with a compass hint (above, below, east, west), never a tile\n")
+    fmt.sbprintf(w, "  state's falling lists the blocks in mid-fall inside the view (a felled trunk, a cut-loose pillar): tile, column x, top y; they land as tiles or items\n")
+    fmt.sbprintf(w, "  state's saga is the book's saga page (this run's time, heroes fallen, foes slain, deepest reached); dead, death_line is the death screen's line, with the place\n")
     fmt.sbprintf(w, "{{\"cmd\":\"goals\",\"add\":[{{\"do\":\"go\",\"to\":[90,60]}},{{\"do\":\"act\",\"move\":\"right\",\"frames\":30}},...]}}  queues goals, played in order while the game runs; answers their ids\n")
     fmt.sbprintf(w, "  You only send goals: the game turns each into the keys and mouse a player would use, so a goal can do nothing a player cannot.\n")
     fmt.sbprintf(w, "  The queue holds %d; a full one answers ok:false. {{\"cmd\":\"goals\",\"cancel\":id}} or \"clear\":true drops goals, which then end failed\n", AGENT_GOALS_MAX)
@@ -625,9 +627,11 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "The act fields, for an act goal:\n")
     fmt.sbprintf(w, "  move: left, right, none. jump, down, interact, dismiss, warp: true\n")
     fmt.sbprintf(w, "  one of mine, place, use, reclaim: [x,y] in tiles. Tiles are %dx%d; state's player x,y are tiles too\n", GRID_W, GRID_H)
+    fmt.sbprintf(w, "    use opens a structure within %d tiles, reclaim takes one within %d; one the game passes over says why in notes\n", BENCH_RANGE, PICK_RANGE)
+    fmt.sbprintf(w, "    a bucket is place: with an empty Iron_Bucket selected, place on water or lava fills it; with a full one, place on an open cell pours it\n")
     fmt.sbprintf(w, "    whole numbers aim at the tile's centre; fractions aim at that point within it (10.0 is the tile's left edge)\n")
     fmt.sbprintf(w, "  one of select, equip, feed (with count), store, take: bag slot. select -1 is an empty hand\n")
-    fmt.sbprintf(w, "  craft: item name, from state's craftable. collect, withdraw, withdraw_fuel: true, on the smelter a use opened\n")
+    fmt.sbprintf(w, "  craft: item name, from state's craftable; state's recipes is the crafting book: each recipe shown, its count, station (hand, or the tile to stand near) and needs. collect, withdraw, withdraw_fuel: true, on the smelter a use opened\n")
     fmt.sbprintf(w, "  store and take work on the barrel a use opened. tithe: slot, on the death screen; then dismiss moves on\n")
     fmt.sbprintf(w, "  The death screen hears neither tithe nor dismiss for about its first %d ticks: state's tithe.ready_in counts them down\n", int(DEATH_INPUT_DELAY / AGENT_STEP))
     fmt.sbprintf(w, "  with a command wand selected, place: [x,y] sets down a bound golem, and one of:\n")
@@ -1782,6 +1786,15 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
     objective: [128]u8
     fmt.sbprintf(&b, `"objective":%s,`, agent_quote(current_objective(gs, objective[:127])))
     agent_write_death(&b, gs)
+    // The book's saga page, as a player reads it: this run's time and the
+    // record of every hero (card 160, playtest 133).
+    saga: [4][64]u8
+    strings.write_string(&b, `"saga":[`)
+    for line, i in saga_lines(gs, &saga) {
+        if i > 0 do strings.write_byte(&b, ',')
+        json_write_string(&b, line)
+    }
+    strings.write_string(&b, "],")
     agent_write_wave(&b, gs)
     if gs.agent.place_refused do strings.write_string(&b, `"refused":"place",`)
     agent_write_goals(&b, &link.goals)
@@ -1818,6 +1831,26 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
         fmt.sbprintf(&b, `"%v"`, r.result)
     }
 
+    // The book: every recipe the crafting window shows, by the same unlock
+    // rule, with what it takes and where (card 160: playtest 127 read the
+    // recipe source for the smelter's).
+    strings.write_string(&b, `],"recipes":[`)
+    comma = false
+    for &r in recipe_table {
+        if !recipe_revealed(&gs.progression, r.result) do continue
+        if comma do strings.write_byte(&b, ',')
+        comma = true
+        station := "hand" if r.station == .None else fmt.tprintf("%v", station_tile[r.station])
+        fmt.sbprintf(&b, `{{"item":"%v","count":%d,"station":"%s","needs":[`, r.result, r.result_count, station)
+        first := true
+        for ing in r.ingredients {
+            if ing.item == .None do continue
+            fmt.sbprintf(&b, `%s{{"item":"%v","count":%d}}`, "" if first else ",", ing.item, ing.count)
+            first = false
+        }
+        strings.write_string(&b, "]}")
+    }
+
     fmt.sbprintf(&b, `],"ui":{{"inventory":%v,"crafting":%v,"smelter":%v,"barrel":%v}},`,
         gs.ui.show_inventory, gs.ui.show_crafting, gs.ui.show_smelter, gs.ui.show_barrel)
 
@@ -1845,6 +1878,17 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
         if comma do strings.write_byte(&b, ',')
         comma = true
         fmt.sbprintf(&b, `{{"slot":%d,"kind":"%v","x":%.2f,"y":%.2f,"w":%.2f,"h":%.2f,"hp":%d}}`, i, e.kind, e.pos.x, e.pos.y, size.x, size.y, e.hp)
+    }
+    // Blocks cut loose and in mid-fall, out of the grid until they land: a
+    // player sees them drop (card 160, playtest 134: a felled trunk and a
+    // pillar left the view and came back as items).
+    strings.write_string(&b, `],"falling":[`)
+    comma = false
+    for &fb in gs.gravity.blocks {
+        if !fb.active || int(fb.x) < v.x || int(fb.x) >= v.x + v.w || int(fb.y) < v.y || int(fb.y) >= v.y + v.h do continue
+        if comma do strings.write_byte(&b, ',')
+        comma = true
+        fmt.sbprintf(&b, `{{"tile":"%v","x":%d,"y":%.2f}}`, fb.tile, fb.x, fb.y)
     }
     strings.write_string(&b, `],"dens":[`)
     comma = false
@@ -1955,6 +1999,9 @@ agent_write_death :: proc(b: ^strings.Builder, gs: ^Game_State) {
     if len(gs.death_by) > 0 {
         strings.write_string(b, `"death_by":`)
         json_write_string(b, gs.death_by)
+        line: [96]u8
+        strings.write_string(b, `,"death_line":`)  // the screen's own line, with the place (card 160)
+        json_write_string(b, death_cause_line(gs, line[:]))
         strings.write_byte(b, ',')
     }
     fmt.sbprintf(b, `"tithe":{{"ready_in":%d,"chosen":%d,"offerable":[`, agent_death_ready_in(gs), gs.ui.tithe_slot)

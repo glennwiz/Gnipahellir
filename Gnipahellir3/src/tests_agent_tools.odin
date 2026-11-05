@@ -124,6 +124,7 @@ summary_measures_how_the_goal_queue_kept_the_hero_busy :: proc(t: ^testing.T) {
     }) {
         testing.expect(t, strings.contains(text, want), want)
     }
+    testing.expect(t, !strings.contains(text, "per minute, over") && !strings.contains(text, "life 1 f"), "one life: no lives named")
 }
 
 @(test)
@@ -153,6 +154,55 @@ summary_starts_a_reconnect_with_an_empty_queue :: proc(t: ^testing.T) {
     defer tools_test_done(run)
     text, _ := tools_test_say("--summary", run)
     testing.expect(t, strings.contains(text, "empty queue: 4 s, longest 3 s from frame 120"), text)
+}
+
+// Card 160, playtest 127: the game's frames start again at 0 with each new
+// life, so the summary counts time over the run, says how many lives, and
+// names a row by its life.
+@(test)
+summary_counts_time_across_lives :: proc(t: ^testing.T) {
+    goal :: proc(f, id: int) -> string {
+        return fmt.tprintf(`{{"f":%d,"goal":{{"do":"act","frames":30}},"kind":"act","id":%d,"via":"Goal","step":0}}`+"\n", f, id)
+    }
+    rows := strings.concatenate({
+        `{"f":600,"objective":{"goal":"first day"}}` + "\n", goal(600, 1), `{"f":3600,"done":1}` + "\n",
+        `{"f":0,"act":{"cmd":"act","dismiss":true},"x":5,"y":6,"hp":10}` + "\n",  // life 2 starts the frames again
+        `{"f":300,"objective":{"goal":"life 2"}}` + "\n", goal(300, 2), `{"f":1500,"done":2}` + "\n",
+        `{"f":0,"act":{"cmd":"act","dismiss":true},"x":5,"y":6,"hp":10}` + "\n",  // and life 3, shorter than life 1
+        `{"f":600,"objective":{"goal":"life 3"}}` + "\n", goal(600, 3), `{"f":900,"done":3}` + "\n",
+        `{"f":1200,"mark":"disconnect"}` + "\n",
+    }, context.temp_allocator)
+    run := tools_test_run("lives_frames", {"action.log", ""}, {"acts.jsonl", rows})
+    defer tools_test_done(run)
+    text, _ := tools_test_say("--summary", run)
+    for want in ([]string{
+        // f600 of life 1 to f1200 of life 3: 3000 + 1500 + 1200 frames
+        "3 goals in 1.6 min connected, 1.9 per minute, over 3 lives\n",
+        "objectives:\n  life 1 f600: first day - 55 s\n  life 2 f300: life 2 - 30 s\n  life 3 f600: life 3 - 10 s\n",
+        "empty queue: 20 s, longest 10 s from life 2 frame 1500\n",  // into the next life, never negative
+        "2 acts, last life 3 frame 1200\n",
+        "life 3 frame 1200: disconnect",
+    }) {
+        testing.expectf(t, strings.contains(text, want), "want %q in %s", want, text)
+    }
+}
+
+// Lives are named from the second; the longest empty stretch can be the one
+// the run starts with.
+@(test)
+summary_names_two_lives_and_an_empty_start :: proc(t: ^testing.T) {
+    rows := strings.concatenate({
+        `{"f":100,"act":{"move":"left"},"x":5,"y":6,"hp":10}` + "\n",
+        `{"f":700,"goal":{"do":"act","frames":30},"kind":"act","id":1,"via":"Goal","step":0}` + "\n", `{"f":760,"done":1}` + "\n",
+        `{"f":40,"act":{"cmd":"act","dismiss":true},"x":5,"y":6,"hp":10}` + "\n",  // life 2
+        `{"f":100,"mark":"disconnect"}` + "\n",
+    }, context.temp_allocator)
+    run := tools_test_run("two_lives", {"action.log", ""}, {"acts.jsonl", rows})
+    defer tools_test_done(run)
+    text, _ := tools_test_say("--summary", run)
+    for want in ([]string{", over 2 lives\n", "empty queue: 12 s, longest 10 s from life 1 frame 100\n"}) {
+        testing.expectf(t, strings.contains(text, want), "want %q in %s", want, text)
+    }
 }
 
 @(test)
