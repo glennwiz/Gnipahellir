@@ -404,7 +404,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     for i := 0; i < link.pending_n; {
         if !agent_read_pending(link, gs, i) do i += 1  // a served one leaves, and the next takes its index
     }
-    if link.connected && (agent_listening(link) || link.awaiting) do agent_read(link, gs)
+    if link.connected do agent_read(link, gs)  // every frame, act or not: a client gone mid-act frees the seat (card 172)
     // After the client's read: a client gone this frame lets a watcher take over.
     for i := 0; i < link.readers_n; {
         if agent_serve_reader(link, gs, i) do i += 1  // one that left gives its index to the next
@@ -599,7 +599,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "\nCONNECT\n")
     fmt.sbprintf(w, "Same port, plain TCP: one JSON object per line each way. No HTTP, no keys, no account.\n")
     fmt.sbprintf(w, "Hold ONE connection for the whole run, from a background process if your tool calls are short: ")
-    fmt.sbprintf(w, "when it closes the game runs on in real time with nobody at the keys.\n")
+    fmt.sbprintf(w, "when it closes, mid-act or not, its goals end and the game runs on in real time with nobody at the keys; the next connection drives.\n")
     fmt.sbprintf(w, "  import json, socket\n")
     fmt.sbprintf(w, "  s = socket.create_connection((\"127.0.0.1\", %d)); f = s.makefile(\"rb\")\n", link.port)
     fmt.sbprintf(w, "  def ask(o): s.sendall((json.dumps(o) + \"\\n\").encode()); return json.loads(f.readline())\n")
@@ -895,10 +895,11 @@ agent_goals_clear :: proc(link: ^Agent_Link, gs: ^Game_State, why: string) {
 
 @(private="file")
 agent_read :: proc(link: ^Agent_Link, gs: ^Game_State) {
-    // A listen still reads, to see a client go, but holds its lines.
-    for link.connected && (agent_listening(link) || link.awaiting) {
+    // A listen or a pending act still reads, to see a client go, but holds its lines.
+    for link.connected {
         // A line may already be buffered behind the one just answered.
-        if nl := agent_newline(link); nl >= 0 && !link.awaiting {
+        nl := agent_newline(link)
+        if nl >= 0 && agent_listening(link) {
             line := string(link.in_buf[:nl])
             agent_handle_line(link, gs, line)
             agent_send(link, gs)
@@ -908,8 +909,8 @@ agent_read :: proc(link: ^Agent_Link, gs: ^Game_State) {
             continue
         }
         if link.in_len == len(link.in_buf) {
-            agent_drop_client(link, gs)  // a line this long is not the protocol
-            return
+            if nl < 0 do agent_drop_client(link, gs)  // a line this long is not the protocol
+            return  // else held lines fill it, and wait their turn
         }
         n, err := net.recv_tcp(link.client, link.in_buf[link.in_len:])
         if err == .Would_Block || err == .Timeout do return
