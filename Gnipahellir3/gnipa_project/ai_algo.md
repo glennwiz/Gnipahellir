@@ -352,10 +352,14 @@ places it for a bridge (a pile come to lie in the cell since: plan again),
 and shuts an open window first. It plans again when
 the path runs out, when the hero lands outside the box between a step's two
 tiles (an edge still holding the body up is inside it), and once after `HERO_GO_REPLAN_S` with no headway; a tile dug
-is headway. `HERO_GO_STUCK_S` with none is `blocked`; a goal tile on top of a
+is headway, and so is a step reached that leaves the plan fewer steps than
+ever (a leg walked to its end counts the next plan's afresh), so a route round,
+away from the tile, is no `blocked` (card 175). `HERO_GO_STUCK_S` with none is `blocked`; a goal tile on top of a
 structure (walked through from the side, so not stood on by walking up to it)
 says so (card 159). A goal tile that burns
-or drowns is `hazard` at the start; a solid one means the tile on top of it.
+or drowns is `hazard` at the start; a solid one means the tile on top of it,
+but a structure (a chest, a bench) means the stand beside it nearest the hero,
+a row up, level or down, as a player walks up to click it (card 175).
 The ledge row leaves a go alone: its drops are priced already.
 
 ## Reflexes
@@ -398,7 +402,12 @@ which one lands, so from a pit or behind a ridge it climbs out first and never
 shoots into a wall (run 8 tunnelled under a frog and shot the dirt). A stand no
 walk gets to is passed over, `HERO_FIGHT_SKIP` at most; with no stand at all
 (an eel hugging the far wall of its pool) it waits `HERO_FIGHT_WAIT_S` in all for the
-target to come out. With the wand it keeps `HERO_KITE_TILES` off. Under
+target to come out. A walk ends as the body's middle crosses into the stand,
+at its edge, while the blow was judged from its middle: there with no blow, it
+steps to within `HERO_STAND_SLACK` of the middle, and centred with still none
+it waits in the same `HERO_FIGHT_WAIT_S` and fails `unreachable` (card 175:
+a pit's lip hid a beetle from the edge and the hero stood there for good).
+With the wand it keeps `HERO_KITE_TILES` off. Under
 `HERO_FIGHT_RETREAT_FRAC` of its hp it backs off all the way out of
 `HERO_THREAT_FAR`, shooting with the wand as it goes, and fails `low_hp`.
 While it runs, the brain's fight and flee score 0: the goal does both. It
@@ -462,7 +471,10 @@ the stack riding it to where it goes, waits, lets go; then another look and the
 window is shut. A drag moves a whole stack, as a mouse does; a store, feed or
 withdraw stops once count have moved, or when a drag moved nothing (`full`).
 A collect, or an ore withdraw from a smelter, is one drag; what a full bag
-leaves stays in the furnace and the goal is done.
+leaves stays in the furnace and the goal is done. A window shut under the goal
+by a fight or a flight it paused for is walked back to and opened again, also
+when the pause came between the click and the goal's first look at it (card
+175: flee flips swept it shut and the goal counted out `HERO_OPEN_TRIES`).
 The goal hands the cursor and the carried stack to `agent_input` in
 `gs.agent.cmd` (`has_cursor`, `cursor`, `carry`), which points
 `inp.mouse_screen` there and shows the stack as `ui.drag_item`; the UI draws

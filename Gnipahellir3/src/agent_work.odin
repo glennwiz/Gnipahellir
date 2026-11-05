@@ -734,7 +734,10 @@ hero_window_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     hand := g.kind == .Craft && recipe_table[w.recipe].station == .None || crew && !hero_crew_walks(gs, g)
     reach := i32(PLAYER_REACH if crew else BENCH_RANGE)
     if b.cursor == {} do b.cursor = {UI_W / 2, UI_H / 2}
-    if (w.phase == .Look || w.phase == .Clicks) && !hero_window_up(gs, g) {
+    // Back from a pause before the window was seen: a flight's tick may have
+    // swept it shut (card 175: playtest 136's flee flips, "did not open").
+    resumed := w.phase == .Open && b.held == 0
+    if (w.phase == .Look || w.phase == .Clicks || resumed) && !hero_window_up(gs, g) {
         // Shut under it, by a fight or a flight the goal paused for: back to
         // the machine, and open it again.
         w.phase, w.leg, w.walking = .Walk, 0, false
