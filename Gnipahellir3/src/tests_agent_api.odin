@@ -3425,3 +3425,125 @@ agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(text, `"home":null`))
     testing.expect(t, strings.contains(text, `"kind":"go"`) && strings.contains(text, `"kind":"home"`))
 }
+
+// Card 172, playtest 136: a driver that drops mid-act is seen going on the
+// frames the act plays, so a watcher, or a fresh connection, drives at once;
+// a line sent during an act still waits for the act's answer.
+@(test)
+a_driver_that_drops_mid_act_frees_the_seat :: proc(t: ^testing.T) {
+    for fresh in ([2]bool{false, true}) {
+        gs, link, at := agent_test_listening(t)
+        defer free(gs)
+        defer free(link)
+        defer agent_close(link, gs)
+        buf := new([AGENT_REPLY_MAX]u8)
+        defer free(buf)
+
+        driver, _ := net.dial_tcp(at)
+        agent_test_ask(gs, link, driver, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+        watcher: net.TCP_Socket
+        if !fresh {
+            watcher, _ = net.dial_tcp(at)
+            agent_test_ask(gs, link, watcher, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+        }
+        net.send_tcp(driver, transmute([]u8)string(`{"cmd":"act","frames":600}` + "\n"))
+        net.send_tcp(driver, transmute([]u8)string(`{"cmd":"state","w":1,"h":1}` + "\n"))
+        time.sleep(50 * time.Millisecond)
+        agent_test_frames(link, gs, 5)
+        n, err := net.recv_tcp(driver, buf[:])
+        testing.expectf(t, err == .Would_Block || err == .Timeout, "fresh %v: the state waits behind the act, got %d bytes %v", fresh, n, err)
+        testing.expect(t, link.connected && agent_goals_busy(&link.goals), "the act plays")
+
+        net.close(driver)
+        time.sleep(50 * time.Millisecond)
+        agent_test_frames(link, gs, 1)
+        testing.expectf(t, !link.connected, "fresh %v: the driver gone mid-act is seen that frame", fresh)
+        testing.expect(t, !agent_goals_busy(&link.goals), "its act ends")
+
+        if fresh {
+            watcher, _ = net.dial_tcp(at)
+        }
+        defer net.close(watcher)
+        out := agent_test_ask(gs, link, watcher, `{"cmd":"objective","goal":"back"}` + "\n", 1, buf[:])
+        for !strings.contains(out, `"re":"objective"`) && len(out) > 0 do out = agent_test_ask(gs, link, watcher, "", 1, buf[:])  // a watcher's events first
+        testing.expectf(t, strings.contains(out, `{"re":"objective","ok":true}`), "fresh %v: %s", fresh, out)
+        testing.expect(t, link.connected, "the next connection drives")
+        testing.expect(t, strings.contains(agent_write_brief(link, gs), "when it closes, mid-act or not, its goals end"), "the brief says so")
+    }
+}
+
+// Card 172: lines a driver sends during an act fill the read buffer and wait
+// there, no drop; one line too long for it is still no protocol, act or not.
+@(test)
+held_lines_wait_in_a_full_buffer_but_an_endless_line_drops :: proc(t: ^testing.T) {
+    for endless in ([2]bool{false, true}) {
+        gs, link, at := agent_test_listening(t)
+        defer free(gs)
+        defer free(link)
+        defer agent_close(link, gs)
+        buf := new([AGENT_REPLY_MAX]u8)
+        defer free(buf)
+
+        driver, _ := net.dial_tcp(at)
+        defer net.close(driver)
+        agent_test_ask(gs, link, driver, `{"cmd":"state","w":1,"h":1}` + "\n", 1, buf[:])
+        net.send_tcp(driver, transmute([]u8)string(`{"cmd":"act","frames":600}` + "\n"))
+        line := `{"cmd":"state","w":1,"h":1}` + "\n"
+        more := strings.repeat("x", AGENT_LINE_MAX + 10, context.temp_allocator) if endless else strings.repeat(line, AGENT_LINE_MAX / len(line) + 10, context.temp_allocator)
+        net.send_tcp(driver, transmute([]u8)more)
+        time.sleep(50 * time.Millisecond)
+        agent_test_frames(link, gs, 5)
+        testing.expectf(t, link.connected == !endless, "endless %v: connected %v", endless, link.connected)
+        if !endless do testing.expect(t, link.in_len == AGENT_LINE_MAX && agent_goals_busy(&link.goals), "the buffer full, the act playing")
+    }
+}
+
+// Card 172: an act the hero's brain holds (here at the pit's ledge, a beetle
+// below and nowhere to run) ends failed with the reason, and is answered with
+// state: it never waits forever (the pause cap, card 164).
+@(test)
+an_act_paused_by_the_brain_ends_with_a_reason :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    link.realtime  = true
+    link.events_on = true  // a client that speaks goals hears the pause
+    // Flat stone, the hero hurt and unarmed between two walls, a beetle in a pit.
+    x0, G := int(SURFACE_HOME_POS.x), int(SURFACE_Y)
+    for x in x0 - 18 ..= x0 + 22 do for y in G - 10 ..= G + 12 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    gs.player.pos = {f32(x0) + 0.1, f32(G) - PLAYER_H}
+    gs.player.inventory = {}
+    gs.player.hp = 1
+    for x in ([2]int{x0 - 3, x0 + 11}) do for y in G - 6 ..< G do set_tile(&gs.world, x, y, .Stone)
+    for x in x0 + 3 ..= x0 + 5 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Air)
+    id, ok := enemy_alloc(&gs.enemies)
+    testing.expect(t, ok)
+    row := enemy_behaviour[.Ember_Beetle]
+    e := &gs.enemies.data[id]
+    e^ = Enemy{kind = .Ember_Beetle, hp = row.hp, hp_max = row.hp, facing = -1,
+               pos = {f32(x0 + 4) + (1 - row.body.x) * 0.5, f32(G + 3) - row.body.y}}
+    entity_map_move(&gs.world, enemy_entity_id(id), builder_tile(e), builder_tile(e))
+
+    agent_handle_line(link, gs, `{"cmd":"act","move":"right","frames":120}`)
+    frames := 0
+    for ; frames < 6000 && agent_goals_busy(&link.goals); frames += 1 {
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expectf(t, f32(frames) * AGENT_STEP > HERO_PAUSE_MAX_S, "held past a 120-frame act: %d frames", frames)
+    testing.expect(t, !agent_goals_busy(&link.goals), "the act ended")
+    pushed := string(link.push[:link.push_len])
+    testing.expectf(t, strings.contains(pushed, "goal_paused"), "it was paused: %s", pushed)
+    testing.expect(t, link.reply_due, "and the act is answered")
+    reply := agent_test_reply(link)
+    testing.expect(t, strings.contains(reply, `"re":"act"`), reply[:min(len(reply), 80)])
+    held := false
+    for &g in link.goals.slots[:link.goals.n] do if g.kind == .Act && g.status == .Failed {
+        held = strings.has_prefix(string(g.reason.buf[:g.reason.len]), "held: paused by ")
+    }
+    testing.expect(t, held, "failed held, naming what held it")
+}
