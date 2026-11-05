@@ -315,13 +315,16 @@ hero_work_find_machine :: proc(gs: ^Game_State, w: ^Hero_Work, feet: [2]i32) -> 
 
 // ─── Finding ───
 
-// The tile nearest from that want says yes to, inside the search window.
+// The tile nearest from that want says yes to, inside the search window; one
+// a den or a hunter is by counts HERO_WORK_DANGER_COST tiles more (card 163).
 @(private="file")
 hero_work_nearest :: proc(gs: ^Game_State, from: [2]i32, w: ^Hero_Work, want: proc(gs: ^Game_State, w: ^Hero_Work, t: [2]i32) -> bool) -> (best: [2]i32, ok: bool) {
     d_best := max(i32)
+    danger: Hero_Dangers
+    nd := hero_dangers(&gs.hero.senses, &danger)
     for y in from.y - HERO_WORK_SEARCH_Y ..= from.y + HERO_WORK_SEARCH_Y {
         for x in from.x - HERO_WORK_SEARCH_X ..= from.x + HERO_WORK_SEARCH_X {
-            d := abs(x - from.x) + abs(y - from.y)
+            d := abs(x - from.x) + abs(y - from.y) + (HERO_WORK_DANGER_COST if hero_in_danger(danger[:nd], {x, y}) else 0)  // a den's own wood, by a hunter: the open one first (card 163)
             if d >= d_best || !in_bounds(int(x), int(y)) || !want(gs, w, {x, y}) do continue
             best, d_best, ok = {x, y}, d, true
         }

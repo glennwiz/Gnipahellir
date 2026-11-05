@@ -2191,8 +2191,9 @@ hero_bridge_blocks_are_the_plain_ones :: proc(t: ^testing.T) {
 }
 
 // Card 159 (playtest 132: a go bridge buried a Dvergr_Forge pile, and mining
-// it back gave the forge).  No block is planned over a pile, nor set down on
-// one that came to lie there after the plan.
+// it back gave the forge).  No block is planned over a pile (a way round it,
+// a row up off a pillar, card 163, leaves it be), nor set down on one that
+// came to lie there after the plan.
 @(test)
 hero_bridge_never_buries_a_pile :: proc(t: ^testing.T) {
     gs, link := exec_test_world()
@@ -2209,7 +2210,11 @@ hero_bridge_never_buries_a_pile :: proc(t: ^testing.T) {
     path: Hero_Path
     testing.expect(t, hero_plan(gs, from, to, &path), "the pit bridged")
     pile(gs, x0 + 5, G)
-    testing.expect(t, !hero_plan(gs, from, to, &path), "not over the pile")
+    hero_plan(gs, from, to, &path)
+    for st in path.steps[:path.n] {
+        on := st.to + {0, 1} if st.move == .Bridge else st.from if st.move == .Pillar else {-1, -1}
+        testing.expectf(t, on != {i32(x0 + 5), i32(G)}, "a block planned over the pile: %v", st)
+    }
     gs.world.items[grid_idx(x0 + 5, G)], gs.world.item_counts[grid_idx(x0 + 5, G)] = .None, 0
 
     // Once the plan is made, a pile lies in the next cell to bridge (put back
@@ -3045,8 +3050,10 @@ hero_work_goals_fail_with_reasons :: proc(t: ^testing.T) {
     id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Stone_Block","at":[%d,%d]}}`, x0 + 2, G), 60)
     work_test_expect_failed(t, link, gs, id, "refused: Something is already there")  // card 159: once out_of_reach (playtest 129)
     // A block on top of a stone column nine high: its top is safe ground in
-    // reach, but no walk gets up there.
+    // reach, but no walk gets up there, and no blocks are left to pillar up
+    // with (card 163).
     for y in G - 9 ..< G do set_tile(&gs.world, x0 + 8, y, .Stone)
+    for &sl in gs.player.inventory.slots do for it in HERO_BRIDGE_BLOCKS do if sl.item == it do sl = {}
     id = work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, x0 + 8, G - 9), 900)
     work_test_expect_failed(t, link, gs, id, "unreachable: ")
     for y in G - 9 ..< G do set_tile(&gs.world, x0 + 8, y, .Air)
@@ -7376,4 +7383,362 @@ hero_fight_centred_on_a_stand_with_no_blow_gives_up :: proc(t: ^testing.T) {
     frames := 0
     for ; frames < int(HERO_FIGHT_WAIT_S * 60) + 120 && agent_goals_busy(&link.goals); frames += 1 do hero_test_tick(link, gs)
     work_test_expect_failed(t, link, gs, id, "unreachable: no blow at the Ember_Beetle lands from any stand")
+}
+
+// ─── Card 163: pillar up, threat priced ───
+
+// Playtest 129's sky (run 090153, life 5, seed 2989336427, f15133): the
+// hero on a cloud deck, the Cloud_Ore in an island 11 rows over open sky.
+// x 70..90, rows 62..78, as gen_sky_level made it: '#' cloud, 'C' ore.
+@(private="file")
+PILLAR_TEST_SKY := [?]string{
+    ".....................",  // 62
+    ".....................",  // 63
+    ".....#####CCC##......",  // 64
+    "......########.......",  // 65
+    "..........##.........",  // 66
+    ".....................",  // 67
+    ".....................",
+    ".....................",
+    ".....................",
+    ".....................",
+    ".....................",
+    ".....................",
+    ".....................",
+    ".....................",  // 75
+    "..###############....",  // 76
+    "...#############.....",  // 77
+    "......##.##..#.......",  // 78
+}
+
+// The run's sky carved into an open box, the hero on the deck under the ore
+// with blocks and nothing to dig with: stairs of blocks are the only way up.
+@(private="file")
+pillar_test_sky :: proc(gs: ^Game_State, blocks: int) {
+    hero_test_arena(gs)
+    for x in 64 ..= 96 do for y in 46 ..= 84 do set_tile(&gs.world, x, y, .Air)
+    for row, j in PILLAR_TEST_SKY {
+        for ch, i in row {
+            switch ch {
+            case '#': set_tile(&gs.world, 70 + i, 62 + j, .Cloud)
+            case 'C': set_tile(&gs.world, 70 + i, 62 + j, .Cloud_Ore)
+            }
+        }
+    }
+    gs.player.inventory = {}
+    if blocks > 0 do go_test_give(gs, .Stone_Block, blocks)
+    gs.player.pos, gs.player.vel = {80.1, 76 - PLAYER_H}, {}
+}
+
+// Playtest 129's goals 210-215 (f15343): go and mine at the Cloud_Ore 12 rows
+// up failed no_route with 20 blocks in the bag.  A player pillars up: a
+// jump, a block under the feet.  The go to the island's top arrives, never
+// with a place the game turns away (the body still in the tile); with no
+// blocks it is no route still.
+@(test)
+hero_go_pillars_up_to_an_island_over_open_sky :: proc(t: ^testing.T) {
+    for blocks in ([2]int{20, 0}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        pillar_test_sky(gs, blocks)
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"go","to":[79,63]}]}`)
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        refused := false
+        frames := 0
+        for ; frames < 1800 && agent_goals_busy(&link.goals); frames += 1 {
+            exec_test_frames(link, gs, 1)
+            refused ||= gs.agent.place_refused
+        }
+        status, reason := go_test_status(link, gs, id)
+        if blocks == 0 {
+            testing.expectf(t, status == "failed" && reason == "no_route", "no blocks: %s %s", status, reason)
+            continue
+        }
+        testing.expectf(t, status == "done", "%s %s in %d frames at %v", status, reason, frames, gs.player.pos)
+        testing.expect(t, !refused, "a place the game turned away")
+        used := blocks - inventory_count(&gs.player.inventory, .Stone_Block)
+        testing.expectf(t, used > 0 && used <= blocks, "%d blocks set down", used)
+    }
+}
+
+// The mine at the ore itself: up the pillar to a stand in the pick's reach.
+@(test)
+hero_mine_pillars_up_to_the_ore :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    pillar_test_sky(gs, 20)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id, frames := go_test_run(link, gs, `{"do":"mine","tile":[80,64]}`, 2400)
+    work_test_expect_done(t, link, gs, id)
+    testing.expectf(t, get_tile(&gs.world, 80, 64) != .Cloud_Ore, "the ore still there after %d frames", frames)
+}
+
+// The planner's pillar, one guard at a time, in a shaft one wide so straight
+// up is the only way: blocks enough for the height, the two rows over the
+// feet open (a solid third only stops the head), no pile under the feet, and
+// each block's cell one the game builds in (Leaves are open, not empty).
+@(test)
+hero_plan_pillars_only_where_a_jump_clears_the_tile :: proc(t: ^testing.T) {
+    Case :: struct {
+        blocks, up: int,   // blocks in the bag; the target this many rows over the feet
+        stone:      int,   // a stone this many rows over the feet, 0 none
+        pile:       bool,  // a pile on the feet tile
+        reached:    bool,
+        leaves:     int,   // Leaves this many rows over the feet, 0 none
+    }
+    cases := [?]Case{
+        {3, 3, 0, false, true, 0},
+        {2, 3, 0, false, false, 0},  // a block short
+        {3, 1, 3, false, true, 0},   // the head stops at the stone, the feet clear the tile
+        {3, 2, 3, false, false, 0},  // from one up, the jump has one row over the feet
+        {3, 2, 1, false, false, 0},  // a stone in the head's tile
+        {3, 1, 0, true,  false, 0},  // never over a pile
+        {3, 3, 0, false, false, 2},  // the third block's cell holds Leaves: placement refuses it
+    }
+    for c, k in cases {
+        gs := new(Game_State)
+        defer free(gs)
+        game_state_init(gs, 781)
+        x0, G := hero_test_arena(gs)
+        for y in G - 8 ..< G do for x in ([2]int{x0 - 1, x0 + 1}) do set_tile(&gs.world, x, y, .Stone)
+        gs.player.inventory = {}
+        if c.blocks > 0 do go_test_give(gs, .Stone_Block, c.blocks)
+        if c.stone > 0 do set_tile(&gs.world, x0, G - 1 - c.stone, .Stone)
+        if c.pile do spawn_ground_item(&gs.world, {i32(x0), i32(G - 1)}, .Wood_Log, 1)
+        if c.leaves > 0 do set_tile(&gs.world, x0, G - 1 - c.leaves, .Leaves)
+        from := [2]i32{i32(x0), i32(G - 1)}
+        path: Hero_Path
+        reached := hero_plan(gs, from, from - {0, i32(c.up)}, &path)
+        testing.expectf(t, reached == c.reached, "case %d %v: reached %v", k, c, reached)
+        if reached do for st in path.steps[:path.n] do testing.expectf(t, st.move == .Pillar, "case %d: a %v step", k, st.move)
+    }
+}
+
+// A Builder sitting in its built den, anchored at a, the den's middle two
+// rows over the anchor.  Held still by hero_test_tick (no enemy update).
+@(private="file")
+danger_test_den :: proc(gs: ^Game_State, a: [2]i32) -> int {
+    id, ok := enemy_alloc(&gs.enemies)
+    assert(ok)
+    e := &gs.enemies.data[id]
+    e^ = Enemy{kind = .Builder, hp = 6, hp_max = 6, pos = {f32(a.x) + 0.1, f32(a.y + 1) - BUILDER_H}, facing = -1}
+    e.builder.anchor, e.builder.den_built = a, true
+    return id
+}
+
+// Playtest 129 (run 090153: goes to (139,53) and (118,53) walked into
+// dens, L5817-6130): a den in view costs the plan its ground, as does a
+// Builder hunting the hero.  The straight way passes it; a tunnel under,
+// twice as long, is out of its reach and is taken.  With neither the
+// straight way is.
+@(test)
+hero_plan_goes_round_a_den :: proc(t: ^testing.T) {
+    Danger :: enum { Den, Hunter, None }
+    for c in Danger {
+        den := c != .None
+        gs := new(Game_State)
+        defer free(gs)
+        game_state_init(gs, 781)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        // The tunnel: in by a 3-row drop west of the hero, out by steps
+        // east of the target.
+        for x in x0 - 3 ..= x0 + 19 do for y in G + 1 ..= G + 2 do set_tile(&gs.world, x, y, .Air)
+        set_tile(&gs.world, x0 - 3, G, .Air)
+        for y in G ..= G + 1 do set_tile(&gs.world, x0 + 20, y, .Air)
+        set_tile(&gs.world, x0 + 19, G, .Air)
+        set_tile(&gs.world, x0 + 21, G, .Air)
+        m := [2]i32{i32(x0 + 9), i32(G - 5)}  // the den's middle: the straight way 4 rows under it, the tunnel 7
+        if den {
+            e := &gs.enemies.data[danger_test_den(gs, m + {0, 2})]
+            if c == .Hunter {
+                e.builder.den_built, e.builder.goal = false, .Hunt
+                e.pos = [2]f32{f32(m.x) + 0.5, f32(m.y) + 0.5} - enemy_body_size(.Builder) * 0.5
+            }
+        }
+        hero_sense(gs, &gs.hero)
+        testing.expect_value(t, gs.hero.senses.n_dens, 1 if c == .Den else 0)
+        path: Hero_Path
+        to := [2]i32{i32(x0 + 17), i32(G - 1)}
+        testing.expectf(t, hero_plan(gs, {i32(x0), i32(G - 1)}, to, &path, dig = false), "%v: a plan", c)
+        near := 0
+        for st in path.steps[:path.n] do if chebyshev(st.to, m) <= HERO_DANGER_R do near += 1
+        if den do testing.expectf(t, near == 0, "%v: %d steps by it", c, near)
+        else do testing.expectf(t, near > 0, "neither, and the straight way not taken")
+    }
+}
+
+// Playtest 129's life 1 (run 090153, f2023-6600, replayed on its code): a
+// gather for Wood_Log took the nearest Wood, which was a den's wall, dug down
+// into it and died there.  A tree in the open, farther, comes first; with no
+// den the nearer wood does.
+@(test)
+hero_gather_takes_the_tree_not_the_den_wall :: proc(t: ^testing.T) {
+    for den in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        for x in x0 + 2 ..= x0 + 4 do for y in G + 4 ..= G + 6 do set_tile(&gs.world, x, y, .Air)
+        wall := [2]i32{i32(x0 + 3), i32(G + 3)}
+        set_tile(&gs.world, int(wall.x), int(wall.y), .Wood)
+        tree := [2]i32{i32(x0 + 18), i32(G - 1)}
+        for y in G - 3 ..= G - 1 do set_tile(&gs.world, int(tree.x), y, .Wood)
+        if den do danger_test_den(gs, {i32(x0 + 3), i32(G + 6)})
+        go_test_give(gs, .Pickaxe, 1)  // as in the run: it dug down to the wall
+        exec_test_frames(link, gs, 1)
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"gather","item":"Wood_Log","count":1}]}`)
+        first: [2]i32
+        picked, tried_wall := false, false
+        for _ in 0 ..< 3 do if !picked {
+            hero_test_tick(link, gs)
+            for &q in link.goals.slots[:link.goals.n] do if q.status == .Running {
+                if q.work.has_target do first, picked = q.work.target, true
+                for sk in q.work.skip[:q.work.n_skip] do if sk == wall do tried_wall = true  // picked, then given up
+            }
+        }
+        if !testing.expectf(t, picked, "den %v: the gather picked nothing", den) do return
+        if den do testing.expectf(t, first.x == tree.x && !tried_wall, "the den's wall: %v, tried %v", first, tried_wall)
+        else do testing.expectf(t, first == wall, "no den: %v, want the nearer %v", first, wall)
+    }
+}
+
+// Playtest 132's addendum to card 163 (run 101225, life 1, f18273-19921,
+// replayed on its code): the gather was not worked on.  It stood paused
+// while the brain fled a hunting Builder for 1650 frames underground, the
+// Builder digging after it, and the hero died running.  The hero had a
+// pickaxe and 7 of 10 hp at the first bite: since card 176 that hero turns
+// and fights (six soft blows fell the Builder, seven of its bites the hero).
+// Only the first choice is pinned, as in card 176's tests.
+@(test)
+hero_bitten_at_seven_with_a_pickaxe_fights_the_builder :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    x0, G := hero_test_arena(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    for y in G - 3 ..= G - 1 do set_tile(&gs.world, x0 + 14, y, .Wood)
+    gs.player.hp = 7
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"gather","item":"Wood_Log","count":20}]}`)
+    weak_arm_test_foe(gs, .Builder, f32(x0) + 2.1, G)
+    first := Hero_Behaviour.None
+    for f := 0; f < 600 && first == .None && !gs.player.dead; f += 1 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Fight || gs.hero.current == .Flee do first = gs.hero.current
+    }
+    testing.expectf(t, first == .Fight, "first answer %v at %d hp", first, gs.player.hp)
+}
+
+// Priced as a bridge's blocks: a ledge three up with stairs to it is walked
+// up, and one with a step two high is jumped, no block spent; behind a wall
+// with neither it is pillared to.
+@(test)
+hero_plan_walks_the_stairs_before_a_pillar :: proc(t: ^testing.T) {
+    for way in ([3]string{"stairs", "a step a jump climbs", "none"}) {
+        gs := new(Game_State)
+        defer free(gs)
+        game_state_init(gs, 781)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        go_test_give(gs, .Stone_Block, 10)
+        for x in x0 + 1 ..= x0 + 8 do for y in G - 3 ..< G do set_tile(&gs.world, x, y, .Stone)  // the ledge, its top G-4
+        if way == "stairs" do for k in 1 ..= 2 do for y in G - 3 + k ..< G do set_tile(&gs.world, x0 + 8 + k, y, .Stone)
+        if way == "a step a jump climbs" do for y in G - 2 ..< G do set_tile(&gs.world, x0 + 9, y, .Stone)  // two high: a jump, two pillar blocks
+        path: Hero_Path
+        testing.expectf(t, hero_plan(gs, {i32(x0 + 13), i32(G - 1)}, {i32(x0 + 4), i32(G - 4)}, &path, dig = false), "%s: a plan", way)
+        pillars := 0
+        for st in path.steps[:path.n] do if st.move == .Pillar do pillars += 1
+        testing.expectf(t, (pillars == 0) == (way != "none"), "%s: %d pillar steps", way, pillars)
+    }
+}
+
+// Review of card 163 (its probe): a shaft one wide with Leaves two rows over
+// the feet, a go three up.  The game builds only in an empty cell, so no
+// pillar is planned through the Leaves: no_route, and no place refused.
+@(test)
+hero_go_never_pillars_into_leaves :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for y in G - 8 ..< G do for x in ([2]int{x0 - 1, x0 + 1}) do set_tile(&gs.world, x, y, .Stone)
+    set_tile(&gs.world, x0, G - 3, .Leaves)
+    gs.player.inventory = {}
+    go_test_give(gs, .Stone_Block, 10)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0, G - 4))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    refused := false
+    frames := 0
+    for ; frames < 1200 && agent_goals_busy(&link.goals); frames += 1 {
+        exec_test_frames(link, gs, 1)
+        if gs.agent.place_refused do refused = true
+    }
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && reason == "no_route", "%s %s in %d frames", status, reason, frames)
+    testing.expect(t, !refused, "a place refused")
+}
+
+// The bridge asks the same: no block planned into a Leaves cell over a pit.
+@(test)
+hero_bridge_never_into_leaves :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, 781)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 11 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Air)
+    set_tile(&gs.world, x0 + 8, G, .Leaves)
+    gs.player.inventory = {}
+    go_test_give(gs, .Stone_Block, 10)
+    path: Hero_Path
+    hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 14), i32(G - 1)}, &path, dig = false)
+    for st in path.steps[:path.n] do testing.expectf(t, !(st.move == .Bridge && st.to + {0, 1} == {i32(x0 + 8), i32(G)}), "a block planned into the Leaves: %v", st)
+}
+
+// The blocks taken from the bag halfway up (a craft, a store): the go plans
+// again and fails no_route, never jumps on the spot until blocked.
+@(test)
+hero_go_pillar_with_the_bag_emptied_fails_no_route :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    pillar_test_sky(gs, 20)
+    exec_test_frames(link, gs, 5)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"go","to":[79,63]}]}`)
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    emptied := false
+    frames := 0
+    for ; frames < 1200 && agent_goals_busy(&link.goals); frames += 1 {
+        exec_test_frames(link, gs, 1)
+        if !emptied && inventory_count(&gs.player.inventory, .Stone_Block) == 18 {
+            for &sl in gs.player.inventory.slots do if sl.item == .Stone_Block do sl = {}
+            emptied = true
+        }
+    }
+    testing.expect(t, emptied, "two blocks set down")
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && reason == "no_route", "%s %s in %d frames", status, reason, frames)
+}
+
+// The senses keep the dens in view, HERO_DENS_MAX of them at most: one out
+// of view is not seen, a sixth in view is not kept.
+@(test)
+hero_senses_keep_the_dens_in_view :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, 781)
+    x0, G := hero_test_arena(gs)
+    far := danger_test_den(gs, {i32(x0 + AGENT_VIEW_W), i32(G + 6)})
+    hero_sense(gs, &gs.hero)
+    testing.expect_value(t, gs.hero.senses.n_dens, 0)
+    for k in 0 ..< HERO_DENS_MAX + 1 do danger_test_den(gs, {i32(x0 - 8 + 4 * k), i32(G + 6)})
+    hero_sense(gs, &gs.hero)
+    testing.expect_value(t, gs.hero.senses.n_dens, HERO_DENS_MAX)
+    for d in gs.hero.senses.dens[:gs.hero.senses.n_dens] do testing.expectf(t, d.x != i32(x0 + AGENT_VIEW_W), "the den out of view kept, slot %d", far)
 }
