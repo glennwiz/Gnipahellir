@@ -1024,8 +1024,14 @@ new_game_world_seed :: proc() -> u32 {
     if s := os.get_env("GNIPA_SEED", context.temp_allocator); s != "" {
         if n, ok := strconv.parse_u64(s); ok do return u32(n)
     }
+    when ODIN_TEST do return TEST_WORLD_SEED  // a test's world never comes from the clock (card 180)
     return u32(time.now()._nsec)
 }
+
+// What a test build seeds in place of the clock, so a test's outcome never
+// depends on when it ran: its loot rolls and any fresh world are the same each run.
+TEST_LOOT_SEED  :: u64(0x00C0FFEE_0D15EA5E)
+TEST_WORLD_SEED :: u32(180180)
 
 game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     // Preserved across a reset (audio/assets are live GPU/OS handles set up
@@ -1071,7 +1077,7 @@ game_state_init :: proc(gs: ^Game_State, world_seed: u32 = DEFAULT_WORLD_SEED) {
     gs.zoom_target        = 1.0
     gs.zoom_from          = 1.0
     gs.zoom_t             = 1.0   // settled: no glide in flight
-    gs.loot_rng           = u64(time.now()._nsec)  // fresh drop rolls each run
+    gs.loot_rng           = TEST_LOOT_SEED when ODIN_TEST else u64(time.now()._nsec)  // fresh drop rolls each run
     gs.world_seed         = world_seed
     gs.ui.show_title      = true   // boot into the title screen; a key press opens the menu
     // No starting tools — the pickaxe waits on the grass (see world_init).
