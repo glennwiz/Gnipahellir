@@ -1531,7 +1531,7 @@ hero_go_through_a_dirt_wall :: proc(t: ^testing.T) {
 }
 
 // A pond in the way, too wide to jump: no route digs its rim, and the water
-// stays where it is.
+// stays where it is; the go swims it (card 174).
 @(test)
 hero_go_never_digs_a_pool_rim :: proc(t: ^testing.T) {
     gs, link := exec_test_world()
@@ -1548,11 +1548,11 @@ hero_go_never_digs_a_pool_rim :: proc(t: ^testing.T) {
     for x in x0 + 3 ..= x0 + 12 do for y in G - 2 ..= G + 3 do if hero_rim(&gs.world, {i32(x), i32(y)}) && is_solid(&gs.world, x, y) do append(&rim, [2]i32{i32(x), i32(y)})
     watch: Go_Watch
     id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 14, G - 1), 6000, &watch)
-    testing.expect_value(t, watch.wet, 0)  // never through the pond either
+    testing.expect(t, watch.wet > 0, "it swims the pond (card 174: water is a route, not a wall)")
     for r in rim do testing.expectf(t, is_solid(&gs.world, int(r.x), int(r.y)), "rim tile %v dug", r)
     for x in x0 + 5 ..= x0 + 10 do testing.expect_value(t, get_tile(&gs.world, x, G + 1), Tile_Type.Water)
     status, reason := go_test_status(link, gs, id)
-    testing.expectf(t, status == "done" || reason == "no_route" || reason == "blocked", "%s %s", status, reason)
+    testing.expectf(t, status == "done", "%s %s", status, reason)
 }
 
 // Dropped on lava, the hero walks out of it, goal or none; with the reflex off
@@ -2500,9 +2500,10 @@ hero_plan_reads_no_earlier_plan_behind_its_start :: proc(t: ^testing.T) {
 }
 
 // Card 159 (coordinator, from card 158's sweep): a drop is never planned
-// into a burn, nor to a stand over water; the same pit dry is dropped into.
+// into a burn; the same pit dry is dropped into.  Card 174: into the water
+// it is a swim (the water breaks the fall), out along the pit's floor.
 @(test)
-hero_plan_drops_into_no_burn_or_water :: proc(t: ^testing.T) {
+hero_plan_drops_into_water_not_a_burn :: proc(t: ^testing.T) {
     for under in ([3]Tile_Type{.Air, .Lava, .Water}) {
         gs, link := exec_test_world()
         defer free(gs)
@@ -2514,7 +2515,11 @@ hero_plan_drops_into_no_burn_or_water :: proc(t: ^testing.T) {
         set_tile(&gs.world, x0 + 3, G + 3, under)
         path: Hero_Path
         reached := hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 5), i32(G + 3)}, &path)
-        testing.expectf(t, reached == (under == .Air), "%v under the drop: reached %v", under, reached)
+        testing.expectf(t, reached == (under != .Lava), "%v under the drop: reached %v", under, reached)
+        if under != .Water do continue
+        into := false
+        for st in path.steps[:path.n] do into ||= st.move == .Swim && st.to == {i32(x0 + 3), i32(G + 3)}
+        testing.expect(t, into, "into the pool by a swim")
     }
 }
 
@@ -6848,4 +6853,307 @@ hero_with_a_pickaxe_is_not_hunted_by_a_builder :: proc(t: ^testing.T) {
     }
     pushed := exec_test_pushed(link)
     testing.expectf(t, worked > 0 && !strings.contains(pushed, `"goal_paused"`), "worked %d frames: %s", worked, pushed)
+}
+
+// Card 174 (playtest 132): a go across a 5-wide pond, its banks level with
+// the water, swims it and arrives, unhurt, at any depth: the planner has the
+// water the body has.
+@(test)
+hero_go_swims_across_a_pond :: proc(t: ^testing.T) {
+    for depth in ([3]int{1, 2, 4}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + depth do set_tile(&gs.world, x, y, .Water)
+        exec_test_frames(link, gs, 5)
+        hp := gs.player.hp
+        path: Hero_Path
+        testing.expectf(t, hero_plan(gs, hero_feet(&gs.player), {i32(x0 + 10), i32(G - 1)}, &path), "depth %d: planned", depth)
+        swims := 0
+        for st in path.steps[:path.n] do if st.move == .Swim do swims += 1
+        testing.expectf(t, swims > 0, "depth %d: the plan swims", depth)
+        id, frames := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 10, G - 1), 1200)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "depth %d: %s %s in %d frames at %v", depth, status, reason, frames, gs.player.pos)
+        testing.expectf(t, gs.player.hp == hp, "depth %d: hp %d of %d", depth, gs.player.hp, hp)
+    }
+}
+
+// In water with every bank a tile over the water's top, no stroke climbs
+// out: a go to the bank fails at once, saying so, and never hangs.
+@(test)
+hero_go_from_a_pond_it_cannot_leave_fails_saying_so :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + 4 do set_tile(&gs.world, x, y, .Air if y == G else .Water)
+    gs.player.inventory = {}  // no pick: nothing to dig a step with
+    gs.player.pos = {f32(x0 + 5) + 0.1, f32(G + 4) - PLAYER_H}
+    gs.player.vel = {}
+    exec_test_frames(link, gs, 5)
+    id, frames := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 10, G - 1), 600)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && reason == "no_route: no way out of the water reaches it", "%s %s", status, reason)
+    testing.expectf(t, frames < 60, "failed in %d frames", frames)
+}
+
+// A swim cell keeps the head out of a burn (c174b's rework): steam over one
+// top-row cell of a pond, the plan across swims under it, never through it.
+@(test)
+hero_plan_swims_under_steam_not_through_it :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 9 do for y in G ..< G + 2 do set_tile(&gs.world, x, y, .Water)
+    set_tile(&gs.world, x0 + 6, G - 1, .Steam)
+    testing.expect(t, .Damaging in terrain_table[Tile_Type.Steam].flags, "steam burns")
+    path: Hero_Path
+    reached := hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 12), i32(G - 1)}, &path, dig = false)
+    testing.expect(t, reached, "a plan across, under the steam")
+    for st in path.steps[:path.n] {
+        head := get_tile(&gs.world, int(st.to.x), int(st.to.y - 1))
+        testing.expectf(t, .Damaging not_in terrain_table[head].flags, "step %v: head in the %v", st, head)
+    }
+}
+
+// The swim goes down too (c174b's rework): a pond whose only way on is a
+// tunnel two high out of its bottom is a plan, and the go swims down to it,
+// stroking only to rise.
+@(test)
+hero_plan_swims_down_to_a_tunnel_out_of_the_bottom :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Water)
+    for x in x0 + 8 ..= x0 + 10 do for y in G + 1 ..= G + 2 do set_tile(&gs.world, x, y, .Air)
+    exec_test_frames(link, gs, 5)
+    path: Hero_Path
+    testing.expect(t, hero_plan(gs, hero_feet(&gs.player), {i32(x0 + 10), i32(G + 2)}, &path, dig = false), "down and out along the bottom")
+    id, frames := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 10, G + 2), 1200)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s in %d frames at %v", status, reason, frames, gs.player.pos)
+}
+
+// A swim cell has room for the head (card 174): a channel one high under
+// stone joining two ponds behind a wall is no way through; two high, it is.
+@(test)
+hero_plan_swims_no_channel_too_low_for_the_head :: proc(t: ^testing.T) {
+    for high in 1 ..= 2 {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}  // no bridge
+        for x in x0 + 6 ..= x0 + 8 do for y in G - 8 ..< G do set_tile(&gs.world, x, y, .Stone)
+        for x in x0 + 3 ..= x0 + 5 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Water)
+        for x in x0 + 9 ..= x0 + 11 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Water)
+        for x in x0 + 6 ..= x0 + 8 do for y in G + 3 - high ..< G + 3 do set_tile(&gs.world, x, y, .Water)
+        path: Hero_Path
+        reached := hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 14), i32(G - 1)}, &path, dig = false)
+        testing.expectf(t, reached == (high == 2), "channel %d high: reached %v", high, reached)
+    }
+}
+
+// Water level with the bank's feet is walked into (card 174): a pond whose top
+// row is the bank's feet row, nine wide, too wide to jump, is swum.
+@(test)
+hero_plan_walks_into_water_level_with_its_feet :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    gs.player.inventory = {}
+    for x in x0 + 3 ..= x0 + 11 do for y in G - 1 ..< G + 2 do set_tile(&gs.world, x, y, .Water)
+    path: Hero_Path
+    testing.expect(t, hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 14), i32(G - 1)}, &path, dig = false), "a plan across")
+    entered := false
+    for st in path.steps[:path.n] do if st.from == {i32(x0 + 2), i32(G - 1)} && st.to == {i32(x0 + 3), i32(G - 1)} && st.move == .Swim do entered = true
+    testing.expect(t, entered, "walked level into the water's top row")
+}
+
+// A pond the hero can jump is jumped, not swum (card 174): one to three wide,
+// two deep, its banks level.  The stride halved in water (HERO_NAV_SWIM_COST)
+// and the stroke out onto the bank, a jump's worth, weigh against the swim.
+@(test)
+hero_plan_jumps_a_pond_it_can_clear :: proc(t: ^testing.T) {
+    for wide in 1 ..= 3 {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        for x in x0 + 3 ..< x0 + 3 + wide do for y in G ..< G + 2 do set_tile(&gs.world, x, y, .Water)
+        path: Hero_Path
+        to := [2]i32{i32(x0 + 6 + wide), i32(G - 1)}
+        testing.expectf(t, hero_plan(gs, {i32(x0), i32(G - 1)}, to, &path, dig = false), "%d wide: a plan across", wide)
+        for st in path.steps[:path.n] do testing.expectf(t, st.move != .Swim, "%d wide: a swim step %v", wide, st)
+    }
+}
+
+// The feet a body in water plans from (card 174): as read in deep water; a row
+// up when read inside the floor under water; as read in solid with no water
+// over it.
+@(test)
+hero_swim_feet_reads_the_settled_body :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + 4 do set_tile(&gs.world, x, y, .Water)
+    Case :: struct { feet_y: int, x: int, want_up: bool }
+    for c in ([3]Case{{G + 2, x0 + 5, false}, {G + 4, x0 + 5, true}, {G, x0, false}}) {
+        gs.player.pos = {f32(c.x) + 0.1, f32(c.feet_y) + 0.05 - PLAYER_H}
+        f := hero_feet(&gs.player)
+        testing.expectf(t, f.y == i32(c.feet_y), "feet row %d, want %d", f.y, c.feet_y)
+        want := f - {0, 1} if c.want_up else f
+        testing.expectf(t, hero_swim_feet(gs) == want, "feet read %v: got %v, want %v", f, hero_swim_feet(gs), want)
+    }
+}
+
+// A fall into water needs the head room the body has (c174b's rework): a
+// pond under a ceiling a tile over its top (one row of air) is no way in.
+@(test)
+hero_plan_never_falls_into_a_pond_under_a_low_ceiling :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 7 {
+        for y in G ..< G + 2 do set_tile(&gs.world, x, y, .Water)
+        set_tile(&gs.world, x, G - 2, .Stone)
+    }
+    path: Hero_Path
+    testing.expect(t, !hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 5), i32(G + 1)}, &path, dig = false), "no plan into the gap")
+}
+
+// Lava is no water: a lava pit as wide as the pond is no route, never entered.
+@(test)
+hero_go_never_swims_lava :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + 2 do set_tile(&gs.world, x, y, .Lava)
+    gs.player.inventory = {}
+    exec_test_frames(link, gs, 5)
+    hp := gs.player.hp
+    path: Hero_Path
+    testing.expect(t, !hero_plan(gs, hero_feet(&gs.player), {i32(x0 + 10), i32(G - 1)}, &path), "no plan over lava")
+    id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 10, G - 1), 600)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "failed" && strings.has_prefix(reason, "no_route"), "%s %s", status, reason)
+    testing.expectf(t, gs.player.hp == hp, "hp %d of %d", gs.player.hp, hp)
+}
+
+// From the bottom of a 4-deep pond a go to the far bank rises by strokes and
+// climbs out level with the water's top, either way.
+@(test)
+hero_go_out_of_the_bottom_of_a_pond :: proc(t: ^testing.T) {
+    for side in ([2]int{-1, 1}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for x in x0 + 3 ..= x0 + 9 do for y in G ..< G + 4 do set_tile(&gs.world, x, y, .Water)
+        gs.player.inventory = {}
+        gs.player.pos = {f32(x0 + 6) + 0.1, f32(G + 4) - PLAYER_H}
+        gs.player.vel = {}
+        exec_test_frames(link, gs, 5)
+        to := [2]int{x0 + 6 + side * 6, G - 1}
+        id, frames := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, to.x, to.y), 1200)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "side %d: %s %s in %d frames at %v", side, status, reason, frames, gs.player.pos)
+    }
+}
+
+// A fight on a beetle at the bottom of a pond ends, done or failed with a
+// reason, inside HERO_FIGHT_WAIT_S and the walk's own limits: never a freeze
+// (playtest 133's item 9 class; its own freeze was no water, card 175).
+@(test)
+hero_fight_on_a_target_in_water_ends :: proc(t: ^testing.T) {
+    for weapon in ([2]Item{.Sword, .Pickaxe}) do for depth in ([2]int{2, 4}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        exec_test_frames(link, gs, 10)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        go_test_give(gs, weapon, 1)
+        for x in x0 + 5 ..= x0 + 12 do for y in G ..< G + depth do set_tile(&gs.world, x, y, .Water)
+        e := fight_test_body(gs, .Ember_Beetle, x0 + 8, G + depth - 1)
+        id, _ := fight_test_run(link, gs, `{"do":"fight","kind":"Ember_Beetle"}`, e, x0, G, 1800)
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done" || (status == "failed" && reason != ""), "%v depth %d: %s %s", weapon, depth, status, reason)
+        testing.expect(t, !gs.player.dead)
+    }
+}
+
+// A stroke out of the water rises into the row over the bank's edge: a lid
+// over the water's edge cell leaves no climb out there (c174's rework).  The
+// west bank, reached only out of the west edge: lidded, no plan; open, one.
+@(test)
+hero_plan_climbs_out_of_a_pond_only_under_open_sky :: proc(t: ^testing.T) {
+    for lid in ([2]bool{true, false}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + 3 do set_tile(&gs.world, x, y, .Water)
+        if lid do set_tile(&gs.world, x0 + 3, G - 2, .Stone)  // over the west edge cell
+        path: Hero_Path
+        reached := hero_plan(gs, {i32(x0 + 5), i32(G + 2)}, {i32(x0 + 2), i32(G - 1)}, &path, dig = false)
+        testing.expectf(t, reached == !lid, "lid %v: reached %v", lid, reached)
+    }
+}
+
+// The swimming flag lasts the tick of a go's swim step, no longer (c174's
+// rework): after a go swims across, a hero put back in the water with no goal
+// is taken out by the leave reflex.
+@(test)
+hero_leaves_the_water_after_a_swim_with_no_goal :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 3 ..= x0 + 7 do for y in G ..< G + 2 do set_tile(&gs.world, x, y, .Water)
+    exec_test_frames(link, gs, 5)
+    id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x0 + 10, G - 1), 1200)
+    status, reason := go_test_status(link, gs, id)
+    if !testing.expectf(t, status == "done", "the swim: %s %s", status, reason) do return
+    gs.player.pos, gs.player.vel = {f32(x0 + 4) + 0.1, f32(G + 2) - PLAYER_H}, {}
+    exec_test_frames(link, gs, 1)
+    testing.expect(t, player_in_water(gs), "put back in the water")
+    for f := 0; f < 600 && player_in_water(gs); f += 1 do exec_test_frames(link, gs, 1)
+    testing.expectf(t, !player_in_water(gs), "still in the water at %v", gs.player.pos)
+}
+
+// On a go's swim step a burn at or under the feet still fires the leave
+// reflex (c174's rework): it heads for the near bank, not on with the swim.
+@(test)
+hero_swim_step_over_a_burn_leaves :: proc(t: ^testing.T) {
+    for row in i32(0) ..= 1 {  // at the feet, under them
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for x in x0 + 3 ..= x0 + 9 do for y in G ..< G + 2 do set_tile(&gs.world, x, y, .Water)
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 12, G - 1))
+        in_swim := false
+        for f := 0; f < 600 && !in_swim; f += 1 {
+            hero_test_tick(link, gs)
+            p := &gs.hero.path
+            in_swim = player_in_water(gs) && hero_feet(&gs.player).x == i32(x0 + 3) && p.at < p.n && p.steps[p.at].move == .Swim
+        }
+        if !testing.expect(t, in_swim, "on a swim step at the west edge") do continue
+        f := hero_feet(&gs.player)
+        set_tile(&gs.world, int(f.x), int(f.y + row), .Lava)
+        hero_test_tick(link, gs)
+        testing.expectf(t, gs.agent.cmd.move == -1, "row %d: move %d, on with the swim by the lava", row, gs.agent.cmd.move)
+    }
 }

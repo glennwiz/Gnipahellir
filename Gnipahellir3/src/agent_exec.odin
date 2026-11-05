@@ -464,6 +464,7 @@ Hero_Brain :: struct {
     paused_goal: int,  // the goal a behaviour has paused, 0 none
     paused_by:   Hero_Behaviour,
     paused_t:    f32,  // seconds the goal has been paused at a stretch
+    swimming:    bool, // this tick's go follows a swim step: the leave reflex leaves the water alone
     idle_told:   bool,
     ledge_t:     f32,  // seconds looking at this edge
     looked:      [2]i32,  // the edge looked at, safe to step
@@ -1246,8 +1247,8 @@ hero_note_names := [Hero_Note_Kind]string{
 // SAFE_FALL_TILES and HERO_NAV_HP_COST per hp the fall rule takes after, and
 // one that would kill or leave the hero under the reflex line is never taken.
 // A drop that hurts at all is taken only when no way without one reaches
-// (card 158: the search runs once without them first); burning and water
-// tiles are never stood in,
+// (card 158: the search runs once without them first); burning tiles are
+// never stood in, water is swum (card 174, below),
 // and a pond or lava rim is never dug.  hero_go_tick follows the path through
 // gs.agent.cmd alone, replans when knocked off it or stuck, and fails the goal
 // with no_route (nothing nearer can be reached), blocked (no headway for
@@ -1269,10 +1270,11 @@ HERO_NAV_DIG_COST    :: f32(3)    // per tile dug
 HERO_NAV_DUG_BACK    :: 4         // a step's floor is checked against the digs of this many steps back along the path
 HERO_NAV_BRIDGE_COST :: f32(4)    // per block set down
 HERO_NAV_HP_COST     :: f32(20)   // per hp a fall takes
+HERO_NAV_SWIM_COST   :: f32(2)    // per tile swum: water halves the stride (WATER_DRAG)
 HERO_LOW_HP_FRAC     :: f32(0.3)  // the reflex line: a potion under it, no fall that ends below it
 HERO_POTION_COOLDOWN_S :: f32(1)  // between potions
 
-Hero_Move :: enum u8 { Walk, Jump, Drop, Gap, Dig, Bridge }
+Hero_Move :: enum u8 { Walk, Jump, Drop, Gap, Dig, Bridge, Swim }
 
 Hero_Step :: struct {
     from, to: [2]i32,  // feet tiles
@@ -1445,9 +1447,14 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         if h := hero_nav_h(a, to); h < best_h || (h == best_h && n.g[i] < n.g[best]) do best, best_h = i, h
         x, y := a.x, a.y
         nb := n.bridges[i]
+        if hero_swim_cell(w, a) {
+            hero_nav_swim(n, &size, o, i, a, nb, to, w)
+            continue
+        }
         for d in ([2]i32{-1, 1}) {
             f := [2]i32{x + d, y}
             if hero_walk_in(w, f) && !hero_nav_dug(n, o, s, i, f + {0, 1}) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
+            if wet, drop := hero_swim_entry(w, f); wet do hero_nav_relax(n, &size, o, i, f + {0, i32(drop)}, 1, .Swim, nb, to)  // a fall into water takes no hp
             if up := ([2]i32{x + d, y - 1}); hero_stand(w, up) && hero_open(w, x, y - 2) && !hero_nav_dug(n, o, s, i, up + {0, 1}) {
                 hero_nav_relax(n, &size, o, i, up, 1.5, .Walk, nb, to)
             }
@@ -1505,6 +1512,58 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     }
     out.n = min(length, HERO_PATH_MAX)
     return reached && length <= HERO_PATH_MAX
+}
+
+// ─── Water (card 174) ───
+//
+// The body in water (player.odin): half the stride, a slow sink, and a jump
+// that is a stroke, with or without footing, as often as it is pressed.  It
+// never drowns.  A stroke lifts the feet at most about 0.9 of a tile over the
+// water's top, so the body climbs out only onto a bank level with that top
+// row, or walks out level along the bottom; a bank a tile higher keeps it in.
+// Falling into water costs no hp.  Lava is no water: never a move.
+
+// A feet tile in water: the feet in it, the head in water or air, no burn.
+hero_swim_cell :: proc(w: ^World_Grid, t: [2]i32) -> bool {
+    feet := terrain_table[get_tile(w, int(t.x), int(t.y))].flags
+    head := terrain_table[get_tile(w, int(t.x), int(t.y - 1))].flags
+    return .Swimmable in feet && .Damaging not_in head && !is_solid(w, int(t.x), int(t.y - 1))  // only water swims, and no water burns
+}
+
+// A step from land into column f's water: the water at the feet, or below
+// open air the body falls through (hero_column: the water breaks the fall)
+// with its head clear on the way in.  Gives the rows fallen, so the swim tile
+// is f + {0, drop}.  A solid or burning f is the landing's head, which the
+// swim cell refuses.
+hero_swim_entry :: proc(w: ^World_Grid, f: [2]i32) -> (wet: bool, drop: int) {
+    if hero_swim_cell(w, f) do return true, 0
+    if !hero_open(w, f.x, f.y - 1) do return false, 0
+    col := hero_column(w, int(f.x), int(f.y))
+    land := f + {0, i32(col.drop) + 1}
+    return hero_swim_cell(w, land), col.drop + 1
+}
+
+// The moves from a feet tile in water: a stroke-free stride to any side, up
+// or down, into another one, or out onto ground level with it; and out by a
+// stroke, a jump's worth, onto a stand a row up, with the head room to rise
+// into it.
+@(private="file")
+hero_nav_swim :: proc(n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, a: [2]i32, nb: u8, to: [2]i32, w: ^World_Grid) {
+    for d in ([4][2]i32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
+        if hero_swim_cell(w, a + d) || hero_stand(w, a + d) do hero_nav_relax(n, size, o, i, a + d, HERO_NAV_SWIM_COST, .Swim, nb, to)
+    }
+    for d in ([2]i32{-1, 1}) {
+        up := a + {d, -1}
+        if hero_stand(w, up) && !is_solid(w, int(a.x), int(a.y - 2)) do hero_nav_relax(n, size, o, i, up, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST, .Swim, nb, to)
+    }
+}
+
+// The feet tile a body in water is planned from: sinking onto the bottom,
+// the feet read a row into it until the body settles.
+hero_swim_feet :: proc(gs: ^Game_State) -> [2]i32 {
+    f := hero_feet(&gs.player)
+    if is_solid(&gs.world, int(f.x), int(f.y)) && hero_swim_cell(&gs.world, f - {0, 1}) do return f - {0, 1}
+    return f
 }
 
 // Whether a dig of the last HERO_NAV_DUG_BACK steps on the way to node i clears tile t:
@@ -1616,6 +1675,8 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     path := &b.path
     feet := hero_feet(p)
     if p.grounded && feet == g.to do return true
+    wet := player_in_water(gs)  // swimming: planned and stepped as on the ground (card 174)
+    if wet do feet = hero_swim_feet(gs)
     if agent_window_open(gs) {
         gs.agent.first = true  // a still tick sweeps the windows shut, as for any goal
         return false
@@ -1640,7 +1701,7 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     if g.stuck_t >= HERO_GO_REPLAN_S && !g.replanned {
         stale, g.replanned = true, true
     }
-    if p.grounded && !stale {
+    if (p.grounded || wet) && !stale {
         st := path.steps[path.at]
         if feet == st.to {
             path.at += 1
@@ -1653,12 +1714,12 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         }
     }
     if stale {
-        if !p.grounded do return false  // plan from the ground
+        if !p.grounded && !wet do return false  // plan from the ground, or the water
         hero_plan(gs, feet, g.to, path, dig = !g.no_dig)
         path.goal = g.id
         if path.n == 0 {
             g.status = .Failed
-            agent_text_set(&g.reason, "no_route")
+            agent_text_set(&g.reason, "no_route: no way out of the water reaches it" if hero_swim_cell(w, feet) else "no_route")
             return false
         }
     }
@@ -1707,6 +1768,15 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
             gs.agent.first = true
             return false
         }
+    case .Swim:
+        // Toward the step's tile, a stroke each tick it lies above the feet.
+        b.swimming = true
+        hero_go_toward(gs, st.to)
+        if feet.y > st.to.y {
+            c.jump = true
+            gs.agent.first = true
+        }
+        return false
     case .Walk, .Jump, .Drop, .Gap:
     }
     hero_go_toward(gs, st.to)
@@ -1758,6 +1828,7 @@ hero_reflexes_run :: proc(gs: ^Game_State, q: ^Agent_Goals) {
     b.potion_t = max(b.potion_t - gs.delta_time, 0)
     b.refused = false
     for r, k in hero_reflexes do if k not_in q.reflexes_off do r.run(gs, b)
+    b.swimming = false
 }
 
 // In a burn or in water, or in the air over one: for the nearest column either
@@ -1768,6 +1839,7 @@ hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     f := hero_feet(&gs.player)
     over := !gs.player.grounded && hero_wet_or_burning(w, f.x, f.y + 1)  // a jump out not yet clear of it
     if !hero_wet_or_burning(w, f.x, f.y) && !over do return
+    if b.swimming && !hero_burning_near(w, f) do return  // a go's swim: the water is its way (card 174)
     blocked: [2]bool  // a wall that side: no way out past it
     for k in i32(1) ..= HERO_SENSE_REACH {
         for d, side in ([2]i8{-1, 1}) {
@@ -1790,6 +1862,13 @@ hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
             return
         }
     }
+}
+
+// A burn at the feet or under them.
+@(private="file")
+hero_burning_near :: proc(w: ^World_Grid, f: [2]i32) -> bool {
+    for y in ([2]i32{f.y, f.y + 1}) do if .Damaging in terrain_table[get_tile(w, int(f.x), int(y))].flags do return true
+    return false
 }
 
 // What heals, in the order the hero takes it: a right-click on any of them in
