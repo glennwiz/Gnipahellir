@@ -13961,6 +13961,24 @@ a_saved_run_keeps_its_seed_for_the_levels_to_come :: proc(t: ^testing.T) {
     testing.expect_value(t, back.world_seed, u32(777))
 }
 
+// Card 180: no clock reaches a test.  Two test states, made apart in time, roll
+// the same loot, and a new game with no seed typed is the same world each run.
+@(test)
+a_test_rolls_the_same_loot_every_run :: proc(t: ^testing.T) {
+    a := test_state()
+    defer free(a)
+    time.sleep(time.Millisecond)  // a clock seed would differ by now
+    b := test_state()
+    defer free(b)
+    testing.expect_value(t, a.loot_rng, TEST_LOOT_SEED)
+    for _ in 0 ..< 100 do testing.expect_value(t, rand_next(a), rand_next(b))
+    start_new_game(a)
+    time.sleep(time.Millisecond)
+    start_new_game(b)
+    testing.expect(t, a.world_seed == b.world_seed && a.loot_rng == b.loot_rng, "a new game in a test is the same world and the same rolls")
+    testing.expect(t, a.world.terrain == b.world.terrain, "the same ground")
+}
+
 @(test)
 the_agent_harness_plays_the_typed_seed :: proc(t: ^testing.T) {
     // GNIPA_SEED is how a GNIPA_AGENT_PORT run is given its seed.
@@ -18139,18 +18157,11 @@ test_scratch_path :: proc(name: string) -> string {
 // to a folder ("%s/") or only compare against it.  A name that cannot carry
 // the pid is allowed only on the line that takes it with an exclusive create
 // (.Excl), so runs sharing the folder take turns at it, and in the os.remove
-// that gives it back.
+// that gives it back.  A name bound to a fixed literal is followed through its
+// proc too (card 180): handed to such a call, joined with + "/", or filling a
+// "%s/" path, it is a fixed folder even with no file kind.
 @(test)
 no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
-    KINDS :: [?]string{".jsonl", ".log", ".sav", ".txt", ".json", ".csv", ".dat", ".tmp", ".bak", ".unread"}
-    MAKERS :: [?]string{"make_directory(", "make_directory_all(", "remove_all(", "os.open(", "write_entire_file(", "os.remove("}
-    GAME_PATHS :: [?]string{"SAVE_FILE", "STATS_FILE", "SETTINGS_FILE", "ACTION_LOG_PATH", "PIXEL_ART_FILE", "AGENT_RUNS_DIR", "TOOL_RUNS_DIR", "TOOL_START_SAVE", "AGENT_ACTS_FILE", "AGENT_FIGHT_FILE"}
-    NEVER_WRITTEN :: [?]string{
-        "tools_test_no_such_folder/x.sav",    // --make-save into a missing folder: refused
-        "x.sav", "past_a.sav",                // arguments a refused or parsed command only reads
-        "pixel_art_test_does_not_exist.dat",  // a load that must find nothing
-        "src/testdata/save_layout.txt", "testdata/save_layout.txt", "testdata/save_layout_v28.txt",  // in the repo
-    }
     defer free_all(context.temp_allocator)
     files, err := os.read_all_directory_by_path(#directory, context.temp_allocator)
     testing.expect(t, err == nil, "the test sources are listed")
@@ -18160,21 +18171,54 @@ no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
         data, read_err := os.read_entire_file_from_path(fi.fullpath, context.temp_allocator)
         testing.expect(t, read_err == nil, fi.name)
         checked += 1
-        lines := strings.split_lines(string(data), context.temp_allocator)
+        for found in fixed_name_findings(fi.name, string(data)) do testing.expect(t, false, found)
+    }
+    testing.expectf(t, checked >= 8, "only %d test sources found beside this one", checked)
+}
+
+// What the guard finds in one test source: a line for each fixed name it
+// writes, in the temp allocator.
+fixed_name_findings :: proc(file, data: string) -> []string {
+    KINDS :: [?]string{".jsonl", ".log", ".sav", ".txt", ".json", ".csv", ".dat", ".tmp", ".bak", ".unread"}
+    MAKERS :: [?]string{"make_directory(", "make_directory_all(", "remove_all(", "os.open(", "write_entire_file(", "os.remove("}
+    GAME_PATHS :: [?]string{"SAVE_FILE", "STATS_FILE", "SETTINGS_FILE", "ACTION_LOG_PATH", "PIXEL_ART_FILE", "AGENT_RUNS_DIR", "TOOL_RUNS_DIR", "TOOL_START_SAVE", "AGENT_ACTS_FILE", "AGENT_FIGHT_FILE"}
+    NEVER_WRITTEN :: [?]string{
+        "tools_test_no_such_folder/x.sav",    // --make-save into a missing folder: refused
+        "x.sav", "past_a.sav",                // arguments a refused or parsed command only reads
+        "pixel_art_test_does_not_exist.dat",  // a load that must find nothing
+        "src/testdata/save_layout.txt", "testdata/save_layout.txt", "testdata/save_layout_v28.txt",  // in the repo
+    }
+    out := make([dynamic]string, context.temp_allocator)
+    {
+        lines := strings.split_lines(data, context.temp_allocator)
         taken := make([dynamic]string, context.temp_allocator)  // names this file takes by exclusive create
         for line in lines do if strings.contains(line, ".Excl") {
             q := strings.index_byte(line, '"')
             e := strings.index_byte(line[q + 1:], '"') if q >= 0 else -1
             if e >= 0 do append(&taken, line[q + 1:][:e])
         }
+        fixed := make(map[string]string, allocator = context.temp_allocator)  // names this proc binds to a fixed literal
         for line, n in lines {
+            if strings.contains(line, ":: proc(") do clear(&fixed)
             if strings.contains(line, "test_scratch_path(") || strings.contains(line, "tools_test_run(") do continue
             code := line[:strings.index(line, "//")] if strings.contains(line, "//") else line
+            derived: [dynamic]string  // a name made from a fixed one is fixed too
+            derived.allocator = context.temp_allocator
+            for name, lit in fixed {
+                formatted := strings.contains(code, fmt.tprintf(", %s)", name)) || strings.contains(code, fmt.tprintf(", %s,", name))
+                used := strings.contains(code, fmt.tprintf("%s + \"/", name)) || (formatted && strings.contains(code, "\"%s/"))
+                for m in MAKERS do for end in ([]string{")", ",", " +"}) do used ||= strings.contains(code, fmt.tprintf("%s%s%s", m, name, end))
+                allowed := false
+                for w in NEVER_WRITTEN do allowed ||= lit == w
+                if used && !allowed do append(&out, fmt.tprintf("%s:%d makes a path from %s, bound to the fixed name %q: put it through test_scratch_path", file, n + 1, name, lit))
+                if formatted || strings.contains(code, fmt.tprintf("%s +", name)) do append(&derived, lit)
+            }
+            fixed_bind(code, &fixed, derived[0] if len(derived) > 0 else "")
             if !strings.contains(code, "%s/") && !strings.contains(code, "expect") && !strings.contains(code, "GAME_PATHS ::") {
                 for g in GAME_PATHS {
                     at := strings.index(code, g)
                     whole := at >= 0 && (at == 0 || !is_ident_byte(code[at - 1])) && (at + len(g) == len(code) || !is_ident_byte(code[at + len(g)]))
-                    testing.expectf(t, !whole, "%s:%d uses the game's own path %s in the folder the tests run in: join it to a scratch folder", fi.name, n + 1, g)
+                    if whole do append(&out, fmt.tprintf("%s:%d uses the game's own path %s in the folder the tests run in: join it to a scratch folder", file, n + 1, g))
                 }
             }
             // Each "..." on the line, up to a // outside one.
@@ -18196,11 +18240,37 @@ no_test_writes_a_scratch_file_under_a_fixed_name :: proc(t: ^testing.T) {
                 allowed := false
                 for w in NEVER_WRITTEN do allowed ||= lit == w
                 for w in taken do allowed ||= lit == w && (strings.contains(line, ".Excl") || strings.has_suffix(before, "os.remove("))  // the take, and its release
-                testing.expectf(t, allowed, "%s:%d writes %q under a fixed name: put it through test_scratch_path", fi.name, n + 1, lit)
+                if !allowed do append(&out, fmt.tprintf("%s:%d writes %q under a fixed name: put it through test_scratch_path", file, n + 1, lit))
             }
         }
     }
-    testing.expectf(t, checked >= 8, "only %d test sources found beside this one", checked)
+    return out[:]
+}
+
+// Card 180: the guard's rules, each on a source that breaks only it.  A name
+// bound to a fixed literal is followed through its proc into a call that makes
+// a path, a "%s/" join, a + "/" join, or a name made from it; a scratch name,
+// one no test writes, or the same name in another proc is let be.
+@(test)
+the_fixed_name_guard_follows_a_name_through_its_proc :: proc(t: ^testing.T) {
+    defer free_all(context.temp_allocator)
+    Case :: struct { src: string, found: int }
+    cases := [?]Case{
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tos.make_directory(dir)\n}", 1},
+        {"d :: proc() {\n\tdir :: \"fixed_dir\"\n\tdefer os.remove_all(dir)\n}", 1},
+        {"d :: proc() {\n\troot := \"fixed_root\"\n\tfolder := fmt.aprintf(\"%s/runs\", root)\n}", 1},
+        {"d :: proc() {\n\ttop :: \"fixed_top\"\n\tagent_sandbox_make(top + \"/runs\", 1)\n}", 1},
+        {"d :: proc() {\n\tbase := \"fixed_base\"\n\tart := fmt.aprintf(\"%s_art.dat\", base)\n\tos.write_entire_file(art, nil)\n}", 1},
+        {"d :: proc() {\n\tdir := test_scratch_path(\"ok\")\n\tos.make_directory(dir)\n}", 0},
+        {"d :: proc() {\n\tsave := \"x.sav\"\n\tos.remove(save)\n}", 0},
+        {"a :: proc() {\n\tname := \"fixed\"\n}\nb :: proc(name: string) {\n\tos.make_directory(name)\n}", 0},
+        {"d :: proc() {\n\tname := \"look about\"\n\tos.make_directory(name)\n}", 0},  // not a path: it has a space
+        {"d :: proc() {\n\tdir := \"fixed_dir\"\n\tp := fmt.aprintf(\"%s/%d.sav\", dir, 3)\n}", 1},
+    }
+    for c, i in cases {
+        found := fixed_name_findings("fixture", c.src)
+        testing.expectf(t, len(found) == c.found, "case %d: %d found, want %d: %v", i, len(found), c.found, found)
+    }
 }
 
 // Card 177: the risen hero holding its post does not claw.  The player well
@@ -18239,6 +18309,36 @@ a_risen_hero_guarding_its_post_does_not_claw :: proc(t: ^testing.T) {
             testing.expectf(t, at_post > 60, "the hero stands at its post: %d frames", at_post)
             testing.expectf(t, claws == 0, "guarding, it clawed %d times", claws)
         }
+    }
+}
+
+// Records each name a line binds to one plain string literal ("name := \"x\"",
+// "a, b :: \"x\", \"y\""), or, given from, the one name a line makes out of
+// the fixed name from.
+@(private="file")
+fixed_bind :: proc(code: string, fixed: ^map[string]string, from := "") {
+    c := strings.trim_space(code)
+    for op in ([]string{":=", "::", "="}) {
+        at := strings.index(c, op)
+        if at <= 0 do continue
+        names := strings.split(c[:at], ",", context.temp_allocator)
+        if from != "" {
+            name := strings.trim_space(names[0])
+            ident := len(names) == 1 && name != ""
+            for i in 0 ..< len(name) do ident &&= is_ident_byte(name[i])
+            if ident do fixed[name] = from
+            return
+        }
+        values := strings.split(c[at + len(op):], ",", context.temp_allocator)
+        if len(names) != len(values) do return
+        for raw, k in names {
+            name, v := strings.trim_space(raw), strings.trim_space(values[k])
+            plain := len(v) > 2 && v[0] == '"' && v[len(v) - 1] == '"' && !strings.contains_any(v[1:len(v) - 1], " %\\\"")
+            ident := name != ""
+            for i in 0 ..< len(name) do ident &&= is_ident_byte(name[i])
+            if ident && plain do fixed[name] = v[1:len(v) - 1]
+        }
+        return
     }
 }
 
