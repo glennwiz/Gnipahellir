@@ -67,6 +67,15 @@ flush_action_log :: proc(gs: ^Game_State) {
     dl.pos = 0
 }
 
+// The kinds whose builder.goal is theirs: the builder and raider brains, a
+// wave's fire sprite, the risen hero.  Every other kind leaves it at its zero
+// value, which would read as Build_Den (playtest 135: Rain_Wisp goal=Build_Den),
+// so its pos line says goal=- instead.
+@(rodata)
+log_has_goal := #partial [Enemy_Kind]bool{
+    .Builder = true, .Raider = true, .Vargr = true, .Fire_Sprite = true, .Undead = true,
+}
+
 // Where every live body IS, written on update.odin's 5 s flush beat.  Bespoke
 // lines only fire when something HAPPENS, so a flyer that drifts to the map
 // edge and then does nothing leaves no trace at all — which is precisely how
@@ -79,9 +88,16 @@ log_breadcrumbs :: proc(gs: ^Game_State) {
         p.pos.x, p.pos.y, p.hp, p.mana, gs.level_index)
     for &e, i in gs.enemies.data {
         if !gs.enemies.active[i] do continue
+        if !log_has_goal[e.kind] {
+            log_action(gs, "pos Enemy#%d %v (%.1f,%.1f) hp=%d goal=-", i, e.kind, e.pos.x, e.pos.y, e.hp)
+            continue
+        }
         log_action(gs, "pos Enemy#%d %v (%.1f,%.1f) hp=%d goal=%v target=(%d,%d)",
             i, e.kind, e.pos.x, e.pos.y, e.hp,
             e.builder.goal, e.builder.target_tile.x, e.builder.target_tile.y)
+    }
+    if gs.birds.seeded do for &f, i in gs.birds.flocks {  // sky scenery, its own store
+        log_action(gs, "pos Flock#%d (%.1f,%.1f) heading=%+.0f scattered=%v", i, f.center.x, f.center.y, f.heading, f.scatter_t > 0)
     }
 }
 

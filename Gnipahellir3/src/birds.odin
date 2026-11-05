@@ -72,6 +72,7 @@ bird_jitter :: proc(seed: u32, scale: f32) -> f32 {
 // Every bird bursts away from `from`, each on its own line, and the flock
 // turns to re-form on the far side.
 bird_flock_scatter :: proc(gs: ^Game_State, f: ^Bird_Flock, from: [2]f32) {
+    log_action(gs, "birds: a flock at (%.1f,%.1f) scatters from (%.1f,%.1f)", f.center.x, f.center.y, from.x, from.y)
     f.scatter_t = BIRD_SCATTER_TIME
     f.heading = f32(1) if f.center.x >= from.x else f32(-1)
     for j in 0 ..< BIRDS_PER_FLOCK {

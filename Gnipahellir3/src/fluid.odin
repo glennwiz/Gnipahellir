@@ -381,6 +381,7 @@ fluid_quench :: proc(gs: ^Game_State, x, y, dir: int) -> bool {
 	for n in ([4][2]int{{x, y + 1}, {x + dir, y}, {x - dir, y}, {x, y - 1}}) {
 		t := get_tile(w, n.x, n.y)
 		if t != .Lava && t != .Magic_Lava do continue
+		log_action(gs, "quench: %v at (%d,%d) spent on %v at (%d,%d), Scoria", get_tile(w, x, y), x, y, t, n.x, n.y)
 		set_tile(w, n.x, n.y, .Scoria)
 		set_tile(w, x, y, gravity_open_tile(gs, y))
 		return true

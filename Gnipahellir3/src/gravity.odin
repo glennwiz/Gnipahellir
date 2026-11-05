@@ -108,6 +108,7 @@ gravity_spawn :: proc(gs: ^Game_State, x, y: i32, t: Tile_Type) {
             monument = monument,
             active = true,
         }
+        log_action(gs, "falls: %v from (%d,%d)", t, x, y)
         set_tile(&gs.world, int(x), int(y), gravity_open_tile(gs, int(y)))
         golem_remove_block_mark(gs,{x,y})
         gs.world.tile_flags[idx] -= {.Placed,.Golem_Placed}  // the block left this cell
@@ -294,6 +295,7 @@ update_gravity :: proc(gs: ^Game_State) {
                 // settles before the one above reaches it — the tiles stack.  Re-
                 // mark .Placed so the settled block is still a faller (stays sand).
                 set_tile(w, int(b.x), r - 1, b.tile)
+                log_action(gs, "lands: %v at (%d,%d), settled", b.tile, b.x, r - 1)
                 settled := [2]i32{b.x,i32(r-1)}
                 settled_idx := grid_idx(int(settled.x),int(settled.y))
                 w.tile_flags[settled_idx] += {.Placed}
@@ -306,6 +308,7 @@ update_gravity :: proc(gs: ^Game_State) {
                 }
             } else if drop := b.monument ? monument_build_item(b.tile) : terrain_table[b.tile].drop_item; drop != .None {
                 spawn_ground_item(w, {b.x, i32(r - 1)}, drop, 1)   // crumbles to a pile
+                log_action(gs, "lands: %v at (%d,%d), a pile of %v", b.tile, b.x, r - 1, drop)
             }
             b.active = false
         } else {
