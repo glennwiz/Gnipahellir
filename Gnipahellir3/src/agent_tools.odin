@@ -39,10 +39,12 @@ TOOL_USAGE :: `usage:
   gnipa --agent-run [--port P] [--seed N | --load save]
                                          an agent run in a new folder under build/agent_runs/;
                                          --load starts it from a save, as Continue does
-  gnipa --replay <run folder>            play a run's goals back in the window
+  gnipa --replay <run folder>            play a run's goals back in the window, from its
+                                         seed, or from its start.sav for a --load run
   gnipa --summary <run folder>           one page on a run, aimed at finding game bugs
   gnipa --pacing <run folder>... [--csv out.csv]
-                                         seconds to Scroll B and to 10 Gold Bars
+                                         seconds to Scroll B and to 10 Gold Bars; a --load
+                                         run is left out, its clock starts at the save
   gnipa --builder-trace <run folder|action.log> [--min-frames N] [--tiles N]
                                          what each Builder did, per life and level
   gnipa --hero-soak                      the hero's live chase: deaths per kit, of 80 runs each
@@ -145,12 +147,32 @@ tool_args :: proc(args: []string, out: ^strings.Builder) -> (run: Tool_Run, exit
             i += 1
         }
         if run.seeded && run.load != "" do return usage(out, "--agent-run --load takes its world from the save: drop --seed")
+        if run.load != "" {  // here, before the window opens
+            data, err := os.read_entire_file_from_path(run.load, context.allocator)
+            defer delete(data)
+            if err != nil {
+                fmt.sbprintfln(out, "agent run: cannot read the save %s: %v", run.load, err)
+                return {}, true, 1
+            }
+            seed, ok := tool_save_seed(data)
+            if !ok {
+                fmt.sbprintfln(out, "agent run: %s is not a save this build runs", run.load)
+                return {}, true, 1
+            }
+            run.seed = seed  // the title boots the save's own seed, so action.log names only that one
+        }
         return run, false, 0
     }
     return usage(out, fmt.tprintf("unknown option %q", args[0]))
 }
 
 // ─── --agent-run ────────────────────────────────────────────────────────────
+
+// The port, seed and folder an agent run hands the title.  A --load run's seed
+// is the save's, so the title boots it and action.log names only that one.
+tool_run_link :: proc(link: ^Agent_Link, run: Tool_Run) {
+    link.run_port, link.run_seed, link.run_seeded, link.run_dir = run.port, run.seed, run.seeded || run.load != "", TOOL_RUNS_DIR
+}
 
 // What the title's [A] does, on a port and seed the command line names, into
 // build/agent_runs/.  The binary is copied into the folder too, so the run can
@@ -168,7 +190,7 @@ tool_agent_run :: proc(link: ^Agent_Link, gs: ^Game_State, run: Tool_Run) -> boo
         }
     }
     defer delete(start)
-    link.run_port, link.run_seed, link.run_seeded, link.run_dir = run.port, run.seed, run.seeded, TOOL_RUNS_DIR
+    tool_run_link(link, run)
     agent_title_start(link, gs)
     if !link.listening {
         fmt.eprintfln("agent run: cannot start: is port %d taken, or %s not writable?", run.port, TOOL_RUNS_DIR)
@@ -197,6 +219,16 @@ tool_run_load :: proc(gs: ^Game_State, data: []u8, name: string, dir := ".") -> 
     _ = save_game(gs)
     log_action(gs, "Run starts from the save %s: world seed %d, level %d", name, gs.world_seed, gs.level_index)
     return true
+}
+
+// The world seed a save holds, and whether this build reads it as a save.  The
+// oldest saves (v23) hold none: 0, and the load says whether it runs.
+tool_save_seed :: proc(data: []u8) -> (seed: u32, ok: bool) {
+    if len(data) == size_of(Save_Data_v23) do return 0, true
+    sd := save_data_read(data)
+    if sd == nil do return 0, false
+    defer free(sd)
+    return sd.world_seed, true
 }
 
 // Copies the binary at exe into the run folder here, and says how to replay
@@ -404,38 +436,82 @@ Tool_Replay :: struct {
     diverged: bool,
 }
 
-// Boots the replay in a new folder inside the run, from the run's seed, as an
-// agent run boots, with the link driving and the frame clock at 0.
-tool_replay_start :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, run: string) -> bool {
+// What a replay boots from, read from the run's folder: its seed and goal rows,
+// and for a --load run the save it began from.
+Tool_Replay_From :: struct {
+    seed:       u32,
+    rows:       []u8,
+    start:      []u8,    // nil unless the run began from a save
+    start_path: string,
+}
+
+// Reads a run's folder for its replay, refusing a run that cannot be replayed
+// before anything is made.  The caller frees start; rows stay with the replay.
+tool_replay_read :: proc(run: string) -> (from: Tool_Replay_From, ok: bool) {
     seed_text, seed_err := os.read_entire_file(fmt.tprintf("%s/seed", run), context.temp_allocator)
     rows, rows_err := os.read_entire_file(fmt.tprintf("%s/%s", run, AGENT_ACTS_FILE), context.allocator)
     seed, seed_ok := strconv.parse_u64(strings.trim_space(string(seed_text)))
     if seed_err != nil || rows_err != nil || !seed_ok {
         fmt.eprintfln("replay: %s needs a seed and an %s", run, AGENT_ACTS_FILE)
-        return false
+        delete(rows)
+        return {}, false
     }
-    // A --load run began from a save, not from its seed: its goals replayed on
-    // the seed's new world would play a different run.
-    if os.exists(fmt.tprintf("%s/%s", run, TOOL_START_SAVE)) {
-        fmt.eprintfln("replay: %s began from a save (--agent-run --load), and a replay starts from the seed", run)
-        return false
+    from = {seed = u32(seed), rows = rows, start_path = fmt.tprintf("%s/%s", run, TOOL_START_SAVE)}
+    // A --load run began from a save: the replay begins from the same one.
+    if os.exists(from.start_path) {
+        err: os.Error
+        from.start, err = os.read_entire_file(from.start_path, context.allocator)
+        if err != nil {
+            fmt.eprintfln("replay: cannot read %s: %v", from.start_path, err)
+            delete(rows)
+            return {}, false
+        }
+        if _, saved := tool_save_seed(from.start); !saved {
+            fmt.eprintfln("replay: %s is not a save this build runs", from.start_path)
+            delete(rows)
+            delete(from.start)
+            return {}, false
+        }
     }
+    return from, true
+}
+
+// Boots the replay in a new folder inside the run, from what the run's folder
+// holds, as an agent run boots, with the link driving and the frame clock at 0.
+tool_replay_start :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, run: string) -> bool {
+    from, ok := tool_replay_read(run)  // before the replay moves into its folder
+    if !ok do return false
+    defer delete(from.start)
     h, m, s := time.clock(time.now())
     folder := fmt.tprintf("%s/replay-%02d%02d%02d", run, h, m, s)
-    if !agent_sandbox_make(folder, u32(seed)) || os.set_working_directory(folder) != nil {
+    if !agent_sandbox_make(folder, from.seed) || os.set_working_directory(folder) != nil {
         fmt.eprintfln("replay: cannot make %s", folder)
         return false
     }
     fd, ferr := os.open(AGENT_ACTS_FILE, os.O_WRONLY | os.O_CREATE | os.O_TRUNC)
     if ferr != nil do return false
     link.acts_file, link.recording = fd, true
-    agent_run_reset(gs, u32(seed), 0, SAVE_FILE, STATS_FILE)
-    action_log_begin_run(gs)
-    action_log_release(gs)
-    log_action(gs, "World seed %d", seed)
-    tool_replay_begin(rep, link, gs, string(rows))
+    if !tool_replay_boot(gs, from) {
+        fmt.eprintfln("replay: %s is not a save this build runs", from.start_path)
+        return false
+    }
+    tool_replay_begin(rep, link, gs, string(from.rows))
     fmt.printfln("replaying %s in %s", run, folder)
     return true
+}
+
+// A replay's world, booted as its run's was: a new game on the run's seed with
+// the action log opened, then, for a run that began from a save, that save,
+// kept in dir and loaded as tool_run_load loaded it.  log is off only in tests,
+// which keep no action.log.
+tool_replay_boot :: proc(gs: ^Game_State, from: Tool_Replay_From, save_path := SAVE_FILE, stats_path := STATS_FILE, dir := ".", log := true) -> bool {
+    agent_run_reset(gs, from.seed, 0, save_path, stats_path)
+    if log {
+        action_log_begin_run(gs)
+        action_log_release(gs)
+        log_action(gs, "World seed %d", from.seed)
+    }
+    return from.start == nil || tool_run_load(gs, from.start, from.start_path, dir)
 }
 
 // A window closed mid-replay: the link has no socket to drop.
@@ -1097,6 +1173,12 @@ tool_pacing :: proc(b: ^strings.Builder, folders: []string, csv_path := "") -> b
     runs := make([dynamic][dynamic]Tool_Life)
     names := make([dynamic]string)
     for folder in folders {
+        // A --load run's clock starts at the save, minutes into the game: its
+        // seconds are not a new game's, so it is left out, saying so.
+        if os.exists(fmt.tprintf("%s/%s", folder, TOOL_START_SAVE)) {
+            fmt.sbprintfln(b, "%s began from a save (--agent-run --load): its seconds count from the save, not from a new game, so it is left out", folder)
+            continue
+        }
         data, err := os.read_entire_file(fmt.tprintf("%s/action.log", folder), context.allocator)
         if err != nil {
             fmt.sbprintfln(b, "cannot read %s/action.log: %v", folder, err)
@@ -1106,6 +1188,10 @@ tool_pacing :: proc(b: ^strings.Builder, folders: []string, csv_path := "") -> b
         trimmed := strings.trim_right(folder, "/\\")
         cut := max(strings.last_index_byte(trimmed, '/'), strings.last_index_byte(trimmed, '\\'))
         append(&names, trimmed[cut + 1:])
+    }
+    if len(runs) == 0 {
+        strings.write_string(b, "no run left to pace\n")
+        return false
     }
     for h, i in FIELDS do fmt.sbprintf(b, "%s%12s", " " if i > 0 else "", h)
     strings.write_byte(b, '\n')

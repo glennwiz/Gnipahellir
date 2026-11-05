@@ -982,13 +982,29 @@ make_save_needs_a_seed_and_a_file :: proc(t: ^testing.T) {
 
 @(test)
 agent_run_load_names_its_save_and_takes_no_seed :: proc(t: ^testing.T) {
+    folder := tools_test_run("load_args")
+    defer tools_test_done(folder)
+    save := fmt.tprintf("%s/past_a.sav", folder)
+    _, made := tools_test_say("--make-save", "--seed", "42", "--out", save)
+    testing.expect_value(t, made, 0)
     b := strings.builder_make(context.temp_allocator)
-    run, exit, _ := tool_args({"--agent-run", "--port", "7001", "--load", "past_a.sav"}, &b)
+    run, exit, _ := tool_args({"--agent-run", "--port", "7001", "--load", save}, &b)
     testing.expect(t, !exit, "an agent run is play, not a report")
     testing.expect_value(t, run.mode, Tool_Mode.Agent_Run)
-    testing.expect_value(t, run.load, "past_a.sav")
+    testing.expect_value(t, run.load, save)
     testing.expect_value(t, run.port, 7001)
     testing.expect(t, !run.seeded, "the world comes from the save")
+    testing.expect_value(t, run.seed, u32(42))  // the title boots the save's own seed (card 178)
+    link := new(Agent_Link)
+    defer free(link)
+    tool_run_link(link, run)
+    testing.expect(t, link.run_seeded && link.run_seed == 42, "the title boots the save's seed, not a chosen one")
+    testing.expect_value(t, link.run_port, 7001)
+    testing.expect_value(t, link.run_dir, TOOL_RUNS_DIR)
+    plain := run
+    plain.load, plain.seed = "", 0
+    tool_run_link(link, plain)
+    testing.expect(t, !link.run_seeded, "a run with no seed and no save lets the title choose")
     _, code := tools_test_say("--agent-run", "--load", "past_a.sav", "--seed", "3")
     testing.expect_value(t, code, 2)
     _, code = tools_test_say("--agent-run", "--load")
@@ -1047,8 +1063,8 @@ an_agent_run_started_from_a_save_plays_from_there :: proc(t: ^testing.T) {
     testing.expect(t, !gs.player.dead, "alive")
 }
 
-// Its goals replayed on the seed's world would be another run, so a replay
-// refuses a run that began from a save, before it makes any folder.
+// A run that began from a save replays from it (card 178), so a start.sav
+// that is no save this build reads is refused, before any folder is made.
 @(test)
 a_replay_refuses_a_run_that_began_from_a_save :: proc(t: ^testing.T) {
     run := tools_test_run("replay_loaded", {"seed", "42\n"}, {AGENT_ACTS_FILE, ""}, {TOOL_START_SAVE, "a save"})
@@ -1060,6 +1076,144 @@ a_replay_refuses_a_run_that_began_from_a_save :: proc(t: ^testing.T) {
     testing.expect(t, !tool_replay_start(&rep, link, gs, run), "refused")
     entries, _ := os.read_all_directory_by_path(run, context.temp_allocator)
     testing.expect_value(t, len(entries), 3)  // no replay folder was made
+    for seed in ([]string{"x\n", ""}) {
+        bad := tools_test_run("replay_bad_seed", {"seed", seed}, {AGENT_ACTS_FILE, ""})
+        defer tools_test_done(bad)
+        _, ok := tool_replay_read(bad)
+        testing.expect(t, !ok, "a run needs a seed it can read")
+    }
+    no_rows := tools_test_run("replay_no_rows", {"seed", "42\n"})
+    defer tools_test_done(no_rows)
+    _, ok := tool_replay_read(no_rows)
+    testing.expect(t, !ok, "and its acts")
+}
+
+// Card 178: --agent-run --load reads its save before the window opens: a path
+// that cannot be read, or holds no save this build runs, ends the command.
+@(test)
+agent_run_load_refuses_a_bad_save_before_the_window :: proc(t: ^testing.T) {
+    run := tools_test_run("load_bad", {"junk.sav", "not a save"})
+    defer tools_test_done(run)
+    text, code := tools_test_say("--agent-run", "--load", fmt.tprintf("%s/none.sav", run))
+    testing.expectf(t, code == 1 && strings.contains(text, "cannot read the save"), "%d %s", code, text)
+    text, code = tools_test_say("--agent-run", "--load", fmt.tprintf("%s/junk.sav", run))
+    testing.expectf(t, code == 1 && strings.contains(text, "is not a save this build runs"), "%d %s", code, text)
+    old := make([]u8, size_of(Save_Data_v23))  // the oldest saves hold no seed: the load judges them
+    defer delete(old)
+    seed, ok := tool_save_seed(old)
+    testing.expect(t, ok && seed == 0, "a v23-sized save is let through to the load")
+}
+
+// Card 178: a run begun from a --make-save save replays from the start.sav its
+// folder keeps: the same goals on the same frames land every act where they
+// did and end the same world.  Booted on the seed alone, the same rows land
+// elsewhere: the save is what the replay starts from.
+@(test)
+a_replay_of_a_loaded_run_lands_where_the_run_did :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_load")
+    defer tools_test_done(run)
+    src := fmt.tprintf("%s/past_a.sav", run)
+    _, code := tools_test_say("--make-save", "--seed", "42", "--out", src)
+    testing.expect_value(t, code, 0)
+    data, _ := os.read_entire_file(src, context.allocator)
+    defer delete(data)
+
+    // The run, as tool_agent_run plays it: the title on the save's seed, then the save.
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    agent_run_reset(gs, 42, 7001, fmt.tprintf("%s/game.sav", run), "")
+    testing.expect(t, tool_run_load(gs, data, src, run), "the run loads the save")
+    rec := fmt.aprintf("%s/%s", run, AGENT_ACTS_FILE)
+    defer delete(rec)
+    tools_test_record(link, rec)
+    link.connected, link.realtime = true, true
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","dismiss":true,"frames":1},{"do":"act","move":"right","frames":50},{"do":"act","move":"left","jump":true,"frames":40},{"do":"act","frames":20},{"do":"act","move":"right","jump":true,"frames":30}]}`)
+    for _ in 0 ..< 1000 {  // until the last goal ends, where a replay stops
+        if !agent_goals_busy(&link.goals) do break
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    os.close(link.acts_file)
+    rows, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(rows)
+    testing.expect(t, !gs.ui.show_title && gs.frame > 0, "the run played")
+    // What --replay reads from the run's folder: the save it began from, with the
+    // recorded rows and seed, handed to the boot whole.
+    from, read := tool_replay_read(run)
+    testing.expect(t, read, "the run's folder replays")
+    defer delete(from.rows)
+    defer delete(from.start)
+    testing.expect_value(t, from.seed, u32(42))
+    testing.expect(t, string(from.rows) == string(rows), "the run's rows")
+    kept, _ := os.read_entire_file(fmt.tprintf("%s/%s", run, TOOL_START_SAVE), context.allocator)
+    defer delete(kept)
+    testing.expect(t, from.start != nil && string(from.start) == string(kept), "the save the run began from")
+
+    for from_save in ([2]bool{true, false}) {
+        dir := fmt.aprintf("%s/replay_%v", run, from_save)
+        defer delete(dir)
+        os.make_directory(dir)
+        save := fmt.aprintf("%s/game.sav", dir)
+        defer delete(save)
+        gs2, link2 := tools_test_world()
+        defer free(gs2)
+        defer free(link2)
+        boot := from
+        if !from_save do boot.start = nil
+        testing.expect(t, tool_replay_boot(gs2, boot, save, "", dir, log = false), "booted")
+        when GAME_DEBUG {  // a release build keeps no action.log
+            if from_save {
+                log := string(gs2.debug_log.buf[:gs2.debug_log.pos])
+                testing.expect(t, strings.contains(log, fmt.tprintf("Run starts from the save %s: world seed 42", from.start_path)), "the replay's log names the save it began from")
+            }
+        }
+        got := fmt.aprintf("%s/%s", dir, AGENT_ACTS_FILE)
+        defer delete(got)
+        tools_test_record(link2, got)
+        rep: Tool_Replay
+        tool_replay_begin(&rep, link2, gs2, string(rows), got)
+        for _ in 0 ..< 5000 {
+            if rep.done do break
+            if tool_replay_frame(&rep, link2, gs2) {
+                game_update(gs2)
+                agent_after_tick(link2, gs2)
+            }
+        }
+        if !from_save {
+            testing.expect(t, rep.diverged || gs2.player.pos != gs.player.pos, "the seed alone is another run")
+            continue
+        }
+        testing.expect(t, rep.done && !rep.diverged && !rep.cut, "every act lands where it did")
+        testing.expect_value(t, gs2.world_seed, gs.world_seed)
+        testing.expect_value(t, gs2.frame, gs.frame)
+        testing.expect_value(t, gs2.player.pos, gs.player.pos)
+        testing.expect_value(t, gs2.player.hp, gs.player.hp)
+        testing.expect_value(t, gs2.player.inventory, gs.player.inventory)
+        testing.expect_value(t, gs2.enemies.count, gs.enemies.count)
+        testing.expect(t, gs2.world.terrain == gs.world.terrain, "the same world")
+        testing.expect(t, gs2.progression.cave_unlocked[0], "past ritual A")
+        kept_here, _ := os.read_entire_file(fmt.tprintf("%s/%s", dir, TOOL_START_SAVE), context.temp_allocator)
+        testing.expect(t, slice.equal(kept_here, kept), "the replay keeps the save it began from")
+    }
+}
+
+// Card 178: --pacing leaves a --load run out, saying so: its clock starts at
+// the save, not at a new game.  With nothing else to pace it says that too.
+@(test)
+pacing_leaves_a_loaded_run_out :: proc(t: ^testing.T) {
+    plain := tools_test_run("pace_plain", {"action.log", "[f0000600] Player takes Rune Scroll B from x\n"})
+    defer tools_test_done(plain)
+    loaded := tools_test_run("pace_loaded", {"action.log", "[f0000060] Player takes Rune Scroll B from x\n"}, {TOOL_START_SAVE, "a save"})
+    defer tools_test_done(loaded)
+    text, code := tools_test_say("--pacing", plain, loaded)
+    testing.expect_value(t, code, 0)
+    testing.expect(t, strings.contains(text, fmt.tprintf("%s began from a save (--agent-run --load)", loaded)), text)
+    testing.expect(t, strings.contains(text, "scroll_b_s: reached 1 of 1, median 10 s"), text)  // the plain run's 600 frames alone
+    text, code = tools_test_say("--pacing", loaded)
+    testing.expectf(t, code == 1 && strings.contains(text, "no run left to pace"), "%d %s", code, text)
 }
 
 // A loaded run sweeps the Quick Clay a save left without its pool, as a load
