@@ -91,6 +91,9 @@ hero_fight_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
         return false
     }
     f.target_kind = gs.enemies.data[f.target].kind
+    // A flyer (or a swimmer) never stands: a stand by it moves on as it does,
+    // so no block goes down after it, off a deck into the void (card 181).
+    g.no_blocks = enemy_behaviour[f.target_kind].gravity == 0
     g.to, g.best = hero_feet(p), max(i32)
     return true
 }
