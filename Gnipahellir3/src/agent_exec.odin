@@ -1277,7 +1277,7 @@ hero_note_names := [Hero_Note_Kind]string{
 
 HERO_NAV_W      :: 64  // the search window round the hero, in tiles
 HERO_NAV_H      :: 48
-HERO_NAV_NODES  :: HERO_NAV_W * HERO_NAV_H
+HERO_NAV_NODES  :: GRID_W * GRID_H  // a goal past the window is searched for over the whole level (card 185)
 HERO_NAV_OPEN   :: 4 * HERO_NAV_NODES
 HERO_NAV_BUDGET :: 4000  // nodes one search expands at most
 HERO_PATH_MAX   :: 64    // a longer path keeps the start of it, and is planned again from its end
@@ -1317,6 +1317,7 @@ Hero_Nav :: struct {
     seen:    [HERO_NAV_NODES]bool,
     closed:  [HERO_NAV_NODES]bool,
     open:    [HERO_NAV_OPEN]A_Open,
+    w, h:    i32,  // this search's window, the nodes numbered across it
     danger:  Hero_Dangers,  // this plan's, from the senses
     n_danger: int,
 }
@@ -1421,10 +1422,15 @@ hero_item_slot :: proc(gs: ^Game_State, it: Item) -> int {
 }
 
 @(private="file")
-hero_nav_index :: proc(o, t: [2]i32) -> int {
+hero_nav_index :: proc(n: ^Hero_Nav, o, t: [2]i32) -> int {
     r := t - o
-    if r.x < 0 || r.y < 0 || r.x >= HERO_NAV_W || r.y >= HERO_NAV_H do return -1
-    return int(r.y) * HERO_NAV_W + int(r.x)
+    if r.x < 0 || r.y < 0 || r.x >= n.w || r.y >= n.h do return -1
+    return int(r.y * n.w + r.x)
+}
+
+@(private="file")
+hero_nav_tile :: proc(n: ^Hero_Nav, o: [2]i32, i: int) -> [2]i32 {
+    return o + {i32(i) % n.w, i32(i) / n.w}
 }
 
 @(private="file")
@@ -1448,15 +1454,22 @@ hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := tru
 hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool, blocks_ok := true) -> (reached: bool) {
     n := &gs.hero.nav
     w := &gs.world
-    // The window round from, or round the middle of the way when to fits in
-    // it too, so a leg the window spans is searched whole.
-    c := from
-    if abs(to.x - from.x) < HERO_NAV_W - 1 && abs(to.y - from.y) < HERO_NAV_H - 1 do c = (from + to) / 2
-    o := [2]i32{clamp(c.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(c.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
+    // The window round the middle of the way when to fits in it, so a leg
+    // the window spans is searched whole.  A goal past it: the whole level,
+    // so a way that bridges out of the window is seen to reach, and lays its
+    // blocks (card 185: playtest 135's #613, east over the rainbow, failed
+    // no_route with the bag whole).
+    o := [2]i32{0, 0}
+    n.w, n.h = GRID_W, GRID_H
+    if abs(to.x - from.x) < HERO_NAV_W - 1 && abs(to.y - from.y) < HERO_NAV_H - 1 {
+        c := (from + to) / 2
+        o = {clamp(c.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(c.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
+        n.w, n.h = HERO_NAV_W, HERO_NAV_H
+    }
     n.seen   = {}
     n.closed = {}
     out.n, out.at = 0, 0
-    s := hero_nav_index(o, from)
+    s := hero_nav_index(n, o, from)
     if s < 0 do return false
     has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
     _, blocks := hero_bridge_blocks(gs)
@@ -1473,7 +1486,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         if n.closed[i] do continue
         n.closed[i] = true
         expanded += 1
-        a := o + {i32(i % HERO_NAV_W), i32(i / HERO_NAV_W)}
+        a := hero_nav_tile(n, o, i)
         if a == to {
             best, reached = i, true
             break
@@ -1543,15 +1556,15 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         if pos < HERO_PATH_MAX {
             p := int(n.parent[j])
             out.steps[pos] = {
-                from = o + {i32(p % HERO_NAV_W), i32(p / HERO_NAV_W)},
-                to   = o + {i32(j % HERO_NAV_W), i32(j / HERO_NAV_W)},
+                from = hero_nav_tile(n, o, p),
+                to   = hero_nav_tile(n, o, j),
                 move = n.move[j],
             }
         }
         pos -= 1
     }
     out.n = min(length, HERO_PATH_MAX)
-    return reached && length <= HERO_PATH_MAX
+    return reached
 }
 
 // ─── Water (card 174) ───
@@ -1616,7 +1629,7 @@ hero_nav_dug :: proc(n: ^Hero_Nav, o: [2]i32, s, i: int, t: [2]i32) -> bool {
         if j == s do return false
         p := int(n.parent[j])
         if n.move[j] == .Dig {
-            tiles, k := hero_dig_tiles(o + {i32(p % HERO_NAV_W), i32(p / HERO_NAV_W)}, o + {i32(j % HERO_NAV_W), i32(j / HERO_NAV_W)})
+            tiles, k := hero_dig_tiles(hero_nav_tile(n, o, p), hero_nav_tile(n, o, j))
             for d in tiles[:k] do if d == t do return true
         }
         j = p
@@ -1626,7 +1639,7 @@ hero_nav_dug :: proc(n: ^Hero_Nav, o: [2]i32, s, i: int, t: [2]i32) -> bool {
 
 @(private="file")
 hero_nav_relax :: proc(n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, b: [2]i32, cost: f32, m: Hero_Move, nb: u8, to: [2]i32) {
-    j := hero_nav_index(o, b)
+    j := hero_nav_index(n, o, b)
     if j < 0 do return
     g := n.g[i] + cost + (HERO_NAV_DANGER_COST if hero_in_danger(n.danger[:n.n_danger], b) else 0)
     if n.seen[j] && g >= n.g[j] do return
