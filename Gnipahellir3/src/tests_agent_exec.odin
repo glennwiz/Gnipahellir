@@ -7702,6 +7702,124 @@ hero_bridge_never_into_leaves :: proc(t: ^testing.T) {
     for st in path.steps[:path.n] do testing.expectf(t, !(st.move == .Bridge && st.to + {0, 1} == {i32(x0 + 8), i32(G)}), "a block planned into the Leaves: %v", st)
 }
 
+// ─── Card 171: the planner's and the floor reflex's unpinned operands ────────
+
+// A step up or a jump up from a column needs the rows over the head there: a
+// ceiling one row over the head stops a step and a jump, one two rows over
+// stops a jump.  The way is walled on the far side, with no blocks and no
+// digs, so the ceiling is the whole question.
+@(test)
+hero_plan_steps_and_jumps_up_only_under_headroom :: proc(t: ^testing.T) {
+    Case :: struct {
+        rise:    int,  // the ledge's height: 1 a step up, 2 a jump
+        ceiling: int,  // the source column's solid row, as rows over the feet; 0 none
+        reached: bool,
+    }
+    cases := [?]Case{
+        {1, 0, true}, {1, 2, false},
+        {2, 0, true}, {2, 2, false}, {2, 3, false},
+    }
+    for c, k in cases {
+        gs := new(Game_State)
+        defer free(gs)
+        game_state_init(gs, 781)
+        x0, G := hero_test_arena(gs)
+        gs.player.inventory = {}
+        for y in G - 10 ..< G do set_tile(&gs.world, x0 + 4, y, .Stone)
+        for y in G - c.rise ..< G do set_tile(&gs.world, x0 + 3, y, .Stone)
+        if c.ceiling > 0 do set_tile(&gs.world, x0 + 2, G - 1 - c.ceiling, .Stone)
+        path: Hero_Path
+        to := [2]i32{i32(x0 + 3), i32(G - 1 - c.rise)}
+        reached := hero_plan(gs, {i32(x0), i32(G - 1)}, to, &path, dig = false)
+        testing.expectf(t, reached == c.reached, "case %d %v: reached %v", k, c, reached)
+    }
+}
+
+// The bridge builds in a Void cell as in Air: both are empty to the game
+// (place_cell_open).  A pit too wide to jump with Void across its top row.
+@(test)
+hero_bridge_builds_into_void :: proc(t: ^testing.T) {
+    gs := new(Game_State)
+    defer free(gs)
+    game_state_init(gs, 781)
+    x0, G := hero_test_arena(gs)
+    for x in x0 + 5 ..= x0 + 11 do for y in G ..< G + 12 do set_tile(&gs.world, x, y, .Void if y == G else .Air)
+    gs.player.inventory = {}
+    go_test_give(gs, .Stone_Block, 10)
+    path: Hero_Path
+    reached := hero_plan(gs, {i32(x0), i32(G - 1)}, {i32(x0 + 14), i32(G - 1)}, &path, dig = false)
+    testing.expect(t, reached, "across the pit")
+    into_void := 0
+    for st in path.steps[:path.n] do if st.move == .Bridge && get_tile(&gs.world, int(st.to.x), int(st.to.y + 1)) == .Void do into_void += 1
+    testing.expectf(t, into_void > 0, "no block planned into the Void row: %d steps", path.n)
+}
+
+// The floor_dig reflex judges only the floor under the body: a hero over air
+// (as in a jump) digging the next column's floor, with a deadly shaft under
+// it, is not refused, either side.
+@(test)
+hero_floor_reflex_leaves_a_dig_beside_the_body :: proc(t: ^testing.T) {
+    for side in ([2]int{-1, 1}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, .Pickaxe)
+        gs.player.hp = 1
+        exec_test_frames(link, gs, 5)
+        for y in G ..= G + 1 do set_tile(&gs.world, x0, y, .Air)  // nothing under the body
+        tile := [2]i32{i32(x0 + side), i32(G)}
+        for y in G + 1 ..= G + 11 do set_tile(&gs.world, int(tile.x), y, .Air)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","mine":[%d,%d],"frames":5}}]}}`, tile.x, tile.y))
+        dug, refused := false, false
+        for _ in 0 ..< 5 {
+            gs.player.pos, gs.player.vel = {f32(x0) + 0.1, f32(G) - PLAYER_H}, {}
+            exec_test_frames(link, gs, 1)
+            dug ||= gs.agent.cmd.has_mine && gs.agent.cmd.mine == tile
+            refused ||= gs.hero.refused && gs.hero.refused_by == .Floor_Dig
+        }
+        testing.expectf(t, dug && !refused, "side %d: dug %v, refused %v", side, dug, refused)
+    }
+}
+
+// The floor_dig reflex refuses the floor whose fall takes exactly the hero's
+// hp, and a floor over lava whose fall is free.
+@(test)
+hero_floor_reflex_refuses_a_fall_of_all_hp_or_into_a_burn :: proc(t: ^testing.T) {
+    for burn in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, .Pickaxe)
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":false}`)  // lava under the floor is a rim too
+        tile := [2]i32{i32(x0), i32(G)}
+        if burn {
+            set_tile(&gs.world, x0, G + 1, .Lava)
+        } else {
+            for y in G + 1 ..= G + 6 do set_tile(&gs.world, x0, y, .Air)
+        }
+        _, hurts, burns := hero_dig_fall(&gs.world, tile)
+        if burn {
+            testing.expectf(t, hurts == 0 && burns, "a free fall into lava: hurts %d", hurts)
+        } else {
+            testing.expect_value(t, hurts, 2)
+            gs.player.hp = hurts
+        }
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","mine":[%d,%d],"frames":5}}]}}`, tile.x, tile.y))
+        refused := false
+        for k := 0; k < 20 && agent_goals_busy(&link.goals); k += 1 {
+            exec_test_frames(link, gs, 1)
+            refused ||= gs.hero.refused && gs.hero.refused_by == .Floor_Dig && gs.hero.refused_at == tile
+        }
+        testing.expectf(t, refused, "burn %v: the floor_dig reflex refuses it", burn)
+        testing.expect_value(t, get_tile(&gs.world, x0, G), Tile_Type.Stone)
+    }
+}
+
 // The blocks taken from the bag halfway up (a craft, a store): the go plans
 // again and fails no_route, never jumps on the spot until blocked.
 @(test)
