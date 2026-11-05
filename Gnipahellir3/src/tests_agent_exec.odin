@@ -659,6 +659,170 @@ hero_flees_a_closing_vargr_when_hurt_then_resumes :: proc(t: ^testing.T) {
     testing.expect_value(t, gs.player.hp, hp)
 }
 
+// Card 160, playtest 127: a stay holds its tile through a threat that would
+// send any other goal running: a hurt hero with a sword never flees, fights
+// only from the tile once the Vargr is in reach, is not given up held past
+// HERO_PAUSE_MAX_S, and is done once its time is up.  Unarmed and hunted, it
+// stands too.  Knocked off, it walks back.
+@(test)
+hero_stay_holds_its_tile_through_a_threat :: proc(t: ^testing.T) {
+    Case :: struct { held: Item, whole: bool }
+    for c in ([4]Case{{.Sword, false}, {.None, false}, {.Fire_Wand, false}, {.Sword, true}}) {
+        held := c.held
+        armed := held != .None
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for _ in 0 ..< 10 do hero_test_tick(link, gs)
+        gs.player.inventory = {}
+        gs.player.mana = 100
+        if armed {
+            gs.player.inventory.slots[0] = {item = held, count = 1}
+            gs.player.inventory.selected = 0
+        }
+        if !c.whole do gs.player.hp = max(1, gs.player.hp_max / 5)  // whole, the brain would walk in to fight it
+        vargr := hero_test_vargr(gs, f32(x0) + 6.1, G, {-RAIDER_SPEED, 0})
+        tile := hero_feet(&gs.player)
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"stay","for":4}]}`)
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        slot: ^Agent_Goal
+        for &s in link.goals.slots[:link.goals.n] do if s.id == id do slot = &s
+        fled, moved, fought := 0, 0, 0
+        arrived, done_at := u64(0), u64(0)
+        reach_score := f32(0)
+        for k := 0; k < 600 && agent_goals_busy(&link.goals); k += 1 {
+            if k == 60 {  // into reach: a sword's blow lands from the tile
+                e := &gs.enemies.data[vargr]
+                e.pos.x = gs.player.pos.x + PLAYER_W + 0.3
+            }
+            if k == 90 && gs.hero.paused_goal == id do gs.hero.paused_t = HERO_PAUSE_MAX_S + 1  // a long fight
+            until := slot.until
+            hero_test_tick(link, gs)  // the brain thinks on the frame the tick moved to
+            if (until == 0 || until == max(u64)) && slot.until != max(u64) do arrived = gs.frame  // queued or walking, then there
+            if done_at == 0 && slot.status == .Done do done_at = gs.frame
+            if k == 61 do reach_score = gs.hero.scores[.Fight]
+            gs.player.hp = max(gs.player.hp, 1)  // the test is of where it stands, not of the blows
+            gs.player.dead = false
+            if gs.hero.current == .Flee do fled += 1
+            if gs.hero.current == .Fight do fought += 1
+            if hero_feet(&gs.player) != tile do moved += 1
+        }
+        status := exec_test_goal(link, gs, id)["status"].(json.String)
+        testing.expectf(t, status == "done", "%v: %s %v", c, status, exec_test_goal(link, gs, id)["reason"])
+        testing.expectf(t, fled == 0 && moved == 0, "%v: fled %d frames, off its tile %d", c, fled, moved)  // a wand backs off from no one either
+        if armed do testing.expectf(t, fought > 0, "%v: fought from the tile: %d", c, fought)
+        // Its 4 s run from the arrival, and it is done on their last frame.
+        testing.expectf(t, slot.until == arrived + 4 * 60 && done_at == slot.until, "%v: arrived %d, until %d, done %d", c, arrived, slot.until, done_at)
+        // Whole, its blow scores as a fight would anywhere: the stay's score is a floor.
+        if c.whole do testing.expectf(t, reach_score > HERO_STAY_FIGHT_SCORE, "%v: fight scores %v in reach", c, reach_score)
+    }
+    // Unarmed and hunted, it still makes for its shelter, away from the Vargr.
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for _ in 0 ..< 10 do hero_test_tick(link, gs)
+        gs.player.inventory = {}
+        hero_test_vargr(gs, f32(x0) + 7.1, G, {-RAIDER_SPEED, 0})
+        for _ in 0 ..< 30 do hero_test_tick(link, gs)  // noticed: any other goal waits
+        shelter := [2]i32{i32(x0 - 4), i32(G - 1)}
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"stay","at":[%d,%d],"for":2}}]}}`, shelter.x, shelter.y))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for k := 0; k < 600 && agent_goals_busy(&link.goals); k += 1 {
+            hero_test_tick(link, gs)
+            gs.player.hp = max(gs.player.hp, 1)
+            gs.player.dead = false
+        }
+        testing.expect_value(t, exec_test_goal(link, gs, id)["status"].(json.String), "done")
+        testing.expect_value(t, hero_feet(&gs.player), shelter)
+    }
+    // Knocked off with the Vargr in sight but out of its blow's reach, a
+    // swordsman at any hp walks back rather than standing to a fight it
+    // cannot strike (in reach, the case loop above fights from the tile).
+    for tenths in ([]int{2, 5, 7, 10}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for _ in 0 ..< 10 do hero_test_tick(link, gs)
+        gs.player.inventory = {}
+        gs.player.inventory.slots[0] = {item = .Sword, count = 1}
+        gs.player.inventory.selected = 0
+        hp := max(1, gs.player.hp_max * tenths / 10)
+        gs.player.hp = hp
+        tile := hero_feet(&gs.player)
+        hero_test_vargr(gs, f32(x0) + 6.1, G, {-RAIDER_SPEED, 0})
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"stay","for":9}]}`)
+        for _ in 0 ..< 30 do hero_test_tick(link, gs)
+        gs.player.pos.x -= 3  // knocked off, further from the Vargr
+        back := false
+        for k := 0; k < 300 && !back; k += 1 {
+            hero_test_tick(link, gs)
+            gs.player.hp = hp
+            back = hero_feet(&gs.player) == tile
+        }
+        testing.expectf(t, back, "hp %d/10: walked back to %v: at %v, %v", tenths, tile, hero_feet(&gs.player), gs.hero.current)
+    }
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        for line in ([]string{`{"do":"stay","for":-1}`, `{"do":"stay","for":"long"}`, `{"do":"stay","at":[900,5]}`}) {
+            agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+            reply := string(link.out[:link.out_len])
+            testing.expectf(t, strings.contains(reply, `"ok":false`) && strings.contains(reply, "stay's"), "%s: %s", line, reply)
+        }
+        // Just inside each bound is taken: for 0, and the level's last column.
+        for line in ([]string{`{"do":"stay","for":0}`, fmt.tprintf(`{{"do":"stay","at":[%d,5]}}`, GRID_W - 1)}) {
+            agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+            reply := string(link.out[:link.out_len])
+            testing.expectf(t, strings.contains(reply, `"ok":true`), "%s: %s", line, reply)
+            agent_handle_line(link, gs, `{"cmd":"goals","clear":true}`)
+        }
+        // With no at, the tile it stands on.
+        exec_test_frames(link, gs, 10)
+        feet := hero_feet(&gs.player)
+        agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"stay"}]}`)
+        exec_test_frames(link, gs, 120)
+        testing.expect(t, agent_goals_busy(&link.goals), "no for: held till cancelled")
+        testing.expect_value(t, link.goals.slots[link.goals.n - 1].to, feet)
+    }
+    // Knocked off its tile, it walks back and holds it to its time.
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    exec_test_frames(link, gs, 10)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"stay","at":[%d,%d],"for":9}}]}}`, x0 + 2, G - 1))
+    id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    exec_test_frames(link, gs, 90)
+    testing.expect_value(t, hero_feet(&gs.player), [2]i32{i32(x0 + 2), i32(G - 1)})
+    for x in x0 + 23 ..= x0 + 56 do for y in G - 10 ..= G + 2 do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+    gs.player.pos.x += 50  // more than HERO_GO_STUCK_S of walking: only a fresh walk back gets there
+    for k := 0; k < 900 && agent_goals_busy(&link.goals); k += 1 do exec_test_frames(link, gs, 1)
+    testing.expect_value(t, exec_test_goal(link, gs, id)["status"].(json.String), "done")
+    testing.expect_value(t, hero_feet(&gs.player), [2]i32{i32(x0 + 2), i32(G - 1)})
+    // Knocked off and held there, the walk back fails blocked at HERO_GO_STUCK_S,
+    // as any go does: the fresh walk is begun once, not on every tick.
+    for &d in link.goals.slots[:link.goals.n] do d.status = .Done
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"stay","at":[%d,%d],"for":60}}]}}`, x0 + 2, G - 1))
+    id = int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+    exec_test_frames(link, gs, 30)
+    gs.player.pos.x += 3
+    hold := gs.player.pos
+    frames := 0
+    for frames < 600 && agent_goals_busy(&link.goals) {
+        exec_test_frames(link, gs, 1)
+        gs.player.pos, gs.player.vel = hold, {}
+        frames += 1
+    }
+    o := exec_test_goal(link, gs, id)
+    reason, _ := o["reason"].(json.String)
+    testing.expectf(t, reason == "blocked" && abs(f32(frames) - HERO_GO_STUCK_S * 60) < 3, "held off its tile: %v %v after %d frames", o["status"], o["reason"], frames)
+}
+
 // Two behaviours scoring near the same do not trade places every tick; a clear
 // winner takes over once the running one has had its hold, and danger at once.
 @(test)
@@ -6679,6 +6843,115 @@ hero_act_mine_reach_note_only_for_work :: proc(t: ^testing.T) {
             if strings.has_prefix(string(it.text[:it.len]), "Out of reach") do n += 1
         }
         testing.expectf(t, n == c.toasts, "%v with %v: %d toasts", c.tile, c.held, n)
+    }
+}
+
+// Card 160, playtest 135 (#308/#309/#313): a gather, or a mine by item, passes
+// over a tile a reflex keeps the pick off and takes the next, where it failed
+// on the nearest each time.  Water comes beside the near ore once it is the
+// target (the rim_dig reflex; a rim is never picked to begin with); the far
+// one is dry.
+@(test)
+hero_gather_passes_over_a_tile_a_reflex_refuses :: proc(t: ^testing.T) {
+    for line in ([2]string{`{"do":"gather","item":"Iron_Ore","count":1}`, `{"do":"mine","item":"Iron_Ore"}`}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        exec_test_frames(link, gs, 10)
+        go_test_give(gs, .Pickaxe, 1)
+        near, far := [2]int{x0 + 3, G}, [2]int{x0 + 12, G}
+        set_tile(&gs.world, near.x, near.y, .Iron_Ore)
+        set_tile(&gs.world, far.x, far.y, .Iron_Ore)
+        refused := false
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[%s]}}`, line))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        exec_test_frames(link, gs, 2)
+        set_tile(&gs.world, near.x, near.y + 1, .Water)  // under it: the hero's stand beside it stays dry
+        for k := 0; k < 900 && agent_goals_busy(&link.goals); k += 1 {
+            exec_test_frames(link, gs, 1)
+            set_tile(&gs.world, near.x, near.y + 1, .Water)  // kept, as a pond would be
+            refused ||= gs.hero.refused && gs.hero.refused_by == .Rim_Dig && gs.hero.refused_at == {i32(near.x), i32(near.y)}
+        }
+        testing.expectf(t, refused, "%s: the near ore was tried, and refused", line)
+        work_test_expect_done(t, link, gs, id)
+        testing.expectf(t, get_tile(&gs.world, near.x, near.y) == .Iron_Ore && get_tile(&gs.world, far.x, far.y) != .Iron_Ore, "%s: the far ore mined, the near one left: near %v far %v", line, get_tile(&gs.world, near.x, near.y), get_tile(&gs.world, far.x, far.y))
+    }
+}
+
+// Card 160, playtest 132: an act's use or reclaim the game passes over says
+// why in a toast, once: out of reach, nothing there, or a bucket (which works
+// with place); one the game takes says nothing.  The brief says so, and that a
+// go at a chest or bench goes beside it (card 175).
+@(test)
+hero_act_use_and_reclaim_say_why_not :: proc(t: ^testing.T) {
+    Case :: struct { verb: string, dx: int, tile: Tile_Type, held: Item, toast: string }
+    cases := [?]Case{
+        {"use", 2, .Crafting_Bench, .Pickaxe, ""},
+        {"use", 3, .Crafting_Bench, .Pickaxe, ""},  // BENCH_RANGE itself
+        {"use", 4, .Crafting_Bench, .Pickaxe, "Out of reach: "},  // one past it
+        {"use", 5, .Crafting_Bench, .Pickaxe, "Out of reach: "},
+        {"use", 2, .Air, .Pickaxe, "Nothing to use at "},
+        {"use", 2, .Water, .Pickaxe, "Nothing to use at "},  // no bucket: water is no structure
+        {"use", 2, .Rune_Scroll_Chest_A, .Pickaxe, ""},     // a rune scroll chest is a structure
+        {"use", 2, .Water, .Iron_Bucket, "A bucket fills and pours with place: "},
+        {"use", 2, .Air, .Water_Bucket, "A bucket fills and pours with place: "},  // a full one pours
+        {"use", 2, .Crafting_Bench, .Iron_Bucket, ""},       // a bench in reach opens, bucket or not
+        {"use", 2, .Rune_Scroll_Chest_A, .Iron_Bucket, ""},
+        {"reclaim", 1, .Crafting_Bench, .Pickaxe, ""},       // PICK_RANGE itself
+        {"reclaim", 2, .Crafting_Bench, .Pickaxe, "Out of reach: "},  // one past it
+        {"reclaim", 3, .Crafting_Bench, .Pickaxe, "Out of reach: "},
+        {"reclaim", 1, .Stone, .Pickaxe, "Nothing to reclaim at "},
+        {"reclaim", 1, .Water, .Iron_Bucket, "Nothing to reclaim at "},  // the bucket note is use's only
+    }
+    for c in cases {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, c.held, 1)
+        gs.player.inventory.selected = hero_item_slot(gs, c.held)
+        at := [2]int{x0 + c.dx, G - 1}
+        set_tile(&gs.world, at.x, at.y, c.tile)
+        exec_test_frames(link, gs, 5)
+        gs.notify.count = 0
+        go_test_run(link, gs, fmt.tprintf(`{{"do":"act","%s":[%d,%d],"frames":2}}`, c.verb, at.x, at.y), 100)
+        said := make([dynamic]string, context.temp_allocator)
+        for i in 0 ..< gs.notify.count {
+            it := &gs.notify.items[i]
+            text := string(it.text[:it.len])
+            for p in ([]string{"Out of reach", "Nothing to", "A bucket"}) do if strings.has_prefix(text, p) do append(&said, text)
+        }
+        want := fmt.tprintf("%s(%d,%d)", c.toast, at.x, at.y)
+        if c.toast == "" {
+            testing.expectf(t, len(said) == 0, "%v: %v", c, said[:])
+        } else {
+            testing.expectf(t, len(said) == 1 && said[0] == want, "%v: %v, want %s", c, said[:], want)
+        }
+    }
+    // An act with neither says nothing of one.
+    {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        hero_test_arena(gs)
+        exec_test_frames(link, gs, 5)
+        gs.notify.count = 0
+        go_test_run(link, gs, `{"do":"act","move":"right","frames":2}`, 100)
+        for i in 0 ..< gs.notify.count {
+            it := &gs.notify.items[i]
+            text := string(it.text[:it.len])
+            testing.expectf(t, !strings.has_prefix(text, "Nothing to") && !strings.has_prefix(text, "Out of reach"), "a move: %s", text)
+        }
+    }
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    brief := agent_write_brief(link, gs)
+    for want in ([]string{"a chest, bench or other structure: the stand beside it", "says why in notes",
+                          fmt.tprintf("use opens a structure within %d tiles, reclaim takes one within %d;", BENCH_RANGE, PICK_RANGE),
+                          "a bucket is place: with an empty Iron_Bucket selected, place on water or lava fills it"}) {
+        testing.expectf(t, strings.contains(brief, want), "the brief: %s", want)
     }
 }
 

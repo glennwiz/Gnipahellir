@@ -90,7 +90,7 @@ Hero_Click :: struct {
     limit:    i32,   // a feed's count, 0 the whole stack
 }
 
-Hero_Mined :: enum u8 { Working, Mined, Failed, Unreachable, Unsafe, Cornered }
+Hero_Mined :: enum u8 { Working, Mined, Failed, Unreachable, Unsafe, Cornered, Refused }
 
 // ─── Reading the goal ───
 
@@ -560,7 +560,7 @@ hero_work_mine :: proc(gs: ^Game_State, g: ^Agent_Goal) -> Hero_Mined {
     if b := &gs.hero; b.refused && b.refused_at == t {
         // A reflex took the pick off it last tick, and will again.
         hero_work_fail(g, fmt.tprintf("refused: the %s reflex keeps the pick off [%d,%d]", hero_reflexes[b.refused_by].name, t.x, t.y))
-        return .Failed
+        return .Refused
     }
     w.t += gs.delta_time
     if w.t > HERO_MINE_GIVE_UP_S {
@@ -592,7 +592,7 @@ hero_mine_goal_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         hero_work_target(gs, g, w.at, false)
     }
     r := hero_work_mine(gs, g)
-    if (r == .Unreachable || r == .Unsafe || r == .Cornered) && w.by_item do hero_work_skip(g, r == .Cornered)
+    if (r == .Unreachable || r == .Unsafe || r == .Cornered || r == .Refused) && w.by_item do hero_work_skip(g, r == .Cornered)
     return r == .Mined
 }
 
@@ -631,7 +631,7 @@ hero_gather_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     if !w.pile {
         #partial switch r := hero_work_mine(gs, g); r {
         case .Mined:       w.has_target = false
-        case .Unreachable, .Unsafe, .Cornered: hero_work_skip(g, r == .Cornered)
+        case .Unreachable, .Unsafe, .Cornered, .Refused: hero_work_skip(g, r == .Cornered)  // a tile a reflex keeps the pick off is passed over too (card 160)
         }
         return false
     }

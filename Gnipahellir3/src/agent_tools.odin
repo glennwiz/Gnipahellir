@@ -879,8 +879,9 @@ tool_summary :: proc(b: ^strings.Builder, run: string) -> bool {
             value, perr := json.parse_string(line, parse_integers = true)
             if rec, is_obj := value.(json.Object); perr == .None && is_obj do append(&rows, rec)
         }
-        tool_summary_acts(b, rows[:])
-        tool_summary_goals(b, rows[:])
+        lives := tool_summary_lives(rows[:])
+        tool_summary_acts(b, rows[:], lives)
+        tool_summary_goals(b, rows[:], lives)
     }
 
     if fights, fight_err := os.read_entire_file(fmt.tprintf("%s/%s", run, AGENT_FIGHT_FILE), context.allocator); fight_err == nil {
@@ -984,12 +985,43 @@ tool_summary_stuck :: proc(b: ^strings.Builder, log: []string) {
     }
 }
 
+// Each row's frame counted over the whole run as "t", and its life as "life":
+// a new life starts the game's frames again at 0 (card 160: playtest 127's
+// summary said 1.4 min connected for a run of lives, and an objective of -5 s).
+// Gives the number of lives.
+@(private="file")
+tool_summary_lives :: proc(rows: []json.Object) -> (lives: int) {
+    lives = 1
+    base, prev := 0, 0
+    for &rec in rows {
+        f, _ := agent_int(rec, "f")  // every row the link writes has one
+        if f < prev {
+            base += prev
+            lives += 1
+        }
+        prev = f
+        rec["t"] = json.Integer(base + f)
+        rec["life"] = json.Integer(lives)
+    }
+    return
+}
+
+// Where a row is, as a person finds it in action.log: its frame, and its life
+// when the run had more than one.
+@(private="file")
+tool_row_at :: proc(rec: json.Object, lives: int, word: string) -> string {
+    f, _ := agent_int(rec, "f")
+    if lives == 1 do return fmt.tprintf("%s%d", word, f)
+    life, _ := agent_int(rec, "life")
+    return fmt.tprintf("life %d %s%d", life, word, f)
+}
+
 // The objectives the agent named, the acts and the ones that changed nothing.
 @(private="file")
-tool_summary_acts :: proc(b: ^strings.Builder, rows: []json.Object) {
+tool_summary_acts :: proc(b: ^strings.Builder, rows: []json.Object, lives: int) {
     strings.write_string(b, "\n== acts ==\n")
     frame :: proc(rec: json.Object) -> int {
-        f, _ := agent_int(rec, "f")
+        f, _ := agent_int(rec, "t")
         return f
     }
     objective_goal :: proc(rec: json.Object) -> string {
@@ -1012,11 +1044,11 @@ tool_summary_acts :: proc(b: ^strings.Builder, rows: []json.Object) {
             o, _ := next["objective"].(json.Object)
             if result, _ := o["result"].(json.String); result == "failed" do note = " (failed)"
         }
-        fmt.sbprintfln(b, "  f%d: %s - %d s%s", frame(a), objective_goal(a), (end - frame(a)) / 60, note)
+        fmt.sbprintfln(b, "  %s: %s - %d s%s", tool_row_at(a, lives, "f"), objective_goal(a), (end - frame(a)) / 60, note)
     }
     played := make([dynamic]json.Object)
     for rec in rows do if "act" in rec do append(&played, rec)
-    fmt.sbprintfln(b, "%d acts, last frame %d", len(played), frame(rows[len(rows) - 1]) if len(rows) > 0 else 0)
+    fmt.sbprintfln(b, "%d acts, last %s", len(played), tool_row_at(rows[len(rows) - 1], lives, "frame ") if len(rows) > 0 else "frame 0")
     wasted: Tool_Tally(string)
     for i in 1 ..< len(played) {
         a, c := played[i - 1], played[i]
@@ -1032,21 +1064,22 @@ tool_summary_acts :: proc(b: ^strings.Builder, rows: []json.Object) {
     tool_tally_line(b, &wasted)
     strings.write_byte(b, '\n')
     for rec in rows {
-        if mark, is_text := rec["mark"].(json.String); is_text do fmt.sbprintfln(b, "frame %d: %s", frame(rec), mark)
+        if mark, is_text := rec["mark"].(json.String); is_text do fmt.sbprintfln(b, "%s: %s", tool_row_at(rec, lives, "frame "), mark)
     }
 }
 
 // How the goal queue kept the hero busy (Glenn, 2026-11-03: play should look
 // seamless).  Counted over the connected stretches: from the first row, and
 // from the first row after each disconnect, to the next disconnect or the last.
-tool_summary_goals :: proc(b: ^strings.Builder, rows: []json.Object) {
+tool_summary_goals :: proc(b: ^strings.Builder, rows: []json.Object, lives: int) {
     Stats :: struct {
         goals, done, failed:        int,
         active, empty, longest:     int,   // frames
-        longest_at:                 int,
+        longest_at:                 json.Object,  // the row the longest empty stretch began on
         window:                     int,   // frames with a window open
         open:                       map[int]bool,
         empty_from, window_from:    int,
+        empty_row:                  json.Object,
         window_open, connected:     bool,
         seg_from:                   int,
         ends, gaps:                 [dynamic]f64,
@@ -1061,19 +1094,19 @@ tool_summary_goals :: proc(b: ^strings.Builder, rows: []json.Object) {
         if len(s.open) == 0 {
             d := f - s.empty_from
             s.empty += d
-            if d > s.longest do s.longest, s.longest_at = d, s.empty_from
+            if d > s.longest do s.longest, s.longest_at = d, s.empty_row
         }
         if s.window_open do s.window += f - s.window_from
         s.active += f - s.seg_from
     }
-    first, _ := agent_int(rows[0], "f")
-    s.connected, s.seg_from, s.empty_from = true, first, first
+    first, _ := agent_int(rows[0], "t")
+    s.connected, s.seg_from, s.empty_from, s.empty_row = true, first, first, rows[0]
     last := first
     for rec in rows {
-        f, _ := agent_int(rec, "f")
+        f, _ := agent_int(rec, "t")
         last = f
         if !s.connected {
-            s.connected, s.seg_from, s.empty_from = true, f, f
+            s.connected, s.seg_from, s.empty_from, s.empty_row = true, f, f, rec
         }
         switch {
         case "goal" in rec:
@@ -1081,7 +1114,7 @@ tool_summary_goals :: proc(b: ^strings.Builder, rows: []json.Object) {
             if len(s.open) == 0 {
                 d := f - s.empty_from
                 s.empty += d
-                if d > s.longest do s.longest, s.longest_at = d, s.empty_from
+                if d > s.longest do s.longest, s.longest_at = d, s.empty_row
             }
             s.open[id] = true
             s.goals += 1
@@ -1092,7 +1125,7 @@ tool_summary_goals :: proc(b: ^strings.Builder, rows: []json.Object) {
             id, _ := agent_int(rec, "failed" if failed else "done")
             if id in s.open {
                 delete_key(&s.open, id)
-                if len(s.open) == 0 do s.empty_from = f
+                if len(s.open) == 0 do s.empty_from, s.empty_row = f, rec
             }
             append(&s.ends, f64(f))
             if failed {
@@ -1120,8 +1153,10 @@ tool_summary_goals :: proc(b: ^strings.Builder, rows: []json.Object) {
     seconds :: proc(frames: int) -> f64 { return f64(frames) / TOOL_FPS }
     minutes := f64(s.active) / (TOOL_FPS * 60)
     strings.write_string(b, "\n== goals ==\n")
-    fmt.sbprintfln(b, "%d goals in %.1f min connected, %.1f per minute", s.goals, minutes, f64(s.goals) / minutes if minutes > 0 else 0)
-    fmt.sbprintfln(b, "empty queue: %.0f s, longest %.0f s from frame %d", seconds(s.empty), seconds(s.longest), s.longest_at)
+    fmt.sbprintf(b, "%d goals in %.1f min connected, %.1f per minute", s.goals, minutes, f64(s.goals) / minutes if minutes > 0 else 0)
+    if lives > 1 do fmt.sbprintf(b, ", over %d lives", lives)
+    strings.write_byte(b, '\n')
+    fmt.sbprintfln(b, "empty queue: %.0f s, longest %.0f s from %s", seconds(s.empty), seconds(s.longest), tool_row_at(s.longest_at, lives, "frame "))
     if len(s.gaps) > 0 {
         top := 0.0
         for g in s.gaps do top = max(top, g)
