@@ -663,14 +663,15 @@ hero_flees_a_closing_vargr_when_hurt_then_resumes :: proc(t: ^testing.T) {
 // winner takes over once the running one has had its hold, and danger at once.
 @(test)
 hero_near_equal_scores_do_not_flip :: proc(t: ^testing.T) {
-    b: Hero_Brain
+    b := new(Hero_Brain)  // the plan scratch makes it too big for the stack
+    defer free(b)
     b.current = .Fight
     b.held = 10
     flips := 0
     for i in 0 ..< 40 {
         b.scores[.Fight] = 60 if i % 2 == 0 else 62
         b.scores[.Flee]  = 62 if i % 2 == 0 else 60
-        if next := hero_pick(&b); next != b.current {
+        if next := hero_pick(b); next != b.current {
             b.current, b.held = next, 0
             flips += 1
         } else {
@@ -684,22 +685,22 @@ hero_near_equal_scores_do_not_flip :: proc(t: ^testing.T) {
     b.held = 0
     b.scores[.Fight] = 60
     b.scores[.Flee]  = 60 + HERO_SWITCH_MARGIN + 1
-    testing.expect_value(t, hero_pick(&b), Hero_Behaviour.Fight)
+    testing.expect_value(t, hero_pick(b), Hero_Behaviour.Fight)
     b.held = HERO_MIN_HOLD_S - 0.01
-    testing.expect_value(t, hero_pick(&b), Hero_Behaviour.Fight)
+    testing.expect_value(t, hero_pick(b), Hero_Behaviour.Fight)
     b.held = HERO_MIN_HOLD_S
-    testing.expect_value(t, hero_pick(&b), Hero_Behaviour.Flee)
+    testing.expect_value(t, hero_pick(b), Hero_Behaviour.Flee)
     b.scores[.Flee] = 60 + HERO_SWITCH_MARGIN
-    testing.expect_value(t, hero_pick(&b), Hero_Behaviour.Fight)  // a tie at the margin holds
+    testing.expect_value(t, hero_pick(b), Hero_Behaviour.Fight)  // a tie at the margin holds
 
     // Danger cuts the hold short, and a behaviour with nothing to do lets go.
     b.held = 0
     b.scores[.Avoid_Ledge] = HERO_URGENT_SCORE
-    testing.expect_value(t, hero_pick(&b), Hero_Behaviour.Avoid_Ledge)
+    testing.expect_value(t, hero_pick(b), Hero_Behaviour.Avoid_Ledge)
     b.scores[.Avoid_Ledge] = 0
     b.scores[.Fight] = 0
     b.scores[.Flee]  = 1
-    testing.expect_value(t, hero_pick(&b), Hero_Behaviour.Flee)
+    testing.expect_value(t, hero_pick(b), Hero_Behaviour.Flee)
 }
 
 // Nothing queued and a threat about: the hero makes for the safe ground it
@@ -2446,6 +2447,37 @@ hero_plan_keeps_its_own_floors_in_random_caves :: proc(t: ^testing.T) {
         checked += plan_test_own_floors(t, &path)
     }
     testing.expectf(t, checked > 200, "steps checked: %d", checked)
+}
+
+// Card 185: the same over the whole level.  The caves, a floor on east past
+// the window, the goal on it: a search over the whole level numbers its
+// nodes across the level, and the look back reads the digs it took there.
+@(test)
+hero_plan_keeps_its_own_floors_toward_a_goal_past_the_window :: proc(t: ^testing.T) {
+    r := rand.create(185)
+    gen := rand.default_random_generator(&r)
+    checked, digs := 0, 0
+    for _ in 0 ..< 60 {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        go_test_give(gs, .Pickaxe, 1)
+        open := 0.25 + 0.25 * rand.float32(gen)
+        for x in x0 - 16 ..= x0 + 20 do for y in G - 9 ..= G + 11 {
+            set_tile(&gs.world, x, y, .Air if y < G - 6 || rand.float32(gen) < open else .Stone)
+        }
+        for x in x0 + 21 ..= x0 + 90 do for y in G - 12 ..= G - 6 do set_tile(&gs.world, x, y, .Stone if y == G - 6 else .Air)
+        from := [2]i32{i32(x0 + rand.int_max(8, gen)), i32(G + 2 + rand.int_max(8, gen))}
+        for y in from.y - 1 ..= from.y do set_tile(&gs.world, int(from.x), int(y), .Air)
+        set_tile(&gs.world, int(from.x), int(from.y + 1), .Stone)
+        to := [2]i32{i32(x0 + 80), i32(G - 7)}
+        path: Hero_Path
+        hero_plan(gs, from, to, &path)
+        checked += plan_test_own_floors(t, &path)
+        for st in path.steps[:path.n] do if st.move == .Dig do digs += 1
+    }
+    testing.expectf(t, checked > 200 && digs > 60, "steps checked: %d, digs %d", checked, digs)
 }
 
 // Playtest 127's turn back: a stair dug up and right, a jump back left onto
@@ -7944,11 +7976,10 @@ hero_go_plans_a_leg_the_window_spans_whole :: proc(t: ^testing.T) {
 }
 
 // Goal 503 (f67556): go from the rainbow's east foot to (18,69), 156
-// columns off.  The plan never reaches a goal past the window; the hero
-// walks to the tile nearest it, plans again from there, and so on to the
-// end (the replay now walks the whole rainbow, no block spent).  Along
-// flat ground, and down a stair 60 rows deep: the window stays round the
-// hero while the goal lies outside it.
+// columns off (the replay now walks the whole rainbow, no block spent).
+// Along flat ground, and down a stair 60 rows deep: a goal past the window
+// is planned over the whole level, a path longer than a plan keeps its
+// start, and the hero plans again from its end.
 @(test)
 hero_go_walks_on_toward_a_goal_past_the_window :: proc(t: ^testing.T) {
     for way in ([2]string{"along", "down"}) {
@@ -7975,6 +8006,48 @@ hero_go_walks_on_toward_a_goal_past_the_window :: proc(t: ^testing.T) {
         for ; frames < 3600 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
         status, reason := go_test_status(link, gs, id)
         testing.expectf(t, status == "done", "%s: %s %s in %d frames", way, status, reason, frames)
+    }
+}
+
+// Goal 613 (f83376): go east from the rainbow's west foot to (174,69), 157
+// columns off, failed no_route at (112,78) with the bag whole: the window
+// round the hero never held the goal, so no plan reached and none laid a
+// block (card 181), and the nearest tile planned without them was where it
+// stood (card 185).  A floor 158 columns long with a pit 9 wide past the
+// first window, the goal across it and past the window from its edge: the
+// go bridges the pit and arrives.
+// The goal sealed in stone instead: no way reaches, and no block is spent.
+@(test)
+hero_go_bridges_to_a_goal_past_the_window :: proc(t: ^testing.T) {
+    for sealed in ([2]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        hero_test_arena(gs)
+        for x in 16 ..= 180 do for y in 8 ..< GRID_H do set_tile(&gs.world, x, y, .Air)
+        for x in 20 ..= 178 do if x < 100 || x > 108 do set_tile(&gs.world, x, 54, .Stone)
+        to := [2]i32{174, 53}
+        if sealed {
+            for y in 50 ..< 54 do for x in ([2]i32{to.x - 1, to.x + 1}) do set_tile(&gs.world, int(x), y, .Stone)
+            set_tile(&gs.world, int(to.x), 50, .Stone)
+        }
+        gs.player.pos = {30.1, 54 - PLAYER_H}
+        gs.player.inventory = {}
+        go_test_give(gs, .Stone_Block, 12)
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, to.x, to.y))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        frames := 0
+        for ; frames < 3600 && agent_goals_busy(&link.goals); frames += 1 do exec_test_frames(link, gs, 1)
+        status, reason := go_test_status(link, gs, id)
+        left := inventory_count(&gs.player.inventory, .Stone_Block)
+        if sealed {
+            testing.expectf(t, status == "failed" && reason == "no_route", "sealed: %s %s in %d frames", status, reason, frames)
+            testing.expectf(t, left == 12, "sealed: %d blocks left of 12", left)
+        } else {
+            testing.expectf(t, status == "done", "%s %s in %d frames", status, reason, frames)
+            testing.expectf(t, left < 12, "the pit crossed with %d blocks left of 12", left)
+        }
     }
 }
 
