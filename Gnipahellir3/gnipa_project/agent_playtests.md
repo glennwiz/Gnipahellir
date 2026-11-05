@@ -25,9 +25,11 @@ what broke, and hands back a report. Glenn reads the reports; feel is still his 
   instead of replaying the ~20 game minutes to get there (Glenn, 2026-11-04):
   `build/gnipa --make-save --seed <seed> --out build/past_a_<seed>.sav`, then
   `build/gnipa --agent-run --port 7777 --load build/past_a_<seed>.sav` (no `--seed`:
-  the world is the save's). The run folder keeps the save as `start.sav`, and
-  action.log opens with `Run starts from the save`. A `--replay` of such a run is
-  refused: a replay starts from the seed.
+  the world is the save's; a path that is no save this build reads is refused
+  before the window opens). The run folder keeps the save as `start.sav`, and
+  action.log names only the save's world seed, then `Run starts from the save`.
+  A `--replay` of such a run starts from its `start.sav`. `--pacing` leaves it
+  out: its clock starts at the save, not at a new game.
 - How the save is made: a new game on the seed plays the route through the game's
   own handlers (pickaxe off its ledge, bench and two Sky Altars crafted, the tier-A
   foundation and gate altar placed, Scroll A taken from its chest, the gate, a
