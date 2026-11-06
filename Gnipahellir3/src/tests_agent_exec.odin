@@ -9503,3 +9503,59 @@ hero_go_blocked_on_a_structure_names_it :: proc(t: ^testing.T) {
     status, reason := go_test_status(link, gs, id)
     testing.expectf(t, status == "failed" && reason == fmt.tprintf("blocked: the hero stands on a Sky_Altar at [%d,%d], which the body walks through from the side", x0, G - 1), "%s %s", status, reason)
 }
+
+// A stale path left in gs.hero.path, its goal 0 as an empty path's is: one
+// step that digs the tile at d from the feet.
+@(private="file")
+stale_path_plant :: proc(gs: ^Game_State, d: [2]i32) -> (tile: [2]i32) {
+    feet := hero_feet(&gs.player)
+    tile = feet + d
+    gs.hero.path = {n = 1}
+    gs.hero.path.steps[0] = {from = feet, to = tile, move = .Dig}
+    return
+}
+
+// Card 204: a retreat the brain starts walks no step of a path it finds left
+// in gs.hero.path, whose goal 0 is its own: here one that digs into the pit's
+// left wall, away from the safe spot on its right.
+@(test)
+hero_retreat_walks_no_stale_path :: proc(t: ^testing.T) {
+    gs, link, _, _ := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    stale := stale_path_plant(gs, {-1, 0})
+    testing.expect(t, is_solid(&gs.world, int(stale.x), int(stale.y)), "the wall")
+    started, dug := false, 0
+    for _ in 0 ..< 60 {
+        hero_test_tick(link, gs)
+        if gs.hero.current == .Retreat do started = true
+        if gs.agent.cmd.has_mine && gs.agent.cmd.mine == stale do dug += 1
+    }
+    testing.expect(t, started, "the retreat began")
+    testing.expect_value(t, dug, 0)
+}
+
+// Card 204: an action the hero takes on its own walks no step of a path it
+// finds left in gs.hero.path either: here a walk of its own, past a path
+// that digs the floor under it.
+@(test)
+hero_on_its_own_walks_no_stale_path :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 10)
+    go_test_give(gs, .Pickaxe, 1)
+    gs.hero.self_skip = {.Ritual, .Wood, .Ore}  // a walk of its own: the work rows clear the path on a new stand already
+    stale := stale_path_plant(gs, {0, 1})
+    testing.expect(t, gs.hero.self.status != .Running, "no action of its own yet")
+    link.goals.reflexes_off = {}  // the game's default: on its own
+    testing.expect(t, is_solid(&gs.world, int(stale.x), int(stale.y)), "the floor")
+    started, dug := false, 0
+    for _ in 0 ..< 60 {
+        exec_test_frames(link, gs, 1)
+        if gs.hero.current == .Self && gs.hero.self.status == .Running && gs.hero.self.kind == .Go do started = true
+        if gs.agent.cmd.has_mine && gs.agent.cmd.mine == stale do dug += 1
+    }
+    testing.expect(t, started, "it set about an action of its own")
+    testing.expect_value(t, dug, 0)
+}

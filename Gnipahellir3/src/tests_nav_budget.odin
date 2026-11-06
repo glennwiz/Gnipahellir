@@ -703,12 +703,20 @@ a_hero_replan_runs_on_until_done :: proc(t: ^testing.T) {
     testing.expect(t, gs.hero.path.goal == g.id && !n.planning, "walking its first plan")
     // No headway this frame (the best already beaten), and long enough for a replan.
     g.stuck_t, g.replanned, g.best, g.steps_best = HERO_GO_REPLAN_S, false, 0, 0
+    old := gs.hero.path   // the walk's path as the replan begins: untouched until the new one is taken up
     for f := 0; f < 10 && !g.replanned; f += 1 do hero_long_frame(link, gs)
     testing.expect(t, g.replanned && n.planning, "the replan takes more than a frame")
+    testing.expect(t, gs.hero.path == old, "the replan's first frame leaves the old path as it was")
     frames := 1
-    for ; frames < 60 && n.planning; frames += 1 do hero_long_frame(link, gs)
+    for ; frames < 60 && n.planning; frames += 1 {
+        hero_long_frame(link, gs)
+        testing.expectf(t, gs.hero.path == old, "frame %d of the replan: the old path neither walked nor written", frames)
+    }
     testing.expectf(t, !n.planning && frames <= 5, "the replan is done in %d frames", frames)
-    testing.expect_value(t, gs.hero.path.at, 0)
+    // Its go takes the new path up at its next tick (card 204: until then it
+    // is the plan's own, in gs.hero.nav.out).
+    hero_long_frame(link, gs)
+    testing.expect(t, gs.hero.path.goal == g.id && gs.hero.path.at == 0 && gs.hero.path.steps[0].from == n.from, "the new path, from the replan's feet")
 }
 
 // A plan in hand is for one walk: another goal, or the same goal sent to
@@ -1183,4 +1191,37 @@ a_hero_stuck_replan_holds_the_hero_until_taken_up :: proc(t: ^testing.T) {
     testing.expect_value(t, n.from, feet)
     testing.expect(t, path.goal == g.id && path.n > 0 && path.at == 0 && path.steps[0].from == feet, "the path taken up starts at the replan's feet")
     testing.expect(t, gs.agent.cmd != {}, "and is walked")
+}
+
+// A go's plan runs in a buffer of its own (card 204): a paused go's plan,
+// running on after the swarm, never writes the path another walk (a retreat)
+// is on, and its go takes up the plan's own path.
+@(test)
+a_hero_plan_writes_no_path_but_its_own :: proc(t: ^testing.T) {
+    gs, link := hero_long_world()
+    defer free(gs)
+    defer free(link)
+    hero_long_go(t, link, gs)
+    g := hero_long_running(link)
+    n := &gs.hero.nav
+    path := &gs.hero.path
+    gs.frame += 1
+    hero_go_tick(gs, g)
+    testing.expect(t, n.planning && n.plan_goal == g.id, "the go's plan runs on")
+    // Another walk on the path, its steps its own.
+    other := Hero_Path{n = 2, goal = 1000}
+    other.steps[0] = {from = HERO_LONG_FROM, to = HERO_LONG_FROM + {1, 0}, move = .Walk}
+    other.steps[1] = {from = HERO_LONG_FROM + {1, 0}, to = HERO_LONG_FROM + {2, 0}, move = .Walk}
+    path^ = other
+    for f := 0; f < 60 && !n.ready; f += 1 {
+        gs.frame += 1
+        gs.nav_work = 0
+        update_hero_plan(gs)   // the go paused, still running: its plan runs on
+        testing.expectf(t, path^ == other, "frame %d: the other walk's path is as it was", f)
+    }
+    testing.expect(t, n.ready, "the plan ran through")
+    gs.frame += 1
+    hero_go_tick(gs, g)
+    testing.expect(t, path.goal == g.id && path.at == 0 && path.n > 0 && path.steps[0].from == HERO_LONG_FROM, "the go takes up its own plan's path")
+    testing.expect(t, path.n != other.n || path.steps[0] != other.steps[0], "not the other walk's")
 }
