@@ -325,6 +325,7 @@ hero_work_nearest :: proc(gs: ^Game_State, from: [2]i32, w: ^Hero_Work, want: pr
     for y in from.y - HERO_WORK_SEARCH_Y ..= from.y + HERO_WORK_SEARCH_Y {
         for x in from.x - HERO_WORK_SEARCH_X ..= from.x + HERO_WORK_SEARCH_X {
             d := abs(x - from.x) + abs(y - from.y) + (HERO_WORK_DANGER_COST if hero_in_danger(danger[:nd], {x, y}) else 0)  // a den's own wood, by a hunter: the open one first (card 163)
+            if want == hero_work_gives do d += hero_work_chance_cost(gs, {x, y})
             if d >= d_best || !in_bounds(int(x), int(y)) || !want(gs, w, {x, y}) do continue
             best, d_best, ok = {x, y}, d, true
         }
@@ -332,15 +333,33 @@ hero_work_nearest :: proc(gs: ^Game_State, from: [2]i32, w: ^Hero_Work, want: pr
     return
 }
 
-// A tile that gives the item, that a tool in the bag mines, and no rim.
+// A tile that gives the item, that a tool in the bag mines, and no rim.  Never
+// a block the player set down, and never a floor over a drop that hurts or
+// burns (card 195, playtest 188: a gather took the sky altar's foundation it
+// had just built, and the ledge floor it then fell through).
 @(private="file")
 hero_work_gives :: proc(gs: ^Game_State, w: ^Hero_Work, t: [2]i32) -> bool {
     tile := get_tile(&gs.world, int(t.x), int(t.y))
     if terrain_table[tile].drop_item != w.item || .Mineable not_in terrain_table[tile].flags || is_structure_tile[tile] do return false
     if hero_rim(&gs.world, t) do return false
+    if .Placed in gs.world.tile_flags[grid_idx(int(t.x), int(t.y))] do return false
+    if hero_open(&gs.world, t.x, t.y - 1) {
+        if _, hurts, burns := hero_dig_fall(&gs.world, t); hurts > 0 || burns do return false
+    }
     for s in w.skip[:w.n_skip] do if s == t do return false
     _, _, _, ok := hero_work_tool(gs, t)
     return ok
+}
+
+// A tile that gives its item only now and then (drop_pct, Cloud's 20) costs
+// the digs of the misses on the way to one: a sure tile a little further is
+// taken first (card 195, playtest 188: a gather of Cloud_Stone dug 37 Cloud
+// with the Cloud_Ore four tiles up).
+@(private="file")
+hero_work_chance_cost :: proc(gs: ^Game_State, t: [2]i32) -> i32 {
+    pct := i32(terrain_table[get_tile(&gs.world, int(t.x), int(t.y))].drop_pct)
+    if pct <= 0 || pct >= 100 do return 0
+    return HERO_WORK_DIG_COST * (100 / pct - 1)
 }
 
 // A pile of the item a body can walk over.
@@ -445,7 +464,7 @@ hero_work_stand :: proc(gs: ^Game_State, t: [2]i32, reach: Hero_Work_Reach, rng:
                 unsafe = drop
                 continue
             }
-            if wary && !hero_way_out_cheap(&gs.world, c) {
+            if wary && !hero_way_out_cheap(&gs.world, c) && !hero_pillar_out(gs, c) {
                 cornered = true  // no work where a hunter corners it
                 continue
             }
@@ -527,7 +546,8 @@ hero_work_mine :: proc(gs: ^Game_State, g: ^Agent_Goal) -> Hero_Mined {
         hero_work_fail(g, fmt.tprintf("no_item: no pickaxe for the %v at [%d,%d]", w.start_tile, t.x, t.y))
         return .Failed
     }
-    _, safe := hero_dig_safe(&gs.world, t, hero_feet_row(p), i32(p.pos.x), i32(p.pos.x + PLAYER_W - 0.001))
+    x0, x1 := hero_body_cols(p)
+    _, safe := hero_dig_safe(&gs.world, t, hero_feet_row(p), x0, x1)
     // Hovering in flight (card 164, goal 316) the body never comes down to a
     // walk: it works what it reaches from there, and says so for the rest.
     hovering := hero_hovering(gs)
