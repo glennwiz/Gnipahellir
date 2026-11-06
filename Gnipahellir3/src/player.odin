@@ -183,7 +183,7 @@ update_player :: proc(gs: ^Game_State) {
     }
     move_body(&gs.world, &p.pos, &p.vel, {PLAYER_W, PLAYER_H}, dt,
         gravity, max_fall, &p.grounded, is_player = true,
-        step_up = true)
+        step_up = true, slip = player_walk_speed(gs) * dt * 0.5 if inp.slip else 0)
 
     // Keep the sprite at its pre-step height on the collision frame, then let
     // the render offset ease to zero. Adding the actual rise preserves visual

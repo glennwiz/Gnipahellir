@@ -2305,9 +2305,11 @@ hero_steer :: proc(gs: ^Game_State, x: f32) -> i8 {
     return i8(steer_key(x - (gs.player.pos.x + PLAYER_W * 0.5), HERO_STEER_SLACK, player_walk_speed(gs) * gs.delta_time))
 }
 
-// The key toward tile t's middle, none once there, and which it is.
+// The key toward tile t's middle, none once there, and which it is.  A body
+// the key leaves on a lip slips into a shaft one wide (card 196).
 @(private="file")
 hero_go_toward :: proc(gs: ^Game_State, t: [2]i32) -> i8 {
+    gs.agent.cmd.slip = true
     gs.agent.cmd.move = hero_steer(gs, f32(t.x) + 0.5)
     return gs.agent.cmd.move
 }

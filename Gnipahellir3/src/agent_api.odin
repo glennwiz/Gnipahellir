@@ -1708,6 +1708,7 @@ agent_input :: proc(gs: ^Game_State) {
     inp.interact   = first && c.interact
     inp.fly_up     = c.jump
     inp.fly_down   = c.down
+    inp.slip       = c.slip
 
     // A click on a structure interacts rather than mines, and the command wand
     // never mines: the two rules update_input applies to the same button.

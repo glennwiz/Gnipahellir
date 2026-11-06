@@ -105,7 +105,7 @@ steer_key :: proc(dx, slack, stride: f32) -> int {
 // doors and structures wall them).
 move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
                   dt, gravity, max_fall: f32, grounded: ^bool, is_player := false,
-                  step_up := false) {
+                  step_up := false, slip := f32(0)) {
     // Step-up is only for a grounded, gravity-bound body (never in fly mode).
     // `grounded^` still holds last frame's value here — the Y sweep is what
     // rewrites it, and that runs after X.
@@ -174,6 +174,11 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
             sweep_d: for r in int(pos.y + size.y - BODY_MARGIN) + 1 ..= int(new_y + size.y - BODY_MARGIN) {
                 for c in left ..= right {
                     if blocks_body(w, c, r, is_player, false) {
+                        if slip_off_lip(w, pos, size, r, slip, is_player) {
+                            left  = int(pos.x + BODY_MARGIN)
+                            right = int(pos.x + size.x - BODY_MARGIN)
+                            continue sweep_d
+                        }
                         new_y = f32(r) - size.y - BODY_EPS
                         vel.y = 0
                         grounded^ = true
@@ -201,6 +206,28 @@ move_body :: proc(w: ^World_Grid, pos, vel: ^[2]f32, size: [2]f32,
     // in the sweeps never fires — the clamp is the real border.
     pos.x = clamp(pos.x, BODY_EPS, f32(GRID_W) - size.x - BODY_EPS)
     pos.y = clamp(pos.y, BODY_EPS, f32(GRID_H) - size.y - BODY_EPS)
+}
+
+// A body falling onto row r with no more than slip of its width on a lip and
+// the rest over an opening one tile wide moves off the lip into it (card 196):
+// false when it lands as it would have.  At a wider opening a lip is a stair
+// step or a ledge's edge, and the body stands on it.  A key moves the hero a whole stride, and steer_key
+// stops it up to half a stride off a point, wider with Speed gear than the
+// room a shaft one wide leaves; the hero's go slips that half stride.
+@(private = "file")
+slip_off_lip :: proc(w: ^World_Grid, pos: ^[2]f32, size: [2]f32, r: int, slip: f32, is_player: bool) -> bool {
+    left  := int(pos.x + BODY_MARGIN)
+    right := int(pos.x + size.x - BODY_MARGIN)
+    lip_l := blocks_body(w, left, r, is_player, false)
+    if lip_l == blocks_body(w, right, r, is_player, false) do return false
+    if lip_l {
+        if f32(right) - pos.x > slip || !blocks_body(w, right + 1, r, is_player, false) do return false
+        pos.x = f32(right) + BODY_EPS
+    } else {
+        if pos.x + size.x - f32(right) > slip || !blocks_body(w, left - 1, r, is_player, false) do return false
+        pos.x = f32(right) - size.x - BODY_EPS
+    }
+    return true
 }
 
 // True when the body overlaps any solid tile — wedged or entombed states

@@ -92,6 +92,7 @@ update_input :: proc(gs: ^Game_State) {
     }
 
     inp := &gs.input
+    inp.slip = false  // the agent's alone
 
     // Mouse in virtual-screen space (window -> virtual, letterbox-aware).  UI
     // hit-testing uses the UI-canvas version; gameplay uses the camera-inverse
