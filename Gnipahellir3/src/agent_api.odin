@@ -70,8 +70,9 @@ package game
 //
 // Replies carry "re":<cmd>.  Once a client has sent a goals command the game
 // also pushes event lines unasked, each with "event": goal_done, goal_failed
-// (reason), goal_paused and goal_resumed (id, reason), idle (threats), hurt (by,
-// hp), died (by), level_changed (level) and heard (text).
+// (reason), goal_paused and goal_resumed (id, reason), idle (threats), self
+// (doing, item, why: an action the hero took on its own), hurt (by, hp), died
+// (by), level_changed (level) and heard (text).
 //
 // An act drives the same seams a player does: Input_State for held input, the
 // Event_Queue for one-shot verbs.  It is never handed a shortcut into world
@@ -647,6 +648,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  floor_dig: never digs the floor under itself over a fall that kills or burns. rim_dig: never digs beside water or lava\n")
     fmt.sbprintf(w, "  fight_back: strikes back for %.1f s at the enemy that hurt it, with the sword in reach (else the pickaxe, %d damage to the sword's %d) or the wand at range\n", HERO_FIGHT_BACK_S, PICKAXE_DAMAGE, SWORD_DAMAGE)
     fmt.sbprintf(w, "    and is the hero's own fighting: off, it neither fights an enemy that comes at it nor shoots back as it runs; a fight goal still fights\n")
+    fmt.sbprintf(w, "  on_its_own: with the queue empty the hero picks its own next action (the self event says which); off, it stands on safe ground\n")
     fmt.sbprintf(w, "{{\"cmd\":\"act\",...}}  one act goal with those fields in place of the queue: it drops what is queued and answers with state when it is done.\n")
     fmt.sbprintf(w, "A refused request answers ok:false with error. State's notes hold the toasts, the only reason some refusals give.\n")
     fmt.sbprintf(w, "A view's rows are one character per tile: legend names them, solid stops you, floor holds you up. enemies lists only what is inside the view, x,y the top-left of a w x h body in tiles.\n")
@@ -669,9 +671,13 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "\nEVENTS\n")
     fmt.sbprintf(w, "Every reply carries \"re\", the cmd it answers. After your first goals command the game also sends lines unasked,\n")
     fmt.sbprintf(w, "each with \"event\" and the frame \"f\": goal_done (id), goal_failed (id, reason), hurt (by, hp), died (by), level_changed (level), heard (text),\n")
-    fmt.sbprintf(w, "goal_paused and goal_resumed (id, reason: fight, flee, ledge or retreat), idle (threats) once the queue runs dry.\n")
+    fmt.sbprintf(w, "goal_paused and goal_resumed (id, reason: fight, flee, ledge or retreat), idle (threats) once the queue runs dry,\n")
+    fmt.sbprintf(w, "self (doing, item, why) each time the hero picks an action of its own.\n")
     fmt.sbprintf(w, "The hero has its own sense of danger: it fights or flees an enemy that comes at it and goes back to the goal after,\n")
     fmt.sbprintf(w, "stops at a drop the fall would hurt from (the goal fails, reason says the drop), and keeps to safe ground when idle.\n")
+    fmt.sbprintf(w, "It is never idle for long: with the queue empty it acts on its own (gathers wood for the bench, mines the ritual's\n")
+    fmt.sbprintf(w, "materials or ore in reach, heads for the objective, looks around) and drops that the frame your next goal comes.\n")
+    fmt.sbprintf(w, "Queue goals ahead to keep it on your plan.\n")
 
     fmt.sbprintf(w, "\nTHE GAME BINARY\n")
     fmt.sbprintf(w, "One binary does everything: the run, its replay and its reports. Every run folder holds %s.\n", AGENT_RUN_LOGS)
@@ -831,9 +837,13 @@ agent_hero_notes :: proc(link: ^Agent_Link, gs: ^Game_State) {
     for i in max(link.seen_notes, q.note_count - HERO_NOTES_MAX) ..< q.note_count {
         n := q.notes[i % HERO_NOTES_MAX]
         name := hero_note_names[n.kind]
-        if n.kind == .Idle {
+        switch n.kind {
+        case .Idle:
             agent_push_event(link, gs, name, fmt.tprintf(`"threats":%d`, n.threats))
-        } else {
+        case .Self:
+            buf: [AGENT_TEXT_MAX]u8
+            agent_push_event(link, gs, name, fmt.tprintf(`"doing":"%s","item":"%v","why":%s`, hero_self_rows[n.self].name, n.item, agent_quote(hero_self_line(n.self, n.item, buf[:]))))
+        case .Paused, .Resumed:
             agent_push_event(link, gs, name, fmt.tprintf(`"id":%d,"reason":"%s"`, n.goal, hero_behaviours[n.why].name))
         }
     }

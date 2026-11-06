@@ -1886,7 +1886,7 @@ draw_ui :: proc(gs: ^Game_State) {
 	// important feedback must stay readable over inventory/storage windows,
 	// tooltips, dragged icons, books, menus, and every full-screen modal.
 	draw_notifications(gs)
-	if gs.agent.panel != nil do draw_agent_panel(gs.agent.panel)
+	if gs.agent.panel != nil do draw_agent_panel(gs, gs.agent.panel)
 	if gs.agent.panel != nil do draw_agent_chat(gs.agent.panel)
 }
 
@@ -1930,8 +1930,32 @@ draw_agent_chat :: proc(p: ^Agent_Panel) {
 	rl.DrawRectangle(AGENT_CHAT_X + 8 + rl.MeasureText(draft, 11), AGENT_CHAT_Y + 4, 2, 12, NORSE_GOLD_HOT)
 }
 
-// The agent's own account of what it is doing, for whoever is watching.
-draw_agent_panel :: proc(p: ^Agent_Panel) {
+AGENT_PANEL_NEXT :: 3  // queued goals the panel shows after the one playing
+
+// The panel's plan lines: the goal playing, then the next queued ones; with
+// none, what the hero chose on its own.  Pure.
+agent_panel_plan :: proc(gs: ^Game_State, plan: ^[1 + AGENT_PANEL_NEXT]Agent_Text) -> (n: int) {
+	if q := gs.agent.goals; q != nil {
+		for &g in q.slots[:q.n] {
+			if n == len(plan) do break
+			if g.status != .Queued && g.status != .Running do continue
+			agent_text_set(&plan[n], fmt.tprintf("%s #%d %s", "now:" if n == 0 else "next:", g.id, string(g.line[:g.len])))
+			n += 1
+		}
+	}
+	if n > 0 do return
+	buf: [AGENT_TEXT_MAX]u8
+	if say := hero_self_say(&gs.hero, buf[:]); say != "" {
+		agent_text_set(&plan[0], say)
+		n = 1
+	}
+	return
+}
+
+// The agent's own account of what it is doing, for whoever is watching: its
+// objective, the goal playing and the next AGENT_PANEL_NEXT queued (card 190),
+// or what the hero chose on its own with the queue empty.
+draw_agent_panel :: proc(gs: ^Game_State, p: ^Agent_Panel) {
 	PANEL_W :: i32(310)
 	PANEL_X :: i32(UI_W) - PANEL_W - 12
 	PANEL_Y :: i32(12)
@@ -1954,9 +1978,13 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 		}
 	}
 
-	if p.goal.len == 0 && p.step.len == 0 && p.say.len == 0 do return
+	plan: [1 + AGENT_PANEL_NEXT]Agent_Text
+	n_plan := agent_panel_plan(gs, &plan)
+
+	if p.goal.len == 0 && p.step.len == 0 && p.say.len == 0 && n_plan == 0 do return
 	lines := i32(2) + (i32(p.goal.len) / (WRAP / 2) + 1) + (i32(p.step.len) / (WRAP / 2) + 1) + i32(p.count) * 2
 	if p.say.len > 0 do lines += i32(p.say.len) / (WRAP / 2) + 1
+	for &t in plan[:n_plan] do lines += i32(t.len) / (WRAP / 2) + 1
 	rl.DrawRectangle(PANEL_X, PANEL_Y, PANEL_W, lines * LINE + 12, NORSE_PANEL)
 	rl.DrawRectangleLinesEx({f32(PANEL_X), f32(PANEL_Y), f32(PANEL_W), f32(lines * LINE + 12)}, 2, NORSE_BORDER)
 
@@ -1971,6 +1999,7 @@ draw_agent_panel :: proc(p: ^Agent_Panel) {
 	if p.say.len > 0 {
 		wrapped(&p.say, x, &y, AGENT_CHAT_SAY)
 	}
+	for &t in plan[:n_plan] do wrapped(&t, x, &y, NORSE_BORDER)
 	y += 4
 	for i in 0 ..< p.count {
 		past := &p.past[i]

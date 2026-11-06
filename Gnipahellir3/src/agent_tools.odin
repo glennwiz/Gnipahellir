@@ -1868,6 +1868,7 @@ tool_soak_run :: proc(seed: u32, off, side: f32, div: int, items: []Item) -> (de
     gs.ui.show_title = false
     gs.player.pos = SURFACE_HOME_POS
     link.connected, link.realtime = true, true
+    link.goals.reflexes_off = {.On_Its_Own}  // the chase starts from the hero standing at home, not off on an errand of its own (card 190)
     frames :: proc(link: ^Agent_Link, gs: ^Game_State, n: int) {
         for _ in 0 ..< n do if agent_drive(link, gs) {
             game_update(gs)

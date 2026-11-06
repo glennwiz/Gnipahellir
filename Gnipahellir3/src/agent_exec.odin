@@ -443,7 +443,7 @@ HERO_DANGER_R         :: i32(6)     // tiles round a known den's middle or a hun
 HERO_NAV_DANGER_COST  :: f32(6)     // per step a plan takes inside it
 HERO_WORK_DANGER_COST :: i32(40)    // tiles of walk a work target inside it is worth
 
-Hero_Behaviour :: enum u8 { None, Work_Goal, Fight, Flee, Avoid_Ledge, Idle, Retreat }
+Hero_Behaviour :: enum u8 { None, Work_Goal, Fight, Flee, Avoid_Ledge, Idle, Retreat, Self }
 
 // An enemy on screen.
 Hero_Threat :: struct {
@@ -486,7 +486,7 @@ Hero_Senses :: struct {
 
 Hero_Dangers :: [HERO_DENS_MAX + HERO_THREATS_MAX][2]i32
 
-Hero_Note_Kind :: enum u8 { Paused, Resumed, Idle }
+Hero_Note_Kind :: enum u8 { Paused, Resumed, Idle, Self }
 
 // What the hero tells a client, kept in the goal queue, which outlives a New
 // Game as the link does: agent_after_tick pushes each once.
@@ -495,6 +495,8 @@ Hero_Note :: struct {
     goal:    int,
     why:     Hero_Behaviour,
     threats: int,
+    self:    Hero_Self_Kind,  // a Self note: what the hero chose on its own
+    item:    Item,
 }
 
 Hero_Brain :: struct {
@@ -537,6 +539,12 @@ Hero_Brain :: struct {
     path:        Hero_Path,
     nav:         Hero_Nav,
     cursor:      [2]f32,  // the pointer a work goal works windows with, in UI pixels
+    self:        Agent_Goal,  // the action the hero took on its own with the queue empty, a goal it runs itself
+    self_kind:   Hero_Self_Kind,
+    self_item:   Item,
+    self_skip:   bit_set[Hero_Self_Kind],  // rows whose action failed since one last went through
+    self_wait:   f32,  // seconds before the hero looks for an action of its own again, after none was found
+    self_dir:    i8,   // the way the last wander went
 }
 
 Hero_Behaviour_Row :: struct {
@@ -553,6 +561,7 @@ hero_behaviours := #partial [Hero_Behaviour]Hero_Behaviour_Row{
     .Avoid_Ledge = {"ledge", hero_ledge_score, hero_ledge_run},
     .Idle        = {"idle",  hero_idle_score,  hero_idle_run},
     .Retreat     = {"retreat", hero_retreat_score, hero_retreat_run},
+    .Self        = {"self",  hero_self_score,  hero_self_run},
 }
 
 // One blow at the hero, by kind; a roamer's is its roamer_table bite.  -1: a
@@ -579,6 +588,8 @@ hero_enemy_damage :: proc(gs: ^Game_State, kind: Enemy_Kind) -> int {
 hero_think :: proc(gs: ^Game_State, q: ^Agent_Goals, g: ^Agent_Goal) {
     b := &gs.hero
     b.swing_t -= gs.delta_time
+    b.self_wait -= gs.delta_time
+    if g != nil do b.self.status, b.self_skip = .Empty, {}  // the client's goal comes first, the frame it comes
     hero_sense(gs, b)
     if hero_threat(b) == nil do b.flight_hp, b.turned_dir, b.drop_back = gs.player.hp, 0, false
     b.seen_ago += gs.delta_time
@@ -1299,6 +1310,182 @@ hero_note_names := [Hero_Note_Kind]string{
     .Paused  = "goal_paused",
     .Resumed = "goal_resumed",
     .Idle    = "idle",
+    .Self    = "self",
+}
+
+// ─── On its own: the hero between the client's goals (card 190) ─────────────
+//
+// Nothing queued, the hero still acts.  Each row of hero_self_rows, in order,
+// may propose one action toward the objective line and the hero's needs; the
+// first that starts is run as a goal the brain owns (b.self), through the same
+// goal kinds a client sends.  It ends on its own, or the frame a client goal
+// comes; a threat in mind, or one seen inside HERO_WARY_S, leaves it to idle.  A row whose action fails is
+// passed over until one goes through; with none left the hero stands for
+// HERO_SELF_RETRY_S and looks again.  The on_its_own reflex switches it off.  Each choice is a Self note: the self
+// event, and the panel's "on my own" line.  Crafting and placing on its own
+// wait on Glenn's word.
+
+Hero_Self_Kind :: enum u8 { None, Wood, Ritual, Ore, Explore, Wander }
+
+Hero_Self_Row :: struct {
+    name: string,  // the event's doing
+    say:  string,  // the panel's line, with the item
+    pick: proc(gs: ^Game_State, b: ^Hero_Brain) -> (item: Item, ok: bool),  // starts b.self
+}
+
+@(rodata)
+hero_self_rows := #partial [Hero_Self_Kind]Hero_Self_Row{
+    .Wood    = {"gather",  "gathering wood for the bench",  hero_self_wood},
+    .Ritual  = {"mine",    "mining %s for the sky ritual",  hero_self_ritual},
+    .Ore     = {"mine",    "mining %s in reach",            hero_self_ore},
+    .Explore = {"explore", "heading for the objective",     hero_self_explore},
+    .Wander  = {"explore", "looking around",                hero_self_wander},
+}
+
+// Feel: first guesses for Glenn to look at.
+HERO_SELF_SCORE        :: HERO_IDLE_SCORE + 2 * HERO_SWITCH_MARGIN  // takes over from idle past the margin; fight, flee and retreat beat it
+HERO_SELF_RETRY_S      :: f32(1)    // nothing to do on its own: look again after this
+HERO_SELF_ORE_TILES    :: i32(8)    // ore this near the feet is mined unasked
+HERO_SELF_NEAR_TILES   :: i32(3)    // this near the objective's mark, the hero heads on no further
+HERO_SELF_WANDER_TILES :: i32(12)   // a wander's leg, alternating sides
+
+@(private="file")
+hero_self_score :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) -> f32 {
+    if g != nil do return 0
+    if q := gs.agent.goals; q == nil || .On_Its_Own in q.reflexes_off do return 0  // the client switched it off: idle stands
+    if b.seen && b.seen_ago < HERO_WARY_S do return 0  // a threat in the senses now or lately (any in mind is one): idle gets clear of it, then keeps to safe ground till it is surely gone
+    return HERO_SELF_SCORE if b.self.status == .Running || b.self_wait < gs.delta_time * 0.5 else 0  // the wait's last tick counts: the look that found nothing and the wait stay inside HERO_SELF_RETRY_S
+}
+
+@(private="file")
+hero_self_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
+    if b.held == 0 do b.self.status = .Empty  // back from a fight or a flight: chosen afresh
+    if b.self.status != .Running && !hero_self_choose(gs, b) do return
+    s := &b.self
+    if agent_goal_kinds[s.kind].tick(gs, s) do s.status = .Done
+    hero_self_settle(b)
+}
+
+// An action that went through clears the rows passed over; one that failed is
+// passed over until one goes through.
+hero_self_settle :: proc(b: ^Hero_Brain) {
+    #partial switch b.self.status {
+    case .Done:   b.self_skip = {}
+    case .Failed: b.self_skip += {b.self_kind}
+    }
+}
+
+// Starts the first row's action that will start, and says so.  None: the hero
+// waits HERO_SELF_RETRY_S.
+hero_self_choose :: proc(gs: ^Game_State, b: ^Hero_Brain) -> bool {
+    for row, k in hero_self_rows {
+        if row.pick == nil || k in b.self_skip do continue
+        item, ok := row.pick(gs, b)
+        if !ok do continue  // nothing for it now: asked again next time
+        b.self_kind, b.self_item = k, item
+        if q := gs.agent.goals; q != nil do hero_note(q, {kind = .Self, self = k, item = item})
+        return true
+    }
+    b.self_skip = {}
+    b.self_wait = HERO_SELF_RETRY_S
+    b.self.status = .Empty
+    return false
+}
+
+// Starts b.self as the goal line asks, as a queued goal starts.
+@(private="file")
+hero_self_start :: proc(gs: ^Game_State, b: ^Hero_Brain, kind: Agent_Goal_Kind, line: string) -> bool {
+    s := &b.self
+    s^ = {kind = kind}
+    s.len = copy(s.line[:], line)
+    if !agent_goal_kinds[kind].start(gs, s) do return false
+    s.status = .Running
+    return true
+}
+
+// What the hero is doing on its own, for the panel; "" when it is not.
+hero_self_say :: proc(b: ^Hero_Brain, buf: []u8) -> string {
+    if b.current != .Self || b.self.status != .Running do return ""
+    n := len(fmt.bprintf(buf, "on my own: "))
+    return string(buf[:n + len(hero_self_line(b.self_kind, b.self_item, buf[n:]))])
+}
+
+// A row's line, with the item's name where the line names one.
+hero_self_line :: proc(k: Hero_Self_Kind, item: Item, buf: []u8) -> string {
+    say := hero_self_rows[k].say
+    for c in say do if c == '%' do return fmt.bprintf(buf, say, item_table[item].name)
+    return fmt.bprintf(buf, say)
+}
+
+// The objective line's "Chop a tree for wood": no bench anywhere, and not a
+// log or the planks for one in the bag.
+@(private="file")
+hero_self_wood :: proc(gs: ^Game_State, b: ^Hero_Brain) -> (Item, bool) {
+    inv := &gs.player.inventory
+    if bench_placed(gs) || inventory_count(inv, .Crafting_Bench) > 0 || inventory_count(inv, .Wood_Log) > 0 || inventory_count(inv, .Plank) >= 4 do return .None, false
+    return .Wood_Log, hero_self_start(gs, b, .Gather, `{"do":"gather","item":"Wood_Log","count":1}`)
+}
+
+// The tier to come's ritual: a material short in the bag that a tile in the
+// search window gives, one tile at a time.
+@(private="file")
+hero_self_ritual :: proc(gs: ^Game_State, b: ^Hero_Brain) -> (Item, bool) {
+    tier := hero_self_tier(gs)
+    if tier < 0 do return .None, false
+    for ing in structure_costs[tier] {
+        if inventory_count(&gs.player.inventory, ing.item) >= ing.count do continue
+        if hero_self_start(gs, b, .Mine, fmt.tprintf(`{{"do":"mine","item":"%v"}}`, ing.item)) do return ing.item, true
+    }
+    return .None, false
+}
+
+// The first tier whose sky structure is not raised; -1 none.
+@(private="file")
+hero_self_tier :: proc(gs: ^Game_State) -> int {
+    for t in 0 ..< MAX_PROGRESSION_TIERS do if !gs.progression.sky_structure_complete[t] do return t
+    return -1
+}
+
+// The nearest ore inside HERO_SELF_ORE_TILES of the feet.
+@(private="file")
+hero_self_ore :: proc(gs: ^Game_State, b: ^Hero_Brain) -> (Item, bool) {
+    feet := hero_feet(&gs.player)
+    best, d_best := Item.None, HERO_SELF_ORE_TILES + 1
+    for it in Item {
+        if _, ore := smelt_rule_for(it); !ore do continue
+        if !hero_self_start(gs, b, .Mine, fmt.tprintf(`{{"do":"mine","item":"%v"}}`, it)) do continue
+        if d := abs(b.self.work.at.x - feet.x) + abs(b.self.work.at.y - feet.y); d < d_best do best, d_best = it, d
+    }
+    if best == .None do return .None, false
+    return best, hero_self_start(gs, b, .Mine, fmt.tprintf(`{{"do":"mine","item":"%v"}}`, best))
+}
+
+// The objective line's compass, once the Sky Altar stands: the scroll's chest
+// on this level, else the gate toward its level.
+@(private="file")
+hero_self_explore :: proc(gs: ^Game_State, b: ^Hero_Brain) -> (Item, bool) {
+    tier := hero_self_tier(gs)
+    if tier < 0 || gs.progression.rune_scroll_found[tier] || gs.progression.sky_altar_pos == {0, 0} do return .None, false  // the line gives no compass before the altar
+    at: [2]i32
+    ok: bool
+    if gs.level_index == rune_scroll_levels[tier] {
+        chest, _ := rune_scroll_chest_tile(tier_rune_scrolls[tier])
+        at, ok = objective_find(gs, chest)
+    } else {
+        at, ok = objective_gate(gs, rune_scroll_levels[tier])
+    }
+    feet := hero_feet(&gs.player)
+    if !ok || abs(at.x - feet.x) + abs(at.y - feet.y) <= HERO_SELF_NEAR_TILES do return .None, false
+    return .None, hero_self_start(gs, b, .Go, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, at.x, at.y))
+}
+
+// Nothing else to do: a leg to one side, the next to the other.
+@(private="file")
+hero_self_wander :: proc(gs: ^Game_State, b: ^Hero_Brain) -> (Item, bool) {
+    b.self_dir = -1 if b.self_dir > 0 else 1
+    feet := hero_feet(&gs.player)
+    x := clamp(feet.x + i32(b.self_dir) * HERO_SELF_WANDER_TILES, 1, GRID_W - 2)
+    return .None, hero_self_start(gs, b, .Go, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, x, feet.y))
 }
 
 // ─── Going somewhere: the go and home goals ───────────────────────────────────
@@ -2031,7 +2218,7 @@ hero_go_toward :: proc(gs: ^Game_State, t: [2]i32) -> i8 {
 // of water, a potion under the reflex line, no dig of the floor when the fall
 // would kill, no dig of a pond or lava rim.
 
-Hero_Reflex :: enum u8 { Leave_Hazard, Potion, Floor_Dig, Rim_Dig, Fight_Back }
+Hero_Reflex :: enum u8 { Leave_Hazard, Potion, Floor_Dig, Rim_Dig, Fight_Back, On_Its_Own }
 
 @(rodata)
 hero_reflexes := [Hero_Reflex]struct {
@@ -2043,6 +2230,7 @@ hero_reflexes := [Hero_Reflex]struct {
     .Floor_Dig    = {"floor_dig",    hero_reflex_floor},
     .Rim_Dig      = {"rim_dig",      hero_reflex_rim},
     .Fight_Back   = {"fight_back",   hero_reflex_fight_back},
+    .On_Its_Own   = {"on_its_own",   nil},  // no tick of its own: the Self behaviour reads it (card 190)
 }
 
 @(private="file")
@@ -2050,7 +2238,7 @@ hero_reflexes_run :: proc(gs: ^Game_State, q: ^Agent_Goals) {
     b := &gs.hero
     b.potion_t = max(b.potion_t - gs.delta_time, 0)
     b.refused = false
-    for r, k in hero_reflexes do if k not_in q.reflexes_off do r.run(gs, b)
+    for r, k in hero_reflexes do if k not_in q.reflexes_off && r.run != nil do r.run(gs, b)
     b.swimming = false
 }
 
