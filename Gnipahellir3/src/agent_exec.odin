@@ -1560,6 +1560,10 @@ HERO_NAV_OPEN   :: 4 * HERO_NAV_NODES
 HERO_NAV_BUDGET :: 4000  // nodes one search expands at most
 HERO_NAV_LEVEL_BUDGET :: 5 * HERO_NAV_BUDGET  // the whole level's search for a way without a hurt, once the first search finds none (card 195)
 HERO_NAV_FRAME_WORK :: 50_000  // nav_work a go's plan spends in one frame at most; the rest runs on the next (card 202)
+NAV_FRAME_WORK      :: 100_000 // the frame's nav work: the hero's plan takes what the golems and enemies left of it; under the frame's p99 budget of 110k (tests_nav_budget.odin) by room for the last node's pushes and the swarm's own spikes (card 203)
+HERO_NAV_FRAME_MIN  :: 1_000   // and this at least, so a frame the swarm fills still moves the plan on (card 203)
+HERO_NAV_TICK_WORK  :: 4_000   // a plan's first slice, at the go's tick before the swarm searches: a short plan is walked that frame (card 203)
+HERO_NAV_STARVE_FRAMES :: 30  // a plan that has waited this many frames takes HERO_NAV_FRAME_WORK whatever the swarm used: the hero never stands still a second for it (cards 190, 203)
 HERO_PATH_MAX   :: 64    // a longer path keeps the start of it, and is planned again from its end
 HERO_GAP_MAX    :: 4     // a running jump lands this many columns over at most
 
@@ -1612,6 +1616,10 @@ Hero_Nav :: struct {
     plan_dig, plan_blocks: bool,
     plan_goal: int,  // the goal and the tile it is for
     plan_to:   [2]i32,
+    ready:     bool,  // run through, for the go to take up at its next tick (card 203)
+    waited:    int,   // frames update_hero_plan has run it
+    owned:     u64,   // the last frame its go ticked (card 203)
+    stepped:   u64,   // 1 + the frame update_hero_plan last ran it: once a frame
 }
 
 // hero_plan's searches, in order.  The whole level's runs only when the
@@ -1765,7 +1773,8 @@ hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := tru
 // A plan for hero_plan_step to run: its first search started.
 hero_plan_begin :: proc(gs: ^Game_State, from, to: [2]i32, dig, blocks: bool) {
     n := &gs.hero.nav
-    n.planning, n.pass, n.plan_dig, n.plan_blocks = true, 0, dig, blocks
+    n.planning, n.ready, n.pass, n.plan_dig, n.plan_blocks = true, false, 0, dig, blocks
+    n.waited, n.owned = 0, gs.frame
     hero_plan_pass_start(gs, from, to)
 }
 
@@ -1805,6 +1814,37 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     hero_search_start(gs, from, to, dig, hurt_ok, blocks_ok, level, budget)
     _, reached, whole = hero_search_run(gs, out, max(int))
     return
+}
+
+// The go's plan in hand, run after the golems' and enemies' searches on what
+// they left of NAV_FRAME_WORK, HERO_NAV_FRAME_MIN at least and
+// HERO_NAV_FRAME_WORK at most, and the most once it has waited
+// HERO_NAV_STARVE_FRAMES; done, its go takes the path up at its next tick.
+// A plan no go owns, none ticking it this frame and no running goal of the
+// queue its own (done, failed, cancelled, the link dropped), is dropped; a
+// go paused for a fight or a flight keeps its plan and its wait (card 203).
+update_hero_plan :: proc(gs: ^Game_State) {
+    n := &gs.hero.nav
+    if !n.planning do return
+    if n.owned != gs.frame && !hero_plan_goal_running(gs) {
+        n.planning = false
+        return
+    }
+    assert(n.stepped != gs.frame + 1, "update_hero_plan: a plan runs once a frame")
+    n.stepped = gs.frame + 1
+    n.waited += 1
+    work := clamp(NAV_FRAME_WORK - gs.nav_work, HERO_NAV_FRAME_MIN, HERO_NAV_FRAME_WORK)
+    if n.waited > HERO_NAV_STARVE_FRAMES do work = HERO_NAV_FRAME_WORK
+    if done, _ := hero_plan_step(gs, &gs.hero.path, work); done do n.ready = true
+}
+
+@(private="file")
+hero_plan_goal_running :: proc(gs: ^Game_State) -> bool {
+    n := &gs.hero.nav
+    q := gs.agent.goals
+    if q == nil do return false
+    for &g in q.slots[:q.n] do if g.id == n.plan_goal && g.status == .Running do return true
+    return false
 }
 
 // One search, set up in gs.hero.nav for hero_search_run.
@@ -1926,11 +1966,15 @@ hero_search_run :: proc(gs: ^Game_State, out: ^Hero_Path, work: int) -> (ended, 
         }
     }
 
-    // The chain back from best, kept from the start end.
+    // The chain back from best, kept from the start end.  Each tile on it
+    // was expanded by this search; one longer is a best left by another.
     best := n.best
     out.n, out.at = 0, 0
     length := 0
-    for j := best; j != s; j = int(n.parent[j]) do length += 1
+    for j := best; j != s; j = int(n.parent[j]) {
+        length += 1
+        assert(length < n.expanded, "hero_search_run: the chain back runs past the tiles expanded")
+    }
     pos := length - 1
     for j := best; j != s; j = int(n.parent[j]) {
         if pos < HERO_PATH_MAX {
@@ -2252,8 +2296,11 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         return false
     }
     n := &b.nav
-    planning := n.planning && n.plan_goal == g.id && n.plan_to == g.to  // a plan for this walk still running (card 202)
-    stale := path.goal != g.id || path.at >= path.n || planning
+    inhand := (n.planning || n.ready) && n.plan_goal == g.id && n.plan_to == g.to  // a plan for this walk, running or run (cards 202, 203)
+    moved := inhand && n.from != feet  // begun where the hero no longer stands: knocked or slid since (card 203)
+    if moved do n.planning, n.ready, inhand = false, false, false
+    if inhand do n.owned = gs.frame  // its go is still here
+    stale := path.goal != g.id || path.at >= path.n || inhand || moved
     if g.stuck_t >= HERO_GO_REPLAN_S && !g.replanned {
         stale, g.replanned = true, true
     }
@@ -2272,11 +2319,15 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     }
     if stale {
         if !p.grounded && !wet do return false  // plan from the ground, or the water
-        if !planning {
+        if !inhand {
             hero_plan_begin(gs, feet, g.to, !g.no_dig, !g.no_blocks)
             n.plan_goal, n.plan_to = g.id, g.to
+            // A short plan is done at once; a long one runs on after the
+            // swarm's searches, in update_hero_plan (card 203).
+            if done, _ := hero_plan_step(gs, path, HERO_NAV_TICK_WORK); done do n.ready = true
         }
-        if done, _ := hero_plan_step(gs, path, HERO_NAV_FRAME_WORK); !done do return false  // the hero waits for the rest of it
+        if !n.ready do return false  // the hero waits for the rest of it
+        n.ready = false
         path.goal = g.id
         if path.n == 0 {
             g.status = .Failed
