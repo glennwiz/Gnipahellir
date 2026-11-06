@@ -569,6 +569,7 @@ agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, sock: net.TCP_Socket, 
     link.idle_step    = 0
     link.idle_ticks   = 0
     if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
+    agent_record_mark(link, gs, "connect")  // --replay hands the seat over on this frame (card 192)
 }
 
 @(private="file")

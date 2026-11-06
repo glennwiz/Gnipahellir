@@ -427,12 +427,19 @@ fixture_site :: proc(gs: ^Game_State, x0, top: int) -> (x, g: int) {
 // A recorded run fed back by frame.  Every row of acts.jsonl carries the frame
 // it came on, and a frame counts ticks, so feeding each goal, clear and cancel
 // on its frame plays the run again whether it ran in real time, waited, or idled.
-// A disconnect handed the game to the keyboard, so the replay stops there.
+// A new life starts the game's frames again at 0, so a row whose frame is below
+// the last one's belongs to the next life and waits for the replay's own clock
+// to start again.  A disconnect handed the game to the keyboard: the replay
+// ticks on with no keys held until the next connection's rows (card 192).
 Tool_Replay :: struct {
     rows:     string,  // the run's acts.jsonl
     at:       int,     // the next row
     got:      string,  // where the replay records, to check itself against rows
-    cut:      bool,    // a disconnect ended what can be replayed
+    cut:      bool,    // between a disconnect and the next connection
+    row_f:    int,     // the frame of the last row fed
+    row_life: int,     // its life, from 0: the times the rows' frames went back
+    life:     int,     // the replay's own life, from 0: the times gs.frame went back
+    seen:     u64,     // gs.frame on the last replayed frame
     done:     bool,
     diverged: bool,
     checked:  int,     // landings the replay compared with the run's
@@ -535,9 +542,16 @@ tool_replay_begin :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State,
 // holds the window.
 tool_replay_frame :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     if rep.done do return false
+    if gs.frame < rep.seen do rep.life += 1  // a new life began on the last tick
+    rep.seen = gs.frame
     if !tool_replay_feed(rep, link, gs) && (rep.cut || !agent_goals_busy(&link.goals)) {
         tool_replay_finish(rep, link)
         return false
+    }
+    if rep.cut {
+        gs.agent = {}  // the keyboard's, as agent_pump leaves it with no client
+        gs.delta_time = AGENT_STEP
+        return true
     }
     return agent_drive(link, gs)
 }
@@ -546,15 +560,17 @@ tool_replay_frame :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State)
 tool_replay_feed :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State) -> (more: bool) {
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     context.allocator = context.temp_allocator
-    for rep.at < len(rep.rows) && !rep.cut {
+    for rep.at < len(rep.rows) {
         end := strings.index_byte(rep.rows[rep.at:], '\n')
         end = len(rep.rows) if end < 0 else rep.at + end
         value, err := json.parse_string(rep.rows[rep.at:end], parse_integers = true)
         rec, is_obj := value.(json.Object)
         f, _ := agent_int(rec, "f")
-        if err == .None && is_obj && u64(f) > gs.frame do return true
+        life := rep.row_life + (1 if f < rep.row_f else 0)
+        if err == .None && is_obj && (life > rep.life || life == rep.life && u64(f) > gs.frame) do return true
         rep.at = end + 1
         if err != .None || !is_obj do continue
+        rep.row_f, rep.row_life = f, life
         tool_replay_row(rep, link, gs, rec)
     }
     return false
@@ -562,6 +578,17 @@ tool_replay_feed :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State) 
 
 @(private="file")
 tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, rec: json.Object) {
+    mark, _ := rec["mark"].(json.String)
+    switch {
+    case mark == "disconnect":  // as agent_drop_client leaves the link
+        rep.cut = true
+        link.connected, link.realtime = false, false
+        link.goals = {}
+    case rep.cut:  // as agent_promote takes the seat: on its connect mark, or in a run from before the marks on its first row
+        rep.cut = false
+        link.connected, link.realtime = true, true
+        link.panel = {}  // the disconnect already emptied the queue
+    }
     switch {
     case "goal" in rec:
         name, _ := rec["kind"].(json.String)
@@ -597,8 +624,6 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
         at, _, _, marked := agent_tile(rec, "home")
         level, _ := agent_int(rec, "level")
         agent_home_set(link, gs, at, level, marked)
-    case "mark" in rec:
-        if mark, _ := rec["mark"].(json.String); mark == "disconnect" do rep.cut = true
     }
 }
 
@@ -616,7 +641,6 @@ tool_replay_finish :: proc(rep: ^Tool_Replay, link: ^Agent_Link) {
     rep.diverged = !ok
     rep.checked  = n
     fmt.println(tool_replay_verdict(n, ok, note))
-    if rep.cut && rep.at < len(rep.rows) do fmt.println("stopped at a disconnect: the keyboard had the game after it, so the rest cannot be replayed")
     fmt.println("close the game window when done watching")
 }
 
@@ -851,9 +875,12 @@ tool_summary :: proc(b: ^strings.Builder, run: string) -> bool {
     tool_tally_line(b, &deaths)
 
     strings.write_string(b, "\n\n== milestones ==\n")
+    // Each by its life: a life's frames start at 0, so unlabelled they read out of order.
+    life = 1
     for line in log {
+        if strings.contains(line, "Player dies") do life += 1
         if strings.contains(line, " pos ") || strings.contains(line, " evt ") do continue
-        if tool_milestone(line) do fmt.sbprintln(b, line[:min(len(line), 100)])
+        if tool_milestone(line) do fmt.sbprintfln(b, "L%d %s", life, line[:min(len(line), 100)])
     }
 
     strings.write_string(b, "\n== bug flags ==\n")

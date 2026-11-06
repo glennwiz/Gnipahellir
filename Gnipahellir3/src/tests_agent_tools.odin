@@ -205,6 +205,18 @@ summary_names_two_lives_and_an_empty_start :: proc(t: ^testing.T) {
     }
 }
 
+// A life's frames start at 0: each milestone names its life, so a later life's
+// earlier frame does not read as out of order (playtest 188).
+@(test)
+summary_names_each_milestone_by_its_life :: proc(t: ^testing.T) {
+    log := "[f0006231] Player crafts Fire_Wand\n[f0007000] Player dies at (1,2)\n[f0000000] New game - world seed 5\n" +
+           "[f0004688] Player crafts Smelter\n[f0005232] Player enters level 1\n"
+    text := tools_test_summary("milestone_lives", log)
+    for want in ([]string{"L1 [f0006231] Player crafts Fire_Wand\nL2 [f0004688] Player crafts Smelter\nL2 [f0005232] Player enters level 1\n"}) {
+        testing.expectf(t, strings.contains(text, want), "want %q in %s", want, text)
+    }
+}
+
 @(test)
 summary_of_a_run_with_no_log_says_so :: proc(t: ^testing.T) {
     text, code := tools_test_say("--summary", "tools_test_no_such_run")
@@ -485,8 +497,9 @@ tools_test_play :: proc(link: ^Agent_Link, gs: ^Game_State, frames: int, wait_of
 
 // Replays rows into a fresh world until the replay is done.
 @(private="file")
-tools_test_replay :: proc(rows, got: string) -> (rep: Tool_Replay, gs: ^Game_State, link: ^Agent_Link) {
+tools_test_replay :: proc(rows, got: string, setup: proc(gs: ^Game_State) = nil) -> (rep: Tool_Replay, gs: ^Game_State, link: ^Agent_Link) {
     gs, link = tools_test_world()
+    if setup != nil do setup(gs)
     tools_test_record(link, got)
     tool_replay_begin(&rep, link, gs, rows, got)
     for _ in 0 ..< 5000 {
@@ -683,21 +696,184 @@ replay_of_a_changed_world_diverges :: proc(t: ^testing.T) {
     testing.expect(t, rep.done && rep.diverged)
 }
 
+// After a disconnect the keyboard had the game, nothing held; the next
+// connection's goals replay on, numbered from 1 again as agent_promote numbers
+// them (card 192: playtest 188's replay stopped at L2 f10232).
 @(test)
-replay_stops_at_a_disconnect :: proc(t: ^testing.T) {
+replay_plays_on_past_a_disconnect :: proc(t: ^testing.T) {
     got_path := test_scratch_path("tools_test_replay_got3.jsonl")
     defer delete(got_path)
     defer os.remove(got_path)
     rows := `{"f":3,"goal":{"do":"act","move":"right","frames":100},"kind":"act","id":1,"via":"Goal","step":0}` + "\n" +
             `{"f":3,"goal":{"do":"fly"},"kind":"fly","id":9,"via":"Goal","step":0}` + "\n" +
+            `{"f":10,"objective":{"goal":"walk about","step":"right"}}` + "\n" +
             `{"f":40,"mark":"disconnect"}` + "\n" +
-            `{"f":41,"goal":{"do":"act","move":"left","frames":10},"kind":"act","id":2,"via":"Goal","step":0}` + "\n"
+            `{"f":41,"goal":{"do":"act","move":"left","frames":10},"kind":"act","id":1,"via":"Goal","step":0}` + "\n"
     rep, gs, link := tools_test_replay(rows, got_path)
     defer free(gs)
     defer free(link)
-    testing.expect(t, rep.done && rep.cut && !rep.diverged)
-    testing.expect_value(t, gs.frame, 40)
-    testing.expect_value(t, link.goals.n, 1)
+    testing.expect(t, rep.done && !rep.cut && !rep.diverged)
+    testing.expect_value(t, link.panel.goal.len, 0)  // a new connection's panel starts empty
+    testing.expect(t, gs.frame >= 51, "the next connection's goal ran its 10 frames")
+    testing.expect_value(t, link.goals.n, 1)  // the first connection's goal went with it
+    testing.expect_value(t, link.goals.slots[0].id, 1)
+    testing.expect_value(t, link.goals.slots[0].status, Agent_Goal_Status.Done)
+}
+
+// Between a disconnect and the next connection's mark the keyboard drives; from
+// the mark the seat is the agent's, before any goal comes.
+@(test)
+replay_hands_the_seat_back_on_the_connect_mark :: proc(t: ^testing.T) {
+    got_path := test_scratch_path("tools_test_replay_got5.jsonl")
+    defer delete(got_path)
+    defer os.remove(got_path)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    tools_test_record(link, got_path)
+    rows := `{"f":3,"goal":{"do":"act","move":"right","frames":100},"kind":"act","id":1,"via":"Goal","step":0}` + "\n" +
+            `{"f":40,"mark":"disconnect"}` + "\n" + `{"f":60,"mark":"connect"}` + "\n" +
+            `{"f":90,"goal":{"do":"act","move":"left","frames":10},"kind":"act","id":1,"via":"Goal","step":0}` + "\n"
+    rep: Tool_Replay
+    tool_replay_begin(&rep, link, gs, rows, got_path)
+    driving, connected: [100]bool
+    step: [100]f32
+    calls: [100]int
+    for _ in 0 ..< 200 {
+        if rep.done do break
+        f := gs.frame
+        gs.delta_time = 0.5  // main's frame time, which a replay's step never takes
+        tick := tool_replay_frame(&rep, link, gs)
+        if f < len(driving) do driving[f], connected[f], step[f] = gs.agent.driving, link.connected, gs.delta_time
+        if f < len(calls) do calls[f] += 1
+        if tick {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expect(t, rep.done && !rep.diverged)
+    testing.expect(t, driving[39] && !driving[40] && !driving[59], "the keyboard's from the disconnect")
+    testing.expect(t, connected[39] && !connected[40] && !connected[59], "no client from the disconnect")
+    testing.expect(t, driving[60] && driving[89] && connected[60], "the agent's from the connect mark, before its goal")
+    testing.expect(t, step[50] == AGENT_STEP && step[70] == AGENT_STEP, "the fixed step, without a client or with")
+    for n, f in calls do testing.expectf(t, n == 1, "frame %d ticks on its first call, as the run did in real time: %d calls", f, n)
+}
+
+// A recorded run over a real socket: a client drops mid-act, the keyboard has
+// the game a while, a second client connects and plays a goal.  The run marks
+// each connection, and the replay lands the second client's goal where it did.
+@(test)
+replay_of_a_run_with_a_reconnect_lands_the_same :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_reconnect")
+    defer tools_test_done(run)
+    rec := fmt.aprintf("%s/rec.jsonl", run)
+    defer delete(rec)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, AGENT_PENDING_MAX)
+    testing.expect_value(t, err, nil)
+    at, _ := net.bound_endpoint(sock)
+    net.set_blocking(sock, false)
+    link.listener, link.listening = sock, true
+    defer agent_close(link, gs)
+    tools_test_record(link, rec)
+    frame :: proc(link: ^Agent_Link, gs: ^Game_State) {  // main's frame
+        gs.delta_time = AGENT_STEP
+        if agent_pump(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    first, _ := net.dial_tcp(at)
+    net.send_tcp(first, transmute([]u8)string(`{"cmd":"goals","add":[{"do":"act","move":"right","frames":200}]}` + "\n"))
+    for _ in 0 ..< 60 do frame(link, gs)
+    testing.expect(t, link.connected && agent_goals_busy(&link.goals), "the first client's act runs")
+    net.close(first)
+    for _ in 0 ..< 500 {
+        frame(link, gs)
+        if !link.connected do break
+    }
+    testing.expect(t, !link.connected, "the drop frees the seat")
+    for _ in 0 ..< 40 do frame(link, gs)
+    second, _ := net.dial_tcp(at)
+    defer net.close(second)
+    net.send_tcp(second, transmute([]u8)string(`{"cmd":"goals","add":[{"do":"act","move":"left","frames":30}]}` + "\n"))
+    for _ in 0 ..< 1000 {
+        frame(link, gs)
+        if link.connected && link.goals.n == 1 && link.goals.slots[0].status == .Done do break
+    }
+    os.close(link.acts_file)
+    link.recording = false
+    data, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(data)
+    rows := string(data)
+    testing.expect_value(t, strings.count(rows, `"mark":"connect"`), 2)
+    testing.expect_value(t, strings.count(rows, `"mark":"disconnect"`), 1)
+    testing.expect_value(t, strings.count(rows, `"done":1,`), 1)  // the second client's act; the first's never ended
+
+    rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run))
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged, "the second client's act lands where it did")
+    testing.expect_value(t, rep.checked, 1)
+    testing.expect_value(t, gs2.player.pos, gs.player.pos)
+}
+
+// The hero high over the surface on one hp: the fall ends the first life.
+@(private="file")
+tools_test_doomed :: proc(gs: ^Game_State) {
+    gs.player.hp = 1
+    gs.player.pos.y -= 20
+    gs.player.fall_peak_y = gs.player.pos.y  // a teleport arms no fall of itself
+}
+
+// Each life starts the frames again at 0.  A row of the next life waits for
+// the replay's own new life, not the frame the last one ended on (card 192:
+// playtest 188's replay fed life 2's gather on life 1's death screen and it
+// ended 447 frames early).
+@(test)
+replay_plays_each_life_on_its_own_frames :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_lives")
+    defer tools_test_done(run)
+    rec := fmt.aprintf("%s/rec.jsonl", run)
+    defer delete(rec)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    tools_test_doomed(gs)
+    tools_test_record(link, rec)
+    link.connected, link.realtime = true, true
+    lives := 1
+    for _ in 0 ..< 3000 {
+        switch {
+        case lives == 1 && gs.frame == 5:   agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":20}]}`)
+        case lives == 1 && gs.frame == 400: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","dismiss":true}]}`)
+        case lives == 2 && gs.frame == 100: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":30}]}`)
+        }
+        before := gs.frame
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+        if gs.frame < before do lives += 1
+        if lives == 2 && gs.frame > 100 && !agent_goals_busy(&link.goals) do break
+    }
+    os.close(link.acts_file)
+    testing.expect_value(t, lives, 2)
+    data, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(data)
+    rows := string(data)
+    testing.expect(t, strings.contains(rows, `{"f":100,"goal":`) && strings.contains(rows, `"done":3,`), rows)
+
+    rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run), tools_test_doomed)
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged, "the second life's goal lands where it did")
+    testing.expect_value(t, rep.life, 1)
+    testing.expect_value(t, rep.checked, 3)
+    testing.expect_value(t, gs2.frame, gs.frame)
+    testing.expect_value(t, gs2.player.pos, gs.player.pos)
 }
 
 // A replay ticks through a gap longer than the idle wait, as the run did in
