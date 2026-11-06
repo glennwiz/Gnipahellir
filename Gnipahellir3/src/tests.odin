@@ -13672,6 +13672,149 @@ an_unreadable_stats_file_is_moved_aside_not_lost :: proc(t: ^testing.T) {
 }
 
 
+// Card 193 (playtest 188): the saga page said 0:14:13 at a death 850 s into
+// the second life.  Its clock is the whole saga's, like the counts beside it:
+// every life before this one, banked at its death or win, and this one while
+// it runs, counted once on the death screen.
+@(test)
+the_saga_clock_counts_every_life :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    clock :: proc(gs: ^Game_State) -> string {
+        bufs: [4][64]u8
+        return strings.clone(saga_lines(gs, &bufs)[0], context.temp_allocator)
+    }
+    grave_die(gs, "lava", 100)
+    testing.expect_value(t, saga_seconds(gs), 100)
+    testing.expect_value(t, clock(gs), "This saga lasted 0:01:40")
+    start_new_game(gs)
+    gs.elapsed_time = 50
+    testing.expect_value(t, saga_seconds(gs), 150)
+    testing.expect_value(t, clock(gs), "This saga lasted 0:02:30")
+    grave_die(gs, "lava", 3600)
+    testing.expect_value(t, clock(gs), "This saga lasted 1:01:40")
+    start_new_game(gs)
+    gs.elapsed_time = 20
+    eq_push(&gs.events, Event{type = .Game_Won})
+    process_events(gs)
+    testing.expect_value(t, saga_seconds(gs), 3720)
+    gs.elapsed_time = 80  // the world goes on after the win; the saga does not
+    testing.expect_value(t, saga_seconds(gs), 3720)
+    grave_die(gs, "lava", 80)  // nor does a death after it: the win banked the life
+    testing.expect_value(t, saga_seconds(gs), 3720)
+}
+
+// Card 193 rework: two deadly hits in one drain.  The second found the hero at
+// 0 hp but not yet dead, pushed a second death, and the life was banked (and
+// counted in runs_played) twice.  One death, one life.
+@(test)
+two_deadly_hits_in_one_frame_are_one_death :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    gs.player.hp = 1
+    gs.elapsed_time = 100
+    runs := gs.stats.runs_played
+    for _ in 0 ..< 2 do eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID, payload = {int_val = 5}})
+    for _ in 0 ..< 4 do process_events(gs)
+    testing.expect(t, gs.player.dead, "the hero died")
+    testing.expect_value(t, gs.stats.runs_played, runs + 1)
+    testing.expect_value(t, saga_seconds(gs), 100)
+}
+
+// The banked clock is in the stats file the moment the hero dies, so killing
+// the process on the death screen keeps it; and the death screen's own line
+// reads the saga's clock, not this life's.
+@(test)
+a_death_writes_the_saga_clock_and_the_death_screen_reads_it :: proc(t: ^testing.T) {
+    PATH := test_scratch_path("test_stats_saga_death.dat")
+    defer delete(PATH)
+    defer os.remove(PATH)
+    gs := test_state()
+    defer free(gs)
+    gs.stats.saga_seconds = 400
+    gs.stats_path = PATH
+    grave_die(gs, "lava", 100)
+    gs.stats_path = ""
+    back: Persistent_Stats
+    testing.expect(t, load_stats(&back, PATH), "the death wrote the stats")
+    testing.expect_value(t, back.saga_seconds, 500)
+
+    gs.elapsed_time = 130  // the death screen's clock runs on; the line does not
+    buf: [96]u8
+    testing.expect_value(t, death_saga_line(gs, buf[:]), fmt.tprintf("Your saga lasted 8:20      Kills %d      Runs %d", gs.stats.total_kills, gs.stats.runs_played))
+}
+
+// A debug rewind undoes the death, so the saga gives back the life it banked
+// there, and keeps the time of the life rewound into.  A living hero's rewind
+// gives back nothing, though the last hero's grave still waits for a world.
+@(test)
+a_rewind_past_a_death_takes_the_banked_life_back :: proc(t: ^testing.T) {
+    SNAP := test_scratch_path("test_saga_rewind.dat")
+    defer delete(SNAP)
+    defer os.remove(SNAP)
+    gs := test_state()
+    defer free(gs)
+    gs.stats.saga_seconds = 400
+    gs.elapsed_time = 50
+    testing.expect(t, save_game_to(gs, SNAP), "snapshot written")
+    grave_die(gs, "lava", 100)
+    testing.expect_value(t, saga_seconds(gs), 500)
+    gs.elapsed_time = 130
+    testing.expect(t, snapshot_restore_from(gs, SNAP), "rewound")
+    testing.expect_value(t, gs.stats.saga_seconds, 400)
+    testing.expect_value(t, saga_seconds(gs), 450)
+
+    gs.stats.grave = {active = true, seconds = 70}
+    testing.expect(t, snapshot_restore_from(gs, SNAP), "rewound alive")
+    testing.expect_value(t, gs.stats.saga_seconds, 400)
+
+    // A win then a death: one life, banked at the win, given back once.
+    gs.elapsed_time = 90
+    eq_push(&gs.events, Event{type = .Game_Won})
+    process_events(gs)
+    grave_die(gs, "lava", 120)
+    testing.expect_value(t, gs.stats.saga_seconds, 490)
+    testing.expect(t, snapshot_restore_from(gs, SNAP), "rewound past the win and the death")
+    testing.expect_value(t, gs.stats.saga_seconds, 400)
+    gs.elapsed_time = 60
+    eq_push(&gs.events, Event{type = .Game_Won})
+    process_events(gs)
+    testing.expect(t, snapshot_restore_from(gs, SNAP), "rewound past the win")
+    testing.expect_value(t, gs.stats.saga_seconds, 400)
+}
+
+// The banked clock lives in the stats file, the one death does not burn; a v4
+// file, from before it, loads with an empty clock and the rest kept.
+@(test)
+the_saga_clock_survives_the_stats_file :: proc(t: ^testing.T) {
+    PATH := test_scratch_path("test_stats_saga.dat")
+    defer delete(PATH)
+    defer os.remove(PATH)
+    stats := Persistent_Stats{total_kills = 7, saga_seconds = 1234.5}
+    testing.expect(t, save_stats_to(&stats, PATH), "wrote")
+    back: Persistent_Stats
+    testing.expect(t, load_stats(&back, PATH), "v5 loads")
+    testing.expect_value(t, back.saga_seconds, 1234.5)
+
+    old := Persistent_Stats{version = 4, total_kills = 12, last_seed = 9, has_last_seed = true}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&old)[:STATS_V4_SIZE]) == nil, "wrote v4")
+    v4: Persistent_Stats
+    testing.expect(t, load_stats(&v4, PATH), "v4 loads")
+    testing.expect_value(t, v4.version, STATS_VERSION)
+    testing.expect_value(t, v4.total_kills, 12)
+    testing.expect_value(t, v4.last_seed, 9)
+    testing.expect_value(t, v4.saga_seconds, 0)
+
+    // A whole v5 file stamped v4 is no file this build wrote: moved aside.
+    ASIDE := test_scratch_path("test_stats_saga.dat.unread")
+    defer delete(ASIDE)
+    defer os.remove(ASIDE)
+    stamped := Persistent_Stats{version = 4, total_kills = 3}
+    testing.expect(t, os.write_entire_file(PATH, mem.ptr_to_bytes(&stamped)) == nil, "wrote")
+    refused: Persistent_Stats
+    testing.expect(t, !load_stats(&refused, PATH), "a v5 layout stamped v4 is refused")
+}
+
 // ─── The risen hero (board card 49) ───────────────────────────────────────────
 
 @(private="file")
@@ -18483,6 +18626,48 @@ a_risen_hero_guarding_its_post_does_not_claw :: proc(t: ^testing.T) {
             testing.expectf(t, at_post > 60, "the hero stands at its post: %d frames", at_post)
             testing.expectf(t, claws == 0, "guarding, it clawed %d times", claws)
         }
+    }
+}
+
+// Card 193 (playtest 188): the risen hero stood 350 s at its post reading
+// goal=Hunt.  Its goal says what it does: Guard while its prey is outside the
+// guard ring, Hunt once it comes in, and the log says each time it changes.
+@(test)
+a_risen_hero_at_its_post_reads_guard_until_its_prey_comes :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    risen_setup(gs)
+    start_new_game(gs)
+    if !gs.risen.walking do risen_hero_rise(gs)
+    testing.expect(t, gs.risen.walking, "it walks")
+    i := gs.risen.slot
+    for k in 0 ..< MAX_ENEMIES do if k != i && gs.enemies.active[k] do despawn_enemy(gs, k)
+    put := proc(gs: ^Game_State, at: [2]i32) {
+        gs.player.pos = {f32(at.x) + 0.5 - PLAYER_W * 0.5, f32(at.y) + 0.5 - PLAYER_H * 0.5}
+    }
+    gs.delta_time = 1.0 / 60
+    run :: proc(gs: ^Game_State) {
+        for _ in 0 ..< 60 {
+            eq_clear(&gs.events)
+            update_enemies(gs)
+        }
+    }
+    put(gs, gs.grave.tile + {RISEN_GUARD_RANGE + 18, 0})
+    run(gs)
+    testing.expect_value(t, gs.enemies.data[i].builder.goal, Builder_Goal.Guard)
+    put(gs, risen_hero_post(gs) + {1, 0})
+    run(gs)
+    testing.expect_value(t, gs.enemies.data[i].builder.goal, Builder_Goal.Hunt)
+    put(gs, gs.grave.tile + {RISEN_GUARD_RANGE + 18, 0})
+    run(gs)
+    testing.expect_value(t, gs.enemies.data[i].builder.goal, Builder_Goal.Guard)
+    when GAME_DEBUG {
+        logged := string(gs.debug_log.buf[:gs.debug_log.pos])
+        post := risen_hero_post(gs)
+        holds := fmt.tprintf("Risen hero#%d holds its post at (%d,%d): its prey is outside the guard ring", i, post.x, post.y)
+        leaves := fmt.tprintf("Risen hero#%d leaves its post - hunting", i)
+        testing.expectf(t, strings.count(logged, holds) == 2, "twice %q in the log", holds)
+        testing.expectf(t, strings.count(logged, leaves) == 1, "once %q in the log", leaves)
     }
 }
 

@@ -717,11 +717,34 @@ deepest_rank :: proc(gs: ^Game_State, level: int) -> int {
     return 0
 }
 
+// A life is over, by death or the win: its time joins the saga's.  Call before
+// dead or game_won is set, and before the stats file is written; a life that
+// has ended already (a second death, a death after the win) banks nothing.
+saga_bank :: proc(gs: ^Game_State) {
+    if gs.player.dead || gs.game_won do return
+    gs.saga_life = gs.elapsed_time
+    gs.stats.saga_seconds += f64(gs.saga_life)
+}
+
+// How long the saga has lasted: every life before this one, and this one while
+// it runs (an ended life is banked already).
+saga_seconds :: proc(gs: ^Game_State) -> f64 {
+    if gs.player.dead || gs.game_won do return gs.stats.saga_seconds
+    return gs.stats.saga_seconds + f64(gs.elapsed_time)
+}
+
+// The death screen's record line: the saga's clock, and the counts beside it.
+death_saga_line :: proc(gs: ^Game_State, buf: []u8) -> string {
+    secs := int(saga_seconds(gs))
+    return fmt.bprintf(buf, "Your saga lasted %d:%02d      Kills %d      Runs %d",
+        secs / 60, secs % 60, gs.stats.total_kills, gs.stats.runs_played)
+}
+
 // The tome's account of the run, one line each; `bufs` holds the formatted text.
-// Deaths and kills are the player's whole record: only the run time is this run's.
+// Every line is the player's whole record, across all their lives.
 saga_lines :: proc(gs: ^Game_State, bufs: ^[4][64]u8) -> [4]string {
     deepest := [4]string{"the Surface", level_names[LEVEL_CAVE2], level_names[LEVEL_CAVE3], dimension_table[.Hell].name}
-    secs := int(gs.elapsed_time)
+    secs := int(saga_seconds(gs))
     return {
         fmt.bprintf(bufs[0][:63], "This saga lasted %d:%02d:%02d", secs / 3600, secs / 60 % 60, secs % 60),
         fmt.bprintf(bufs[1][:63], "Heroes fallen before you: %d", gs.stats.runs_played - gs.stats.runs_won),

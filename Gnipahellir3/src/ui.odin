@@ -2425,17 +2425,8 @@ draw_death_screen :: proc(gs: ^Game_State) {
 		center_text(cstring(raw_data(cause_buf[:])), ty + 132, 22, rl.Color{255, 190, 150, u8(255 * fade)})
 	}
 
-	mins := int(gs.elapsed_time) / 60
-	secs := int(gs.elapsed_time) % 60
 	buf: [96]u8
-	fmt.bprintf(
-		buf[:95],
-		"Your saga lasted %d:%02d      Kills %d      Runs %d",
-		mins,
-		secs,
-		gs.stats.total_kills,
-		gs.stats.runs_played,
-	)
+	death_saga_line(gs, buf[:95])
 	center_text(cstring(raw_data(buf[:])), ty + 165, 20, rl.Color{255, 255, 255, u8(255 * fade)})
 
 	center_text(

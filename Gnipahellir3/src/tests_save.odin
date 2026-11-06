@@ -163,7 +163,7 @@ pinned_enums := []struct{type: typeid, names: []string}{
 		"Cairn", "Pillar", "Shelter", "Lair",
 	}},
 	{Builder_Goal, {
-		"Build_Den", "Fetch_Mineral", "Encase_Den", "Hunt", "Cooldown", "Wave_Hunt",
+		"Build_Den", "Fetch_Mineral", "Encase_Den", "Hunt", "Cooldown", "Wave_Hunt", "Guard",
 	}},
 	{Dimension_Kind, {
 		"Metal", "Gold", "Runic", "Hell",

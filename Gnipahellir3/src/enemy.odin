@@ -2598,9 +2598,10 @@ update_builder :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
         builder_fetch(e, id, gs, dt)
     case .Encase_Den:
         builder_encase(e, id, gs, dt)
-    case .Hunt, .Wave_Hunt:
+    case .Hunt, .Wave_Hunt, .Guard:
         // .Wave_Hunt is not a builder goal — only wave kinds carry it, and
-        // they run update_raider/update_fire_sprite instead.  Listed here
+        // they run update_raider/update_fire_sprite instead; nor is .Guard,
+        // the risen hero's, which runs update_undead.  Listed here
         // rather than hidden behind a #partial so this switch keeps failing
         // the build if a real goal is ever left out.
         builder_hunt(e, id, gs, dt)

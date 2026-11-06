@@ -73,6 +73,9 @@ Builder_Goal :: enum u8 {
     // at a time, and only turn on the player once nothing built is standing.
     // Appended: saved as u8 inside Builder_State.
     Wave_Hunt,
+    // The risen hero holding its post at its grave while the player stays
+    // outside its guard ring (draugr.odin).  Appended: saved as u8.
+    Guard,
 }
 
 Builder_State :: struct {
@@ -861,6 +864,7 @@ Persistent_Stats :: struct {
     kit:          [RISEN_KIT]Inventory_Slot,  // what they carried, until then too
     last_seed:    u32,           // the most recent world's seed: "Yesterday's world" on the title
     has_last_seed: bool,
+    saga_seconds: f64,           // every finished life's time, banked at its death or win (saga_bank)
 }
 
 // ─── Game State (fat struct) ──────────────────────────────────────────────────
@@ -955,6 +959,7 @@ Game_State :: struct {
     death_by:     string, // what landed the killing blow, from a static table — not saved; read by the death screen
     hurt_by:      string, // what landed the last blow, the same way — not saved; the agent's hurt event reads it
     game_won:     bool,   // run complete — not saved; a won run ends like a death
+    saga_life:    f32,    // what this life put in stats.saga_seconds as it ended (saga_bank) — not saved
     zoom:         f32,    // view zoom, eased toward zoom_target each frame (1.0 = whole level); not saved
     zoom_target:  f32,    // wheel-set zoom the view eases toward; smoothing removes the per-notch pop/lurch; not saved
     zoom_from:    f32,    // zoom the current glide started from; not saved
