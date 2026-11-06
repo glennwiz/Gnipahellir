@@ -4,6 +4,7 @@ game_update :: proc(gs: ^Game_State) {
     profile_scope("game_update")
     gs.delta_time = clamp(gs.delta_time, 0, 0.05)  // cap at 50ms
     gs.frame     += 1
+    gs.nav_work   = 0  // this frame's search work: the hero's, golems' and enemies' (card 202)
 
     // 0. Agent goals — while an agent drives, the executor turns its running goal
     //    into this tick's gs.agent.cmd, which update_input reads (agent_exec.odin)

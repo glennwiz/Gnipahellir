@@ -2005,7 +2005,6 @@ golem_update_one :: proc(gs: ^Game_State, id: int) {
 
 update_golems :: proc(gs: ^Game_State) {
 	gs.golem_searches = 0
-	gs.nav_work = 0
 	// The first worker of a frame moves round the crew, so one that cannot
 	// find a route never holds the searches away from the slots after it.
 	for i in 0 ..< MAX_GOLEMS do golem_update_one(gs, (int(gs.frame) + i) % MAX_GOLEMS)

@@ -901,8 +901,8 @@ Game_State :: struct {
     golem_skips: [MAX_GOLEMS]Golem_Skips, // transient: resource choices each golem found no route to
     golem_transfer: [MAX_GOLEMS]Golem_Transfer, // transient: build sources and stores each golem gave up on
     golem_idle: [MAX_GOLEMS]f32, // transient: seconds each golem has gone with no target (golem_tick_quick_clay)
-    nav_work:    int,        // astar_dig work this frame, golems and enemies:
-                             // nodes expanded + heap sift steps; reset in update_golems
+    nav_work:    int,        // search work this frame, the hero's, golems' and enemies':
+                             // nodes expanded + heap sift steps; reset in game_update
     cage:        Cage_State, // transient Garm combat-cage anchor (garm.odin)
     golems:      Golem_System,
     monument_cells: Monument_Cells, // saved
