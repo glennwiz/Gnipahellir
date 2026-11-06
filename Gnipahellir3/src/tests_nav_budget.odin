@@ -1,5 +1,6 @@
 package game
 
+import "core:fmt"
 import "core:log"
 import "core:slice"
 import "core:testing"
@@ -537,4 +538,228 @@ a_stockpile_with_no_route_is_not_picked_twice :: proc(t: ^testing.T) {
     skips = golem_transfer_skips(gs, 0)
     testing.expect_value(t, len(skips), 4)
     for a, i in skips do for b in skips[i+1:] do testing.expect(t, a != b, "each search tried a new pile")
+}
+
+// Seed 781's surface, the hero at (89,79) with a pick and 30 blocks, nothing
+// hunting it: the long go to (165,100) runs the window's search, the whole
+// level's and the one that hurts (card 195's test).
+HERO_LONG_FROM :: [2]i32{89, 79}
+HERO_LONG_TO   :: [2]i32{165, 100}
+
+@(private="file")
+hero_long_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
+    gs = new(Game_State)
+    link = new(Agent_Link)
+    game_state_init(gs, 781)
+    gs.ui.show_title = false
+    link.connected, link.realtime = true, true
+    link.goals.reflexes_off = {.On_Its_Own}
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    gs.player.inventory = {}
+    _ = inventory_insert(&gs.player.inventory, .Pickaxe, 1)
+    _ = inventory_insert(&gs.player.inventory, .Stone_Block, 30)
+    gs.player.pos = {f32(HERO_LONG_FROM.x) + 0.1, f32(HERO_LONG_FROM.y) + 1 - PLAYER_H}
+    return
+}
+
+@(private="file")
+hero_long_frame :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    if agent_drive(link, gs) {
+        game_update(gs)
+        agent_after_tick(link, gs)
+    }
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+}
+
+@(private="file")
+hero_long_go :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State) {
+    for _ in 0 ..< 10 do hero_long_frame(link, gs)
+    testing.expect_value(t, hero_feet(&gs.player), HERO_LONG_FROM)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, HERO_LONG_TO.x, HERO_LONG_TO.y))
+}
+
+// The hero's searches count in the frame's work, and a long go's plan is
+// spread over frames (card 202): in one frame it was several frames' budget.
+@(test)
+a_hero_replan_is_counted_and_spread_over_frames :: proc(t: ^testing.T) {
+    gs, link := hero_long_world()
+    defer free(gs)
+    defer free(link)
+    hero_long_go(t, link, gs)
+    top, total, run, longest := 0, 0, 0, 0
+    for f := 0; f < 60 * 120 && agent_goals_busy(&link.goals); f += 1 {
+        hero_long_frame(link, gs)
+        top = max(top, gs.nav_work)
+        total += gs.nav_work
+        run = run + 1 if gs.nav_work > 0 else 0
+        longest = max(longest, run)
+    }
+    log.infof("hero nav work: max frame %d, total %d, longest run of searching frames %d", top, total, longest)
+    testing.expect(t, total > 0, "the hero's searches are counted")
+    testing.expect(t, top <= NAV_WORK_P99_BUDGET, "no frame of the go's searches passes the frame's budget")
+    testing.expect(t, longest <= 30, "the hero waits half a second at most for a plan")
+    g := &link.goals.slots[0]
+    testing.expectf(t, link.goals.n == 1 && g.status == .Done, "the go arrives: %v %s", g.status, string(g.reason.buf[:g.reason.len]))
+}
+
+// A plan run a slice of work at a time is the plan run whole: the same path,
+// the same work, and no slice much past what it was given.
+@(test)
+a_hero_plan_in_slices_is_the_plan_run_whole :: proc(t: ^testing.T) {
+    gs, link := hero_long_world()
+    defer free(gs)
+    defer free(link)
+    whole, sliced: Hero_Path
+    gs.nav_work = 0
+    reached := hero_plan(gs, HERO_LONG_FROM, HERO_LONG_TO, &whole)
+    work := gs.nav_work
+    testing.expect(t, !gs.hero.nav.planning, "a whole plan leaves none in hand")
+    SLICE :: 5000
+    gs.nav_work = 0
+    hero_plan_begin(gs, HERO_LONG_FROM, HERO_LONG_TO, true, true)
+    slices, top := 0, 0
+    for {
+        before := gs.nav_work
+        done, r := hero_plan_step(gs, &sliced, SLICE)
+        slices += 1
+        top = max(top, gs.nav_work - before)
+        if done {
+            testing.expect_value(t, r, reached)
+            break
+        }
+        testing.expect(t, gs.hero.nav.planning, "a plan not done is still in hand")
+        if slices > 1000 do break
+    }
+    log.infof("hero plan: work %d, reached %v, in %d slices, the largest %d", work, reached, slices, top)
+    testing.expect(t, reached, "the long go is planned to its end")
+    testing.expect(t, !gs.hero.nav.planning, "a plan done leaves none in hand")
+    testing.expect_value(t, gs.nav_work, work)
+    testing.expect(t, slices > work / SLICE, "it ran in slices")
+    testing.expect(t, top <= SLICE + 500, "a slice stops near its work: one node's pushes past it at most")
+    testing.expect_value(t, sliced.n, whole.n)
+    for i in 0 ..< min(whole.n, sliced.n) do testing.expectf(t, sliced.steps[i] == whole.steps[i], "step %d: %v, whole %v", i, sliced.steps[i], whole.steps[i])
+}
+
+// A corridor two tiles high, closed at x 19 and x 61, nothing to dig, jump
+// or bridge: one way along it.
+@(private="file")
+hero_corridor :: proc(gs: ^Game_State) {
+    for x in 18 ..= 62 {
+        for y in 46 ..= 52 do set_tile(&gs.world, x, y, .Stone)
+        if x > 19 && x < 61 do for y in 48 ..= 49 do set_tile(&gs.world, x, y, .Air)
+    }
+    gs.player.inventory = {}
+}
+
+// From 30 to 40 along it: each node expanded is one work, each push its
+// sifts.  31 to 39 each push the next, a sift over 29, which waits behind;
+// 30 pushes 29 and 31, one sift; 40 ends it: 1 + 1 + 9 * 2 + 1.
+@(test)
+a_hero_search_counts_its_nodes_and_sifts :: proc(t: ^testing.T) {
+    gs := nav_state()
+    defer free(gs)
+    hero_corridor(gs)
+    path: Hero_Path
+    gs.nav_work = 0
+    reached, _ := hero_plan_once(gs, {30, 49}, {40, 49}, &path, false, false, false)
+    testing.expect(t, reached, "along the corridor")
+    testing.expect_value(t, path.n, 10)
+    testing.expect_value(t, gs.nav_work, 21)
+}
+
+// A goal past the window that the corridor never reaches: the first search
+// goes over the whole level and shuts it, so no second search without a hurt
+// runs, and with no blocks none without them: the plan is two searches.
+@(test)
+a_hero_plan_the_level_shuts_runs_no_search_again :: proc(t: ^testing.T) {
+    gs := nav_state()
+    defer free(gs)
+    hero_corridor(gs)
+    from, to := [2]i32{30, 49}, [2]i32{120, 49}
+    path: Hero_Path
+    gs.nav_work = 0
+    reached, whole := hero_plan_once(gs, from, to, &path, false, false, false)
+    testing.expect(t, !reached && whole, "the corridor is the whole level's way")
+    one := gs.nav_work
+    gs.nav_work = 0
+    testing.expect(t, !hero_plan(gs, from, to, &path, dig = false, blocks = false), "no way")
+    testing.expect_value(t, gs.nav_work, 2 * one)
+    testing.expect(t, path.n > 0 && path.steps[path.n - 1].to == {60, 49}, "the end of the corridor, nearest the goal")
+}
+
+// A replan for a go that has its path, when no headway stops it, runs on
+// each frame until it is done; the old path is not walked meanwhile.
+@(test)
+a_hero_replan_runs_on_until_done :: proc(t: ^testing.T) {
+    gs, link := hero_long_world()
+    defer free(gs)
+    defer free(link)
+    hero_long_go(t, link, gs)
+    g := &link.goals.slots[0]
+    n := &gs.hero.nav
+    for f := 0; f < 120 && (gs.hero.path.goal != g.id || n.planning || gs.hero.path.at < 2); f += 1 do hero_long_frame(link, gs)
+    testing.expect(t, gs.hero.path.goal == g.id && !n.planning, "walking its first plan")
+    // No headway this frame (the best already beaten), and long enough for a replan.
+    g.stuck_t, g.replanned, g.best, g.steps_best = HERO_GO_REPLAN_S, false, 0, 0
+    for f := 0; f < 10 && !g.replanned; f += 1 do hero_long_frame(link, gs)
+    testing.expect(t, g.replanned && n.planning, "the replan takes more than a frame")
+    frames := 1
+    for ; frames < 60 && n.planning; frames += 1 do hero_long_frame(link, gs)
+    testing.expectf(t, !n.planning && frames <= 5, "the replan is done in %d frames", frames)
+    testing.expect_value(t, gs.hero.path.at, 0)
+}
+
+// A plan in hand is for one walk: another goal, or the same goal sent to
+// another tile (a work goal's next stand), starts its own.
+@(test)
+a_hero_plan_in_hand_is_for_one_walk :: proc(t: ^testing.T) {
+    gs, link := hero_long_world()
+    defer free(gs)
+    defer free(link)
+    hero_long_go(t, link, gs)
+    hero_long_frame(link, gs)
+    n := &gs.hero.nav
+    g := &link.goals.slots[0]
+    testing.expect(t, n.planning && n.plan_goal == g.id, "the go's plan runs on")
+    other := Agent_Goal{id = g.id + 100, status = .Running, kind = g.kind, to = HERO_LONG_TO, best = max(i32)}
+    hero_go_tick(gs, &other)
+    testing.expect(t, n.planning && n.plan_goal == other.id, "another goal plans afresh")
+    other.to = {120, 60}
+    hero_go_tick(gs, &other)
+    testing.expect(t, n.plan_to == other.to && n.to == other.to, "a new tile plans afresh")
+}
+
+// The corridor three tiles high with a pit a tile deep at 33 and at 36:
+// from 30 the hero walks, drops in, climbs out or jumps over, so nodes wait
+// in the open set and a pop sifts.  Measured with every pop, push and node
+// counted: 11 nodes, 35 work.
+@(test)
+a_hero_search_counts_its_pops :: proc(t: ^testing.T) {
+    gs := nav_state()
+    defer free(gs)
+    hero_corridor(gs)
+    for x in 20 ..= 60 do set_tile(&gs.world, x, 47, .Air)
+    for x in ([2]int{33, 36}) do set_tile(&gs.world, x, 50, .Air)
+    path: Hero_Path
+    gs.nav_work = 0
+    reached, _ := hero_plan_once(gs, {30, 49}, {40, 49}, &path, false, false, false)
+    testing.expect(t, reached, "along the corridor")
+    log.infof("three-high corridor: %d nodes, %d work", gs.hero.nav.expanded, gs.nav_work)
+    testing.expect_value(t, gs.nav_work, 35)
+}
+
+// A plan from a tile off the level has no search to run: it comes back done
+// at once, with no path and no plan left in hand, so no go waits on it.
+@(test)
+a_hero_plan_from_off_the_level_is_done_at_once :: proc(t: ^testing.T) {
+    gs := nav_state()
+    defer free(gs)
+    path: Hero_Path
+    path.n = 5
+    hero_plan_begin(gs, {-5, 49}, {40, 49}, true, true)
+    done, reached := hero_plan_step(gs, &path, HERO_NAV_FRAME_WORK)
+    testing.expect(t, done && !reached, "done, and nowhere reached")
+    testing.expect_value(t, path.n, 0)
+    testing.expect(t, !gs.hero.nav.planning, "no plan left in hand")
 }

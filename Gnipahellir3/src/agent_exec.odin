@@ -1559,6 +1559,7 @@ HERO_NAV_NODES  :: GRID_W * GRID_H  // a goal past the window is searched for ov
 HERO_NAV_OPEN   :: 4 * HERO_NAV_NODES
 HERO_NAV_BUDGET :: 4000  // nodes one search expands at most
 HERO_NAV_LEVEL_BUDGET :: 5 * HERO_NAV_BUDGET  // the whole level's search for a way without a hurt, once the first search finds none (card 195)
+HERO_NAV_FRAME_WORK :: 50_000  // nav_work a go's plan spends in one frame at most; the rest runs on the next (card 202)
 HERO_PATH_MAX   :: 64    // a longer path keeps the start of it, and is planned again from its end
 HERO_GAP_MAX    :: 4     // a running jump lands this many columns over at most
 
@@ -1599,6 +1600,33 @@ Hero_Nav :: struct {
     w, h:    i32,  // this search's window, the nodes numbered across it
     danger:  Hero_Dangers,  // this plan's, from the senses
     n_danger: int,
+    // The search in hand, which hero_search_run takes up where it stopped.
+    o, from, to: [2]i32,  // the window's corner, and the search's ends
+    s, size, best, expanded, budget, blocks: int,
+    best_h:  f32,
+    has_pick, hurt_ok: bool,
+    // The plan in hand: hero_plan's searches, run over as many frames as
+    // their work takes (card 202).
+    planning:  bool,
+    pass:      int,  // the hero_plan_passes row running
+    plan_dig, plan_blocks: bool,
+    plan_goal: int,  // the goal and the tile it is for
+    plan_to:   [2]i32,
+}
+
+// hero_plan's searches, in order.  The whole level's runs only when the
+// first did not go over it all, and the last only when the bag has blocks.
+Hero_Plan_Pass :: struct {
+    hurt_ok, no_blocks, level: bool,
+    budget: int,
+}
+
+@(rodata)
+hero_plan_passes := [4]Hero_Plan_Pass{
+    {budget = HERO_NAV_BUDGET},
+    {level = true, budget = HERO_NAV_LEVEL_BUDGET},
+    {hurt_ok = true, budget = HERO_NAV_BUDGET},
+    {hurt_ok = true, no_blocks = true, budget = HERO_NAV_BUDGET},
 }
 
 hero_feet :: proc(p: ^Player) -> [2]i32 {
@@ -1729,22 +1757,59 @@ hero_nav_h :: proc(a, b: [2]i32) -> f32 {
 // 195, playtest 188: long goes took 9- and 10-tile drops while a way round was
 // there, past the window or past what the search had time for).
 hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := true, blocks := true) -> (reached: bool) {
-    whole: bool
-    if reached, whole = hero_plan_once(gs, from, to, out, dig, false, blocks); reached do return true
-    if !whole {
-        if reached, _ = hero_plan_once(gs, from, to, out, dig, false, blocks, level = true, budget = HERO_NAV_LEVEL_BUDGET); reached do return true
+    hero_plan_begin(gs, from, to, dig, blocks)
+    _, reached = hero_plan_step(gs, out, max(int))
+    return
+}
+
+// A plan for hero_plan_step to run: its first search started.
+hero_plan_begin :: proc(gs: ^Game_State, from, to: [2]i32, dig, blocks: bool) {
+    n := &gs.hero.nav
+    n.planning, n.pass, n.plan_dig, n.plan_blocks = true, 0, dig, blocks
+    hero_plan_pass_start(gs, from, to)
+}
+
+@(private="file")
+hero_plan_pass_start :: proc(gs: ^Game_State, from, to: [2]i32) {
+    n := &gs.hero.nav
+    r := hero_plan_passes[n.pass]
+    hero_search_start(gs, from, to, n.plan_dig, r.hurt_ok, n.plan_blocks && !r.no_blocks, r.level, r.budget)
+}
+
+// The plan in hand, for at most work more nav_work: done once a search
+// reaches or the last ends, with out its path; not done, it goes on from
+// where it stopped at the next call.
+hero_plan_step :: proc(gs: ^Game_State, out: ^Hero_Path, work: int) -> (done, reached: bool) {
+    n := &gs.hero.nav
+    start := gs.nav_work
+    for {
+        ended, whole: bool
+        ended, reached, whole = hero_search_run(gs, out, work - (gs.nav_work - start))
+        if !ended do return false, false
+        next := n.pass + 1
+        if next == 1 && whole do next = 2      // the level gone over: no way without a hurt
+        if next == 3 && !n.plan_blocks do next = 4
+        if reached || next == len(hero_plan_passes) {
+            n.planning = false
+            return true, reached
+        }
+        n.pass = next
+        hero_plan_pass_start(gs, n.from, n.to)
     }
-    if r, _ := hero_plan_once(gs, from, to, out, dig, true, blocks); r do return true
-    if blocks do hero_plan_once(gs, from, to, out, dig, true, false)
-    return false
 }
 
 // level: over the whole level, never the window.  whole: the search went over
 // the whole level and ran out of tiles to try, so what it did not reach no
 // way reaches.
 hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool, blocks_ok := true, level := false, budget := HERO_NAV_BUDGET) -> (reached, whole: bool) {
+    hero_search_start(gs, from, to, dig, hurt_ok, blocks_ok, level, budget)
+    _, reached, whole = hero_search_run(gs, out, max(int))
+    return
+}
+
+// One search, set up in gs.hero.nav for hero_search_run.
+hero_search_start :: proc(gs: ^Game_State, from, to: [2]i32, dig, hurt_ok: bool, blocks_ok: bool, level: bool, budget: int) {
     n := &gs.hero.nav
-    w := &gs.world
     // The window round the middle of the way when to fits in it, so a leg
     // the window spans is searched whole.  A goal past it: the whole level,
     // so a way that bridges out of the window is seen to reach, and lays its
@@ -1759,45 +1824,61 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     }
     n.seen   = {}
     n.closed = {}
-    out.n, out.at = 0, 0
-    s := hero_nav_index(n, o, from)
-    if s < 0 do return false, false
-    has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
-    _, blocks := hero_bridge_blocks(gs)
-    if !blocks_ok do blocks = 0
+    n.o, n.from, n.to, n.budget, n.hurt_ok = o, from, to, budget, hurt_ok
+    n.size, n.expanded = 0, 0
+    n.s = hero_nav_index(n, o, from)
+    if n.s < 0 do return
+    n.has_pick = dig && hero_item_slot(gs, .Pickaxe) >= 0
+    _, n.blocks = hero_bridge_blocks(gs)
+    if !blocks_ok do n.blocks = 0
     n.n_danger = hero_dangers(&gs.hero.senses, &n.danger)
 
-    size, work := 0, 0
+    s := n.s
     n.g[s], n.seen[s], n.bridges[s] = 0, true, 0
-    astar_open_push(n.open[:], &size, {hero_nav_h(from, to), i16(s)}, &work)
-    best, best_h := s, hero_nav_h(from, to)
-    expanded := 0
-    for size > 0 && expanded < budget {
-        i := int(astar_open_pop(n.open[:], &size, &work).node)
+    astar_open_push(n.open[:], &n.size, {hero_nav_h(from, to), i16(s)}, &gs.nav_work)
+    n.best, n.best_h = s, hero_nav_h(from, to)
+}
+
+// The search in hand, for at most work more nav_work.  ended: it reached,
+// or ran out of tiles or of its budget, and out holds its path; not ended,
+// it stopped for the work and the next call goes on.
+hero_search_run :: proc(gs: ^Game_State, out: ^Hero_Path, work: int) -> (ended, reached, whole: bool) {
+    n := &gs.hero.nav
+    w := &gs.world
+    o, s, to, has_pick, hurt_ok, blocks := n.o, n.s, n.to, n.has_pick, n.hurt_ok, n.blocks
+    if s < 0 {
+        out.n, out.at = 0, 0
+        return true, false, false
+    }
+    start := gs.nav_work
+    for n.size > 0 && n.expanded < n.budget {
+        if gs.nav_work - start >= work do return false, false, false
+        i := int(astar_open_pop(n.open[:], &n.size, &gs.nav_work).node)
         if n.closed[i] do continue
         n.closed[i] = true
-        expanded += 1
+        n.expanded += 1
+        gs.nav_work += 1
         a := hero_nav_tile(n, o, i)
         if a == to {
-            best, reached = i, true
+            n.best, reached = i, true
             break
         }
-        if h := hero_nav_h(a, to); h < best_h || (h == best_h && n.g[i] < n.g[best]) do best, best_h = i, h
+        if h := hero_nav_h(a, to); h < n.best_h || (h == n.best_h && n.g[i] < n.g[n.best]) do n.best, n.best_h = i, h
         x, y := a.x, a.y
         nb := n.bridges[i]
         if hero_swim_cell(w, a) {
-            hero_nav_swim(gs, n, &size, o, i, a, nb, to, has_pick)
+            hero_nav_swim(gs, n, o, i, a, nb, to, has_pick)
             continue
         }
         for d in ([2]i32{-1, 1}) {
             f := [2]i32{x + d, y}
-            if hero_walk_in(w, f) && !hero_nav_dug(n, o, s, i, f + {0, 1}) do hero_nav_relax(n, &size, o, i, f, 1, .Walk, nb, to)
-            if wet, drop := hero_swim_entry(w, f); wet do hero_nav_relax(n, &size, o, i, f + {0, i32(drop)}, 1, .Swim, nb, to)  // a fall into water takes no hp
+            if hero_walk_in(w, f) && !hero_nav_dug(n, o, s, i, f + {0, 1}) do hero_nav_relax(gs, n, o, i, f, 1, .Walk, nb, to)
+            if wet, drop := hero_swim_entry(w, f); wet do hero_nav_relax(gs, n, o, i, f + {0, i32(drop)}, 1, .Swim, nb, to)  // a fall into water takes no hp
             if up := ([2]i32{x + d, y - 1}); hero_stand(w, up) && hero_open(w, x, y - 2) && !hero_nav_dug(n, o, s, i, up + {0, 1}) {
-                hero_nav_relax(n, &size, o, i, up, 1.5, .Walk, nb, to)
+                hero_nav_relax(gs, n, o, i, up, 1.5, .Walk, nb, to)
             }
             if up := ([2]i32{x + d, y - 2}); hero_stand(w, up) && hero_open(w, x, y - 2) && hero_open(w, x, y - 3) && !hero_nav_dug(n, o, s, i, up + {0, 1}) {
-                hero_nav_relax(n, &size, o, i, up, 2 + HERO_NAV_JUMP_COST, .Jump, nb, to)
+                hero_nav_relax(gs, n, o, i, up, 2 + HERO_NAV_JUMP_COST, .Jump, nb, to)
             }
             if hero_open(w, f.x, f.y) && hero_open(w, f.x, f.y - 1) && !is_solid(w, int(f.x), int(f.y + 1)) {
                 // Off the edge: a drop to wherever it lands, or a running jump
@@ -1805,13 +1886,13 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
                 col := hero_column(w, int(f.x), int(f.y))
                 land := [2]i32{f.x, f.y + i32(col.drop)}
                 if !col.hazard && hero_stand(w, land) && (col.hurts == 0 || hurt_ok && hero_fall_ok(gs, col.hurts)) {
-                    hero_nav_relax(n, &size, o, i, land, 1 + 0.3 * f32(col.drop) + HERO_NAV_HP_COST * f32(col.hurts), .Drop, nb, to)
+                    hero_nav_relax(gs, n, o, i, land, 1 + 0.3 * f32(col.drop) + HERO_NAV_HP_COST * f32(col.hurts), .Drop, nb, to)
                 }
                 if l, k, ok := hero_gap_landing(w, a, d); ok {
-                    hero_nav_relax(n, &size, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
+                    hero_nav_relax(gs, n, o, i, l, f32(k) + HERO_NAV_JUMP_COST, .Gap, nb, to)
                 }
                 if int(nb) < blocks && place_cell_open(w, int(f.x), int(f.y + 1)) && w.item_counts[grid_idx(int(f.x), int(f.y + 1))] == 0 {  // never over a pile: the block would bury it
-                    hero_nav_relax(n, &size, o, i, f, 1 + HERO_NAV_BRIDGE_COST, .Bridge, nb + 1, to)
+                    hero_nav_relax(gs, n, o, i, f, 1 + HERO_NAV_BRIDGE_COST, .Bridge, nb + 1, to)
                 }
             }
             for dt in ([3][2]i32{{x + d, y}, {x + d, y - 1}, {x + d, y + 1}}) {
@@ -1827,25 +1908,27 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
                     case: ok = false
                     }
                 }
-                if ok && dug > 0 do hero_nav_relax(n, &size, o, i, dt, 1 + HERO_NAV_DIG_COST * f32(dug), .Dig, nb, to)
+                if ok && dug > 0 do hero_nav_relax(gs, n, o, i, dt, 1 + HERO_NAV_DIG_COST * f32(dug), .Dig, nb, to)
             }
         }
         // Straight down through its own floor onto the tile under it, as a
         // player digs a pillar back down (card 195, playtest 188: on top of
         // its own pillar every go failed no_route).
         if dn := a + {0, 1}; hero_diggable(gs, dn, has_pick) && is_solid(w, int(dn.x), int(dn.y + 1)) && !hero_nav_dug(n, o, s, i, dn + {0, 1}) {
-            hero_nav_relax(n, &size, o, i, dn, 1 + HERO_NAV_DIG_COST, .Dig, nb, to)
+            hero_nav_relax(gs, n, o, i, dn, 1 + HERO_NAV_DIG_COST, .Dig, nb, to)
         }
         // Up a pillar, as a player climbs with blocks in the bag: a jump, and
         // a block set down in the feet's tile once they clear it.  The jump
         // needs the two rows over the feet; a third, solid, only stops the head
         // (card 163).
         if int(nb) < blocks && place_cell_open(w, int(x), int(y)) && hero_open(w, x, y - 1) && hero_open(w, x, y - 2) && w.item_counts[grid_idx(int(x), int(y))] == 0 {  // never over a pile, as the bridge
-            hero_nav_relax(n, &size, o, i, a - {0, 1}, 1 + HERO_NAV_BRIDGE_COST, .Pillar, nb + 1, to)
+            hero_nav_relax(gs, n, o, i, a - {0, 1}, 1 + HERO_NAV_BRIDGE_COST, .Pillar, nb + 1, to)
         }
     }
 
     // The chain back from best, kept from the start end.
+    best := n.best
+    out.n, out.at = 0, 0
     length := 0
     for j := best; j != s; j = int(n.parent[j]) do length += 1
     pos := length - 1
@@ -1861,7 +1944,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         pos -= 1
     }
     out.n = min(length, HERO_PATH_MAX)
-    return reached, size == 0 && n.w == GRID_W && n.h == GRID_H
+    return true, reached, n.size == 0 && n.w == GRID_W && n.h == GRID_H
 }
 
 // ─── Water (card 174) ───
@@ -1898,15 +1981,15 @@ hero_swim_entry :: proc(w: ^World_Grid, f: [2]i32) -> (wet: bool, drop: int) {
 // stroke, a jump's worth, onto a stand a row up, with the head room to rise
 // into it, or onto one the pick digs out of the bank there.
 @(private="file")
-hero_nav_swim :: proc(gs: ^Game_State, n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, a: [2]i32, nb: u8, to: [2]i32, has_pick: bool) {
+hero_nav_swim :: proc(gs: ^Game_State, n: ^Hero_Nav, o: [2]i32, i: int, a: [2]i32, nb: u8, to: [2]i32, has_pick: bool) {
     w := &gs.world
     for d in ([4][2]i32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
-        if hero_swim_cell(w, a + d) || hero_stand(w, a + d) do hero_nav_relax(n, size, o, i, a + d, HERO_NAV_SWIM_COST, .Swim, nb, to)
+        if hero_swim_cell(w, a + d) || hero_stand(w, a + d) do hero_nav_relax(gs, n, o, i, a + d, HERO_NAV_SWIM_COST, .Swim, nb, to)
     }
     for d in ([2]i32{-1, 1}) {
         up := a + {d, -1}
-        if hero_stand(w, up) && !is_solid(w, int(a.x), int(a.y - 2)) do hero_nav_relax(n, size, o, i, up, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST, .Swim, nb, to)
-        if t, ok := hero_bank_dig(gs, a, d, has_pick); ok do hero_nav_relax(n, size, o, i, t, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST + HERO_NAV_DIG_COST, .Dig, nb, to)
+        if hero_stand(w, up) && !is_solid(w, int(a.x), int(a.y - 2)) do hero_nav_relax(gs, n, o, i, up, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST, .Swim, nb, to)
+        if t, ok := hero_bank_dig(gs, a, d, has_pick); ok do hero_nav_relax(gs, n, o, i, t, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST + HERO_NAV_DIG_COST, .Dig, nb, to)
     }
 }
 
@@ -1950,14 +2033,13 @@ hero_nav_dug :: proc(n: ^Hero_Nav, o: [2]i32, s, i: int, t: [2]i32) -> bool {
 }
 
 @(private="file")
-hero_nav_relax :: proc(n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, b: [2]i32, cost: f32, m: Hero_Move, nb: u8, to: [2]i32) {
+hero_nav_relax :: proc(gs: ^Game_State, n: ^Hero_Nav, o: [2]i32, i: int, b: [2]i32, cost: f32, m: Hero_Move, nb: u8, to: [2]i32) {
     j := hero_nav_index(n, o, b)
     if j < 0 do return
     g := n.g[i] + cost + (HERO_NAV_DANGER_COST if hero_in_danger(n.danger[:n.n_danger], b) else 0)
     if n.seen[j] && g >= n.g[j] do return
     n.g[j], n.parent[j], n.move[j], n.bridges[j], n.seen[j] = g, i16(i), m, nb, true
-    work := 0
-    if size^ < HERO_NAV_OPEN do astar_open_push(n.open[:], size, {g + hero_nav_h(b, to), i16(j)}, &work)
+    if n.size < HERO_NAV_OPEN do astar_open_push(n.open[:], &n.size, {g + hero_nav_h(b, to), i16(j)}, &gs.nav_work)
 }
 
 // ─── The goal rows ───
@@ -2169,7 +2251,9 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         }
         return false
     }
-    stale := path.goal != g.id || path.at >= path.n
+    n := &b.nav
+    planning := n.planning && n.plan_goal == g.id && n.plan_to == g.to  // a plan for this walk still running (card 202)
+    stale := path.goal != g.id || path.at >= path.n || planning
     if g.stuck_t >= HERO_GO_REPLAN_S && !g.replanned {
         stale, g.replanned = true, true
     }
@@ -2188,7 +2272,11 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
     }
     if stale {
         if !p.grounded && !wet do return false  // plan from the ground, or the water
-        hero_plan(gs, feet, g.to, path, dig = !g.no_dig, blocks = !g.no_blocks)
+        if !planning {
+            hero_plan_begin(gs, feet, g.to, !g.no_dig, !g.no_blocks)
+            n.plan_goal, n.plan_to = g.id, g.to
+        }
+        if done, _ := hero_plan_step(gs, path, HERO_NAV_FRAME_WORK); !done do return false  // the hero waits for the rest of it
         path.goal = g.id
         if path.n == 0 {
             g.status = .Failed
