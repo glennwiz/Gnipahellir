@@ -801,7 +801,7 @@ agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     g.told = true
     if g.status == .Done && g.via != .Goal do agent_record_act(link, gs, g)
     // Where the goal left the hero, so a replay checks each goal's landing.
-    land := fmt.tprintf(`"x":%.3f,"y":%.3f,"hp":%d`, gs.player.pos.x, gs.player.pos.y, gs.player.hp)
+    land := fmt.tprintf(`"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f`, gs.player.pos.x, gs.player.pos.y, gs.player.hp, gs.player.mana)
     if g.status == .Done {
         agent_record_op(link, gs, fmt.tprintf(`"done":%d,%s`, g.id, land))
     } else {
