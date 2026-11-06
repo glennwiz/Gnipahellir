@@ -483,6 +483,7 @@ tools_test_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
     game_state_init(gs, 778)
     gs.ui.show_title = false
     gs.player.pos = SURFACE_HOME_POS
+    link.goals.reflexes_off = {.On_Its_Own}  // the hero stands between goals, as the recording and its replay both expect (card 190)
     return
 }
 
@@ -1292,7 +1293,7 @@ replay_carries_reflexes_and_home :: proc(t: ^testing.T) {
     defer free(gs2)
     defer free(link2)
     testing.expect(t, rep.done && !rep.diverged)
-    testing.expect_value(t, link2.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})
+    testing.expect_value(t, link2.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig, .On_Its_Own})  // on_its_own: off from tools_test_world, recorded with the rest
     testing.expect(t, link2.goals.has_home && link2.goals.home == home + {1, 0})
     testing.expect_value(t, hero_feet(&gs2.player), home)  // the go home went where it went
     got, _ := os.read_entire_file(got_path, context.allocator)
@@ -1750,4 +1751,49 @@ a_loaded_run_sweeps_orphan_quick_clay :: proc(t: ^testing.T) {
     other.save_path = fmt.tprintf("%s/game.sav", run)
     testing.expect(t, tool_run_load(other, data, path, run), "loaded")
     testing.expect(t, get_tile(&other.world, 40, 50) != .Quick_Clay, "the orphan clay is gone")
+}
+
+// Card 190: with on_its_own on, the hero's own actions between the client's
+// goals replay exactly: the switch is recorded, the hero chooses the same,
+// and the world and the bag come out the same, every block mined accounted
+// for in both.
+@(test)
+replay_of_a_hero_on_its_own_lands_the_same :: proc(t: ^testing.T) {
+    rec_path, got_path := test_scratch_path("tools_test_own_rec.jsonl"), test_scratch_path("tools_test_own_got.jsonl")
+    defer delete(rec_path)
+    defer delete(got_path)
+    defer os.remove(rec_path)
+    defer os.remove(got_path)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    tools_test_record(link, rec_path)
+    link.connected, link.realtime = true, true
+    for frame := 0; frame < 2000; frame += 1 {
+        switch frame {
+        case 5:   agent_handle_line(link, gs, `{"cmd":"reflexes","on_its_own":true}`)
+        case 6:   agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","frames":5}]}`)
+        case 400: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":20},{"do":"act","frames":5}]}`)
+        }
+        if frame > 400 && !agent_goals_busy(&link.goals) do break
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    os.close(link.acts_file)
+    data, _ := os.read_entire_file(rec_path, context.allocator)
+    defer delete(data)
+    testing.expect(t, strings.contains(string(data), `"on_its_own":true`), "the switch is recorded")
+    testing.expect(t, inventory_count(&gs.player.inventory, .Wood_Log) > 0, "its own gather in the gap went through")
+    rep, gs2, link2 := tools_test_replay(string(data), got_path)
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged, "every goal ends where it did")
+    testing.expect(t, .On_Its_Own not_in link2.goals.reflexes_off, "the replay acts on its own too")
+    testing.expect_value(t, gs2.frame, gs.frame)
+    testing.expect_value(t, gs2.player.pos, gs.player.pos)
+    testing.expect(t, gs2.player.inventory == gs.player.inventory, "the same bag")
+    testing.expect(t, gs2.world.terrain == gs.world.terrain, "the same world")
+    testing.expect(t, gs2.world.items == gs.world.items && gs2.world.item_counts == gs.world.item_counts, "the same piles")
 }

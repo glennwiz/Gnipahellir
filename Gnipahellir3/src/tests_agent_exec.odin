@@ -18,6 +18,7 @@ exec_test_world :: proc(seed: u32 = 781) -> (gs: ^Game_State, link: ^Agent_Link)
     gs.player.pos = SURFACE_HOME_POS
     link.connected = true  // no socket: nothing is sent, the push buffer is read instead
     link.realtime  = true
+    link.goals.reflexes_off = {.On_Its_Own}  // the hero stands between goals; the tests of its own actions turn it on
     return
 }
 
@@ -8594,4 +8595,294 @@ hero_fight_walk_stands_over_a_threat_it_cannot_reach :: proc(t: ^testing.T) {
         testing.expectf(t, fights > 60, "gear %s off %v: the brain fights %d ticks of 120", gear, off, fights)
         testing.expectf(t, flips <= 1 && sides == 0, "gear %s off %v: %d facing flips, %d side changes", gear, off, flips, sides)
     }
+}
+
+// Card 190 (Glenn after playtest 188: the hero "stands around a lot"): a goal
+// ends and none follows, and within a second of game time the hero has chosen
+// an action of its own and is at it, never standing longer than that; the self
+// event and the panel say what it chose; a client goal takes over the frame it
+// comes.
+@(test)
+hero_on_its_own_never_stands_and_a_goal_takes_over_at_once :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    link.goals.reflexes_off = {}  // the game's default: on its own
+    exec_test_frames(link, gs, 10)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","frames":5}]}`)
+    for i := 0; i < 60 && agent_goals_busy(&link.goals); i += 1 do exec_test_frames(link, gs, 1)
+    testing.expect(t, !agent_goals_busy(&link.goals), "the client's goal ended")
+
+    // Ten seconds with an empty queue: the longest stretch with no input at all.
+    gs.hero.self_skip = {.Ritual}  // as a failed action would leave it: the first one that goes through clears it
+    still, longest, first := 0, 0, -1
+    for i in 0 ..< 600 {
+        exec_test_frames(link, gs, 1)
+        if gs.agent.cmd == {} {
+            still += 1
+            longest = max(longest, still)
+        } else {
+            still = 0
+            if first < 0 do first = i
+        }
+    }
+    testing.expectf(t, first >= 0 && first < 60, "it set about something inside a second: first input on frame %d", first)
+    // No bench and no wood on a new surface: the objective line's first step.
+    wood := `{"event":"self","f":16,"doing":"gather","item":"Wood_Log","why":"gathering wood for the bench"}`
+    testing.expectf(t, strings.contains(exec_test_pushed(link), wood), "the first choice, the tick after the goal: %s", exec_test_pushed(link))
+    testing.expect_value(t, inventory_count(&gs.player.inventory, .Wood_Log), 1)
+    testing.expectf(t, longest <= 60, "it never stood more than a second: %d frames still", longest)
+    testing.expect_value(t, gs.hero.current, Hero_Behaviour.Self)
+    testing.expect_value(t, gs.hero.self.status, Agent_Goal_Status.Running)
+    testing.expect_value(t, gs.hero.self_skip, bit_set[Hero_Self_Kind]{})
+
+    // What it chose, as the event and the panel say it.
+    buf: [AGENT_TEXT_MAX]u8
+    why := hero_self_line(gs.hero.self_kind, gs.hero.self_item, buf[:])
+    pushed := exec_test_pushed(link)
+    testing.expectf(t, strings.contains(pushed, `"event":"self"`) && strings.contains(pushed, agent_quote(why)), "the self event says %q: %s", why, pushed)
+    say := hero_self_say(&gs.hero, buf[:])
+    testing.expectf(t, strings.has_prefix(say, "on my own: ") && len(say) > len("on my own: "), "the panel's line: %q", say)
+    plan: [1 + AGENT_PANEL_NEXT]Agent_Text
+    testing.expect_value(t, agent_panel_plan(gs, &plan), 1)
+    testing.expect_value(t, string(plan[0].buf[:plan[0].len]), say)
+
+    // A client goal: the hero's own action is dropped that same frame.
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":30}]}`)
+    exec_test_frames(link, gs, 1)
+    testing.expect_value(t, gs.hero.current, Hero_Behaviour.Work_Goal)
+    testing.expect(t, gs.hero.self.status != .Running, "its own action is dropped")
+    testing.expect_value(t, gs.agent.cmd.move, i8(-1))
+    testing.expect_value(t, hero_self_say(&gs.hero, buf[:]), "")
+
+    // And a goal that comes while its own action is fresh, inside the hold any
+    // other behaviour would get: over at once all the same.
+    for i := 0; i < 120 && agent_goals_busy(&link.goals); i += 1 do exec_test_frames(link, gs, 1)
+    exec_test_frames(link, gs, 2)
+    testing.expect_value(t, gs.hero.current, Hero_Behaviour.Self)
+    testing.expect(t, gs.hero.held < HERO_MIN_HOLD_S, "a fresh action")
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"right","frames":30}]}`)
+    exec_test_frames(link, gs, 1)
+    testing.expect_value(t, gs.hero.current, Hero_Behaviour.Work_Goal)
+    testing.expect_value(t, gs.agent.cmd.move, i8(1))
+}
+
+// The panel shows the plan: the goal playing and the next AGENT_PANEL_NEXT
+// queued, no more, none that has ended.
+@(test)
+agent_panel_shows_the_goal_playing_and_the_next_queued :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, 2)
+    agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","frames":2},{"do":"act","frames":30},{"do":"act","frames":31},{"do":"act","frames":32},{"do":"act","frames":33},{"do":"act","frames":34}]}`)
+    exec_test_frames(link, gs, 4)  // the first is done, the second plays
+    plan: [1 + AGENT_PANEL_NEXT]Agent_Text
+    n := agent_panel_plan(gs, &plan)
+    testing.expect_value(t, n, 1 + AGENT_PANEL_NEXT)
+    for want, i in ([]string{"now: #2 ", "next: #3 ", "next: #4 ", "next: #5 "}) {
+        line := string(plan[i].buf[:plan[i].len])
+        testing.expectf(t, strings.has_prefix(line, want), "line %d is %q, want %q", i, line, want)
+    }
+    testing.expect(t, strings.contains(string(plan[0].buf[:plan[0].len]), `"frames":30`), "with the goal itself")
+    agent_handle_line(link, gs, `{"cmd":"goals","clear":true}`)
+    exec_test_frames(link, gs, 1)
+    testing.expect_value(t, agent_panel_plan(gs, &plan), 0)  // on_its_own off in this world: nothing to show
+}
+
+// The on_its_own reflex off: the queue runs dry and the hero stands, as before
+// card 190.
+@(test)
+hero_on_its_own_off_stands :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    link.goals.reflexes_off = {}
+    agent_handle_line(link, gs, `{"cmd":"reflexes","on_its_own":false}`)
+    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.On_Its_Own})
+    exec_test_frames(link, gs, 120)
+    testing.expect_value(t, gs.hero.current, Hero_Behaviour.Idle)
+    testing.expect(t, gs.hero.self.status != .Running, "no action of its own")
+    testing.expect(t, !strings.contains(exec_test_pushed(link), `"event":"self"`), "and no self event")
+}
+
+// Card 190: what the hero picks on its own, row by row: wood for the bench,
+// the ritual's material, ore in reach, the objective's mark, then a wander
+// that turns each leg; with every row spent it waits HERO_SELF_RETRY_S.
+@(test)
+hero_on_its_own_picks_by_its_rows :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    link.goals.reflexes_off = {}
+    exec_test_frames(link, gs, 10)
+    b := &gs.hero
+    feet := hero_feet(&gs.player)
+    inv := &gs.player.inventory
+
+    testing.expect(t, hero_self_choose(gs, b), "a new surface: something to do")
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wood)
+    testing.expect_value(t, b.self.kind, Agent_Goal_Kind.Gather)
+    testing.expect_value(t, b.self.work.item, Item.Wood_Log)
+    inventory_insert(inv, .Crafting_Bench, 1)  // a bench in the bag, no planks or log: no wood wanted
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wander)
+    inventory_remove(inv, .Crafting_Bench, 1)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wood)
+    inventory_insert(inv, .Plank, 4)  // the planks for a bench already: no wood wanted
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wander)
+
+    // A bench in the bag and a pick: the ritual's Cloud Stone before the ore.
+    inventory_insert(inv, .Crafting_Bench, 1)
+    inventory_insert(inv, .Pickaxe, 1)
+    cloud, ore := feet + {-3, 1}, feet + {2, 1}
+    set_tile(&gs.world, int(cloud.x), int(cloud.y), .Cloud)
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Iron_Ore)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Ritual)
+    testing.expect_value(t, b.self_item, Item.Cloud_Stone)
+    testing.expect_value(t, b.self.work.at, cloud)
+
+    // The ritual's materials in the bag: the ore in reach.
+    inventory_insert(inv, .Cloud_Stone, 8)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Ore)
+    testing.expect_value(t, b.self_item, Item.Iron_Ore)
+    testing.expect_value(t, b.self.work.at, ore)
+    buf: [AGENT_TEXT_MAX]u8
+    testing.expect_value(t, hero_self_line(b.self_kind, b.self_item, buf[:]), "mining Iron Ore in reach")
+    // The nearest ore, whatever its kind; at one distance, the first in item order.
+    silver := feet + {-1, 1}
+    set_tile(&gs.world, int(silver.x), int(silver.y), .Silver_Ore)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_item, Item.Silver_Ore)
+    set_tile(&gs.world, int(silver.x), int(silver.y), .Stone)
+    silver = feet + {-2, 1}
+    set_tile(&gs.world, int(silver.x), int(silver.y), .Silver_Ore)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_item, Item.Iron_Ore)
+    set_tile(&gs.world, int(silver.x), int(silver.y), .Stone)
+
+    // Ore HERO_SELF_ORE_TILES off is mined; one tile further it is left, and
+    // the objective's mark comes next.
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Stone)
+    edge := feet + {HERO_SELF_ORE_TILES - 1, 1}
+    set_tile(&gs.world, int(edge.x), int(edge.y), .Iron_Ore)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Ore)
+    testing.expect_value(t, b.self.work.at, edge)
+    set_tile(&gs.world, int(edge.x), int(edge.y), .Stone)
+    far := feet + {HERO_SELF_ORE_TILES, 1}  // Manhattan HERO_SELF_ORE_TILES + 1
+    set_tile(&gs.world, int(far.x), int(far.y), .Iron_Ore)
+    chest, _ := rune_scroll_chest_tile(tier_rune_scrolls[0])
+    mark := feet + {20, 0}
+    set_tile(&gs.world, int(mark.x), int(mark.y), chest)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wander)  // no Sky Altar yet: the line gives no compass
+    gs.progression.sky_altar_pos = {1, 1}
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Explore)
+    testing.expect_value(t, b.self.kind, Agent_Goal_Kind.Go)
+    testing.expectf(t, abs(b.self.to.x - mark.x) <= 1 && abs(b.self.to.y - mark.y) <= 1, "a go beside the chest at %v: %v", mark, b.self.to)
+    // Standing within HERO_SELF_NEAR_TILES of the mark: no heading on.
+    set_tile(&gs.world, int(mark.x), int(mark.y), .Air)
+    near := feet + {HERO_SELF_NEAR_TILES, 0}
+    set_tile(&gs.world, int(near.x), int(near.y), chest)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wander)
+    set_tile(&gs.world, int(near.x), int(near.y), .Air)
+    set_tile(&gs.world, int(mark.x), int(mark.y), chest)
+
+    // The next tier's scroll lies on another level: the gate toward it.
+    gs.progression.sky_structure_complete[0] = true
+    gate, has_gate := objective_gate(gs, rune_scroll_levels[1])
+    testing.expect(t, has_gate && rune_scroll_levels[1] != gs.level_index, "the surface has the gate down")
+    inventory_insert(inv, .Cloud_Stone, 12)  // tier B's materials in the bag: the ritual row passes
+    inventory_insert(inv, .Silver_Bar, 6)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Explore)
+    testing.expectf(t, abs(b.self.to.x - gate.x) <= 1 && abs(b.self.to.y - gate.y) <= 2, "a go to the gate at %v: %v", gate, b.self.to)
+    gs.progression.sky_structure_complete[0] = false
+
+    // The scroll found: nothing to head for, so a wander, one way then the other.
+    gs.progression.rune_scroll_found[0] = true
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self_kind, Hero_Self_Kind.Wander)
+    first := b.self.to.x - feet.x
+    testing.expect_value(t, abs(first), HERO_SELF_WANDER_TILES)
+    testing.expect(t, hero_self_choose(gs, b))
+    testing.expect_value(t, b.self.to.x - feet.x, -first)
+
+    // Every row passed over: nothing, and a wait before the next look.
+    b.self_skip = ~bit_set[Hero_Self_Kind]{}
+    testing.expect(t, !hero_self_choose(gs, b), "every row spent")
+    testing.expect_value(t, b.self_wait, HERO_SELF_RETRY_S)
+    testing.expect_value(t, b.self_skip, bit_set[Hero_Self_Kind]{})
+    testing.expect(t, b.self.status != .Running, "no action")
+    testing.expect_value(t, b.current, Hero_Behaviour.Self)
+    testing.expect_value(t, hero_self_say(b, buf[:]), "")  // the panel says nothing it is not doing
+}
+
+// Card 190: what keeps the hero from its own action, and what brings it back.
+@(test)
+hero_on_its_own_gives_way_and_comes_back :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    link.goals.reflexes_off = {}
+    exec_test_frames(link, gs, 10)
+    b := &gs.hero
+    testing.expect_value(t, b.current, Hero_Behaviour.Self)
+
+    // A threat seen lately: idle keeps to safe ground.
+    b.seen, b.seen_ago = true, 0
+    exec_test_frames(link, gs, 1)
+    testing.expect_value(t, b.current, Hero_Behaviour.Idle)
+    buf: [AGENT_TEXT_MAX]u8
+    testing.expect_value(t, hero_self_say(b, buf[:]), "")  // its action set aside: not on the panel
+    // Past HERO_WARY_S it takes up an action again, chosen afresh and said.
+    told := link.goals.note_count
+    b.seen_ago = HERO_WARY_S
+    b.held = HERO_MIN_HOLD_S
+    exec_test_frames(link, gs, 1)
+    testing.expect_value(t, b.current, Hero_Behaviour.Self)
+    testing.expect_value(t, b.self.status, Agent_Goal_Status.Running)
+    testing.expect_value(t, link.goals.note_count, told + 1)
+
+    // Nothing to do: idle stands until HERO_SELF_RETRY_S is up, then it looks again.
+    b.self.status = .Empty
+    b.self_wait = HERO_SELF_RETRY_S
+    exec_test_frames(link, gs, int(HERO_SELF_RETRY_S * 60) - 2)
+    testing.expect_value(t, b.current, Hero_Behaviour.Idle)
+    exec_test_frames(link, gs, 3)
+    testing.expect_value(t, b.current, Hero_Behaviour.Self)
+    // With every row spent, the stand in frames: never more than the card's second.
+    b.self_skip = ~bit_set[Hero_Self_Kind]{}
+    b.self.status = .Empty
+    b.held = 0  // chosen afresh: every row passed over, so it waits
+    still := 0
+    for still <= 120 {
+        exec_test_frames(link, gs, 1)
+        if gs.agent.cmd != {} do break
+        still += 1
+    }
+    testing.expectf(t, still <= 60, "with nothing to do it stood %d frames", still)
+
+    // An action that fails is passed over, the next row taken; one that goes
+    // through clears the list.
+    b.self.status = .Empty
+    b.self_skip = {}
+    b.self_wait = 0
+    gs.progression.rune_scroll_found[0] = true
+    b.current, b.held = .Idle, HERO_MIN_HOLD_S
+    exec_test_frames(link, gs, 1)
+    kind := b.self_kind
+    b.self.status = .Failed  // as its tick would leave it
+    hero_self_settle(b)
+    testing.expect(t, kind in b.self_skip, "the failed row is passed over")
+    b.self.status = .Done
+    hero_self_settle(b)
+    testing.expect_value(t, b.self_skip, bit_set[Hero_Self_Kind]{})
 }

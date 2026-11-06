@@ -25,6 +25,7 @@ agent_test_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
     gs.player.pos = SURFACE_HOME_POS
     link.connected = true  // no socket: agent_send is only reached through agent_pump
     link.idle_off  = true  // each test about idling turns it back on
+    link.goals.reflexes_off = {.On_Its_Own}  // the hero stands between goals; the tests of its own actions turn it on
     return
 }
 
@@ -984,6 +985,7 @@ agent_recorded_acts_replay_from_their_rows :: proc(t: ^testing.T) {
         gs.ui.show_title = false
         gs.player.pos = SURFACE_HOME_POS
         link.connected = true
+        link.goals.reflexes_off = {.On_Its_Own}  // an idle wait replays as an empty act only while the hero stands
     }
     run :: proc(link: ^Agent_Link, gs: ^Game_State, ticks: int) {
         n := 0
@@ -1078,6 +1080,7 @@ agent_idle_ticks_equal_an_empty_act :: proc(t: ^testing.T) {
         gs.player.pos = SURFACE_HOME_POS
         link.connected = true
         link.idle_off = !idle
+        link.goals.reflexes_off = {.On_Its_Own}  // idle ticks equal an empty act only while the hero stands
         run :: proc(link: ^Agent_Link, gs: ^Game_State) {
             for agent_goals_busy(&link.goals) {
                 agent_drive(link, gs)
@@ -1775,9 +1778,11 @@ the_brief_names_every_goal_kind_and_the_binary_options :: proc(t: ^testing.T) {
     // Every behaviour that can pause a goal is named as a pause reason.
     _, _, reasons := strings.partition(brief, "goal_resumed (id, reason: ")
     reasons, _, _ = strings.partition(reasons, ")")
-    for row, k in hero_behaviours do if k != .Work_Goal && k != .Idle && row.name != "" {
+    for row, k in hero_behaviours do if k != .Work_Goal && k != .Idle && k != .Self && row.name != "" {  // self runs only with no goal
         testing.expectf(t, strings.contains(reasons, row.name), "the brief names %s as a pause reason: %q", row.name, reasons)
     }
+    testing.expect(t, strings.contains(brief, "self (doing, item, why) each time the hero picks an action of its own"), "the self event (card 190)")
+    testing.expect(t, strings.contains(brief, "  on_its_own: with the queue empty the hero picks its own next action"), "and its switch")
     for want in ([]string{
         "You only send goals: the game turns each into the keys and mouse a player would use",
         "an act holds its keys for 1..", "The act fields, for an act goal:", `{"cmd":"act",...}  one act goal`,
@@ -3485,13 +3490,13 @@ agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
     link.recording = true
 
     agent_handle_line(link, gs, `{"cmd":"reflexes","potion":false,"rim_dig":false}`)
-    testing.expect_value(t, agent_test_reply(link), `{"re":"reflexes","ok":true,"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false,"fight_back":true}}` + "\n")
-    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})
+    testing.expect_value(t, agent_test_reply(link), `{"re":"reflexes","ok":true,"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false,"fight_back":true,"on_its_own":false}}` + "\n")  // on_its_own: off in agent_test_world
+    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig, .On_Its_Own})
     agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":true,"swim":false}`)
     testing.expect(t, strings.contains(agent_test_reply(link), "swim is not a reflex"))
     agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":1}`)
     testing.expect(t, strings.contains(agent_test_reply(link), "rim_dig is not a reflex to switch with true or false"))
-    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig})  // all or nothing
+    testing.expect_value(t, link.goals.reflexes_off, bit_set[Hero_Reflex]{.Potion, .Rim_Dig, .On_Its_Own})  // all or nothing
     agent_handle_line(link, gs, `{"cmd":"reflexes"}`)
     testing.expect(t, strings.contains(agent_test_reply(link), `"potion":false`), "a bare reflexes reads them")
 
@@ -3517,7 +3522,7 @@ agent_reflexes_home_and_go_are_commands :: proc(t: ^testing.T) {
     testing.expect(t, read_err == nil)
     defer delete(data)
     text := string(data)
-    testing.expect(t, strings.contains(text, `"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false,"fight_back":true}`))
+    testing.expect(t, strings.contains(text, `"reflexes":{"leave_hazard":true,"potion":false,"floor_dig":true,"rim_dig":false,"fight_back":true,"on_its_own":false}`))
     testing.expect(t, strings.contains(text, `"home":[40,30],"level":`))
     testing.expect(t, strings.contains(text, `"home":null`))
     testing.expect(t, strings.contains(text, `"kind":"go"`) && strings.contains(text, `"kind":"home"`))
