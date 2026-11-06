@@ -624,6 +624,42 @@ replay_says_where_a_run_parts_from_its_recording :: proc(t: ^testing.T) {
     testing.expect(t, ok, "a goal end's mana within a tenth is the same")
     _, ok, _ = tool_replay_compare(ends[:strings.index_byte(ends, '\n') + 1], drift)
     testing.expect(t, ok, "a landing from before mana was kept matches any mana")
+
+    // A goal's end carries a digest of the hero's bag: a drift in the bag alone
+    // parts the run, and a row from before the bag was kept still matches (card 199).
+    packed := `{"f":60,"done":1,"x":1.000,"y":2.000,"hp":10,"mana":3.00,"bag":"0badf00d"}` + "\n"
+    n, ok, _ = tool_replay_compare(packed, packed)
+    testing.expect(t, ok && n == 1, "an equal bag is the same")
+    robbed, _ := strings.replace(packed, `"bag":"0badf00d"`, `"bag":"0badf00e"`, 1, context.temp_allocator)
+    _, ok, note = tool_replay_compare(packed, robbed)
+    testing.expect(t, !ok && strings.contains(note, "DIVERGED at goal 1, frame 60"), note)
+    _, ok, _ = tool_replay_compare(spent, robbed)
+    testing.expect(t, ok, "a landing from before the bag was kept matches any bag")
+}
+
+// The bag digest sees each slot's item and count, and only those (card 199).
+@(test)
+a_bag_digest_changes_with_the_bag :: proc(t: ^testing.T) {
+    a, b: Inventory
+    testing.expect_value(t, agent_bag_digest(&a), agent_bag_digest(&b))
+    inventory_insert(&a, .Dirt, 3)
+    d := agent_bag_digest(&a)
+    testing.expect(t, d != agent_bag_digest(&b), "a block in the bag changes it")
+    c: Inventory
+    inventory_insert(&c, .Flower, 3)
+    testing.expect(t, agent_bag_digest(&c) != d, "another item at the same count changes it")
+    inventory_insert(&b, .Dirt, 3)
+    b.selected = 5
+    testing.expect_value(t, agent_bag_digest(&b), d)  // the selection is not the bag
+    inventory_insert(&b, .Dirt, 1)
+    testing.expect(t, agent_bag_digest(&b) != d, "one more of the same changes it")
+    inventory_remove(&b, .Dirt, 1)
+    testing.expect_value(t, agent_bag_digest(&b), d)
+    b.slots[0], b.slots[1] = b.slots[1], b.slots[0]
+    testing.expect(t, agent_bag_digest(&b) != d, "the same stack in another slot changes it")
+    b.slots[0], b.slots[1] = b.slots[1], b.slots[0]
+    b.slots[MAX_INVENTORY - 1] = {.Flower, 2}
+    testing.expect(t, agent_bag_digest(&b) != d, "a stack in the bag's last slot changes it")
 }
 
 // A goals-only run writes no act rows: the replay checks each goal's end, and
@@ -653,7 +689,7 @@ a_goals_only_replay_checks_each_goal_where_it_landed :: proc(t: ^testing.T) {
     rows := string(data)
     testing.expect_value(t, strings.count(rows, `,"act":`), 0)  // nothing for the old check to go by
     testing.expect_value(t, strings.count(rows, `"x":`), 4)
-    last := fmt.tprintf(`"done":4,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f}`, gs.player.pos.x, gs.player.pos.y, gs.player.hp, gs.player.mana)
+    last := fmt.tprintf(`"done":4,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f,"bag":"%08x"}`, gs.player.pos.x, gs.player.pos.y, gs.player.hp, gs.player.mana, agent_bag_digest(&gs.player.inventory))
     testing.expect(t, strings.contains(rows, last), last)  // the last goal ends where the run did
 
     rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run))
@@ -673,6 +709,19 @@ a_goals_only_replay_checks_each_goal_where_it_landed :: proc(t: ^testing.T) {
     testing.expect_value(t, rep3.checked, 2)
     _, ok, note := tool_replay_compare(moved, rows)
     testing.expect(t, !ok && strings.contains(note, "DIVERGED at goal 3, frame "), note)
+
+    // The same goals replayed with one block more in the bag land on the same
+    // tiles, and the first goal's end parts on the bag alone (card 199).
+    got4 := fmt.tprintf("%s/got4.jsonl", run)
+    rep4, gs4, link4 := tools_test_replay(rows, got4, proc(gs: ^Game_State) { inventory_insert(&gs.player.inventory, .Dirt, 1) })
+    defer free(gs4)
+    defer free(link4)
+    testing.expect(t, rep4.done && rep4.diverged, "a bag that drifted is a divergence")
+    testing.expect_value(t, rep4.checked, 0)
+    testing.expect_value(t, gs4.player.pos, gs.player.pos)  // the bag is all that drifted
+    data4, _ := os.read_entire_file(got4, context.temp_allocator)
+    _, ok, note = tool_replay_compare(rows, string(data4))
+    testing.expect(t, !ok && strings.contains(note, "DIVERGED at goal 1, frame "), note)
 }
 
 // A clear ends the goals it cuts with the reason it was recorded with; a clear

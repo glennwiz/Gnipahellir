@@ -839,7 +839,7 @@ agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
     g.told = true
     if g.status == .Done && g.via != .Goal do agent_record_act(link, gs, g)
     // Where the goal left the hero, so a replay checks each goal's landing.
-    land := fmt.tprintf(`"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f`, gs.player.pos.x, gs.player.pos.y, gs.player.hp, gs.player.mana)
+    land := fmt.tprintf(`"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f,"bag":"%08x"`, gs.player.pos.x, gs.player.pos.y, gs.player.hp, gs.player.mana, agent_bag_digest(&gs.player.inventory))
     if g.status == .Done {
         agent_record_op(link, gs, fmt.tprintf(`"done":%d,%s`, g.id, land))
     } else {
@@ -858,6 +858,18 @@ agent_goal_tell :: proc(link: ^Agent_Link, gs: ^Game_State, g: ^Agent_Goal) {
         agent_reply_state(link, gs, nil, "act")
         link.reply_due = true
     }
+}
+
+// A goal end's mark of the hero's bag: FNV-1a over each slot's item and count,
+// in slot order, so a replay that mined, placed or crafted differently parts.
+agent_bag_digest :: proc(inv: ^Inventory) -> u32 {
+    h := u32(2166136261)
+    for s in inv.slots {
+        for v in ([2]u32{u32(s.item), u32(s.count)}) {
+            h = (h ~ v) * 16777619
+        }
+    }
+    return h
 }
 
 // What the hero's behaviours did with the goals since the last push: a goal

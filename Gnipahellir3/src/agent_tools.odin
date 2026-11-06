@@ -676,9 +676,9 @@ tool_replay_verdict :: proc(n: int, ok: bool, note: string) -> string {
 // (done or failed, with its reason) and each finished act, with where it left
 // the player.  False, with the first difference, when they part.  A goal end
 // recorded before its landing was written is checked by frame and outcome, and
-// one from before mana was kept is checked without it.
+// one from before mana or the bag was kept is checked without it.
 tool_replay_compare :: proc(want, got: string) -> (matched: int, ok: bool, note: string) {
-    Landing :: struct { f, goal: int, failed, placed, has_mana: bool, reason: string, x, y: f64, hp, lvl: int, mana: f64 }
+    Landing :: struct { f, goal: int, failed, placed, has_mana: bool, reason, bag: string, x, y: f64, hp, lvl: int, mana: f64 }
     landings :: proc(rows: string) -> [dynamic]Landing {
         out := make([dynamic]Landing, context.temp_allocator)
         for line in strings.split_lines(rows, context.temp_allocator) {
@@ -702,6 +702,7 @@ tool_replay_compare :: proc(want, got: string) -> (matched: int, ok: bool, note:
             l.placed  = "x" in rec
             l.has_mana = "mana" in rec
             l.mana    = tool_json_f64(rec["mana"])
+            l.bag, _  = rec["bag"].(json.String)
             l.hp, _   = agent_int(rec, "hp")
             l.x       = tool_json_f64(rec["x"])
             l.y       = tool_json_f64(rec["y"])
@@ -715,6 +716,7 @@ tool_replay_compare :: proc(want, got: string) -> (matched: int, ok: bool, note:
         b := g[i]
         same := a.f == b.f && a.goal == b.goal && a.failed == b.failed && a.reason == b.reason && a.lvl == b.lvl
         if a.has_mana do same = same && abs(a.mana - b.mana) <= 0.1
+        if a.bag != "" do same = same && a.bag == b.bag
         if a.placed do same = same && abs(a.x - b.x) <= 0.01 && abs(a.y - b.y) <= 0.01 && a.hp == b.hp
         if same do continue
         if a.goal != 0 {
