@@ -568,6 +568,9 @@ snapshot_restore_from :: proc(gs: ^Game_State, path: string) -> bool {
     if !ok do return false
 
     flush_action_log(gs)  // game_state_init doesn't preserve the log buffer
+    // Nor did their life end: the saga takes back what it banked (saga_bank;
+    // nothing while the life still runs).
+    gs.stats.saga_seconds -= f64(gs.saga_life)
     game_state_init(gs, gs.world_seed)
     gs.stats.grave = {}   // a rewound hero did not die, so no grave, tithe or kit
     gs.stats.kit   = {}
@@ -708,13 +711,14 @@ load_settings :: proc(gs: ^Game_State) -> bool {
 // ─── Persistent Stats ─────────────────────────────────────────────────────────
 
 //  STATS_VERSION is in the file since v2; v1 was the bare four counters, and
-//  v2 and v3 are v4 cut short before the kit and the last seed.  A
-//  file this build cannot read is moved aside, never overwritten.  The state
+//  v2, v3 and v4 are v5 cut short before the kit, the last seed and the saga
+//  clock.  A file this build cannot read is moved aside, never overwritten.  The state
 //  main never armed has no file, which keeps `odin test src` off real stats.
 
-STATS_VERSION :: i32(4)
+STATS_VERSION :: i32(5)
 STATS_V2_SIZE :: int(offset_of(Persistent_Stats, kit))
 STATS_V3_SIZE :: int(offset_of(Persistent_Stats, last_seed))
+STATS_V4_SIZE :: int(offset_of(Persistent_Stats, saga_seconds))
 
 Persistent_Stats_v1 :: struct {
     runs_played:  int,
@@ -752,10 +756,11 @@ load_stats :: proc(stats: ^Persistent_Stats, path: string) -> bool {
             total_kills  = old.total_kills,
         }
         return true
-    case STATS_V2_SIZE, STATS_V3_SIZE, size_of(Persistent_Stats):
+    case STATS_V2_SIZE, STATS_V3_SIZE, STATS_V4_SIZE, size_of(Persistent_Stats):
         version := STATS_VERSION
         if len(data) == STATS_V2_SIZE do version = 2
         if len(data) == STATS_V3_SIZE do version = 3
+        if len(data) == STATS_V4_SIZE do version = 4
         read: Persistent_Stats
         mem.copy(&read, raw_data(data), len(data))
         if read.version == version {

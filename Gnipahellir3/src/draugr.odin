@@ -81,8 +81,16 @@ update_undead :: proc(e: ^Enemy, id: int, gs: ^Game_State, dt: f32) {
     }
 
     // The risen hero keeps to their grave until the player comes for it.
+    // Its goal says which (playtest 188: a hero at its post read Hunt).
     guarding := risen_hero_guarding(gs, id, pt)
     if guarding do pt = risen_hero_post(gs)
+    if guarding && b.goal != .Guard {
+        b.goal = .Guard
+        log_action(gs, "Risen hero#%d holds its post at (%d,%d): its prey is outside the guard ring", id, pt.x, pt.y)
+    } else if !guarding && b.goal != .Hunt {
+        b.goal = .Hunt
+        log_action(gs, "Risen hero#%d leaves its post - hunting", id)
+    }
 
     // Player moved off the planned intercept — force a fresh path.
     if chebyshev(b.plan_target, pt) > 2 {
