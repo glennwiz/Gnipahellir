@@ -176,6 +176,9 @@ Agent_Link :: struct {
     idle_step:   int,            // render frames since the last slow tick
     idle_ticks:  int,            // idle ticks in this wait, recorded when it ends
     goals:       Agent_Goals,
+    goal_ids:    int,            // the last goal id given out: ids rise across connections (card 194)
+    drive_seed:  u32,            // the world the last drive saw: a new one is a new game
+    drove:       bool,
     events_on:   bool,           // the client speaks goals, so it hears events
     seen_hp:     int,            // the player as the last tick left it, for the events
     seen_dead:   bool,
@@ -563,7 +566,7 @@ agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, sock: net.TCP_Socket, 
     link.connected    = true
     link.in_len       = copy(link.in_buf[:], sent)
     link.realtime     = true
-    link.panel        = {}
+    agent_panel_new_client(&link.panel)
     link.goals        = {}
     link.events_on    = false
     link.push_len     = 0
@@ -572,6 +575,16 @@ agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, sock: net.TCP_Socket, 
     link.idle_ticks   = 0
     if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
     agent_record_mark(link, gs, "connect")  // --replay hands the seat over on this frame (card 192)
+}
+
+// A new client's panel: the last client's objective stays up until a client
+// sets a new one or a new game starts; the talk was that client's (card 194).
+// --replay takes the seat with it too.
+agent_panel_new_client :: proc(p: ^Agent_Panel) {
+    objective := p^
+    p^ = {}
+    p.goal, p.step   = objective.goal, objective.step
+    p.past, p.count  = objective.past, objective.count
 }
 
 @(private="file")
@@ -613,7 +626,13 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
         GRID_W, GRID_H, AGENT_VIEW_W, AGENT_VIEW_H)
     fmt.sbprintf(w, "  state's objective is the game's objective line: the next step of the loop, with a compass hint (above, below, east, west), never a tile\n")
     fmt.sbprintf(w, "  state's falling lists the blocks in mid-fall inside the view (a felled trunk, a cut-loose pillar): tile, column x, top y; they land as tiles or items\n")
-    fmt.sbprintf(w, "  state's saga is the book's saga page (this run's time, heroes fallen, foes slain, deepest reached); dead, death_line is the death screen's line, with the place\n")
+    fmt.sbprintf(w, "  state's saga is the book's saga page (the saga's time over every life so far, heroes fallen, foes slain, deepest reached); dead, death_line is the death screen's line, with the place\n")
+    fmt.sbprintf(w, "  state's altar_plan is the foundation a Sky Altar needs on this level, the plan (press B) in the game: each cell's tile at dx,dy from the altar's own tile, dy down.\n")
+    fmt.sbprintf(w, "    Set each support tile first (Wood from a Plank or a Wood_Log, Stone from a Stone_Block, an ore tile from its ore), then place the Sky_Altar on the dx 0, dy 0 tile\n")
+    fmt.sbprintf(w, "  state's sky_gate is the way up a surface Sky Altar opens (null before one is raised): its level, the altar's tile, standing (false once smashed or taken),\n")
+    fmt.sbprintf(w, "    and use: act with interact:true within %d tiles of the altar to go to the sky. A smashed one is raised again on the plan\n", BENCH_RANGE)
+    fmt.sbprintf(w, "  an enemy with guarding:true is your last hero risen from its grave, carrying that hero's kit: it holds its post by the grave while you are\n")
+    fmt.sbprintf(w, "    more than %d tiles from the grave, and hunts you inside that ring. The hero walks past it at its post; a goal into the ring fails hunted\n", RISEN_GUARD_RANGE)
     fmt.sbprintf(w, "{{\"cmd\":\"goals\",\"add\":[{{\"do\":\"go\",\"to\":[90,60]}},{{\"do\":\"act\",\"move\":\"right\",\"frames\":30}},...]}}  queues goals, played in order while the game runs; answers their ids\n")
     fmt.sbprintf(w, "  You only send goals: the game turns each into the keys and mouse a player would use, so a goal can do nothing a player cannot.\n")
     fmt.sbprintf(w, "  The queue holds %d; a full one answers ok:false. {{\"cmd\":\"goals\",\"cancel\":id}} or \"clear\":true drops goals, which then end failed\n", AGENT_GOALS_MAX)
@@ -624,7 +643,7 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "  it fails with no_recipe, no_station, no_item, out_of_reach, unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), refused, blocked or full first, then what\n")
     fmt.sbprintf(w, "  refused: a place the game turns away, in the game's own words (e.g. refused: Something is already there), or a mine a reflex keeps the pick off, the reflex named\n")
     fmt.sbprintf(w, "  a fight is done when its enemy is gone; it fails with no_item, no_target, unreachable or low_hp (backed off) first\n")
-    fmt.sbprintf(w, "  when the hero dies every goal but an act fails with died: queue again for the next life\n")
+    fmt.sbprintf(w, "  when the hero dies every goal fails with died, an act too unless it only presses keys (move, jump, down, dismiss, tithe): queue again for the next life\n")
     fmt.sbprintf(w, "  a goal paused for a fight or a flight more than %.0f s at a stretch fails held, naming what held it\n", HERO_PAUSE_MAX_S)
     fmt.sbprintf(w, "  an act holds its keys for 1..%d ticks at 60 a second; it fails only when its verb is refused as it starts, or at a drop that hurts or a burn ahead\n", AGENT_MAX_FRAMES)
     fmt.sbprintf(w, "The act fields, for an act goal:\n")
@@ -687,6 +706,8 @@ agent_write_brief :: proc(link: ^Agent_Link, gs: ^Game_State) -> string {
     fmt.sbprintf(w, "The human reads your panel in the window, so keep it true:\n")
     fmt.sbprintf(w, "{{\"cmd\":\"objective\",\"goal\":\"kill Garm\",\"step\":\"perch at the east wall\"}}\n")
     fmt.sbprintf(w, "A new goal files the old one; add \"result\":\"failed\" if it did not work.\n")
+    fmt.sbprintf(w, "A reconnect keeps the panel's goal and step until a client sets a new one or a new game starts, and goal ids keep rising across connections,\n")
+    fmt.sbprintf(w, "so an id from before a reconnect never names a new goal.\n")
 
     fmt.sbprintf(w, "\nTALK\n")
     fmt.sbprintf(w, "The human can type to you from the window. Read state's heard in every reply: each line comes once, so answer it.\n")
@@ -711,6 +732,12 @@ agent_drive :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     gs.agent.panel   = &link.panel
     gs.agent.goals   = &link.goals
     gs.delta_time    = AGENT_STEP
+    // A new world is a new game: the objective the agent set was the last
+    // one's (card 194).  The panel itself outlives it.
+    if link.drive_seed != gs.world_seed || !link.drove {
+        if link.drove do link.panel.goal, link.panel.step = {}, {}
+        link.drive_seed, link.drove = gs.world_seed, true
+    }
     if link.realtime || agent_goals_busy(&link.goals) do return true
     if link.idle_off || link.idle_ticks >= AGENT_IDLE_MAX do return false
     return agent_slow_beat(link)
@@ -888,7 +915,11 @@ agent_quote :: proc(text: string) -> string {
 
 // A goal for the queue: queued, and recorded with the frame it came on.
 agent_goal_add :: proc(link: ^Agent_Link, gs: ^Game_State, kind: Agent_Goal_Kind, via: Agent_Goal_Via, line: string) -> int {
+    // A queue emptied by a reconnect goes on from the link's last id, so an id
+    // names one goal for the whole game (card 194).
+    link.goals.next_id = max(link.goals.next_id, link.goal_ids)
     id := agent_goals_push(&link.goals, kind, via, line)
+    link.goal_ids = id
     agent_record_op(link, gs, fmt.tprintf(`"goal":%s,"kind":"%s","id":%d,"via":"%v"`, line, agent_goal_kinds[kind].name, id, via))
     return id
 }
@@ -1899,7 +1930,9 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
         size := enemy_body_size(e.kind)
         if comma do strings.write_byte(&b, ',')
         comma = true
-        fmt.sbprintf(&b, `{{"slot":%d,"kind":"%v","x":%.2f,"y":%.2f,"w":%.2f,"h":%.2f,"hp":%d}}`, i, e.kind, e.pos.x, e.pos.y, size.x, size.y, e.hp)
+        fmt.sbprintf(&b, `{{"slot":%d,"kind":"%v","x":%.2f,"y":%.2f,"w":%.2f,"h":%.2f,"hp":%d`, i, e.kind, e.pos.x, e.pos.y, size.x, size.y, e.hp)
+        if e.builder.goal == .Guard do strings.write_string(&b, `,"guarding":true`)  // the risen hero at its post (card 193)
+        strings.write_byte(&b, '}')
     }
     // Blocks cut loose and in mid-fall, out of the grid until they land: a
     // player sees them drop (card 160, playtest 134: a felled trunk and a
@@ -1927,6 +1960,8 @@ agent_reply_state :: proc(link: ^Agent_Link, gs: ^Game_State, view: ^Agent_View,
     strings.write_string(&b, "],")
     agent_write_birds(&b, gs, v)
     agent_write_crew(&b, gs)
+    agent_write_altar_plan(&b, gs)
+    agent_write_sky_gate(&b, gs)
     strings.write_string(&b, "}\n")
     link.out_len = strings.builder_len(b)
 }
@@ -1997,6 +2032,39 @@ agent_write_crew :: proc(b: ^strings.Builder, gs: ^Game_State) {
         fmt.sbprintf(b, `,"monument":{{"plan":"%v","x":%d,"y":%d,"complete":%v}}`, p.plan, p.anchor.x, p.anchor.y, p.complete)
     }
     strings.write_byte(b, '}')
+}
+
+// The foundation the Sky Altar wants on this level, as the plan (press B)
+// draws it: each support tile at its offset from the altar's own tile, dy
+// down (card 194: the refusal named the plan and state had none).
+@(private="file")
+agent_write_altar_plan :: proc(b: ^strings.Builder, gs: ^Game_State) {
+    tpl := structure_template_for(gs, .Sky_Altar)
+    acol, arow := structure_template_anchor(tpl)
+    fmt.sbprintf(b, `,"altar_plan":{{"name":%s,"cells":[`, agent_quote(tpl.name))
+    comma := false
+    for line, r in tpl.rows do for glyph, c in line {
+        tile, kind := structure_template_cell(glyph)
+        if kind != .Support do continue
+        if comma do strings.write_byte(b, ',')
+        comma = true
+        fmt.sbprintf(b, `{{"dx":%d,"dy":%d,"tile":"%v"}}`, c - acol, r - arow, tile)
+    }
+    strings.write_string(b, "]}")
+}
+
+// The sky gate the surface Sky Altar raised, from any level: where the altar
+// stands and whether it still does.  null before one is raised (card 194).
+@(private="file")
+agent_write_sky_gate :: proc(b: ^strings.Builder, gs: ^Game_State) {
+    ap := gs.progression.sky_altar_pos
+    if ap == {0, 0} {
+        strings.write_string(b, `,"sky_gate":null`)
+        return
+    }
+    surface := &gs.world if gs.level_index == LEVEL_SURFACE else &gs.levels.worlds[LEVEL_SURFACE]
+    fmt.sbprintf(b, `,"sky_gate":{{"level":%d,"at":[%d,%d],"standing":%v,"use":"interact within %d tiles of the altar"}}`,
+        LEVEL_SURFACE, ap.x, ap.y, get_tile(surface, int(ap.x), int(ap.y)) == .Sky_Altar, BENCH_RANGE)
 }
 
 // The watcher's unread lines.  A reply reads them: each comes once.

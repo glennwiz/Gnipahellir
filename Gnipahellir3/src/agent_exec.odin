@@ -1959,17 +1959,32 @@ agent_goal_home_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
     return false
 }
 
-// At the death every goal but an act ends: its life is over, and the next life
-// may be a new world.  An act stays, to work the death screen.  Run once, by
+// At the death every goal but a keys-only act ends: its life is over, and the
+// next life may be a new world.  An act of keys stays, to work the death
+// screen; one that works the world was the life's (card 194).  Run once, by
 // the death itself (Player_Died), so a goal queued on the death screen is for
 // the next life whatever opens over the screen or reconnects meanwhile.
 agent_goals_died :: proc(gs: ^Game_State) {
     q := gs.agent.goals
     if q == nil do return
-    for &d in q.slots[:q.n] do if d.kind != .Act && (d.status == .Queued || d.status == .Running) {
+    for &d in q.slots[:q.n] do if d.status == .Queued || d.status == .Running {
+        if d.kind == .Act && !agent_act_works_the_world(gs, &d) do continue
         d.status = .Failed
         agent_text_set(&d.reason, "died")
     }
+}
+
+// An act that works the world, not only the keys and the death screen: a tile
+// it aims at, a bag, window or wand verb but the tithe (a monument's at comes
+// with its verb), an interact or a warp (card 194: playtest 188's queued use
+// at (141,94) ran after the death).
+agent_act_works_the_world :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    value, _ := json.parse_string(string(g.line[:g.len]), parse_integers = true, allocator = context.temp_allocator)
+    o, _ := value.(json.Object)
+    c, _, _ := agent_parse_act(gs, o, false)
+    return c.has_mine || c.has_place || c.has_use || c.has_reclaim || c.has_zone ||
+           c.interact || c.warp || (c.verb != .None && c.verb != .Tithe)
 }
 
 // The feet tile of the surface spawn.

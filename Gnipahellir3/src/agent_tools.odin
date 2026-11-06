@@ -597,7 +597,7 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
     case rep.cut:  // as agent_promote takes the seat: on its connect mark, or in a run from before the marks on its first row
         rep.cut = false
         link.connected, link.realtime = true, true
-        link.panel = {}  // the disconnect already emptied the queue
+        agent_panel_new_client(&link.panel)  // the disconnect already emptied the queue
     }
     switch {
     case "goal" in rec:
@@ -607,6 +607,9 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
         via := Agent_Goal_Via.Goal
         for v in Agent_Goal_Via do if fmt.tprint(v) == via_name do via = v
         if !known do return
+        // The id the run gave it: a run from before card 194 numbered each
+        // connection's goals from 1 again, a later one goes on rising.
+        if id, has_id := agent_int(rec, "id"); has_id do link.goal_ids = id - 1
         agent_goal_add(link, gs, kind, via, agent_canonical(rec["goal"]))
     case "clear" in rec:
         why, given := rec["reason"].(json.String)
