@@ -6155,7 +6155,8 @@ hero_wary_gathers_in_the_open_not_the_notch :: proc(t: ^testing.T) {
     testing.expect(t, get_tile(&gs.world, x0 + 7, G + 3) == .Wood, "the notch's log left")
     testing.expect(t, get_tile(&gs.world, x0 - 12, G - 1) != .Wood, "the open one mined")
     // A place inside the notch, reached from its floor (cornered) and from the
-    // rim (open): placed from the rim.
+    // rim (open): placed from the rim.  Clay, no block a pillar climbs out on
+    // (card 195: spare Stone_Block make the floor no corner).
     {
         gs, link := exec_test_world()
         defer free(gs)
@@ -6163,14 +6164,14 @@ hero_wary_gathers_in_the_open_not_the_notch :: proc(t: ^testing.T) {
         x0, G := hero_test_arena(gs)
         exec_test_frames(link, gs, 10)
         retreat_test_pit(gs, x0, G, 4)
-        go_test_give(gs, .Stone_Block, 4)
+        go_test_give(gs, .Clay, 4)
         gs.hero.seen = true
         testing.expect(t, hero_wary(gs), "wary")
         at := [2]i32{i32(x0 + 5), i32(G + 1)}
         _, ok, _, cornered := hero_work_stand(gs, at, .Place, HERO_PLACE_STAND)
         testing.expect(t, ok && cornered, "a stand on the rim, the floor's cornered")
         gs.player.pos = {f32(x0 - 12) + 0.1, f32(G) - PLAYER_H}  // out of reach: it walks to a stand
-        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Stone_Block","at":[%d,%d]}}`, at.x, at.y), 60 * 30)
+        id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"place","item":"Clay","at":[%d,%d]}}`, at.x, at.y), 60 * 30)
         work_test_expect_done(t, link, gs, id)
         testing.expect(t, is_solid(&gs.world, int(at.x), int(at.y)), "placed")
         testing.expect(t, hero_feet_row(&gs.player) < i32(G), "never went down")
@@ -8885,4 +8886,269 @@ hero_on_its_own_gives_way_and_comes_back :: proc(t: ^testing.T) {
     b.self.status = .Done
     hero_self_settle(b)
     testing.expect_value(t, b.self_skip, bit_set[Hero_Self_Kind]{})
+}
+
+// ─── Card 195: goals keep the hero safe (playtest 188) ───────────────────────
+
+// The body's columns as physics reads them: a hair over a column's edge, less
+// than BODY_MARGIN, is not on it; more is.  Either edge (a hair of 0.002 is
+// still on it by the old 0.001 slack).
+@(test)
+hero_body_cols_read_the_body_as_physics_does :: proc(t: ^testing.T) {
+    p: Player
+    p.pos.x = 84 - 0.0005
+    x0, x1 := hero_body_cols(&p)
+    testing.expect_value(t, [2]i32{x0, x1}, [2]i32{84, 84})
+    p.pos.x = 84 - 0.01
+    x0, x1 = hero_body_cols(&p)
+    testing.expect_value(t, [2]i32{x0, x1}, [2]i32{83, 84})
+    p.pos.x = 84.2 + 0.002  // the right edge a hair into column 85
+    x0, x1 = hero_body_cols(&p)
+    testing.expect_value(t, [2]i32{x0, x1}, [2]i32{84, 84})
+    p.pos.x = 84.2 + 0.01
+    x0, x1 = hero_body_cols(&p)
+    testing.expect_value(t, [2]i32{x0, x1}, [2]i32{84, 85})
+}
+
+// A floor over a 12-tile drop, the hero's body a hair over the next column's
+// floor (playtest 188 L3 f18813: at x 83.9999, column 83's floor was read as
+// under it, and the floor it stood on was dug out).  Physics does not hold it
+// there: the floor under it is its own.
+@(private="file")
+safe_test_hair_floor :: proc(gs: ^Game_State) -> (floor: [2]i32) {
+    x0, G := hero_test_arena(gs)
+    X := x0 + 6
+    for y in G + 1 ..= G + 12 do set_tile(&gs.world, X, y, .Air)
+    set_tile(&gs.world, X, G + 13, .Stone)
+    gs.player.pos = {f32(X) - 0.0005, f32(G) - PLAYER_H}
+    return {i32(X), i32(G)}
+}
+
+@(test)
+hero_floor_reflex_reads_the_body_as_physics_does :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    floor := safe_test_hair_floor(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    gs.player.inventory.selected = hero_item_slot(gs, .Pickaxe)
+    _, hurts, _ := hero_dig_fall(&gs.world, floor)
+    gs.player.hp = hurts
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","mine":[%d,%d],"frames":5}}]}}`, floor.x, floor.y))
+    refused := false
+    for k := 0; k < 20 && agent_goals_busy(&link.goals); k += 1 {
+        gs.player.pos.x, gs.player.vel = f32(floor.x) - 0.0005, {}
+        exec_test_frames(link, gs, 1)
+        refused ||= gs.hero.refused && gs.hero.refused_by == .Floor_Dig && gs.hero.refused_at == floor
+    }
+    testing.expect(t, refused, "the floor_dig reflex refuses the floor the body is on")
+    testing.expect_value(t, get_tile(&gs.world, int(floor.x), int(floor.y)), Tile_Type.Stone)
+}
+
+@(test)
+hero_mine_from_a_hair_over_the_next_floor_steps_onto_it :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    floor := safe_test_hair_floor(gs)
+    go_test_give(gs, .Pickaxe, 1)
+    hp := gs.player.hp
+    id := work_test_run(t, link, gs, fmt.tprintf(`{{"do":"mine","tile":[%d,%d]}}`, floor.x, floor.y), 60 * 30)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect_value(t, get_tile(&gs.world, int(floor.x), int(floor.y)), Tile_Type.Void)
+    testing.expect_value(t, gs.player.hp, hp)
+    testing.expect(t, hero_feet_row(&gs.player) < floor.y, "on the ground beside it, not down the drop")
+}
+
+// A gather takes no floor over a drop that hurts or burns, and no block the
+// player set down: the stone over the cave, over the lava pocket and the
+// placed blocks stay, and the loose stone further off is mined.  (Playtest
+// 188: L2 f2831 and L4 f342 the ledge floor (96,62), L3 f14636 the sky altar's
+// foundation.)
+@(test)
+hero_gather_keeps_its_ledges_and_its_building :: proc(t: ^testing.T) {
+    for kind in ([3]string{"cave", "lava", "placed"}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for x in x0 - 18 ..= x0 + 22 do for y in G ..= G + 12 do set_tile(&gs.world, x, y, .Dirt)
+        keep: [4][2]i32
+        for i in 0 ..< 4 {
+            x := x0 + 3 + i
+            switch kind {
+            case "cave":
+                for y in G + 1 ..= G + 11 do set_tile(&gs.world, x, y, .Air)
+                keep[i] = {i32(x), i32(G)}
+            case "lava":
+                set_tile(&gs.world, x, G + 1, .Air)
+                set_tile(&gs.world, x, G + 2, .Lava)
+                keep[i] = {i32(x), i32(G)}
+            case "placed":
+                keep[i] = {i32(x), i32(G - 1)}
+                gs.world.tile_flags[grid_idx(x, G - 1)] += {.Placed}
+            }
+            set_tile(&gs.world, int(keep[i].x), int(keep[i].y), .Stone)
+        }
+        if kind == "lava" do agent_handle_line(link, gs, `{"cmd":"reflexes","rim_dig":false}`)  // the pocket's own sides are rims: only the floor rule keeps the pick off
+        loose := [2]i32{i32(x0 - 10), i32(G - 1)}
+        set_tile(&gs.world, int(loose.x), int(loose.y), .Stone)
+        go_test_give(gs, .Pickaxe, 1)
+        exec_test_frames(link, gs, 5)
+        hp := gs.player.hp
+        id := work_test_run(t, link, gs, `{"do":"gather","item":"Stone_Block","count":1}`, 60 * 30)
+        work_test_expect_done(t, link, gs, id)
+        for k in keep do testing.expectf(t, get_tile(&gs.world, int(k.x), int(k.y)) == .Stone, "%s: the stone at %v kept", kind, k)
+        testing.expectf(t, get_tile(&gs.world, int(loose.x), int(loose.y)) != .Stone, "%s: the loose stone mined", kind)
+        testing.expect_value(t, gs.player.hp, hp)
+    }
+}
+
+// The way without a hurt is looked for over the whole level before a drop
+// that hurts is taken: a plateau's east cliff is 9 deep (3 hp); its stair
+// down, 41 columns west and out of the window round a goal at the cliff's
+// foot, goes into a tunnel through its base to that foot.  With no pick and no
+// blocks, the stair and the tunnel are the way.
+@(test)
+hero_plan_goes_round_past_the_window_before_a_hurt :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    G := 80
+    for x in 0 ..< GRID_W do for y in 0 ..< GRID_H do set_tile(&gs.world, x, y, .Air if y < G else .Stone)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    top := G - 9
+    for x in 40 ..= 90 do for y in top ..< G do set_tile(&gs.world, x, y, .Stone)
+    for i in 0 ..< 8 do for y in top ..= top + i do set_tile(&gs.world, 47 - i, y, .Air)  // the stair: a step down a tile each column west
+    for x in 40 ..= 90 do for y in G - 2 ..< G do set_tile(&gs.world, x, y, .Air)  // the tunnel, at the stair's foot
+    gs.player.inventory = {}
+    path := &gs.hero.path
+    from := [2]i32{88, i32(top) - 1}
+    to := [2]i32{95, i32(G) - 1}
+    testing.expect_value(t, hero_column(&gs.world, 91, int(top) - 1).hurts, 3)
+    reached, whole := hero_plan_once(gs, from, to, path, true, false)
+    testing.expect(t, !reached && !whole, "the window's own search finds no way, and proves nothing")
+    testing.expect(t, hero_plan(gs, from, to, path), "reached")
+    for st in path.steps[:path.n] do testing.expectf(t, !(st.move == .Drop && f32(st.to.y - st.from.y) > SAFE_FALL_TILES), "no hurtful drop: %v", st)
+    testing.expect(t, path.n > 0 && path.steps[0].to.x < from.x, "it sets off west, for the stair")
+    // A wall too high to jump in front of the stair: the whole level searched,
+    // shut, and the drop taken.
+    for y in top - 3 ..< top do set_tile(&gs.world, 48, y, .Stone)
+    reached, whole = hero_plan_once(gs, from, to, path, true, false, level = true)
+    testing.expect(t, !reached && whole, "no way without the drop on the whole level")
+    testing.expect(t, hero_plan(gs, from, to, path), "the drop")
+}
+
+// A long go whose first search without a hurt runs out of nodes is searched
+// again over the whole level, with HERO_NAV_LEVEL_BUDGET, before it takes a
+// drop that hurts (playtest 188 L2 f42756, f42957: two 9-tile drops with a
+// way round).  Seed 781's surface: from (89,79) to (165,100) the 4000-node
+// search ends short, and the way that hurts is there.
+@(test)
+hero_go_takes_no_hurt_when_the_safe_search_runs_long :: proc(t: ^testing.T) {
+    gs, link := exec_test_world(781)
+    defer free(gs)
+    defer free(link)
+    for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+    gs.roamer_timer = -1e9
+    gs.player.inventory = {}
+    go_test_give(gs, .Pickaxe, 1)
+    go_test_give(gs, .Stone_Block, 30)
+    from, to := [2]i32{89, 79}, [2]i32{165, 100}
+    path := &gs.hero.path
+    reached, whole := hero_plan_once(gs, from, to, path, true, false)
+    testing.expect(t, !reached && !whole, "the first search runs out short of it")
+    reached, _ = hero_plan_once(gs, from, to, path, true, true)
+    hurt := false
+    for st in path.steps[:path.n] do hurt ||= st.move == .Drop && f32(st.to.y - st.from.y) > SAFE_FALL_TILES
+    testing.expect(t, reached && hurt, "a way with a hurt reaches")
+    gs.player.pos = {f32(from.x) + 0.1, f32(from.y) + 1 - PLAYER_H}
+    exec_test_frames(link, gs, 10)
+    testing.expect_value(t, hero_feet(&gs.player), from)
+    hp := gs.player.hp
+    id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, to.x, to.y), 60 * 120)
+    status, reason := go_test_status(link, gs, id)
+    testing.expectf(t, status == "done", "%s %s", status, reason)
+    testing.expect_value(t, gs.player.hp, hp)
+}
+
+// A wary hero with spare blocks pillars out of a pit: its floor is no corner
+// while a pillar of what the bag spares reaches a cheap way out, head room
+// over it (playtest 188: gather Stone_Block failed cornered in its own 3-5
+// deep pits, L2 f11862, f19462, L5 f4263, f6607).  The 4-deep pit needs 2.
+@(test)
+hero_wary_pillars_out_of_a_pit_with_blocks :: proc(t: ^testing.T) {
+    Case :: struct{blocks: int, roof: bool, cornered: bool}
+    for c in ([]Case{{0, false, true}, {1, false, true}, {2, false, false}, {10, false, false}, {10, true, true}}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        retreat_test_pit(gs, x0, G, 4)
+        if c.roof do set_tile(&gs.world, x0 + 6, G, .Stone)  // no head room up the pillar
+        ore := [2]i32{i32(x0 + 7), i32(G + 3)}
+        if c.blocks > 0 do go_test_give(gs, .Stone_Block, c.blocks)
+        gs.hero.seen = true
+        testing.expect(t, hero_wary(gs), "wary")
+        floor := [2]i32{i32(x0 + 6), i32(G + 3)}
+        testing.expectf(t, hero_pillar_out(gs, floor) == !c.cornered, "%v: a pillar out", c)
+        s, ok, _, cornered := hero_work_stand(gs, ore, .Pick, PICK_RANGE)
+        testing.expectf(t, ok == !c.cornered && cornered == c.cornered, "%v: a stand %v at %v, cornered %v", c, ok, s, cornered)
+    }
+}
+
+// On top of its own pillar, every way off a drop it cannot take, the hero
+// digs the pillar down a tile at a time (playtest 188 L5 f18404: every go
+// failed no_route).  Never a top it cannot dig (a World_Anchor), and never a
+// lone block with air under it: dug, it would drop the hero the whole way.
+@(test)
+hero_go_digs_down_off_its_own_pillar :: proc(t: ^testing.T) {
+    for kind in ([3]string{"pillar", "anchor", "floating"}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        X := x0 + 6
+        for y in G - 9 ..< G {
+            if kind == "floating" && y > G - 9 do continue
+            set_tile(&gs.world, X, y, .World_Anchor if kind == "anchor" && y == G - 9 else .Stone)
+            gs.world.tile_flags[grid_idx(X, y)] += {.Placed}
+        }
+        gs.player.inventory = {}
+        go_test_give(gs, .Pickaxe, 1)
+        gs.player.pos = {f32(X) + 0.1, f32(G - 9) - PLAYER_H}
+        exec_test_frames(link, gs, 10)
+        testing.expectf(t, hero_feet(&gs.player) == [2]i32{i32(X), i32(G - 10)}, "%s: on top", kind)
+        testing.expect_value(t, hero_column(&gs.world, X + 1, G - 10).hurts, 3)
+        gs.player.hp = 4  // the 3-hp fall leaves it under the reflex line
+        id, _ := go_test_run(link, gs, fmt.tprintf(`{{"do":"go","to":[%d,%d]}}`, X + 6, G - 1), 60 * 60)
+        status, reason := go_test_status(link, gs, id)
+        if kind == "pillar" {
+            testing.expectf(t, status == "done", "%s: %s %s", kind, status, reason)
+        } else {
+            testing.expectf(t, status == "failed" && reason == "no_route", "%s: %s %s", kind, status, reason)
+        }
+        testing.expectf(t, gs.player.hp == 4, "%s: hp %d", kind, gs.player.hp)
+    }
+}
+
+// A gather takes the tile that surely gives the item over a nearer one that
+// gives it now and then: Cloud_Ore four tiles off before the Cloud beside
+// the hero (playtest 188 L2 f35967: 37 Cloud dug for 8 Cloud_Stone).
+@(test)
+hero_gather_takes_the_sure_tile_over_the_chance :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    x0, G := hero_test_arena(gs)
+    cloud := [2]i32{i32(x0 + 1), i32(G - 1)}
+    ore := [2]i32{i32(x0 + 5), i32(G - 1)}
+    set_tile(&gs.world, int(cloud.x), int(cloud.y), .Cloud)
+    set_tile(&gs.world, int(ore.x), int(ore.y), .Cloud_Ore)
+    go_test_give(gs, .Pickaxe, 1)
+    exec_test_frames(link, gs, 5)
+    id := work_test_run(t, link, gs, `{"do":"gather","item":"Cloud_Stone","count":1}`, 60 * 30)
+    work_test_expect_done(t, link, gs, id)
+    testing.expect(t, get_tile(&gs.world, int(ore.x), int(ore.y)) != .Cloud_Ore, "the ore mined")
+    testing.expect_value(t, get_tile(&gs.world, int(cloud.x), int(cloud.y)), Tile_Type.Cloud)
 }

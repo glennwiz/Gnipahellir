@@ -427,6 +427,7 @@ HERO_PASS_BLOWS       :: 1          // blows a threat gets in as the hero runs b
 HERO_BREAK_STUCK_S    :: f32(0.5)   // a flight with no headway this long: the way is shut
 HERO_WARY_S           :: f32(8)     // a threat in the senses this recently, noticed or not, keeps the hero wary
 HERO_WARY_EXIT_HP     :: 2          // while wary, a work stand needs a way out that costs at most this
+HERO_PILLAR_OUT_TILES :: i32(5)     // or, with the blocks to spare, a pillar this high at most up to one (card 195)
 HERO_RETREAT_SCORE    :: f32(70)    // low with no heal, in a pit: out of it ahead of a work goal
 HERO_MAULED_TILES     :: f32(1.5)   // a threat this near across is striking: with the way shut, a fall that leaves the hero standing beats it
 HERO_CLEAR_MARGIN     :: f32(4)     // a noticed threat stays in mind this far past HERO_THREAT_FAR
@@ -671,6 +672,14 @@ hero_pick :: proc(b: ^Hero_Brain) -> Hero_Behaviour {
 
 hero_feet_row :: proc(p: ^Player) -> i32 {
     return i32(p.pos.y + PLAYER_H - 0.001)
+}
+
+// The columns the body rests on, as physics reads them (move_body's
+// BODY_MARGIN): a body a hair over a column's edge does not stand on it (card
+// 195, playtest 188: at x 83.9999 the dig checks read column 83's floor under
+// the body, and the floor under it was dug out over an 18-tile drop).
+hero_body_cols :: proc(p: ^Player) -> (x0, x1: i32) {
+    return i32(p.pos.x + BODY_MARGIN), i32(p.pos.x + PLAYER_W - BODY_MARGIN)
 }
 
 hero_sense :: proc(gs: ^Game_State, b: ^Hero_Brain) {
@@ -1095,6 +1104,21 @@ hero_way_out_cheap :: proc(w: ^World_Grid, a: [2]i32) -> bool {
     return hero_exit_cost(w, a) <= HERO_WARY_EXIT_HP
 }
 
+// A way out of feet tile a up a pillar of the bag's spare blocks, at most
+// HERO_PILLAR_OUT_TILES high, to a tile with a cheap way out: a pit the hero
+// dug itself is no corner while it has the blocks to climb out (card 195,
+// playtest 188: a gather of Stone_Block failed cornered in its own 3-5 deep
+// pits, the bag full of blocks).
+hero_pillar_out :: proc(gs: ^Game_State, a: [2]i32) -> bool {
+    w := &gs.world
+    _, spare := hero_bridge_blocks(gs)
+    for k in i32(1) ..= min(HERO_PILLAR_OUT_TILES, i32(spare)) {
+        if !hero_open(w, a.x, a.y - k - 1) do return false  // the head room to jump up onto each block
+        if hero_way_out_cheap(w, a - {0, k}) do return true
+    }
+    return false
+}
+
 // What the cheapest way out from feet tile a costs: walked each way as a
 // player walks for HERO_THREAT_FAR steps (a step up of one or two tiles where
 // the body fits, a walk or a free drop, a gap the jump arc clears), the hp of
@@ -1510,6 +1534,7 @@ HERO_NAV_H      :: 48
 HERO_NAV_NODES  :: GRID_W * GRID_H  // a goal past the window is searched for over the whole level (card 185)
 HERO_NAV_OPEN   :: 4 * HERO_NAV_NODES
 HERO_NAV_BUDGET :: 4000  // nodes one search expands at most
+HERO_NAV_LEVEL_BUDGET :: 5 * HERO_NAV_BUDGET  // the whole level's search for a way without a hurt, once the first search finds none (card 195)
 HERO_PATH_MAX   :: 64    // a longer path keeps the start of it, and is planned again from its end
 HERO_GAP_MAX    :: 4     // a running jump lands this many columns over at most
 
@@ -1674,14 +1699,26 @@ hero_nav_h :: proc(a, b: [2]i32) -> f32 {
 // nearest tile is planned without them, so no block is spent on a way that
 // may end short (card 181: playtest 135's goes bridged 11 to 37 blocks, then
 // failed no_route).
+//
+// The search for a way that hurts runs only when the one without has looked
+// over the whole level, with HERO_NAV_LEVEL_BUDGET, and not found one (card
+// 195, playtest 188: long goes took 9- and 10-tile drops while a way round was
+// there, past the window or past what the search had time for).
 hero_plan :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig := true, blocks := true) -> (reached: bool) {
-    if hero_plan_once(gs, from, to, out, dig, false, blocks) || hero_plan_once(gs, from, to, out, dig, true, blocks) do return true
+    whole: bool
+    if reached, whole = hero_plan_once(gs, from, to, out, dig, false, blocks); reached do return true
+    if !whole {
+        if reached, _ = hero_plan_once(gs, from, to, out, dig, false, blocks, level = true, budget = HERO_NAV_LEVEL_BUDGET); reached do return true
+    }
+    if r, _ := hero_plan_once(gs, from, to, out, dig, true, blocks); r do return true
     if blocks do hero_plan_once(gs, from, to, out, dig, true, false)
     return false
 }
 
-@(private="file")
-hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool, blocks_ok := true) -> (reached: bool) {
+// level: over the whole level, never the window.  whole: the search went over
+// the whole level and ran out of tiles to try, so what it did not reach no
+// way reaches.
+hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, hurt_ok: bool, blocks_ok := true, level := false, budget := HERO_NAV_BUDGET) -> (reached, whole: bool) {
     n := &gs.hero.nav
     w := &gs.world
     // The window round the middle of the way when to fits in it, so a leg
@@ -1691,7 +1728,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     // no_route with the bag whole).
     o := [2]i32{0, 0}
     n.w, n.h = GRID_W, GRID_H
-    if abs(to.x - from.x) < HERO_NAV_W - 1 && abs(to.y - from.y) < HERO_NAV_H - 1 {
+    if !level && abs(to.x - from.x) < HERO_NAV_W - 1 && abs(to.y - from.y) < HERO_NAV_H - 1 {
         c := (from + to) / 2
         o = {clamp(c.x - HERO_NAV_W / 2, 0, GRID_W - HERO_NAV_W), clamp(c.y - HERO_NAV_H / 2, 0, GRID_H - HERO_NAV_H)}
         n.w, n.h = HERO_NAV_W, HERO_NAV_H
@@ -1700,7 +1737,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     n.closed = {}
     out.n, out.at = 0, 0
     s := hero_nav_index(n, o, from)
-    if s < 0 do return false
+    if s < 0 do return false, false
     has_pick := dig && hero_item_slot(gs, .Pickaxe) >= 0
     _, blocks := hero_bridge_blocks(gs)
     if !blocks_ok do blocks = 0
@@ -1711,7 +1748,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
     astar_open_push(n.open[:], &size, {hero_nav_h(from, to), i16(s)}, &work)
     best, best_h := s, hero_nav_h(from, to)
     expanded := 0
-    for size > 0 && expanded < HERO_NAV_BUDGET {
+    for size > 0 && expanded < budget {
         i := int(astar_open_pop(n.open[:], &size, &work).node)
         if n.closed[i] do continue
         n.closed[i] = true
@@ -1769,6 +1806,12 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
                 if ok && dug > 0 do hero_nav_relax(n, &size, o, i, dt, 1 + HERO_NAV_DIG_COST * f32(dug), .Dig, nb, to)
             }
         }
+        // Straight down through its own floor onto the tile under it, as a
+        // player digs a pillar back down (card 195, playtest 188: on top of
+        // its own pillar every go failed no_route).
+        if dn := a + {0, 1}; hero_diggable(gs, dn, has_pick) && is_solid(w, int(dn.x), int(dn.y + 1)) && !hero_nav_dug(n, o, s, i, dn + {0, 1}) {
+            hero_nav_relax(n, &size, o, i, dn, 1 + HERO_NAV_DIG_COST, .Dig, nb, to)
+        }
         // Up a pillar, as a player climbs with blocks in the bag: a jump, and
         // a block set down in the feet's tile once they clear it.  The jump
         // needs the two rows over the feet; a third, solid, only stops the head
@@ -1794,7 +1837,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         pos -= 1
     }
     out.n = min(length, HERO_PATH_MAX)
-    return reached
+    return reached, size == 0 && n.w == GRID_W && n.h == GRID_H
 }
 
 // ─── Water (card 174) ───
@@ -2319,7 +2362,7 @@ hero_reflex_floor :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     if !hero_digging(gs) do return
     p := &gs.player
     t := gs.agent.cmd.mine
-    x0, x1 := i32(p.pos.x), i32(p.pos.x + PLAYER_W - 0.001)
+    x0, x1 := hero_body_cols(p)
     if t.y != hero_feet_row(p) + 1 || t.x < x0 || t.x > x1 do return
     for x in x0 ..= x1 do if x != t.x && is_solid(&gs.world, int(x), int(t.y)) do return
     _, hurts, burns := hero_dig_fall(&gs.world, t)
