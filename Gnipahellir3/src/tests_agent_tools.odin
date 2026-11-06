@@ -609,6 +609,20 @@ replay_says_where_a_run_parts_from_its_recording :: proc(t: ^testing.T) {
     testing.expect(t, ok, "an old row matches any landing")
     _, ok, _ = tool_replay_compare(old, `{"f":62,"done":1,"x":1.000,"y":2.000,"hp":10}` + "\n")
     testing.expect(t, !ok, "an old row still holds its frame")
+
+    // A goal's end carries the hero's mana: a drift in mana alone parts the run,
+    // and a row from before mana was kept still matches (card 198).
+    spent := `{"f":60,"done":1,"x":1.000,"y":2.000,"hp":10,"mana":3.00}` + "\n"
+    n, ok, _ = tool_replay_compare(spent, spent)
+    testing.expect(t, ok && n == 1)
+    drift, _ := strings.replace(spent, `"mana":3.00`, `"mana":3.50`, 1, context.temp_allocator)
+    _, ok, note = tool_replay_compare(spent, drift)
+    testing.expect(t, !ok && strings.contains(note, "DIVERGED at goal 1, frame 60"), note)
+    calm_end, _ := strings.replace(spent, `"mana":3.00`, `"mana":3.05`, 1, context.temp_allocator)
+    _, ok, _ = tool_replay_compare(spent, calm_end)
+    testing.expect(t, ok, "a goal end's mana within a tenth is the same")
+    _, ok, _ = tool_replay_compare(ends[:strings.index_byte(ends, '\n') + 1], drift)
+    testing.expect(t, ok, "a landing from before mana was kept matches any mana")
 }
 
 // A goals-only run writes no act rows: the replay checks each goal's end, and
@@ -638,7 +652,7 @@ a_goals_only_replay_checks_each_goal_where_it_landed :: proc(t: ^testing.T) {
     rows := string(data)
     testing.expect_value(t, strings.count(rows, `,"act":`), 0)  // nothing for the old check to go by
     testing.expect_value(t, strings.count(rows, `"x":`), 4)
-    last := fmt.tprintf(`"done":4,"x":%.3f,"y":%.3f,"hp":%d}`, gs.player.pos.x, gs.player.pos.y, gs.player.hp)
+    last := fmt.tprintf(`"done":4,"x":%.3f,"y":%.3f,"hp":%d,"mana":%.2f}`, gs.player.pos.x, gs.player.pos.y, gs.player.hp, gs.player.mana)
     testing.expect(t, strings.contains(rows, last), last)  // the last goal ends where the run did
 
     rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run))
