@@ -221,8 +221,10 @@ hero_work_start :: proc(gs: ^Game_State, g: ^Agent_Goal) -> bool {
             }
         }
         if why != "" || r.station == .None do break
-        t, ok := hero_work_nearest(gs, feet, w, hero_work_station)
-        if !ok do why = fmt.tprintf("no_station: no %v in %d tiles", station_tile[r.station], HERO_WORK_SEARCH_X)
+        // A station the player built is known wherever it stands on the level
+        // (card 201, playtest 188: the bench 62 tiles off was "no_station").
+        t, ok := hero_work_nearest(gs, feet, w, hero_work_station, {GRID_W, GRID_H})
+        if !ok do why = fmt.tprintf("no_station: no %v on this level", station_tile[r.station])
         w.machine = t
     case .Place:
         switch {
@@ -315,15 +317,16 @@ hero_work_find_machine :: proc(gs: ^Game_State, w: ^Hero_Work, feet: [2]i32) -> 
 
 // ─── Finding ───
 
-// The tile nearest from that want says yes to, inside the search window; one
-// a den or a hunter is by counts HERO_WORK_DANGER_COST tiles more (card 163).
+// The tile nearest from that want says yes to, inside the search window (or
+// reach tiles each way); one a den or a hunter is by counts
+// HERO_WORK_DANGER_COST tiles more (card 163).
 @(private="file")
-hero_work_nearest :: proc(gs: ^Game_State, from: [2]i32, w: ^Hero_Work, want: proc(gs: ^Game_State, w: ^Hero_Work, t: [2]i32) -> bool) -> (best: [2]i32, ok: bool) {
+hero_work_nearest :: proc(gs: ^Game_State, from: [2]i32, w: ^Hero_Work, want: proc(gs: ^Game_State, w: ^Hero_Work, t: [2]i32) -> bool, reach := [2]i32{HERO_WORK_SEARCH_X, HERO_WORK_SEARCH_Y}) -> (best: [2]i32, ok: bool) {
     d_best := max(i32)
     danger: Hero_Dangers
     nd := hero_dangers(&gs.hero.senses, &danger)
-    for y in from.y - HERO_WORK_SEARCH_Y ..= from.y + HERO_WORK_SEARCH_Y {
-        for x in from.x - HERO_WORK_SEARCH_X ..= from.x + HERO_WORK_SEARCH_X {
+    for y in from.y - reach.y ..= from.y + reach.y {
+        for x in from.x - reach.x ..= from.x + reach.x {
             d := abs(x - from.x) + abs(y - from.y) + (HERO_WORK_DANGER_COST if hero_in_danger(danger[:nd], {x, y}) else 0)  // a den's own wood, by a hunter: the open one first (card 163)
             if want == hero_work_gives do d += hero_work_chance_cost(gs, {x, y})
             if d >= d_best || !in_bounds(int(x), int(y)) || !want(gs, w, {x, y}) do continue
