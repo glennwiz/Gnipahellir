@@ -141,13 +141,7 @@ update_player :: proc(gs: ^Game_State) {
         if gs.soak_t > 0 do p.vel *= RAIN_SOAK_DRAG
     } else {
         // ── Horizontal intent (Speed stat: base + equipment) ──────
-        speed := f32(player_stat(p, .Speed))
-        if submerged {
-            speed *= WATER_DRAG
-        } else if gs.soak_t > 0 {
-            speed *= RAIN_SOAK_DRAG   // not stacked with water, like leaf fall
-        }
-        if gs.bite_slow_t > 0 do speed *= BITE_SLOW
+        speed := player_walk_speed(gs)
         p.vel.x = 0
         if inp.move_left  { p.vel.x = -speed; p.facing = -1 }
         if inp.move_right { p.vel.x =  speed; p.facing =  1 }
@@ -331,6 +325,24 @@ update_player :: proc(gs: ^Game_State) {
 }
 
 // True while the body overlaps any swimmable tile — used to break falls.
+// How fast a held key moves the body sideways now, in tiles a second: the
+// Speed stat (base and gear) through water, rain and a bite; in flight its
+// speed, rain left out (an upper bound is all the agent's brake needs, card
+// 191: it stops a hair sooner).
+player_walk_speed :: proc(gs: ^Game_State) -> f32 {
+    flying := gs.flight_t > 0
+    when GAME_DEBUG do flying = flying || gs.debug.fly
+    if flying do return FLY_SPEED
+    speed := f32(player_stat(&gs.player, .Speed))
+    if player_in_water(gs) {
+        speed *= WATER_DRAG
+    } else if gs.soak_t > 0 {
+        speed *= RAIN_SOAK_DRAG   // not stacked with water, like leaf fall
+    }
+    if gs.bite_slow_t > 0 do speed *= BITE_SLOW
+    return speed
+}
+
 player_in_water :: proc(gs: ^Game_State) -> bool {
     p := &gs.player
     left  := int(p.pos.x)

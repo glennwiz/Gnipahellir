@@ -18702,3 +18702,144 @@ a_hunting_builder_drops_down_a_shaft_without_flipping :: proc(t: ^testing.T) {
         testing.expectf(t, flips == 0, "start %v: %d frames facing west in %d", start, flips, frames)
     }
 }
+
+// Card 191: a hunting Builder's jump over a gap onto a ledge a row up, and
+// its fall down a shaft one wide, moved by game_update, at 60 Hz and at the
+// 50 ms the game's tick is capped at (a stride wider than the 0.15
+// deadzone's room).  The player is east the whole way: it never turns.
+@(test)
+a_builder_jumps_a_gap_and_falls_a_shaft_holding_its_facing :: proc(t: ^testing.T) {
+    for gap in ([]bool{true, false}) do for dt in ([]f32{1.0 / 60.0, 0.05}) do for start in ([]f32{0, 0.3, 0.6}) {
+        gs := test_state()
+        defer free(gs)
+        gs.ui.show_title = false
+        for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+        gs.roamer_timer = -1e9
+        x, G := 60, SURFACE_Y
+        for xx in x - 6 ..= x + 12 do for y in G - 8 ..< G + 10 do set_tile(&gs.world, xx, y, .Stone if y >= G else .Air)
+        feet: f32
+        if gap {
+            for y in G ..< G + 10 do set_tile(&gs.world, x + 3, y, .Air)          // a gap one wide
+            for xx in x + 4 ..= x + 12 do set_tile(&gs.world, xx, G - 1, .Stone)  // the far side a row up
+            feet = f32(G - 1)
+        } else {
+            for y in G ..< G + 5 do set_tile(&gs.world, x + 3, y, .Air)           // a shaft one wide, five down
+            feet = f32(G + 5)
+        }
+        gs.player.pos = {f32(x + 3 if !gap else x + 8) + (1 - PLAYER_W) * 0.5, feet - PLAYER_H}
+        e := pond_builder(gs, x, G, {}, 0)
+        e.pos.x += start
+        e.builder.goal = .Hunt
+        e.builder.plan_target = {-99, -99}
+        e.facing = 1
+        flips, frames := 0, 0
+        far := builder_tile(e)
+        for ; frames < int(6 / dt); frames += 1 {
+            gs.delta_time = dt
+            gs.player.hp = 1000
+            game_update(gs)
+            if e.facing != 1 do flips += 1
+            far = {max(far.x, builder_tile(e).x), max(far.y, builder_tile(e).y)}
+        }
+        name := "gap" if gap else "shaft"
+        testing.expectf(t, far.x >= i32(x + 4) if gap else far.y >= i32(G + 2), "%s dt %v start %v: got no further than %v", name, dt, start, far)
+        testing.expectf(t, flips == 0, "%s dt %v start %v: %d ticks facing west in %d", name, dt, start, flips, frames)
+    }
+}
+
+// The shared steer: no side inside the slack, and a walk's last step cut to
+// what is left, so a body never passes its point whatever the tick.
+@(test)
+steer_settles_inside_its_slack :: proc(t: ^testing.T) {
+    testing.expect_value(t, steer_dir(0.1, 0.1), 0)
+    testing.expect_value(t, steer_dir(-0.1, 0.1), 0)
+    testing.expect_value(t, steer_dir(0.11, 0.1), 1)
+    testing.expect_value(t, steer_dir(-0.11, 0.1), -1)
+    // A whole stride a tick: a side only when it leaves the body nearer.
+    testing.expect_value(t, steer_key(0.12, 0.1, 0.25), 0)
+    testing.expect_value(t, steer_key(0.13, 0.1, 0.25), 1)
+    testing.expect_value(t, steer_key(-0.09, 0.1, 0.1), 0)
+    testing.expect_value(t, steer_key(-0.11, 0.1, 0.1), -1)
+    for stride in ([]f32{0.05, 0.133, 0.2, 0.25, 0.7}) do for start in ([]f32{3, 0.3, 0.13, -0.13, -3}) {
+        dx, flips := start, 0
+        dir0 := steer_key(start, 0.1, stride)
+        for _ in 0 ..< 400 {
+            dir := steer_key(dx, 0.1, stride)
+            if dir != 0 && dir != dir0 do flips += 1
+            dx -= f32(dir) * stride
+        }
+        testing.expectf(t, flips == 0 && abs(dx) <= max(0.1, stride * 0.5) + 1e-5, "stride %v from %v: %d flips, left %v", stride, start, flips, dx)
+    }
+    for dt in ([]f32{1.0 / 144.0, 1.0 / 60.0, 0.05}) {
+        for start in ([]f32{3, 0.2, 0.04, -0.04, -3}) {
+            dx, flips := start, 0
+            dir0 := steer_dir(start, 0.03)
+            for _ in 0 ..< 400 {
+                v, dir := steer_vel(dx, 0.03, 4, dt)
+                if dir != 0 && dir != dir0 do flips += 1
+                dx -= v * dt
+            }
+            testing.expectf(t, flips == 0 && abs(dx) <= 0.03 + 1e-5, "dt %v from %v: %d flips, left %v", dt, start, flips, dx)
+        }
+    }
+}
+
+// Card 191: a golem's path walk, at the 50 ms the game's tick is capped at.
+// A stride there (GOLEM_SPEED * 0.05) is wider than the 0.08 deadzone's room,
+// so up a step and down a shaft the walk overshot its waypoint and came back
+// (2 and 4 ticks facing west from a start 0.1 east).  Moved by game_update,
+// east the whole way, it never turns.
+@(test)
+a_golem_steps_up_and_drops_a_shaft_holding_its_facing :: proc(t: ^testing.T) {
+    for way in ([]string{"step", "shaft"}) do for start in ([]f32{0, 0.1, 0.2, 0.3}) {
+        shaft := way == "shaft"
+        gs := test_state()
+        defer free(gs)
+        gs.ui.show_title = false
+        for i in 0 ..< MAX_ENEMIES do if gs.enemies.active[i] do despawn_enemy(gs, i)
+        gs.roamer_timer = -1e9
+        x, G := 60, SURFACE_Y
+        for xx in x - 6 ..= x + 14 do for y in G - 8 ..< G + 10 do set_tile(&gs.world, xx, y, .Stone if y >= G else .Air)
+        T: [2]i32
+        from := [2]f32{f32(x) + start, f32(G) - GOLEM_H}
+        if shaft {
+            for y in G ..< G + 5 do set_tile(&gs.world, x + 4, y, .Air)  // a shaft one wide, five down
+            T = {i32(x + 4), i32(G + 4)}
+        } else {
+            for xx in x + 4 ..= x + 14 do set_tile(&gs.world, xx, G - 1, .Stone)  // a step a row up
+            T = {i32(x + 8), i32(G - 2)}
+        }
+        gs.player.pos = {f32(x - 5), f32(G) - PLAYER_H}
+        g := &gs.golems.data[0]
+        g^ = {status = .Deployed, level = gs.level_index, pos = from, hp = GOLEM_HP,
+            mode = .Gather, grounded = true, project_cell = -1, facing = 1}
+        testing.expectf(t, golem_set_target(gs, g, T, false), "%s start %v: a route", way, start)
+        flips := 0
+        for _ in 0 ..< 100 {
+            gs.delta_time = 0.05
+            gs.player.hp = 1000
+            game_update(gs)
+            if g.facing != 1 do flips += 1
+        }
+        at := [2]i32{i32(g.pos.x + GOLEM_W * 0.5), i32(g.pos.y + GOLEM_H * 0.5)}
+        testing.expectf(t, chebyshev(at, T) <= 1, "%s start %v: at %v, not by %v", way, start, at, T)
+        testing.expectf(t, flips == 0, "%s start %v: %d ticks facing west", way, start, flips)
+    }
+}
+
+// A golem under a waypoint inside the deadzone, a hair west of it, keeps its
+// facing: no correction smaller than the deadzone turns it.  No layout the
+// game builds reaches it (a golem's route out of a shaft goes up a diagonal,
+// and the stride's cut lands it on the middle), so the walk is driven here.
+@(test)
+a_golem_inside_its_deadzone_keeps_its_facing :: proc(t: ^testing.T) {
+    gs := test_state()
+    defer free(gs)
+    g := &gs.golems.data[0]
+    for face in ([]i8{1, -1}) do for off in ([]f32{0.05, -0.05}) {
+        g^ = {status = .Deployed, pos = {60.5 - GOLEM_W * 0.5 + off, 50}, facing = face}
+        g.path.tiles[0], g.path.len = {60, 48}, 1  // two rows overhead: never ticked off from here
+        golem_follow_path(g, &gs.world, 1.0 / 60.0)
+        testing.expectf(t, g.facing == face && g.vel.x == 0, "facing %d off %v: facing %d, vel %v", face, off, g.facing, g.vel.x)
+    }
+}
