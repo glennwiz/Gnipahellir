@@ -1797,3 +1797,142 @@ replay_of_a_hero_on_its_own_lands_the_same :: proc(t: ^testing.T) {
     testing.expect(t, gs2.world.terrain == gs.world.terrain, "the same world")
     testing.expect(t, gs2.world.items == gs.world.items && gs2.world.item_counts == gs.world.item_counts, "the same piles")
 }
+
+// Card 200: a run recorded before card 190 has no on_its_own switch, and its
+// hero stood between goals.  Its replay keeps the hero standing, whether the
+// run marks its connection (from card 192) or not, though the replay's link
+// starts with every reflex on as tool_replay_start's does.
+@(test)
+replay_of_a_run_from_before_the_hero_acted_on_its_own_lands_the_same :: proc(t: ^testing.T) {
+    rec_path, got_path := test_scratch_path("tools_test_old_rec.jsonl"), test_scratch_path("tools_test_old_got.jsonl")
+    defer delete(rec_path)
+    defer delete(got_path)
+    defer os.remove(rec_path)
+    defer os.remove(got_path)
+    gs, link := tools_test_world()  // on_its_own off: the hero of a run before card 190
+    defer free(gs)
+    defer free(link)
+    tools_test_record(link, rec_path)
+    os.write_string(link.acts_file, `{"f":0,"mark":"connect"}` + "\n")  // the connect row as card 192 wrote it
+    link.connected, link.realtime = true, true
+    for frame := 0; frame < 2000; frame += 1 {
+        switch frame {
+        case 6:   agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","frames":5}]}`)
+        case 400: agent_handle_line(link, gs, `{"cmd":"goals","add":[{"do":"act","move":"left","frames":20},{"do":"act","frames":5}]}`)
+        }
+        if frame > 400 && !agent_goals_busy(&link.goals) do break
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    os.close(link.acts_file)
+    data, _ := os.read_entire_file(rec_path, context.allocator)
+    defer delete(data)
+    testing.expect(t, !strings.contains(string(data), "reflexes"), "an old run records no switch")
+    marked := string(data)
+    unmarked, _ := strings.replace(marked, `{"f":0,"mark":"connect"}` + "\n", "", 1, context.temp_allocator)  // a run from before card 192
+    for rows in ([]string{marked, unmarked}) {
+        gs2, link2 := tools_test_world()
+        defer free(gs2)
+        defer free(link2)
+        link2.goals.reflexes_off = {}  // as the link tool_replay_start replays on
+        tools_test_record(link2, got_path)
+        rep: Tool_Replay
+        tool_replay_begin(&rep, link2, gs2, rows, got_path)
+        for _ in 0 ..< 5000 {
+            if rep.done do break
+            if tool_replay_frame(&rep, link2, gs2) {
+                game_update(gs2)
+                agent_after_tick(link2, gs2)
+            }
+        }
+        testing.expect(t, rep.done && !rep.diverged, "every goal ends where it did")
+        testing.expect_value(t, rep.checked, 3)
+        testing.expect(t, .On_Its_Own in link2.goals.reflexes_off, "the hero stands between goals")
+        testing.expect_value(t, gs2.player.pos, gs.player.pos)
+        testing.expect(t, gs2.player.inventory == gs.player.inventory, "the same bag")
+    }
+}
+
+// Card 200: each connection's mark says whether the hero acts on its own.  A
+// connection whose mark says nothing is one from before card 190, after a
+// disconnect too; one from before the marks takes the seat on its first row
+// and is as old.
+@(test)
+replay_takes_on_its_own_from_each_connect_mark :: proc(t: ^testing.T) {
+    got_path := test_scratch_path("tools_test_replay_got_own.jsonl")
+    defer delete(got_path)
+    defer os.remove(got_path)
+    goal :: `{"f":3,"goal":{"do":"act","frames":10},"kind":"act","id":1,"via":"Goal","step":0}` + "\n" + `{"f":40,"mark":"disconnect"}` + "\n"
+    late :: `{"f":90,"goal":{"do":"act","frames":10},"kind":"act","id":1,"via":"Goal","step":0}` + "\n"
+    on   :: `"reflexes":{"leave_hazard":true,"potion":true,"floor_dig":true,"rim_dig":true,"fight_back":true,"on_its_own":true}`
+    cases := []struct { rows: string, own: bool }{
+        {goal + `{"f":60,"mark":"connect"}` + "\n" + late, false},
+        {goal + late, false},
+        {goal + `{"f":60,"mark":"connect",` + on + "}\n" + late, true},
+        {`{"f":0,"mark":"connect",` + on + "}\n" + `{"f":3,"goal":{"do":"act","frames":10},"kind":"act","id":1,"via":"Goal","step":0}` + "\n", true},
+    }
+    for c, i in cases {
+        rep, gs, link := tools_test_replay(c.rows, got_path)
+        defer free(gs)
+        defer free(link)
+        testing.expectf(t, rep.done && !rep.diverged, "case %d replays", i)
+        testing.expectf(t, (.On_Its_Own not_in link.goals.reflexes_off) == c.own, "case %d: on its own %v", i, c.own)
+    }
+}
+
+// Card 200: a run over a real socket whose client never switches a reflex has
+// the hero act on its own between goals.  The connect row records that, and
+// the replay acts on its own too, though its link starts with it off.
+@(test)
+replay_of_a_connection_with_the_hero_on_its_own_lands_the_same :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_own")
+    defer tools_test_done(run)
+    rec := fmt.aprintf("%s/rec.jsonl", run)
+    defer delete(rec)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, AGENT_PENDING_MAX)
+    testing.expect_value(t, err, nil)
+    at, _ := net.bound_endpoint(sock)
+    net.set_blocking(sock, false)
+    link.listener, link.listening = sock, true
+    defer agent_close(link, gs)
+    tools_test_record(link, rec)
+    frame :: proc(link: ^Agent_Link, gs: ^Game_State) {  // main's frame
+        gs.delta_time = AGENT_STEP
+        if agent_pump(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    client, _ := net.dial_tcp(at)
+    defer net.close(client)
+    net.send_tcp(client, transmute([]u8)string(`{"cmd":"goals","add":[{"do":"act","frames":5}]}` + "\n"))
+    for _ in 0 ..< 400 do frame(link, gs)
+    testing.expect(t, .On_Its_Own not_in link.goals.reflexes_off, "a client's hero acts on its own")
+    net.send_tcp(client, transmute([]u8)string(`{"cmd":"goals","add":[{"do":"act","move":"left","frames":20},{"do":"act","frames":5}]}` + "\n"))
+    for _ in 0 ..< 1000 {
+        frame(link, gs)
+        if link.goals.n > 0 && link.goals.slots[link.goals.n - 1].status == .Done do break
+    }
+    os.close(link.acts_file)
+    link.recording = false
+    data, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(data)
+    rows := string(data)
+    testing.expect(t, strings.contains(rows, `"mark":"connect","reflexes":{`) && strings.contains(rows, `"on_its_own":true}`), "the connect row records the switch")
+    testing.expect(t, inventory_count(&gs.player.inventory, .Wood_Log) > 0, "its own gather in the gap went through")
+
+    rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run))
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged, "every goal ends where it did")
+    testing.expect(t, rep.checked >= 3)
+    testing.expect_value(t, gs2.frame, gs.frame)
+    testing.expect_value(t, gs2.player.pos, gs.player.pos)
+    testing.expect(t, gs2.player.inventory == gs.player.inventory, "the same bag")
+    testing.expect(t, gs2.world.terrain == gs.world.terrain, "the same world")
+}

@@ -448,6 +448,11 @@ Tool_Replay :: struct {
     checked:  int,     // landings the replay compared with the run's
 }
 
+// A connection recorded before its connect row carried the reflexes (card 200)
+// is from before card 190: its hero never acted on its own.  A connect row
+// with them sets them as a reflexes row does.
+TOOL_REPLAY_OLD_REFLEXES_OFF :: bit_set[Hero_Reflex]{.On_Its_Own}
+
 // What a replay boots from, read from the run's folder: its seed and goal rows,
 // and for a --load run the save it began from.
 Tool_Replay_From :: struct {
@@ -538,6 +543,7 @@ tool_replay_begin :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State,
     rep^ = {rows = rows, got = got}
     link.connected = true  // no socket: the replay never reaches agent_pump
     link.realtime  = true
+    link.goals.reflexes_off = TOOL_REPLAY_OLD_REFLEXES_OFF  // until a connect row says otherwise
 }
 
 // main's frame in a replay: the rows due, then whether the sim ticks.  Once
@@ -598,6 +604,7 @@ tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, r
         rep.cut = false
         link.connected, link.realtime = true, true
         link.panel = {}  // the disconnect already emptied the queue
+        if "reflexes" not_in rec do link.goals.reflexes_off = TOOL_REPLAY_OLD_REFLEXES_OFF
     }
     switch {
     case "goal" in rec:
