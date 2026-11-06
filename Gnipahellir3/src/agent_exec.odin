@@ -1347,6 +1347,7 @@ hero_retreat_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
             return
         }
         r^ = {}  // no failure left from the last
+        b.path = {}  // nor a path: one left in it has the retreat's goal 0, an empty path's (card 204)
         hero_go_start(gs, r, spot)  // refuses only a burn or water, which has no way out
     }
     hero_go_tick(gs, r)
@@ -1445,6 +1446,7 @@ hero_self_choose :: proc(gs: ^Game_State, b: ^Hero_Brain) -> bool {
 hero_self_start :: proc(gs: ^Game_State, b: ^Hero_Brain, kind: Agent_Goal_Kind, line: string) -> bool {
     s := &b.self
     s^ = {kind = kind}
+    b.path = {}  // a path left in it has the action's goal 0, an empty path's (card 204)
     s.len = copy(s.line[:], line)
     if !agent_goal_kinds[kind].start(gs, s) do return false
     s.status = .Running
@@ -1620,6 +1622,7 @@ Hero_Nav :: struct {
     waited:    int,   // frames update_hero_plan has run it
     owned:     u64,   // the last frame its go ticked (card 203)
     stepped:   u64,   // 1 + the frame update_hero_plan last ran it: once a frame
+    out:       Hero_Path,  // its path, copied to gs.hero.path only when its go takes it up: a paused go's plan never writes the path another walk is on (card 204)
 }
 
 // hero_plan's searches, in order.  The whole level's runs only when the
@@ -1835,7 +1838,7 @@ update_hero_plan :: proc(gs: ^Game_State) {
     n.waited += 1
     work := clamp(NAV_FRAME_WORK - gs.nav_work, HERO_NAV_FRAME_MIN, HERO_NAV_FRAME_WORK)
     if n.waited > HERO_NAV_STARVE_FRAMES do work = HERO_NAV_FRAME_WORK
-    if done, _ := hero_plan_step(gs, &gs.hero.path, work); done do n.ready = true
+    if done, _ := hero_plan_step(gs, &n.out, work); done do n.ready = true
 }
 
 @(private="file")
@@ -2324,10 +2327,11 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
             n.plan_goal, n.plan_to = g.id, g.to
             // A short plan is done at once; a long one runs on after the
             // swarm's searches, in update_hero_plan (card 203).
-            if done, _ := hero_plan_step(gs, path, HERO_NAV_TICK_WORK); done do n.ready = true
+            if done, _ := hero_plan_step(gs, &n.out, HERO_NAV_TICK_WORK); done do n.ready = true
         }
         if !n.ready do return false  // the hero waits for the rest of it
         n.ready = false
+        path^ = n.out
         path.goal = g.id
         if path.n == 0 {
             g.status = .Failed
