@@ -411,6 +411,7 @@ agent_pump :: proc(link: ^Agent_Link, gs: ^Game_State) -> (tick: bool) {
     }
     if !link.connected {
         gs.agent = {}  // back to the keyboard, with nothing of the last act left to replay
+        agent_record_frame_time(link, gs)
         return true
     }
     return agent_drive(link, gs)
@@ -1013,6 +1014,16 @@ agent_record_mark :: proc(link: ^Agent_Link, gs: ^Game_State, mark: string) {
     if !link.recording do return
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"mark":"%s"}}` + "\n", gs.frame, mark))
+}
+
+// A frame the keyboard has: it ticks on main's frame time, not AGENT_STEP, so
+// the run keeps that time's f32 bits for --replay to tick the frame on
+// (card 197).  The title's frames are not part of a run.
+@(private="file")
+agent_record_frame_time :: proc(link: ^Agent_Link, gs: ^Game_State) {
+    if !link.recording || gs.ui.show_title do return
+    runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+    os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"dt_bits":%d}}` + "\n", gs.frame, transmute(u32)gs.delta_time))
 }
 
 @(private="file")

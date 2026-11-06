@@ -156,6 +156,28 @@ summary_starts_a_reconnect_with_an_empty_queue :: proc(t: ^testing.T) {
     testing.expect(t, strings.contains(text, "empty queue: 4 s, longest 3 s from frame 120"), text)
 }
 
+// Card 197: a gap's frame-time rows are the keyboard's clock, not a client's
+// rows: the summary reads the run as if they were not there.
+@(test)
+summary_reads_past_a_gap_s_frame_times :: proc(t: ^testing.T) {
+    goal :: proc(f, id: int) -> string {
+        return fmt.tprintf(`{{"f":%d,"goal":{{"do":"act","frames":30}},"kind":"act","id":%d,"via":"Goal","step":0}}`+"\n", f, id)
+    }
+    gap := strings.builder_make(context.temp_allocator)
+    for f in 60 ..< 120 do fmt.sbprintf(&gap, `{{"f":%d,"dt_bits":%d}}`+"\n", f, transmute(u32)f32(0.02))
+    rows := strings.concatenate({
+        goal(0, 1), `{"f":60,"mark":"disconnect"}` + "\n", strings.to_string(gap), `{"f":120,"act":{"move":"left"},"x":5,"y":6,"hp":10}` + "\n",
+        goal(300, 2), `{"f":360,"done":2}` + "\n", `{"f":420,"act":{"move":"left"},"x":5,"y":6,"hp":10}` + "\n",
+        `{"f":430,"mark":"disconnect"}` + "\n", `{"f":430,"dt_bits":1}` + "\n",
+    }, context.temp_allocator)
+    run := tools_test_run("goals_gap_dt", {"action.log", ""}, {"acts.jsonl", rows})
+    defer tools_test_done(run)
+    text, _ := tools_test_say("--summary", run)
+    for want in ([]string{"empty queue: 4 s, longest 3 s from frame 120", "2 acts, last frame 430\n"}) {
+        testing.expectf(t, strings.contains(text, want), "want %q in %s", want, text)
+    }
+}
+
 // Card 160, playtest 127: the game's frames start again at 0 with each new
 // life, so the summary counts time over the run, says how many lives, and
 // names a row by its life.
@@ -818,6 +840,159 @@ replay_of_a_run_with_a_reconnect_lands_the_same :: proc(t: ^testing.T) {
     testing.expect(t, rep.done && !rep.diverged, "the second client's act lands where it did")
     testing.expect_value(t, rep.checked, 1)
     testing.expect_value(t, gs2.player.pos, gs.player.pos)
+}
+
+// Card 197: with no client the game ticks at main's frame time, which is not
+// AGENT_STEP and not the same from frame to frame.  The run records each of
+// those frame times, and the replay ticks its gap on them, so the next
+// connection's act lands where it did (playtest 188 drifted from L2 f10239).
+@(test)
+replay_ticks_a_disconnect_gap_on_its_recorded_frame_times :: proc(t: ^testing.T) {
+    run := tools_test_run("replay_gap_dt")
+    defer tools_test_done(run)
+    rec := fmt.aprintf("%s/rec.jsonl", run)
+    defer delete(rec)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.player.mana = 0  // mana fills on frame time: a gap ticked on another clock lands with other mana
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, AGENT_PENDING_MAX)
+    testing.expect_value(t, err, nil)
+    at, _ := net.bound_endpoint(sock)
+    net.set_blocking(sock, false)
+    link.listener, link.listening = sock, true
+    defer agent_close(link, gs)
+    tools_test_record(link, rec)
+    mixed := [?]f32{0.1, 0.004, 0.05, 1.0 / 30.0, 0.0213}
+    gap := 0
+    frame :: proc(link: ^Agent_Link, gs: ^Game_State, dt: f32) {  // main's frame
+        gs.delta_time = dt
+        if agent_pump(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    first, _ := net.dial_tcp(at)
+    net.send_tcp(first, transmute([]u8)string(`{"cmd":"goals","add":[{"do":"act","move":"right","frames":200}]}` + "\n"))
+    for _ in 0 ..< 60 do frame(link, gs, AGENT_STEP)
+    testing.expect(t, link.connected && agent_goals_busy(&link.goals), "the first client's act runs")
+    net.close(first)
+    for i in 0 ..< 500 {
+        frame(link, gs, mixed[i % len(mixed)])  // a client's frames take AGENT_STEP whatever main's frame time
+        if !link.connected {
+            gap += 1
+            break
+        }
+    }
+    testing.expect(t, !link.connected, "the drop frees the seat")
+    for i in 0 ..< 40 {
+        frame(link, gs, mixed[i % len(mixed)])
+        gap += 1
+    }
+    second, _ := net.dial_tcp(at)
+    defer net.close(second)
+    net.send_tcp(second, transmute([]u8)string(`{"cmd":"goals","add":[{"do":"act","move":"left","frames":30}]}` + "\n"))
+    for i in 0 ..< 1000 {
+        frame(link, gs, mixed[i % len(mixed)])
+        if link.connected && link.goals.n == 1 && link.goals.slots[0].status == .Done do break
+    }
+    os.close(link.acts_file)
+    link.recording = false
+    data, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(data)
+    rows := string(data)
+    testing.expect_value(t, strings.count(rows, `"mark":"connect"`), 2)
+    testing.expect_value(t, strings.count(rows, `"dt_bits":`), gap)  // the frames the keyboard had, each once
+
+    rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run), proc(gs: ^Game_State) { gs.player.mana = 0 })
+    defer free(gs2)
+    defer free(link2)
+    testing.expect(t, rep.done && !rep.diverged, "the second client's act lands where it did")
+    testing.expect_value(t, rep.checked, 1)
+    testing.expect_value(t, gs2.frame, gs.frame)
+    testing.expect_value(t, gs2.player.pos, gs.player.pos)
+    testing.expect_value(t, gs2.player.mana, gs.player.mana)
+}
+
+// The run keeps each keyboard frame's time to the bit, on the frame it ticks,
+// and none for the title's frames, which a connection sets back to frame 0.
+@(test)
+run_records_the_keyboard_s_frame_times_off_the_title :: proc(t: ^testing.T) {
+    run := tools_test_run("record_dt")
+    defer tools_test_done(run)
+    rec := fmt.aprintf("%s/rec.jsonl", run)
+    defer delete(rec)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    sock, err := net.listen_tcp(net.Endpoint{address = net.IP4_Loopback, port = 0}, AGENT_PENDING_MAX)
+    testing.expect_value(t, err, nil)
+    net.set_blocking(sock, false)
+    link.listener, link.listening = sock, true
+    defer agent_close(link, gs)
+    tools_test_record(link, rec)
+    gs.ui.show_title = true
+    for _ in 0 ..< 5 {
+        gs.delta_time = 0.02
+        if agent_pump(link, gs) do gs.frame += 1
+    }
+    gs.ui.show_title = false
+    dts := [?]f32{0.1, 1.0 / 144.0, 0.0213}
+    from := gs.frame
+    for dt in dts {
+        gs.delta_time = dt
+        if agent_pump(link, gs) do gs.frame += 1
+    }
+    os.close(link.acts_file)
+    link.recording = false
+    data, _ := os.read_entire_file(rec, context.allocator)
+    defer delete(data)
+    want := fmt.tprintf(`{{"f":%d,"dt_bits":%d}}`+"\n"+`{{"f":%d,"dt_bits":%d}}`+"\n"+`{{"f":%d,"dt_bits":%d}}`+"\n",
+        from, transmute(u32)dts[0], from + 1, transmute(u32)dts[1], from + 2, transmute(u32)dts[2])
+    testing.expect_value(t, string(data), want)
+}
+
+// A gap's frame times are the keyboard's: a frame with none recorded, as in a
+// run from before card 197, takes AGENT_STEP, and a frame-time row never hands
+// the seat back as a connection's row would.
+@(test)
+replay_takes_each_gap_frame_time_on_its_frame :: proc(t: ^testing.T) {
+    got_path := test_scratch_path("tools_test_replay_got_dt.jsonl")
+    defer delete(got_path)
+    defer os.remove(got_path)
+    gs, link := tools_test_world()
+    defer free(gs)
+    defer free(link)
+    tools_test_record(link, got_path)
+    bits :: proc(dt: f32) -> u32 { return transmute(u32)dt }
+    rows := fmt.tprintf(`{{"f":3,"goal":{{"do":"act","move":"right","frames":100}},"kind":"act","id":1,"via":"Goal","step":0}}` + "\n" +
+            `{{"f":40,"mark":"disconnect"}}` + "\n" + `{{"f":40,"dt_bits":%d}}` + "\n" + `{{"f":41,"dt_bits":%d}}` + "\n" +
+            `{{"f":43,"dt_bits":%d}}` + "\n" + `{{"f":60,"mark":"connect"}}` + "\n" +
+            `{{"f":90,"goal":{{"do":"act","move":"left","frames":10}},"kind":"act","id":1,"via":"Goal","step":0}}` + "\n",
+            bits(0.1), bits(0.004), bits(1.0 / 30.0))
+    rep: Tool_Replay
+    tool_replay_begin(&rep, link, gs, rows, got_path)
+    step: [100]f32
+    driving: [100]bool
+    for _ in 0 ..< 200 {
+        if rep.done do break
+        f := gs.frame
+        gs.delta_time = 0.5  // main's frame time, which a replay never takes
+        tick := tool_replay_frame(&rep, link, gs)
+        if f < len(step) do step[f], driving[f] = gs.delta_time, gs.agent.driving
+        if tick {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expect(t, rep.done && !rep.diverged)
+    testing.expect_value(t, step[40], f32(0.1))
+    testing.expect_value(t, step[41], f32(0.004))
+    testing.expect_value(t, step[42], AGENT_STEP)  // none recorded for it
+    testing.expect_value(t, step[43], f32(1.0 / 30.0))
+    testing.expect_value(t, step[44], AGENT_STEP)
+    testing.expect(t, !driving[41] && !driving[43] && !driving[59], "the keyboard's until the connect mark")
+    testing.expect(t, driving[60] && step[60] == AGENT_STEP, "the agent's from the connect mark, on the fixed step")
 }
 
 // The hero high over the surface on one hp: the fall ends the first life.

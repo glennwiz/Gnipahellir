@@ -430,12 +430,15 @@ fixture_site :: proc(gs: ^Game_State, x0, top: int) -> (x, g: int) {
 // A new life starts the game's frames again at 0, so a row whose frame is below
 // the last one's belongs to the next life and waits for the replay's own clock
 // to start again.  A disconnect handed the game to the keyboard: the replay
-// ticks on with no keys held until the next connection's rows (card 192).
+// ticks on with no keys held until the next connection's rows (card 192), each
+// frame on the frame time the run recorded for it (card 197).
 Tool_Replay :: struct {
     rows:     string,  // the run's acts.jsonl
     at:       int,     // the next row
     got:      string,  // where the replay records, to check itself against rows
     cut:      bool,    // between a disconnect and the next connection
+    dt:       f32,     // the frame time recorded for this frame, while dt_due
+    dt_due:   bool,
     row_f:    int,     // the frame of the last row fed
     row_life: int,     // its life, from 0: the times the rows' frames went back
     life:     int,     // the replay's own life, from 0: the times gs.frame went back
@@ -548,9 +551,11 @@ tool_replay_frame :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State)
         tool_replay_finish(rep, link)
         return false
     }
+    due := rep.dt_due
+    rep.dt_due = false
     if rep.cut {
         gs.agent = {}  // the keyboard's, as agent_pump leaves it with no client
-        gs.delta_time = AGENT_STEP
+        gs.delta_time = rep.dt if due else AGENT_STEP  // a run from before card 197 recorded none
         return true
     }
     return agent_drive(link, gs)
@@ -578,6 +583,11 @@ tool_replay_feed :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State) 
 
 @(private="file")
 tool_replay_row :: proc(rep: ^Tool_Replay, link: ^Agent_Link, gs: ^Game_State, rec: json.Object) {
+    if "dt_bits" in rec {  // the keyboard's frame time, not a connection's row
+        bits, _ := agent_int(rec, "dt_bits")
+        rep.dt, rep.dt_due = transmute(f32)u32(bits), true
+        return
+    }
     mark, _ := rec["mark"].(json.String)
     switch {
     case mark == "disconnect":  // as agent_drop_client leaves the link
@@ -904,7 +914,8 @@ tool_summary :: proc(b: ^strings.Builder, run: string) -> bool {
         rows := make([dynamic]json.Object)
         for line in strings.split_lines(string(acts)) {
             value, perr := json.parse_string(line, parse_integers = true)
-            if rec, is_obj := value.(json.Object); perr == .None && is_obj do append(&rows, rec)
+            rec, is_obj := value.(json.Object)
+            if perr == .None && is_obj && "dt_bits" not_in rec do append(&rows, rec)  // a gap's frame times are no client's rows
         }
         lives := tool_summary_lives(rows[:])
         tool_summary_acts(b, rows[:], lives)
