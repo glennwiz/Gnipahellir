@@ -734,8 +734,9 @@ replay_of_a_changed_world_diverges :: proc(t: ^testing.T) {
 }
 
 // After a disconnect the keyboard had the game, nothing held; the next
-// connection's goals replay on, numbered from 1 again as agent_promote numbers
-// them (card 192: playtest 188's replay stopped at L2 f10232).
+// connection's goals replay on, numbered as the run numbered them: a run from
+// before card 194 began again at 1 (card 192: playtest 188's replay stopped
+// at L2 f10232).
 @(test)
 replay_plays_on_past_a_disconnect :: proc(t: ^testing.T) {
     got_path := test_scratch_path("tools_test_replay_got3.jsonl")
@@ -750,7 +751,7 @@ replay_plays_on_past_a_disconnect :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     testing.expect(t, rep.done && !rep.cut && !rep.diverged)
-    testing.expect_value(t, link.panel.goal.len, 0)  // a new connection's panel starts empty
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "walk about")  // the objective stays up past the reconnect (card 194)
     testing.expect(t, gs.frame >= 51, "the next connection's goal ran its 10 frames")
     testing.expect_value(t, link.goals.n, 1)  // the first connection's goal went with it
     testing.expect_value(t, link.goals.slots[0].id, 1)
@@ -847,7 +848,7 @@ replay_of_a_run_with_a_reconnect_lands_the_same :: proc(t: ^testing.T) {
     rows := string(data)
     testing.expect_value(t, strings.count(rows, `"mark":"connect"`), 2)
     testing.expect_value(t, strings.count(rows, `"mark":"disconnect"`), 1)
-    testing.expect_value(t, strings.count(rows, `"done":1,`), 1)  // the second client's act; the first's never ended
+    testing.expect_value(t, strings.count(rows, `"done":2,`), 1)  // the second client's act, its id going on from the first's (card 194); the first's never ended
 
     rep, gs2, link2 := tools_test_replay(rows, fmt.tprintf("%s/got.jsonl", run))
     defer free(gs2)

@@ -1895,7 +1895,7 @@ a_client_connecting_on_the_title_starts_the_frame_clock :: proc(t: ^testing.T) {
     frame := gs.frame
     testing.expect(t, agent_pump(link, gs) && agent_pump(link, gs), "and the game ticks with nobody sending")
     testing.expect_value(t, gs.frame, frame)  // agent_pump only says so: main's game_update moves the clock
-    testing.expect_value(t, link.panel.goal.len, 0)
+    testing.expect_value(t, link.panel.goal.len, 3)  // the last client's objective stays up (card 194)
 }
 
 // The two title tests bind fixed ports, so those sit below Linux's ephemeral
@@ -3196,7 +3196,7 @@ agent_brief_tells_the_fight :: proc(t: ^testing.T) {
     defer free(gs)
     defer free(link)
     brief := agent_write_brief(link, gs)
-    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "else the pickaxe, 1 damage to the sword's 2", "the sword in reach (else the pickaxe, a weak blow)", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), refused, blocked or full", "when the hero dies every goal but an act fails with died", "refused: a place the game turns away, in the game's own words", "a mine a reflex keeps the pick off, the reflex named", "it names a structure the tile stands on"}) {
+    for want in ([]string{"    fight: kind: an enemy kind", "no_item, no_target, unreachable or low_hp", "fight_back: strikes back for 1.5 s", "else the pickaxe, 1 damage to the sword's 2", "the sword in reach (else the pickaxe, a weak blow)", "unreachable, unsafe, cornered (wary, and every stand in reach has no cheap way out), refused, blocked or full", "when the hero dies every goal fails with died, an act too unless it only presses keys", "refused: a place the game turns away, in the game's own words", "a mine a reflex keeps the pick off, the reflex named", "it names a structure the tile stands on"}) {
         testing.expectf(t, strings.contains(brief, want), "the brief says %q", want)
     }
 }
@@ -3648,4 +3648,212 @@ an_act_paused_by_the_brain_ends_with_a_reason :: proc(t: ^testing.T) {
         held = strings.has_prefix(string(g.reason.buf[:g.reason.len]), "held: paused by ")
     }
     testing.expect(t, held, "failed held, naming what held it")
+}
+
+// ─── Card 194: playtest 188's state and reconnect gaps ───────────────────────
+
+// A reconnect keeps the objective the last client set and goes on with its
+// goal ids; a new game clears the objective, and the ids still rise.
+@(test)
+a_reconnect_keeps_the_objective_and_the_goal_ids_until_a_new_game :: proc(t: ^testing.T) {
+    gs, link, at := agent_test_listening(t)
+    defer free(gs)
+    defer free(link)
+    defer agent_close(link, gs)
+    buf := new([AGENT_REPLY_MAX]u8)
+    defer free(buf)
+
+    first, _ := net.dial_tcp(at)
+    agent_test_ask(gs, link, first, `{"cmd":"objective","goal":"find the bench"}` + "\n", 1, buf[:])
+    agent_test_ask(gs, link, first, `{"cmd":"objective","goal":"reach cave 2","step":"dig the shaft"}` + "\n", 1, buf[:])
+    out := agent_test_ask(gs, link, first, `{"cmd":"goals","add":[{"do":"act","frames":1},{"do":"act","frames":1}]}` + "\n", 1, buf[:])
+    testing.expectf(t, strings.contains(out, `"ids":[1,2]`), "first ids: %s", out)
+    net.close(first)
+    agent_test_frames(link, gs, 20)
+    testing.expect(t, !link.connected, "the first client is gone")
+
+    again, _ := net.dial_tcp(at)
+    defer net.close(again)
+    out = agent_test_ask(gs, link, again, `{"cmd":"goals","add":[{"do":"act","frames":1}]}` + "\n", 1, buf[:])
+    testing.expectf(t, strings.contains(out, `"ids":[3]`), "after the reconnect the ids go on: %s", out)
+    agent_test_frames(link, gs, 3)
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "reach cave 2")
+    testing.expect_value(t, string(link.panel.step.buf[:link.panel.step.len]), "dig the shaft")
+    testing.expect_value(t, link.panel.count, 1)  // and the goals it filed
+    testing.expect_value(t, string(link.panel.past[0].text.buf[:link.panel.past[0].text.len]), "find the bench")
+
+    // A new game: the objective was the last game's.
+    seed := gs.world_seed
+    game_state_init(gs, seed + 1)
+    gs.ui.show_title = false
+    agent_test_frames(link, gs, 1)
+    testing.expect_value(t, link.panel.goal.len, 0)
+    testing.expect_value(t, link.panel.step.len, 0)
+    out = agent_test_ask(gs, link, again, `{"cmd":"goals","add":[{"do":"act","frames":1}]}` + "\n", 1, buf[:])
+    testing.expectf(t, strings.contains(out, `"ids":[4]`), "ids still rise: %s", out)
+    // An objective the new game's client sets stays, frame after frame.
+    agent_test_ask(gs, link, again, `{"cmd":"objective","goal":"find the pickaxe"}` + "\n", 1, buf[:])
+    agent_test_frames(link, gs, 3)
+    testing.expect_value(t, string(link.panel.goal.buf[:link.panel.goal.len]), "find the pickaxe")
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "goal ids keep rising across connections"), "the brief says so")
+}
+
+// Playtest 188 L4: an act queued with a use at a tile ran after the death and
+// toasted 'Nothing to use'.  At the death an act that works the world fails
+// died with the other goals; one of keys only stays, to work the death screen.
+@(test)
+a_death_fails_the_acts_that_work_the_world :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    link.realtime = true
+    p := player_tile(&gs.player)
+    agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"act","move":"right","frames":%d}},` +
+        `{{"do":"act","use":[%d,%d]}},{{"do":"act","take":5}},{{"do":"act","mine":[%d,%d]}},{{"do":"act","place":[%d,%d]}},` +
+        `{{"do":"act","reclaim":[%d,%d]}},{{"do":"act","interact":true}},{{"do":"act","warp":true}},{{"do":"act","select":0}},` +
+        `{{"do":"act","zone":[1,1,2,2]}},{{"do":"act","jump":true,"down":true}},{{"do":"act","dismiss":true}},{{"do":"act","tithe":0}}]}}`,
+        AGENT_MAX_FRAMES, p.x + 1, p.y, p.x + 1, p.y + 1, p.x + 1, p.y, p.x + 1, p.y))
+    testing.expectf(t, strings.contains(agent_test_reply(link), `"ok":true`), "queued: %s", agent_test_reply(link))
+    world := []int{2, 3, 4, 5, 6, 7, 8, 9, 10}  // ids: the use, take, mine, place, reclaim, interact, warp, select, zone
+    keys  := []int{1, 11, 12, 13}               // the running walk, a jump, a dismiss, a tithe
+    for _ in 0 ..< 3 {
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expect_value(t, link.goals.slots[0].status, Agent_Goal_Status.Running)
+    eq_push(&gs.events, Event{type = .Damage_Dealt, source = INVALID_ENTITY, target = PLAYER_ID, payload = {int_val = 100}, cause = .Lava})
+    for _ in 0 ..< 2 {
+        if agent_drive(link, gs) {
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+    }
+    testing.expect(t, gs.player.dead, "dead")
+    for &g in link.goals.slots[:link.goals.n] {
+        reason := string(g.reason.buf[:g.reason.len])
+        if slice_has(world, g.id) {
+            testing.expectf(t, g.status == .Failed && reason == "died", "act %d works the world: %v %s", g.id, g.status, reason)
+        }
+        if slice_has(keys, g.id) {
+            testing.expectf(t, reason != "died", "act %d is keys only: %v %s", g.id, g.status, reason)
+        }
+    }
+    brief := agent_write_brief(link, gs)
+    testing.expect(t, strings.contains(brief, "an act too unless it only presses keys"), "the brief says so")
+
+    slice_has :: proc(s: []int, v: int) -> bool {
+        for x in s do if x == v do return true
+        return false
+    }
+}
+
+// The refusal says 'build the plan (press B)': state carries that plan, the
+// support tiles at their offsets from the altar's own tile, for the level.
+@(test)
+agent_state_carries_the_altar_plan :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+
+    check :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State, tpl: ^Structure_Template) {
+        agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+        value, err := json.parse_string(agent_test_reply(link), allocator = context.temp_allocator)
+        testing.expect_value(t, err, json.Error.None)
+        plan, ok := value.(json.Object)["altar_plan"].(json.Object)
+        testing.expect(t, ok, "state has altar_plan")
+        if !ok do return
+        testing.expect_value(t, plan["name"].(json.String), tpl.name)
+        cells := plan["cells"].(json.Array)
+        acol, arow := structure_template_anchor(tpl)
+        n := 0
+        for line, r in tpl.rows do for glyph, c in line {
+            tile, kind := structure_template_cell(glyph)
+            if kind != .Support do continue
+            cell := cells[n].(json.Object)
+            testing.expect_value(t, int(cell["dx"].(json.Float)), c - acol)
+            testing.expect_value(t, int(cell["dy"].(json.Float)), r - arow)
+            testing.expect_value(t, cell["tile"].(json.String), fmt.tprint(tile))
+            n += 1
+        }
+        testing.expect_value(t, len(cells), n)
+    }
+    check(t, link, gs, &structure_templates[0])  // the surface: tier A's, 3 Wood on 5 Stone
+    agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+    testing.expect(t, strings.contains(agent_test_reply(link), `{"dx":-1,"dy":1,"tile":"Wood"}`), "the Wood row under the altar")
+    testing.expect(t, strings.contains(agent_test_reply(link), `{"dx":-2,"dy":2,"tile":"Stone"}`), "the Stone row under it")
+    gs.level_index = LEVEL_SKY  // the sky: the active tier's
+    gs.progression.rune_scroll_found = {true, true, false}
+    gs.progression.sky_structure_complete[0] = true
+    check(t, link, gs, structure_template_for(gs, .Sky_Altar))
+    testing.expect(t, structure_template_for(gs, .Sky_Altar) != &structure_templates[0], "a grander altar in the sky")
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "state's altar_plan is the foundation"), "the brief names it")
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "the saga's time over every life so far"), "and the saga clock as card 193 left it")
+}
+
+// The surface sky gate: null before an altar raises it, then its tile and
+// whether its altar stands, read from the surface wherever the player is.
+@(test)
+agent_state_carries_the_sky_gate :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    gate :: proc(t: ^testing.T, link: ^Agent_Link, gs: ^Game_State) -> json.Value {
+        agent_handle_line(link, gs, `{"cmd":"state","w":1,"h":1}`)
+        value, err := json.parse_string(agent_test_reply(link), allocator = context.temp_allocator)
+        testing.expect_value(t, err, json.Error.None)
+        g, has := value.(json.Object)["sky_gate"]
+        testing.expect(t, has, "state has sky_gate")
+        return g
+    }
+    _, is_null := gate(t, link, gs).(json.Null)
+    testing.expect(t, is_null, "no altar raised: null")
+
+    at := [2]i32{30, i32(SURFACE_Y) - 1}
+    gs.progression.sky_altar_pos = at
+    set_tile(&gs.world, int(at.x), int(at.y), .Sky_Altar)
+    g := gate(t, link, gs).(json.Object)
+    testing.expect_value(t, int(g["level"].(json.Float)), LEVEL_SURFACE)
+    xy := g["at"].(json.Array)
+    testing.expect_value(t, int(xy[0].(json.Float)), 30)
+    testing.expect_value(t, int(xy[1].(json.Float)), int(at.y))
+    testing.expect(t, g["standing"].(json.Boolean), "the altar stands")
+    testing.expect(t, strings.contains(g["use"].(json.String), "interact within"), "says how")
+
+    set_tile(&gs.world, int(at.x), int(at.y), .Air)  // smashed
+    testing.expect(t, !gate(t, link, gs).(json.Object)["standing"].(json.Boolean), "smashed: not standing")
+
+    // From the sky the surface is stored away: it is read there.
+    set_tile(&gs.world, int(at.x), int(at.y), .Sky_Altar)
+    gs.levels.worlds[LEVEL_SURFACE] = gs.world
+    gs.level_index = LEVEL_SKY
+    set_tile(&gs.world, int(at.x), int(at.y), .Air)  // the sky's own tile there is not the altar
+    testing.expect(t, gate(t, link, gs).(json.Object)["standing"].(json.Boolean), "read off the surface")
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "state's sky_gate is the way up"), "the brief names it")
+}
+
+// Card 193's Guard goal: the risen hero at its post says so in state.
+@(test)
+agent_state_says_the_risen_hero_is_guarding :: proc(t: ^testing.T) {
+    gs, link := agent_test_world()
+    defer free(gs)
+    defer free(link)
+    i, _ := enemy_alloc(&gs.enemies)
+    e := &gs.enemies.data[i]
+    e.kind, e.hp, e.pos = .Undead, 5, gs.player.pos + {3, 0}
+    e.builder.goal = .Guard
+    // An ordinary enemy beside it, its builder goal the zero one (Build_Den):
+    // no guarding on it.
+    j, _ := enemy_alloc(&gs.enemies)
+    o := &gs.enemies.data[j]
+    o.kind, o.hp, o.pos = .Builder, 3, gs.player.pos + {-3, 0}
+    agent_handle_line(link, gs, `{"cmd":"state"}`)
+    testing.expectf(t, strings.contains(agent_test_reply(link), fmt.tprintf(`"slot":%d,"kind":"Undead"`, i)), "in view")
+    testing.expect(t, strings.count(agent_test_reply(link), `,"guarding":true}`) == 1, "at its post, and only it")
+    testing.expectf(t, strings.contains(agent_test_reply(link), fmt.tprintf(`"slot":%d,"kind":"Builder"`, j)), "the builder in view")
+    e.builder.goal = .Hunt
+    agent_handle_line(link, gs, `{"cmd":"state"}`)
+    testing.expect(t, !strings.contains(agent_test_reply(link), `"guarding"`), "hunting: no guarding")
+    testing.expect(t, strings.contains(agent_write_brief(link, gs), "an enemy with guarding:true is your last hero"), "the brief names it")
 }
