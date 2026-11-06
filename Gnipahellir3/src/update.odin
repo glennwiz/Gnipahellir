@@ -37,6 +37,10 @@ game_update :: proc(gs: ^Game_State) {
     // 3. Enemies
     update_enemies(gs)
 
+    // 3a. Hero plan — the agent go's plan in hand runs on what nav work the
+    //     golems and enemies left this frame (agent_exec.odin, card 203)
+    update_hero_plan(gs)
+
     // 4. Projectiles
     update_projectiles(gs)
 
