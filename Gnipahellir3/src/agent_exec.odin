@@ -67,6 +67,9 @@ Agent_Goals :: struct {
     home:         [2]i32,  // the tile {"cmd":"home","at":[x,y]} marked
     home_level:   int,
     has_home:     bool,
+    level:        int,   // the level the goals last ran on
+    level_seen:   bool,  // level holds one: alive, on the play screen or past it
+    last_act:     bool,  // the goal that ran last tick was an act: a level change then was asked for
 }
 
 // One goal kind: what its parameters are, the add-time check, the start-time
@@ -206,7 +209,9 @@ update_agent_goals :: proc(gs: ^Game_State) {
     if q == nil do return
     gs.agent.cmd   = {}
     gs.agent.first = false
+    agent_goals_level(gs, q)
     g := agent_goals_current(gs, q)
+    q.last_act = g != nil && g.kind == .Act
     if g != nil do q.ran = true
     if agent_screen(gs) == "play" {
         hero_think(gs, q, g)  // the hero's own sense of danger has a say first
@@ -214,6 +219,25 @@ update_agent_goals :: proc(gs: ^Game_State) {
     } else if g != nil && agent_goal_kinds[g.kind].tick(gs, g) {
         g.status = .Done
     }
+}
+
+// A level change no act asked for (a fall through the sky's floor, a mine
+// through its own) leaves the goals planned for the level behind: every live
+// one fails, and the hero's own action is dropped (card 201, playtest 188 L3
+// f16050: after a fall out of the sky the queued sky place goals dug the
+// surface, and the hero fell 13).  Dead, the level is only taken afresh in the
+// next life.
+@(private="file")
+agent_goals_level :: proc(gs: ^Game_State, q: ^Agent_Goals) {
+    if q.level_seen && q.level != gs.level_index && !q.last_act {
+        why := fmt.tprintf("level_changed: the hero left level %d for level %d, unasked", q.level, gs.level_index)
+        for &d in q.slots[:q.n] do if d.status == .Queued || d.status == .Running {
+            d.status = .Failed
+            agent_text_set(&d.reason, why)
+        }
+        gs.hero.self.status = .Empty
+    }
+    q.level, q.level_seen = gs.level_index, !gs.player.dead
 }
 
 // The running goal, or the first queued one that starts.  One that cannot start
@@ -1762,7 +1786,7 @@ hero_plan_once :: proc(gs: ^Game_State, from, to: [2]i32, out: ^Hero_Path, dig, 
         x, y := a.x, a.y
         nb := n.bridges[i]
         if hero_swim_cell(w, a) {
-            hero_nav_swim(n, &size, o, i, a, nb, to, w)
+            hero_nav_swim(gs, n, &size, o, i, a, nb, to, has_pick)
             continue
         }
         for d in ([2]i32{-1, 1}) {
@@ -1872,16 +1896,31 @@ hero_swim_entry :: proc(w: ^World_Grid, f: [2]i32) -> (wet: bool, drop: int) {
 // The moves from a feet tile in water: a stroke-free stride to any side, up
 // or down, into another one, or out onto ground level with it; and out by a
 // stroke, a jump's worth, onto a stand a row up, with the head room to rise
-// into it.
+// into it, or onto one the pick digs out of the bank there.
 @(private="file")
-hero_nav_swim :: proc(n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, a: [2]i32, nb: u8, to: [2]i32, w: ^World_Grid) {
+hero_nav_swim :: proc(gs: ^Game_State, n: ^Hero_Nav, size: ^int, o: [2]i32, i: int, a: [2]i32, nb: u8, to: [2]i32, has_pick: bool) {
+    w := &gs.world
     for d in ([4][2]i32{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}) {
         if hero_swim_cell(w, a + d) || hero_stand(w, a + d) do hero_nav_relax(n, size, o, i, a + d, HERO_NAV_SWIM_COST, .Swim, nb, to)
     }
     for d in ([2]i32{-1, 1}) {
         up := a + {d, -1}
         if hero_stand(w, up) && !is_solid(w, int(a.x), int(a.y - 2)) do hero_nav_relax(n, size, o, i, up, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST, .Swim, nb, to)
+        if t, ok := hero_bank_dig(gs, a, d, has_pick); ok do hero_nav_relax(n, size, o, i, t, HERO_NAV_SWIM_COST + HERO_NAV_JUMP_COST + HERO_NAV_DIG_COST, .Dig, nb, to)
     }
+}
+
+// From swim cell a, the bank on side d a row up that a dig makes a stand a
+// stroke reaches: the tile at the swimmer's head height, the pick works it,
+// ground under it, open over it, and head room over the swimmer to rise
+// (card 201, playtest 188 L2 f47677: a bank one tile over the water's top
+// kept the hero in the Deep Cave pool).
+hero_bank_dig :: proc(gs: ^Game_State, a: [2]i32, d: i32, has_pick: bool) -> (t: [2]i32, ok: bool) {
+    w := &gs.world
+    t = a + {d, -1}
+    ok = hero_diggable(gs, t, has_pick) && is_solid(w, int(t.x), int(t.y + 1)) &&
+         hero_open(w, t.x, t.y - 1) && !is_solid(w, int(a.x), int(a.y - 2))
+    return
 }
 
 // The feet tile a body in water is planned from: sinking onto the bottom,
@@ -2123,6 +2162,10 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         // home marked on the bench): say so.
         if on := get_tile(w, int(g.to.x), int(g.to.y + 1)); is_structure_tile[on] {
             agent_text_set(&g.reason, fmt.tprintf("blocked: [%d,%d] stands on a %v, which the body walks through from the side", g.to.x, g.to.y, on))
+        } else if under := get_tile(w, int(feet.x), int(feet.y + 1)); is_structure_tile[under] {
+            // The hero's own floor (card 201, playtest 188 L5 f23845: on the
+            // altar, back from the sky).
+            agent_text_set(&g.reason, fmt.tprintf("blocked: the hero stands on a %v at [%d,%d], which the body walks through from the side", under, feet.x, feet.y + 1))
         }
         return false
     }
@@ -2244,7 +2287,7 @@ hero_go_tick :: proc(gs: ^Game_State, g: ^Agent_Goal) -> (last: bool) {
         // ledge over an open foot of the shaft dug to get here.
         if is_solid(w, int(x), int(b.senses.feet_y) - 1) do c.jump = true
     case .Gap:
-        if !col.wall && col.drop > 0 do c.jump = true
+        if !col.wall && (col.drop > 0 || col.hazard) do c.jump = true  // lava at the floor's own row drops nothing: jumped all the same (card 201)
     }
     if c.jump do gs.agent.first = true
     return false
@@ -2309,6 +2352,16 @@ hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
     over := !gs.player.grounded && hero_wet_or_burning(w, f.x, f.y + 1)  // a jump out not yet clear of it
     if !hero_wet_or_burning(w, f.x, f.y) && !over do return
     if b.swimming && !hero_burning_near(w, f) do return  // a go's swim: the water is its way (card 174)
+    // In water, or bobbing on it, a stroke reaches a bank level with the
+    // water's top and no higher (hero_nav_swim's rule): bobbing, the feet row
+    // is the air over the water, and a bank a tile over that read as a step
+    // swum at forever (card 201, playtest 188 L2 f47677).
+    top := f
+    wet := hero_swim_cell(w, f) || over && hero_swim_cell(w, f + {0, 1})
+    if wet {
+        if !hero_swim_cell(w, top) do top.y += 1
+        for hero_swim_cell(w, top - {0, 1}) do top.y -= 1  // the water's top
+    }
     blocked: [2]bool  // a wall that side: no way out past it
     for k in i32(1) ..= HERO_SENSE_REACH {
         for d, side in ([2]i8{-1, 1}) {
@@ -2319,6 +2372,7 @@ hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
             step := is_solid(w, int(x), int(f.y)) &&
                     (hero_open(w, x, f.y - 1) && hero_open(w, x, f.y - 2) ||
                      hero_open(w, x, f.y - 2) && hero_open(w, x, f.y - 3))
+            if wet do step = is_solid(w, int(x), int(top.y)) && hero_open(w, x, top.y - 1) && hero_open(w, x, top.y - 2)
             if !level && !step {
                 blocked[side] = is_solid(w, int(x), int(f.y)) || is_solid(w, int(x), int(f.y - 1))
                 continue
@@ -2328,6 +2382,50 @@ hero_reflex_leave :: proc(gs: ^Game_State, b: ^Hero_Brain) {
                 gs.agent.cmd.jump = true
                 gs.agent.first    = true
             }
+            return
+        }
+    }
+    hero_leave_by_digging(gs)
+}
+
+HERO_SWIM_DIG_REACH :: i32(HERO_NAV_W / 2)  // columns each way along the water a bank to dig is looked for
+
+// In water with no bank a stroke reaches: along the water to the nearest bank
+// a dig makes a stand of (hero_bank_dig), up to the top, and the pick at it
+// (card 201, playtest 188 L2 f47677: the hero sat in the Deep Cave pool).
+@(private="file")
+hero_leave_by_digging :: proc(gs: ^Game_State) {
+    w := &gs.world
+    c := &gs.agent.cmd
+    pick := hero_item_slot(gs, .Pickaxe)
+    f := hero_swim_feet(gs)
+    if !hero_swim_cell(w, f) do f.y += 1  // bobbing: the feet in the air over the water
+    if pick < 0 do return
+    shut: [2]bool  // out of the water that side: no further
+    for k in i32(0) ..= HERO_SWIM_DIG_REACH {
+        for d, side in ([2]i32{-1, 1}) {
+            a := [2]i32{f.x + d * k, f.y}
+            if shut[side] || !hero_swim_cell(w, a) {
+                shut[side] = true
+                continue
+            }
+            for hero_swim_cell(w, a - {0, 1}) do a.y -= 1  // the top of the water there
+            t, ok := hero_bank_dig(gs, a, d, true)
+            if !ok do continue
+            if f.y > a.y {
+                c.jump = true
+                gs.agent.first = true
+            }
+            if k > 0 {
+                c.move = i8(d)
+                return
+            }
+            if held_item(&gs.player) != .Pickaxe {
+                c.verb, c.verb_arg = .Select, i32(pick)
+                gs.agent.first = true
+                return
+            }
+            c.has_mine, c.mine, c.aim = true, t, {f32(t.x) + 0.5, f32(t.y) + 0.5}
             return
         }
     }
