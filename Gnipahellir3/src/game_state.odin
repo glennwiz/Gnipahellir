@@ -580,6 +580,7 @@ Input_State :: struct {
     interact:     bool,
     fly_up:       bool,   // flight steering: debug fly mode and the altar-swirl buff
     fly_down:     bool,
+    slip:         bool,   // the agent's go only, never a key: off a lip into a shaft one wide (move_body, card 196)
     mouse_tile:   [2]i32,
     mouse_world:  [2]f32,   // world-pixel space (camera-inverse) — mining/placement
     mouse_screen: [2]f32,   // virtual-screen space — UI hit-testing
@@ -600,6 +601,7 @@ Agent_Command :: struct {
     move:      i8,    // -1 left, 1 right
     jump:      bool,  // a jump on the first frame, fly-up held
     down:      bool,  // fly-down held
+    slip:      bool,  // a go's step: the body slips off a lip into a shaft one wide (card 196)
     interact:  bool,
     dismiss:   bool,  // past whatever screen is holding the game up
     has_mine:  bool,

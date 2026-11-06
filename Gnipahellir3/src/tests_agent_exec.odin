@@ -8554,6 +8554,135 @@ hero_jumps_a_gap_and_falls_a_shaft_holding_its_facing :: proc(t: ^testing.T) {
     }
 }
 
+// Card 196 (c191b's review of card 191): with max Speed gear a go into a
+// shaft one wide ended blocked from 4 starts in 25.  A key moves the body a
+// whole stride, wider than the room the shaft leaves, so the nearest it could
+// stop was off the middle with a sliver on the lip, and it never fell in.  At
+// base speed and in the fastest gear, at 60, 30 and 144 Hz, from starts a
+// tile's width apart in steps of 0.04: the go lands at the shaft's foot.
+@(test)
+hero_go_drops_into_a_one_wide_shaft_at_every_gear_and_dt :: proc(t: ^testing.T) {
+    for dt in ([]f32{1.0 / 60, 1.0 / 30, 1.0 / 144}) do for gear in ([]bool{false, true}) do for k in 0 ..< 25 {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for y in G ..< G + 4 do set_tile(&gs.world, x0 + 6, y, .Air)  // the shaft
+        gs.player.inventory = {}
+        if gear do hero_test_speed_gear(t, gs)
+        gs.player.pos.x = f32(x0) + 0.1 + 0.04 * f32(k)
+        exec_test_frames(link, gs, 5)
+        agent_handle_line(link, gs, fmt.tprintf(`{{"cmd":"goals","add":[{{"do":"go","to":[%d,%d]}}]}}`, x0 + 6, G + 3))
+        id := int(exec_test_reply(link)["ids"].(json.Array)[0].(json.Float))
+        for n := 0; n < 1200 && agent_goals_busy(&link.goals); n += 1 {
+            if !agent_drive(link, gs) do continue
+            gs.delta_time = dt  // agent_drive ticks at AGENT_STEP; main and a replay tick at the frame's own
+            game_update(gs)
+            agent_after_tick(link, gs)
+        }
+        status, reason := go_test_status(link, gs, id)
+        testing.expectf(t, status == "done", "dt %v gear %v start %d: %s %s at x %v", dt, gear, k, status, reason, gs.player.pos.x - f32(x0))
+    }
+}
+
+// Card 196: the slip is the agent's go alone.  Keys held right in the fastest
+// Speed gear, from a start whose strides never square the body over the shaft
+// one wide: by keyboard the body walks over it as before, and only with the
+// go's slip set does it fall in.
+@(test)
+keyboard_walk_crosses_a_one_wide_shaft_its_stride_skips :: proc(t: ^testing.T) {
+    for slip in ([]bool{false, true}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for y in G ..< G + 4 do set_tile(&gs.world, x0 + 6, y, .Air)  // the shaft
+        gs.player.inventory = {}
+        hero_test_speed_gear(t, gs)
+        gs.delta_time = 1.0 / 60
+        gs.player.pos.x = f32(x0) + 0.22  // every stride's x mod 1 lies in [0.22, 0.97]: never wholly in a column
+        for _ in 0 ..< 60 {
+            gs.input = {move_right = true, slip = slip}
+            update_player(gs)
+        }
+        fell := gs.player.pos.y > f32(G)
+        if slip {
+            testing.expectf(t, fell, "slip: the body walked over the shaft to x %v", gs.player.pos.x - f32(x0))
+        } else {
+            testing.expectf(t, !fell && gs.player.pos.x > f32(x0 + 8), "keyboard: the body at %v fell %v", gs.player.pos - {f32(x0), f32(G)}, fell)
+        }
+    }
+}
+
+// Card 196: the go's slip reaches half a stride, the most steer_key leaves
+// the body off a point, and no farther.  Standing still in the fastest Speed
+// gear, a sliver of the body on the lip of a shaft one wide, either side: a
+// sliver just inside half a stride slips in, wholly off the rock, and one just
+// past it stands.  Beside an opening two wide the lip is a stair step or a
+// ledge's edge: the body stands on it with the same sliver.
+@(test)
+go_slip_reaches_half_a_stride_off_a_lip :: proc(t: ^testing.T) {
+    for wide in ([]bool{false, true}) do for side in ([]f32{-1, 1}) do for over in ([]f32{-0.01, 0.01}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for y in G ..< G + 4 do set_tile(&gs.world, x0 + 6, y, .Air)  // the shaft
+        if wide do for y in G ..< G + 4 do set_tile(&gs.world, x0 + 6 - int(side), y, .Air)  // its far side open too
+        gs.player.inventory = {}
+        hero_test_speed_gear(t, gs)
+        gs.delta_time = 1.0 / 60
+        sliver := player_walk_speed(gs) * gs.delta_time * 0.5 + over
+        gs.player.pos.x = f32(x0 + 6) - sliver if side < 0 else f32(x0 + 7) - PLAYER_W + sliver
+        for _ in 0 ..< 30 {
+            gs.input = {slip = true}
+            update_player(gs)
+        }
+        fell := gs.player.pos.y > f32(G)
+        testing.expectf(t, fell == (over < 0 && !wide), "wide %v side %v sliver %v: fell %v", wide, side, sliver, fell)
+        in_shaft := gs.player.pos.x >= f32(x0 + 6) && gs.player.pos.x + PLAYER_W <= f32(x0 + 7)
+        testing.expectf(t, !fell || (in_shaft && !body_embedded(&gs.world, gs.player.pos, {PLAYER_W, PLAYER_H})), "side %v: fell at x %v, half in the rock", side, gs.player.pos.x - f32(x0))
+    }
+}
+
+// Card 196: a slip mid-fall goes on falling in the same tick, the opening's
+// own rows swept below it.  A fall of 1.5 rows a tick onto a lip, with a
+// sliver of the body on it: over a shaft four deep the feet drop the whole
+// 1.5 still airborne, and over a notch one deep they land on its floor.
+@(test)
+move_body_slip_falls_on_in_the_same_tick :: proc(t: ^testing.T) {
+    for depth in ([]int{4, 1}) {
+        gs, link := exec_test_world()
+        defer free(gs)
+        defer free(link)
+        x0, G := hero_test_arena(gs)
+        for y in G ..< G + depth do set_tile(&gs.world, x0 + 6, y, .Air)
+        pos := [2]f32{f32(x0 + 6) - 0.05, f32(G) - PLAYER_H - 0.01}
+        vel := [2]f32{0, 15}
+        grounded := false
+        move_body(&gs.world, &pos, &vel, {PLAYER_W, PLAYER_H}, 0.1, 0, 100, &grounded, is_player = true, slip = 0.1)
+        feet := pos.y + PLAYER_H
+        if depth > 1 {
+            testing.expectf(t, !grounded && abs(feet - (f32(G) + 1.49)) < 0.001, "depth %d: feet at %v grounded %v", depth, feet - f32(G), grounded)
+        } else {
+            testing.expectf(t, grounded && abs(feet - f32(G + 1)) < 0.01, "depth %d: feet at %v grounded %v", depth, feet - f32(G), grounded)
+        }
+        testing.expectf(t, pos.x > f32(x0 + 6), "depth %d: the body stayed on the lip at %v", depth, pos.x - f32(x0))
+    }
+}
+
+// The slip is the agent's alone: a keyboard frame after a dropped agent clears it.
+@(test)
+keyboard_frame_clears_the_go_slip :: proc(t: ^testing.T) {
+    gs, link := exec_test_world()
+    defer free(gs)
+    defer free(link)
+    gs.agent.driving = false
+    gs.input.slip = true
+    update_input(gs)
+    testing.expect(t, !gs.input.slip, "the slip outlived the agent")
+}
+
 // The brain's fight walks at its threat (hero_walk_to).  A Fire Sprite
 // hovering straight overhead, in sight and out of the sword's reach (the
 // harness moves no enemy, so it stays there), near either side of the
