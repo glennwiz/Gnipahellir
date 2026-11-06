@@ -571,7 +571,12 @@ agent_promote :: proc(link: ^Agent_Link, gs: ^Game_State, sock: net.TCP_Socket, 
     link.idle_step    = 0
     link.idle_ticks   = 0
     if gs.ui.show_title do gs.frame = 0  // time spent on the title screen is not part of a run
-    agent_record_mark(link, gs, "connect")  // --replay hands the seat over on this frame (card 192)
+    // --replay hands the seat over on this frame (card 192), with the reflexes
+    // it starts with: a connect row without them is from before card 190.
+    if link.recording {
+        runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+        os.write_string(link.acts_file, fmt.tprintf(`{{"f":%d,"mark":"connect","reflexes":{{%s}}}}` + "\n", gs.frame, agent_reflexes_json(link.goals.reflexes_off)))
+    }
 }
 
 @(private="file")
@@ -1206,9 +1211,15 @@ agent_reflexes_command :: proc(link: ^Agent_Link, gs: ^Game_State, root: json.Ob
 // The reflexes switched, recorded for a replay; gives them all as JSON fields.
 agent_reflexes_set :: proc(link: ^Agent_Link, gs: ^Game_State, off: bit_set[Hero_Reflex]) -> string {
     link.goals.reflexes_off = off
+    fields := agent_reflexes_json(off)
+    agent_record_op(link, gs, fmt.tprintf(`"reflexes":{{%s}}`, fields))
+    return fields
+}
+
+// Every reflex as a JSON field, true when on.
+agent_reflexes_json :: proc(off: bit_set[Hero_Reflex]) -> string {
     b := strings.builder_make(context.temp_allocator)
     for row, k in hero_reflexes do fmt.sbprintf(&b, `%s"%s":%v`, "" if k == min(Hero_Reflex) else ",", row.name, k not_in off)
-    agent_record_op(link, gs, fmt.tprintf(`"reflexes":{{%s}}`, strings.to_string(b)))
     return strings.to_string(b)
 }
 
