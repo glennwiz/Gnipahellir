@@ -9559,3 +9559,131 @@ hero_on_its_own_walks_no_stale_path :: proc(t: ^testing.T) {
     testing.expect(t, started, "it set about an action of its own")
     testing.expect_value(t, dug, 0)
 }
+
+// A plan left in gs.hero.nav by an earlier walk of goal 0, for the tile to,
+// begun from the feet: run through and ready to take up, its path one step
+// that digs the tile at d from the feet; or, ready false, still running, with
+// waited frames on it.
+@(private="file")
+stale_plan_plant :: proc(gs: ^Game_State, to, d: [2]i32, ready: bool) -> (tile: [2]i32) {
+    tile = stale_path_plant(gs, d)
+    n := &gs.hero.nav
+    n.out = gs.hero.path
+    gs.hero.path = {}
+    n.planning, n.ready = !ready, ready
+    n.plan_goal, n.plan_to, n.from = 0, to, hero_feet(&gs.player)
+    n.waited = 1000
+    return
+}
+
+// The frames until the retreat in retreat_test_world begins, and its spot.
+@(private="file")
+stale_plan_retreat_spot :: proc() -> (k: int, spot: [2]i32) {
+    gs, link, _, _ := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    for gs.hero.current != .Retreat {
+        hero_test_tick(link, gs)
+        k += 1
+        assert(k < 600, "the retreat began")
+    }
+    return k, gs.hero.retreat.to
+}
+
+// Card 205: a ready plan an earlier retreat left, goal 0 and for the same
+// spot, is not the new retreat's: it plans again from its own feet and digs
+// none of the old plan's way, here into the pit's left wall.
+@(test)
+hero_retreat_takes_up_no_stale_plan :: proc(t: ^testing.T) {
+    k, spot := stale_plan_retreat_spot()
+    gs, link, _, _ := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    for _ in 0 ..< k - 1 do hero_test_tick(link, gs)
+    testing.expect(t, gs.hero.current != .Retreat, "not yet retreating")
+    stale := stale_plan_plant(gs, spot, {-1, 0}, true)
+    testing.expect(t, is_solid(&gs.world, int(stale.x), int(stale.y)), "the wall")
+    dug := 0
+    for i in 0 ..< 60 {
+        hero_test_tick(link, gs)
+        if i == 0 do testing.expect_value(t, gs.hero.retreat.to, spot)
+        if gs.agent.cmd.has_mine && gs.agent.cmd.mine == stale do dug += 1
+    }
+    testing.expect_value(t, dug, 0)
+}
+
+// Card 205: nor is a plan an earlier retreat left still running: the new
+// retreat begins its own, its wait afresh.
+@(test)
+hero_retreat_runs_on_no_stale_plan :: proc(t: ^testing.T) {
+    k, spot := stale_plan_retreat_spot()
+    gs, link, _, _ := retreat_test_world(0.2, true)
+    defer free(gs)
+    defer free(link)
+    for _ in 0 ..< k - 1 do hero_test_tick(link, gs)
+    stale_plan_plant(gs, spot, {-1, 0}, false)
+    hero_test_tick(link, gs)
+    testing.expect(t, gs.hero.current == .Retreat, "the retreat began")
+    testing.expectf(t, gs.hero.nav.waited < 1000, "a plan of its own: waited %d", gs.hero.nav.waited)
+}
+
+@(private="file")
+stale_plan_self_world :: proc() -> (gs: ^Game_State, link: ^Agent_Link) {
+    gs, link = exec_test_world()
+    exec_test_frames(link, gs, 10)
+    go_test_give(gs, .Pickaxe, 1)
+    gs.hero.self_skip = {.Ritual, .Wood, .Ore}
+    link.goals.reflexes_off = {}
+    return
+}
+
+// The frames until stale_plan_self_world's walk of its own begins, and its tile.
+@(private="file")
+stale_plan_self_spot :: proc() -> (k: int, to: [2]i32) {
+    gs, link := stale_plan_self_world()
+    defer free(gs)
+    defer free(link)
+    for !(gs.hero.self.status == .Running && gs.hero.self.kind == .Go) {
+        exec_test_frames(link, gs, 1)
+        k += 1
+        assert(k < 600, "a walk of its own began")
+    }
+    return k, gs.hero.self.to
+}
+
+// Card 205: a ready plan an earlier walk of the hero's own left, goal 0 and
+// for the same tile, is not the next one's either: here one that digs the
+// floor under it.
+@(test)
+hero_on_its_own_takes_up_no_stale_plan :: proc(t: ^testing.T) {
+    k, to := stale_plan_self_spot()
+    gs, link := stale_plan_self_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, k - 1)
+    testing.expect(t, gs.hero.self.status != .Running, "no action of its own yet")
+    stale := stale_plan_plant(gs, to, {0, 1}, true)
+    testing.expect(t, is_solid(&gs.world, int(stale.x), int(stale.y)), "the floor")
+    dug := 0
+    for i in 0 ..< 60 {
+        exec_test_frames(link, gs, 1)
+        if i == 0 do testing.expect_value(t, gs.hero.self.to, to)
+        if gs.agent.cmd.has_mine && gs.agent.cmd.mine == stale do dug += 1
+    }
+    testing.expect_value(t, dug, 0)
+}
+
+// Card 205: nor a plan an earlier walk of its own left still running: the
+// next begins its own, its wait afresh.
+@(test)
+hero_on_its_own_runs_on_no_stale_plan :: proc(t: ^testing.T) {
+    k, to := stale_plan_self_spot()
+    gs, link := stale_plan_self_world()
+    defer free(gs)
+    defer free(link)
+    exec_test_frames(link, gs, k - 1)
+    stale_plan_plant(gs, to, {0, 1}, false)
+    exec_test_frames(link, gs, 1)
+    testing.expect(t, gs.hero.self.status == .Running && gs.hero.self.kind == .Go, "the walk began")
+    testing.expectf(t, gs.hero.nav.waited < 1000, "a plan of its own: waited %d", gs.hero.nav.waited)
+}

@@ -1348,6 +1348,7 @@ hero_retreat_run :: proc(gs: ^Game_State, b: ^Hero_Brain, g: ^Agent_Goal) {
         }
         r^ = {}  // no failure left from the last
         b.path = {}  // nor a path: one left in it has the retreat's goal 0, an empty path's (card 204)
+        b.nav.planning, b.nav.ready = false, false  // nor a plan, run or running: one left for the same spot has goal 0 too (card 205)
         hero_go_start(gs, r, spot)  // refuses only a burn or water, which has no way out
     }
     hero_go_tick(gs, r)
@@ -1447,6 +1448,7 @@ hero_self_start :: proc(gs: ^Game_State, b: ^Hero_Brain, kind: Agent_Goal_Kind, 
     s := &b.self
     s^ = {kind = kind}
     b.path = {}  // a path left in it has the action's goal 0, an empty path's (card 204)
+    b.nav.planning, b.nav.ready = false, false  // and a plan left, run or running, too (card 205)
     s.len = copy(s.line[:], line)
     if !agent_goal_kinds[kind].start(gs, s) do return false
     s.status = .Running
