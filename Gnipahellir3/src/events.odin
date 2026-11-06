@@ -72,7 +72,9 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Damage_Dealt:
             if e.target == PLAYER_ID {
-                if !gs.player.dead {
+                // At 0 hp the hero is dying already (dead is set at Player_Died):
+                // a second deadly hit in the same drain kills nobody twice.
+                if !gs.player.dead && gs.player.hp > 0 {
                     dmg := int(e.payload.int_val)
                     // Armor blunts enemy blows but never below 1 — no gear
                     // set makes an enemy harmless; the world (lava, falls —
@@ -327,7 +329,9 @@ process_events :: proc(gs: ^Game_State) {
             // Permadeath: the autosave goes now, so killing the process on the
             // death screen has nothing to load.  Stats are their own file, and
             // debug snapshots are too: neither is touched.
+            saga_bank(gs)
             gs.player.dead = true
+            _ = save_stats(gs)
             save_remove(gs)
             agent_goals_died(gs)  // the goals live at the death fail, once
 
@@ -500,6 +504,7 @@ process_events :: proc(gs: ^Game_State) {
 
         case .Game_Won:
             if !gs.game_won {
+                saga_bank(gs)
                 gs.game_won = true
                 gs.stats.runs_played += 1
                 gs.stats.runs_won    += 1
